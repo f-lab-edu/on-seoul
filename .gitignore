@@ -30,3 +30,26 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+
+# Claude
+.claude/
+CLAUDE.md
+
+# Secrets & credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore
+*.truststore
+secrets/
+credentials/
+.secrets
+serviceAccountKey.json
+*-service-account*.json
+firebase-adminsdk*.json
