@@ -34,8 +34,14 @@ public class SeoulApiResponse {
     @JsonProperty("row")
     private List<PublicServiceRow> rows = new ArrayList<>();
 
+    /** INFO-000: 정상 처리 */
     public boolean isSuccess() {
         return result != null && "INFO-000".equals(result.getCode());
+    }
+
+    /** INFO-200: 해당하는 데이터가 없습니다 — 빈 목록이지만 정상 응답 */
+    public boolean isNoData() {
+        return result != null && "INFO-200".equals(result.getCode());
     }
 
     @Getter

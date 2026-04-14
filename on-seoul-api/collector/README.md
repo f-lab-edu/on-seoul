@@ -9,28 +9,28 @@
 
 ```mermaid
 flowchart TD
-    Scheduler["CollectionScheduler\n(app 모듈)"]
+    Scheduler["CollectionScheduler<br/>(app 모듈)"]
 
     subgraph collector 모듈
-        Client["SeoulOpenApiClient\n페이지네이션 · 재시도"]
-        Mapper["PublicServiceRowMapper\n날짜·좌표·문자열 변환"]
+        Client["SeoulOpenApiClient<br/>페이지네이션 · 재시도"]
+        Mapper["PublicServiceRowMapper<br/>날짜·좌표·문자열 변환"]
     end
 
     subgraph 외부
-        API["서울시 Open API\nOA-2266 ~ OA-2270"]
+        API["서울시 Open API<br/>OA-2266 ~ OA-2270"]
     end
 
     subgraph common 모듈
-        Entity["PublicServiceReservation\n(JPA 엔티티)"]
+        Entity["PublicServiceReservation<br/>(JPA 엔티티)"]
     end
 
     DB[(PostgreSQL)]
 
     Scheduler -->|"fetchAll(serviceName) 호출"| Client
-    Client <-->|"HTTP GET\n200건씩 페이지네이션\n5xx 시 최대 3회 재시도"| API
+    Client <-->|"HTTP GET<br/>200건씩 페이지네이션<br/>5xx 시 최대 3회 재시도"| API
     Client -->|"List&lt;PublicServiceRow&gt;"| Mapper
     Mapper -->|"toEntity(row)"| Entity
-    Entity -->|"Upsert\n(Phase 6)"| DB
+    Entity -->|"Upsert<br/>(Phase 6)"| DB
 ```
 
 ---
@@ -69,6 +69,22 @@ collector/
 List<PublicServiceRow> rows = client.fetchAll("ListPublicReservationCulture");
 ```
 
+**페이지네이션 종료 조건**: 첫 번째 페이지 응답의 `list_total_count`를 읽어 전체 호출 횟수를 결정합니다. 빈 응답이 올 때까지 반복하는 방식이 아니므로 불필요한 추가 호출이 발생하지 않습니다.
+
+```
+총 건수=450, 페이지 크기=200 → 1-200, 201-400, 401-450 (3회 호출)
+```
+
+**RESULT.CODE 처리 정책**: 서울시 API는 HTTP 200을 반환하면서도 응답 body에 오류 코드를 담는 경우가 있습니다.
+
+| RESULT.CODE | 의미 | 처리 |
+|---|---|---|
+| `INFO-000` | 정상 처리 | 데이터 반환 |
+| `INFO-200` | 해당하는 데이터 없음 | 빈 목록 반환 (예외 없음) |
+| `ERROR-*` 등 | API 오류 (인증키 오류 등) | `SeoulApiException` 발생 |
+
+`INFO-200`은 카테고리에 현재 예약 가능한 서비스가 없는 정상 상태이므로 예외로 처리하지 않습니다.
+
 수집 대상 서비스명:
 
 | 카테고리 | 서비스명 | 데이터셋 ID |
@@ -92,6 +108,22 @@ List<PublicServiceRow> rows = client.fetchAll("ListPublicReservationCulture");
 | 문자열 필드 일반 | 앞뒤 공백 제거. 공백만 있는 문자열 → `null` |
 
 변환 실패는 예외를 던지지 않고 `null`로 처리하며, WARN 로그를 남깁니다.
+
+---
+
+## 수집 중 부분 실패 처리 정책
+
+5개 API를 순차 호출할 때 일부가 실패해도 나머지 API 수집은 계속 진행합니다.
+각 API 호출은 독립적인 `collection_history` 레코드를 생성하므로, 한 API의 실패가 다른 API의 수집 결과에 영향을 주지 않습니다.
+
+```
+API 1 수집 성공 → collection_history(SUCCESS)
+API 2 수집 실패 → collection_history(FAILED, 에러 메시지)
+API 3 수집 성공 → collection_history(SUCCESS)   ← 계속 진행
+...
+```
+
+파이프라인 오케스트레이션(`CollectionService`, `CollectionScheduler`)은 Phase 6–7에서 구현합니다.
 
 ---
 
@@ -138,5 +170,5 @@ MockWebServer(OkHttp3)로 실제 HTTP 요청 없이 클라이언트를 검증합
 
 | 대상 | 검증 항목 |
 |---|---|
-| `SeoulOpenApiClient` | 페이지네이션 전체 수집, 5xx 재시도 횟수, 4xx 즉시 실패, 응답 파싱 오류 |
+| `SeoulOpenApiClient` | 페이지네이션 전체 수집, 5xx 재시도 횟수, 4xx 즉시 실패, 응답 파싱 오류, INFO-200 빈 목록 반환, ERROR 코드 예외 발생 |
 | `PublicServiceRowMapper` | 날짜 포맷 변형, 좌표 null, 공백 문자열, 취소 기준일 파싱 |

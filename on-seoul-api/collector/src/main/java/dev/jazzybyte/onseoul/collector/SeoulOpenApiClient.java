@@ -104,6 +104,10 @@ public class SeoulOpenApiClient {
                                             "API 응답에서 서비스 키를 찾을 수 없음: " + serviceName);
             }
             SeoulApiResponse response = objectMapper.treeToValue(inner, SeoulApiResponse.class);
+            if (response.isNoData()) {
+                log.info("수집 데이터 없음 — serviceName={}", serviceName);
+                return response;
+            }
             if (!response.isSuccess()) {
                 throw new SeoulApiException(ErrorCode.COLLECT_API_CLIENT_ERROR,
                                             "API 오류 코드: " + response.getResult().getCode()

@@ -175,6 +175,27 @@ class SeoulOpenApiClientTest {
     }
 
     @Test
+    @DisplayName("INFO-200(데이터 없음) 응답은 예외 없이 빈 목록을 반환한다")
+    void fetchPage_returns_empty_list_on_info_200() {
+        mockWebServer.enqueue(noDataResponse("ListPublicReservationCulture"));
+
+        SeoulApiResponse response = client.fetchPage("ListPublicReservationCulture", 1, 1000);
+
+        assertThat(response.getRows()).isEmpty();
+        assertThat(response.getListTotalCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("INFO-200 응답 시 fetchAll은 빈 목록을 반환한다")
+    void fetchAll_returns_empty_list_on_info_200() {
+        mockWebServer.enqueue(noDataResponse("ListPublicReservationCulture"));
+
+        List<PublicServiceRow> result = client.fetchAll("ListPublicReservationCulture");
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
     @DisplayName("응답 JSON에 서비스명 키가 없으면 SeoulApiException이 발생한다")
     void fetchPage_throws_when_service_key_missing() {
         mockWebServer.enqueue(new MockResponse()
@@ -195,6 +216,15 @@ class SeoulOpenApiClientTest {
         String body = String.format(
                 "{\"%s\": {\"list_total_count\": %d, \"RESULT\": {\"CODE\": \"INFO-000\", \"MESSAGE\": \"정상 처리됩니다\"}, \"row\": [%s]}}",
                 serviceName, totalCount, rows);
+        return new MockResponse()
+                .setHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .setBody(body);
+    }
+
+    private MockResponse noDataResponse(String serviceName) {
+        String body = String.format(
+                "{\"%s\": {\"list_total_count\": 0, \"RESULT\": {\"CODE\": \"INFO-200\", \"MESSAGE\": \"해당하는 데이터가 없습니다.\"}, \"row\": []}}",
+                serviceName);
         return new MockResponse()
                 .setHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .setBody(body);
