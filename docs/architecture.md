@@ -48,50 +48,55 @@ ai-service/
 ## API Service (Spring Boot)
 >인증, 세션, 데이터 수집, 변경 이력 관리, 알림 발송, 대화 이력을 담당한다.
 
+Gradle 멀티모듈 구성: `app`(Spring Boot 진입점) → `common`(공유 엔티티/DTO) ← `collector`(수집 파이프라인)
+
 ```
-api-service/
-├── controller/
-│   ├── AuthController.java            # 로그인 / 로그아웃 / 회원가입
-│   ├── ChatController.java            # POST /api/chat — AI 서비스 SSE 릴레이
-│   ├── HistoryController.java         # 대화 이력 조회
-│   └── NotificationController.java    # 알림 구독 설정 조회/수정
-├── service/
-│   ├── AuthService.java               # 인증 비즈니스 로직
-│   ├── ChatService.java               # AI 서비스 SSE 스트림 수신 + 프론트엔드 릴레이 + 이력 저장
-│   ├── HistoryService.java            # 대화 이력 조회
-│   ├── CollectionService.java         # Open API 수집 파이프라인 (전체 갱신 + diff 감지)
-│   ├── ChangeLogService.java          # 서비스 변경 이력 기록 (NEW / UPDATED / DELETED)
-│   └── NotificationService.java       # 상태 변경 감지 → 고정 템플릿 알림 발송 (FCM)
-├── domain/
-│   ├── User.java                      # 사용자 엔티티
-│   ├── ChatHistory.java               # 대화 이력 엔티티 (질문 + 응답)
-│   ├── PublicServiceReservation.java   # 공공서비스 예약 엔티티 (current 테이블)
-│   ├── ServiceChangeLog.java          # 서비스 변경 이력 엔티티 (이벤트 로그)
-│   ├── CollectionHistory.java         # 수집 실행 이력 엔티티
-│   └── NotificationSubscription.java  # 알림 구독 설정 엔티티 (카테고리, 자치구, 키워드)
-├── repository/
-│   ├── UserRepository.java
-│   ├── ChatHistoryRepository.java
-│   ├── ReservationRepository.java
-│   ├── ChangeLogRepository.java
-│   ├── CollectionHistoryRepository.java
-│   └── NotificationSubscriptionRepository.java
-├── client/
-│   └── AiServiceClient.java           # FastAPI SSE 스트림 수신 (WebClient)
-├── scheduler/
-│   └── CollectionScheduler.java       # 일 1회 수집 트리거 → CollectionService → ChangeLogService → NotificationService
-├── security/
-│   ├── SecurityConfig.java            # Spring Security 설정 (세션 기반)
-│   ├── CustomUserDetailsService.java
-│   └── SessionAuthFilter.java         # 요청마다 세션 검증
-└── common/
-    ├── exception/
-    │   ├── GlobalExceptionHandler.java
-    │   └── ErrorCode.java
-    └── dto/
-        ├── ChatRequest.java
-        ├── ChatResponse.java
-        └── CollectionResult.java       # 수집 결과 (신규/변경/삭제 건수)
+on-seoul-api/                                    # 루트 (공통 빌드 설정, 소스 없음)
+│
+├── common/                                      # 공유 모듈
+│   └── domain/
+│       ├── User.java                            # 사용자 엔티티
+│       ├── ChatHistory.java                     # 대화 이력 엔티티 (질문 + 응답)
+│       ├── PublicServiceReservation.java         # 공공서비스 예약 엔티티 (current 테이블)
+│       ├── ServiceChangeLog.java                # 서비스 변경 이력 엔티티 (이벤트 로그)
+│       ├── CollectionHistory.java               # 수집 실행 이력 엔티티
+│       └── NotificationSubscription.java        # 알림 구독 설정 엔티티 (카테고리, 자치구, 키워드)
+│   └── exception/
+│       ├── GlobalExceptionHandler.java
+│       └── ErrorCode.java
+│   └── dto/
+│       ├── ChatRequest.java
+│       ├── ChatResponse.java
+│       └── CollectionResult.java                # 수집 결과 (신규/변경/삭제 건수)
+│
+├── collector/                                   # 수집 모듈
+│   └── service/
+│       ├── CollectionService.java               # Open API 수집 파이프라인 (전체 갱신 + diff 감지)
+│       └── ChangeLogService.java                # 서비스 변경 이력 기록 (NEW / UPDATED / DELETED)
+│   └── client/
+│       └── SeoulOpenApiClient.java              # 서울시 Open API 호출 (WebClient, 페이지네이션)
+│
+├── app/                                         # 앱 모듈 (Spring Boot 진입점)
+│   └── controller/
+│       ├── AuthController.java                  # 로그인 / 로그아웃 / 회원가입
+│       ├── ChatController.java                  # POST /api/chat — AI 서비스 SSE 릴레이
+│       ├── HistoryController.java               # 대화 이력 조회
+│       └── NotificationController.java          # 알림 구독 설정 조회/수정
+│   └── service/
+│       ├── AuthService.java                     # 인증 비즈니스 로직
+│       ├── ChatService.java                     # AI 서비스 SSE 스트림 수신 + 프론트엔드 릴레이 + 이력 저장
+│       ├── HistoryService.java                  # 대화 이력 조회
+│       └── NotificationService.java             # 상태 변경 감지 → 고정 템플릿 알림 발송 (FCM)
+│   └── client/
+│       └── AiServiceClient.java                 # FastAPI SSE 스트림 수신 (WebClient)
+│   └── scheduler/
+│       └── CollectionScheduler.java             # 일 1회 수집 트리거 → CollectionService → ChangeLogService → NotificationService
+│   └── security/
+│       ├── SecurityConfig.java                  # Spring Security 설정 (세션 기반)
+│       ├── CustomUserDetailsService.java
+│       └── SessionAuthFilter.java               # 요청마다 세션 검증
+│
+└── migration-scripts/                           # DB 마이그레이션 SQL
 ```
 
 ### 주요 설계 사항
