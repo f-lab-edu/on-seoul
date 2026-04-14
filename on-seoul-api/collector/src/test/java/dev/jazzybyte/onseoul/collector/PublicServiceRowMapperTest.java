@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -269,7 +270,7 @@ class PublicServiceRowMapperTest {
     // 헬퍼
     // ────────────────────────────────────────────
 
-    private PublicServiceRow row(java.util.function.Consumer<RowBuilder> config) {
+    private PublicServiceRow row(Consumer<RowBuilder> config) {
         RowBuilder builder = new RowBuilder();
         config.accept(builder);
         return builder.build();
