@@ -1,4 +1,4 @@
-package dev.jazzybyte.onseoul.domain;
+package dev.jazzybyte.onseoul.collector.domain;
 
 import jakarta.persistence.*;
 import lombok.AccessLevel;

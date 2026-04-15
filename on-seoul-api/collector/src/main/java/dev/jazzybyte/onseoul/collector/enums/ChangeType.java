@@ -1,4 +1,4 @@
-package dev.jazzybyte.onseoul.enums;
+package dev.jazzybyte.onseoul.collector.enums;
 
 public enum ChangeType {
     NEW,

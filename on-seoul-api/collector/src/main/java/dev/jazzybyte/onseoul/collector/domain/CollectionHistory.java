@@ -1,6 +1,6 @@
-package dev.jazzybyte.onseoul.domain;
+package dev.jazzybyte.onseoul.collector.domain;
 
-import dev.jazzybyte.onseoul.enums.CollectionStatus;
+import dev.jazzybyte.onseoul.collector.enums.CollectionStatus;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Builder;

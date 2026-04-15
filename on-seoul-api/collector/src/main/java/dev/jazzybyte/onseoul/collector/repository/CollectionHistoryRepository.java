@@ -1,6 +1,6 @@
-package dev.jazzybyte.onseoul.repository;
+package dev.jazzybyte.onseoul.collector.repository;
 
-import dev.jazzybyte.onseoul.domain.CollectionHistory;
+import dev.jazzybyte.onseoul.collector.domain.CollectionHistory;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;

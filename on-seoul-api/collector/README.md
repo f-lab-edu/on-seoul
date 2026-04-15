@@ -47,6 +47,17 @@ collector/
 ├── config/
 │   ├── CollectorConfig.java        # WebClient Bean 등록
 │   └── SeoulApiProperties.java     # seoul.api.* 설정 바인딩
+├── domain/                         # 수집 파이프라인 전용 엔티티
+│   ├── CollectionHistory.java      # 수집 실행 이력
+│   ├── ServiceChangeLog.java       # 서비스 단위 변경 이력
+│   └── DataSourceCatalog.java      # 수집 대상 API 카탈로그
+├── repository/
+│   ├── CollectionHistoryRepository.java
+│   ├── ServiceChangeLogRepository.java
+│   └── DataSourceCatalogRepository.java
+├── enums/
+│   ├── CollectionStatus.java       # SUCCESS / FAILED / PARTIAL
+│   └── ChangeType.java             # NEW / UPDATED / DELETED
 ├── dto/
 │   ├── PublicServiceRow.java       # API 응답 row (24개 필드)
 │   └── SeoulApiResponse.java       # API 응답 최상위 래퍼
@@ -59,6 +70,9 @@ collector/
 ├── PublicServiceRowMapper.java     # DTO → 엔티티 변환기 (필수 필드 검증 포함)
 └── SeoulOpenApiClient.java         # Open API 호출 클라이언트
 ```
+
+> 공용 엔티티 `PublicServiceReservation` 및 해당 Repository는 `domain` 모듈에 있습니다.
+> `collector/domain`에는 수집 파이프라인 운영 데이터(이력·변경 로그·카탈로그)만 둡니다.
 
 ---
 
