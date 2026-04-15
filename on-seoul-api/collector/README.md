@@ -1,7 +1,10 @@
 # collector 모듈
 
-서울 열린데이터 광장 Open API에서 공공서비스 예약 데이터를 수집하고 JPA 엔티티로 변환하는 파이프라인 모듈입니다.
-`app` 모듈의 스케줄러가 수집을 트리거하면, `collector`가 API 호출 → 페이지네이션 → 변환의 흐름을 처리합니다.
+서울 열린데이터 광장 Open API에서 공공서비스 예약 데이터를 수집하고 DB에 적재하는 파이프라인 모듈입니다.
+
+**책임 범위**: API 호출 → 페이지네이션 → DTO 변환 → 변경 감지(신규/변경/유지) → DB Upsert → 수집 이력 기록
+
+`app` 모듈의 `CollectionScheduler`가 트리거만 담당하고, 수집 파이프라인 전체는 `collector` 모듈이 책임집니다.
 
 ---
 
@@ -9,28 +12,30 @@
 
 ```mermaid
 flowchart TD
-    Scheduler["CollectionScheduler<br/>(app 모듈)"]
+    Scheduler["CollectionScheduler<br/>(app 모듈)<br/>트리거만 담당"]
 
     subgraph collector 모듈
+        CollectionService["CollectionService<br/>수집 오케스트레이션<br/>(Phase 6)"]
         Client["SeoulOpenApiClient<br/>페이지네이션 · 재시도"]
-        Mapper["PublicServiceRowMapper<br/>날짜·좌표·문자열 변환"]
+        Mapper["PublicServiceRowMapper<br/>DTO → 엔티티 변환<br/>필수 필드 검증"]
+        ChangeDetector["변경 감지<br/>service_id 기준<br/>신규 / 변경 / 유지 분류<br/>(Phase 6)"]
+        ChangeLogService["ChangeLogService<br/>변경 이력 기록<br/>(Phase 6)"]
     end
 
     subgraph 외부
         API["서울시 Open API<br/>OA-2266 ~ OA-2270"]
     end
 
-    subgraph common 모듈
-        Entity["PublicServiceReservation<br/>(JPA 엔티티)"]
-    end
-
     DB[(PostgreSQL)]
 
-    Scheduler -->|"fetchAll(serviceName) 호출"| Client
+    Scheduler -->|"수집 트리거"| CollectionService
+    CollectionService -->|"fetchAll(serviceName)"| Client
     Client <-->|"HTTP GET<br/>200건씩 페이지네이션<br/>5xx 시 최대 3회 재시도"| API
     Client -->|"List&lt;PublicServiceRow&gt;"| Mapper
-    Mapper -->|"toEntity(row)"| Entity
-    Entity -->|"Upsert<br/>(Phase 6)"| DB
+    Mapper -->|"Optional&lt;Entity&gt;"| ChangeDetector
+    ChangeDetector -->|"Upsert"| DB
+    ChangeDetector -->|"변경 이벤트"| ChangeLogService
+    ChangeLogService -->|"이력 기록"| DB
 ```
 
 ---
@@ -48,7 +53,10 @@ collector/
 ├── exception/
 │   ├── SeoulApiException.java      # Open API 호출 오류 기반 클래스 (4xx)
 │   └── SeoulApiServerException.java# 5xx 오류 — 재시도 대상
-├── PublicServiceRowMapper.java     # DTO → 엔티티 변환기
+├── service/                        # (Phase 6)
+│   ├── CollectionService.java      # 수집 파이프라인 오케스트레이션
+│   └── ChangeLogService.java       # 서비스 변경 이력 기록
+├── PublicServiceRowMapper.java     # DTO → 엔티티 변환기 (필수 필드 검증 포함)
 └── SeoulOpenApiClient.java         # Open API 호출 클라이언트
 ```
 

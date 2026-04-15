@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.Optional;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,7 +54,7 @@ class PublicServiceRowMapperTest {
                 .revstdday("5")
         );
 
-        PublicServiceReservation entity = mapper.toEntity(row);
+        PublicServiceReservation entity = mapper.toEntity(row).get();
 
         assertThat(entity.getServiceId()).isEqualTo("S251230171728158726");
         assertThat(entity.getServiceGubun()).isEqualTo("자체");
@@ -70,6 +71,63 @@ class PublicServiceRowMapperTest {
         assertThat(entity.getCancelStdDays()).isEqualTo((short) 5);
     }
 
+    // ────────────────────────────────────────────
+    // 필수 필드 검증
+    // ────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("필수 필드 검증 (SVCID, SVCNM)")
+    class RequiredFieldValidation {
+
+        @Test
+        @DisplayName("SVCID가 null이면 Optional.empty()를 반환한다")
+        void null_svcid_returns_empty() {
+            PublicServiceRow row = row(b -> b.svcid(null).svcnm("테스트 서비스"));
+
+            assertThat(mapper.toEntity(row)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("SVCID가 공백이면 Optional.empty()를 반환한다")
+        void blank_svcid_returns_empty() {
+            PublicServiceRow row = row(b -> b.svcid("   ").svcnm("테스트 서비스"));
+
+            assertThat(mapper.toEntity(row)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("SVCNM이 null이면 Optional.empty()를 반환한다")
+        void null_svcnm_returns_empty() {
+            PublicServiceRow row = row(b -> b.svcid("SVC-001").svcnm(null));
+
+            assertThat(mapper.toEntity(row)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("SVCNM이 공백이면 Optional.empty()를 반환한다")
+        void blank_svcnm_returns_empty() {
+            PublicServiceRow row = row(b -> b.svcid("SVC-001").svcnm("   "));
+
+            assertThat(mapper.toEntity(row)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("SVCID, SVCNM이 모두 있으면 엔티티가 반환된다")
+        void valid_required_fields_returns_entity() {
+            PublicServiceRow row = row(b -> b.svcid("SVC-001").svcnm("테스트 서비스"));
+
+            Optional<PublicServiceReservation> result = mapper.toEntity(row);
+
+            assertThat(result).isPresent();
+            assertThat(result.get().getServiceId()).isEqualTo("SVC-001");
+            assertThat(result.get().getServiceName()).isEqualTo("테스트 서비스");
+        }
+    }
+
+    // ────────────────────────────────────────────
+    // 날짜 파싱
+    // ────────────────────────────────────────────
+
     @Nested
     @DisplayName("날짜 파싱")
     class DateTimeParsing {
@@ -83,7 +141,7 @@ class PublicServiceRowMapperTest {
                     .rcptenddt("2026-02-15 23:59:00.0")
             );
 
-            PublicServiceReservation entity = mapper.toEntity(row);
+            PublicServiceReservation entity = mapper.toEntity(row).get();
 
             assertThat(entity.getReceiptStartDt()).isEqualTo(LocalDateTime.of(2026, 1, 1, 0, 1, 0));
             assertThat(entity.getReceiptEndDt()).isEqualTo(LocalDateTime.of(2026, 2, 15, 23, 59, 0));
@@ -97,7 +155,7 @@ class PublicServiceRowMapperTest {
                     .rcptbgndt("2026-03-01 09:00:00")
             );
 
-            PublicServiceReservation entity = mapper.toEntity(row);
+            PublicServiceReservation entity = mapper.toEntity(row).get();
 
             assertThat(entity.getReceiptStartDt()).isEqualTo(LocalDateTime.of(2026, 3, 1, 9, 0, 0));
         }
@@ -110,7 +168,7 @@ class PublicServiceRowMapperTest {
                     .rcptbgndt(null)
             );
 
-            assertThat(mapper.toEntity(row).getReceiptStartDt()).isNull();
+            assertThat(mapper.toEntity(row).get().getReceiptStartDt()).isNull();
         }
 
         @Test
@@ -121,7 +179,7 @@ class PublicServiceRowMapperTest {
                     .rcptbgndt("   ")
             );
 
-            assertThat(mapper.toEntity(row).getReceiptStartDt()).isNull();
+            assertThat(mapper.toEntity(row).get().getReceiptStartDt()).isNull();
         }
 
         @Test
@@ -132,7 +190,7 @@ class PublicServiceRowMapperTest {
                     .rcptbgndt("invalid-date")
             );
 
-            assertThat(mapper.toEntity(row).getReceiptStartDt()).isNull();
+            assertThat(mapper.toEntity(row).get().getReceiptStartDt()).isNull();
         }
     }
 
@@ -149,7 +207,7 @@ class PublicServiceRowMapperTest {
                     .vMax("18:00")
             );
 
-            PublicServiceReservation entity = mapper.toEntity(row);
+            PublicServiceReservation entity = mapper.toEntity(row).get();
 
             assertThat(entity.getUseTimeStart()).isEqualTo(LocalTime.of(9, 0));
             assertThat(entity.getUseTimeEnd()).isEqualTo(LocalTime.of(18, 0));
@@ -163,8 +221,8 @@ class PublicServiceRowMapperTest {
                     .vMin(null).vMax(null)
             );
 
-            assertThat(mapper.toEntity(row).getUseTimeStart()).isNull();
-            assertThat(mapper.toEntity(row).getUseTimeEnd()).isNull();
+            assertThat(mapper.toEntity(row).get().getUseTimeStart()).isNull();
+            assertThat(mapper.toEntity(row).get().getUseTimeEnd()).isNull();
         }
     }
 
@@ -181,7 +239,7 @@ class PublicServiceRowMapperTest {
                     .y("37.570500279648634")
             );
 
-            PublicServiceReservation entity = mapper.toEntity(row);
+            PublicServiceReservation entity = mapper.toEntity(row).get();
 
             assertThat(entity.getCoordX()).isEqualByComparingTo(new BigDecimal("126.97037430869801"));
             assertThat(entity.getCoordY()).isEqualByComparingTo(new BigDecimal("37.570500279648634"));
@@ -195,8 +253,8 @@ class PublicServiceRowMapperTest {
                     .x(null).y(null)
             );
 
-            assertThat(mapper.toEntity(row).getCoordX()).isNull();
-            assertThat(mapper.toEntity(row).getCoordY()).isNull();
+            assertThat(mapper.toEntity(row).get().getCoordX()).isNull();
+            assertThat(mapper.toEntity(row).get().getCoordY()).isNull();
         }
 
         @Test
@@ -207,8 +265,8 @@ class PublicServiceRowMapperTest {
                     .x("").y("")
             );
 
-            assertThat(mapper.toEntity(row).getCoordX()).isNull();
-            assertThat(mapper.toEntity(row).getCoordY()).isNull();
+            assertThat(mapper.toEntity(row).get().getCoordX()).isNull();
+            assertThat(mapper.toEntity(row).get().getCoordY()).isNull();
         }
     }
 
@@ -224,7 +282,7 @@ class PublicServiceRowMapperTest {
                     .revstdday("5")
             );
 
-            assertThat(mapper.toEntity(row).getCancelStdDays()).isEqualTo((short) 5);
+            assertThat(mapper.toEntity(row).get().getCancelStdDays()).isEqualTo((short) 5);
         }
 
         @Test
@@ -235,7 +293,7 @@ class PublicServiceRowMapperTest {
                     .revstdday(null)
             );
 
-            assertThat(mapper.toEntity(row).getCancelStdDays()).isNull();
+            assertThat(mapper.toEntity(row).get().getCancelStdDays()).isNull();
         }
     }
 
@@ -251,7 +309,7 @@ class PublicServiceRowMapperTest {
                     .usetgtinfo(" 제한없음 ")
             );
 
-            assertThat(mapper.toEntity(row).getTargetInfo()).isEqualTo("제한없음");
+            assertThat(mapper.toEntity(row).get().getTargetInfo()).isEqualTo("제한없음");
         }
 
         @Test
@@ -262,7 +320,7 @@ class PublicServiceRowMapperTest {
                     .telno("   ")
             );
 
-            assertThat(mapper.toEntity(row).getTelNo()).isNull();
+            assertThat(mapper.toEntity(row).get().getTelNo()).isNull();
         }
     }
 
