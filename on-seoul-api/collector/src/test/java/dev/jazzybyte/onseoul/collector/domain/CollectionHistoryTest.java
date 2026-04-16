@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CollectionHistoryTest {
 
@@ -124,6 +125,47 @@ class CollectionHistoryTest {
 
             assertThat(history.getErrorMessage()).isEqualTo("OA-2270 응답 오류");
             assertThat(history.getDurationMs()).isEqualTo(2500);
+        }
+    }
+
+    @Nested
+    @DisplayName("상태 전이 중복 호출 방어")
+    class DuplicateTransition {
+
+        @Test
+        @DisplayName("complete() 후 다시 complete()를 호출하면 예외가 발생한다")
+        void throws_on_double_complete() {
+            history.complete(100, 10, 5, 2, 3000);
+
+            assertThatThrownBy(() -> history.complete(50, 5, 2, 1, 1500))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("complete() 후 fail()을 호출하면 예외가 발생한다")
+        void throws_on_complete_then_fail() {
+            history.complete(100, 10, 5, 2, 3000);
+
+            assertThatThrownBy(() -> history.fail("오류", 500))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("fail() 후 다시 fail()을 호출하면 예외가 발생한다")
+        void throws_on_double_fail() {
+            history.fail("첫 번째 오류", 1000);
+
+            assertThatThrownBy(() -> history.fail("두 번째 오류", 500))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("partial() 후 complete()를 호출하면 예외가 발생한다")
+        void throws_on_partial_then_complete() {
+            history.partial(80, 8, 3, 1, 2500, "OA-2270 응답 오류");
+
+            assertThatThrownBy(() -> history.complete(80, 8, 3, 1, 2500))
+                    .isInstanceOf(IllegalStateException.class);
         }
     }
 }

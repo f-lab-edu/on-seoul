@@ -57,6 +57,7 @@ public class CollectionHistory {
 
     public void complete(int totalFetched, int newCount, int updatedCount, int deletedCount,
                          int durationMs) {
+        validateNotFinished();
         this.status = CollectionStatus.SUCCESS;
         this.totalFetched = totalFetched;
         this.newCount = newCount;
@@ -66,6 +67,7 @@ public class CollectionHistory {
     }
 
     public void fail(String errorMessage, int durationMs) {
+        validateNotFinished();
         this.status = CollectionStatus.FAILED;
         this.errorMessage = errorMessage;
         this.durationMs = durationMs;
@@ -73,6 +75,7 @@ public class CollectionHistory {
 
     public void partial(int totalFetched, int newCount, int updatedCount, int deletedCount,
                         int durationMs, String errorMessage) {
+        validateNotFinished();
         this.status = CollectionStatus.PARTIAL;
         this.totalFetched = totalFetched;
         this.newCount = newCount;
@@ -80,5 +83,17 @@ public class CollectionHistory {
         this.deletedCount = deletedCount;
         this.durationMs = durationMs;
         this.errorMessage = errorMessage;
+    }
+
+    /**
+     * 이미 결과가 기록된 이력에 중복으로 전이를 시도할 경우 예외를 던진다.
+     * durationMs는 complete/fail/partial 세 메서드 모두에서 반드시 설정되므로,
+     * null 여부로 "미완료" 상태를 판별한다.
+     */
+    private void validateNotFinished() {
+        if (this.durationMs != null) {
+            throw new IllegalStateException(
+                    "이미 결과가 기록된 수집 이력입니다. id=" + this.id + ", status=" + this.status);
+        }
     }
 }
