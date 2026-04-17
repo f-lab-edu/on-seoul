@@ -28,6 +28,7 @@ public class CollectionService {
     private final SeoulOpenApiClient apiClient;
     private final PublicServiceRowMapper rowMapper;
     private final UpsertService upsertService;
+    private final GeocodingService geocodingService;
 
     /**
      * 모든 활성 소스를 순차 수집한다.
@@ -59,6 +60,8 @@ public class CollectionService {
         } else {
             log.warn("일부 소스 수집 실패 — deletion sweep 건너뜀");
         }
+
+        geocodingService.fillMissingCoords();
 
         log.info("수집 완료");
     }

@@ -1,6 +1,7 @@
 package dev.jazzybyte.onseoul;
 
 import dev.jazzybyte.onseoul.collector.service.CollectionService;
+import dev.jazzybyte.onseoul.collector.service.GeocodingService;
 import dev.jazzybyte.onseoul.collector.service.UpsertService;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
@@ -32,6 +33,9 @@ class OnSeoulApiApplicationTests {
 
     @MockitoBean
     UpsertService upsertService;
+
+    @MockitoBean
+    GeocodingService geocodingService;
 
     @Test
     void contextLoads(ApplicationContext applicationContext) {

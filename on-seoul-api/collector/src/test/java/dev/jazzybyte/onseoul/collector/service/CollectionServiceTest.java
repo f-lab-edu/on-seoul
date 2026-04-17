@@ -41,6 +41,7 @@ class CollectionServiceTest {
     @Mock private SeoulOpenApiClient apiClient;
     @Mock private PublicServiceRowMapper rowMapper;
     @Mock private UpsertService upsertService;
+    @Mock private GeocodingService geocodingService;
 
     @InjectMocks
     private CollectionService collectionService;
@@ -60,6 +61,7 @@ class CollectionServiceTest {
                 .active(true).build();
 
         when(historyRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        lenient().doNothing().when(geocodingService).fillMissingCoords();
     }
 
     @Test
