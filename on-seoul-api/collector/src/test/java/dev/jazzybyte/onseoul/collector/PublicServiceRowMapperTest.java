@@ -224,6 +224,22 @@ class PublicServiceRowMapperTest {
             assertThat(mapper.toEntity(row).get().getUseTimeStart()).isNull();
             assertThat(mapper.toEntity(row).get().getUseTimeEnd()).isNull();
         }
+
+        @Test
+        @DisplayName("30:00처럼 24시를 초과하는 시간값은 나머지로 정규화한다 (30→06, 33→09)")
+        void time_over_24h_is_normalized() {
+            PublicServiceRow row30 = row(b -> b
+                    .svcid("S260204144926681226").svcstatnm("접수중").svcnm("테스트")
+                    .vMax("30:00")
+            );
+            PublicServiceRow row33 = row(b -> b
+                    .svcid("S260219151546737385").svcstatnm("접수중").svcnm("테스트")
+                    .vMax("33:00")
+            );
+
+            assertThat(mapper.toEntity(row30).get().getUseTimeEnd()).isEqualTo(LocalTime.of(6, 0));
+            assertThat(mapper.toEntity(row33).get().getUseTimeEnd()).isEqualTo(LocalTime.of(9, 0));
+        }
     }
 
     @Nested
