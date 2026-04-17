@@ -77,6 +77,23 @@ class UpsertServiceTest {
     }
 
     @Test
+    @DisplayName("UPDATE 시 prevServiceStatus에 변경 전 상태가 저장된다")
+    void prev_service_status_is_saved_on_update() {
+        PublicServiceReservation existing = reservation("SVC001", "접수중",
+                LocalDateTime.of(2026, 1, 1, 0, 0),
+                LocalDateTime.of(2026, 3, 31, 23, 59));
+        PublicServiceReservation incoming = reservation("SVC001", "안내중",
+                LocalDateTime.of(2026, 1, 1, 0, 0),
+                LocalDateTime.of(2026, 3, 31, 23, 59));
+        when(reservationRepository.findAllByServiceIdIn(anyCollection())).thenReturn(List.of(existing));
+
+        upsertService.upsert(List.of(incoming), 1L);
+
+        assertThat(existing.getPrevServiceStatus()).isEqualTo("접수중");
+        assertThat(existing.getServiceStatus()).isEqualTo("안내중");
+    }
+
+    @Test
     @DisplayName("핵심 필드가 동일하면 UNCHANGED로 스킵된다")
     void unchanged_entity_is_skipped() {
         LocalDateTime start = LocalDateTime.of(2026, 1, 1, 0, 0);
