@@ -49,7 +49,7 @@ class GeocodingServiceTest {
                 .build();
         // coordX, coordY는 null (builder에서 설정하지 않음)
         when(repository.findAllByCoordXIsNullOrCoordYIsNull()).thenReturn(List.of(record));
-        when(geocodingClient.addressSearch("서울시청"))
+        when(geocodingClient.keywordSearch("서울시청"))
                 .thenReturn(Optional.of(new BigDecimal[]{new BigDecimal("126.9784"), new BigDecimal("37.5665")}));
 
         geocodingService.fillMissingCoords();
@@ -68,7 +68,7 @@ class GeocodingServiceTest {
                 .placeName("알수없는장소")
                 .build();
         when(repository.findAllByCoordXIsNullOrCoordYIsNull()).thenReturn(List.of(record));
-        when(geocodingClient.addressSearch("알수없는장소")).thenReturn(Optional.empty());
+        when(geocodingClient.keywordSearch("알수없는장소")).thenReturn(Optional.empty());
 
         geocodingService.fillMissingCoords();
 
@@ -86,12 +86,12 @@ class GeocodingServiceTest {
                 .serviceId("SVC002").serviceName("테스트2").serviceStatus("접수중")
                 .placeName("서울시청").build();
         when(repository.findAllByCoordXIsNullOrCoordYIsNull()).thenReturn(List.of(r1, r2));
-        when(geocodingClient.addressSearch("서울시청"))
+        when(geocodingClient.keywordSearch("서울시청"))
                 .thenReturn(Optional.of(new BigDecimal[]{new BigDecimal("126.9784"), new BigDecimal("37.5665")}));
 
         geocodingService.fillMissingCoords();
 
-        verify(geocodingClient, times(1)).addressSearch("서울시청"); // 캐시로 인해 1회만 호출
+        verify(geocodingClient, times(1)).keywordSearch("서울시청"); // 캐시로 인해 1회만 호출
         verify(repository, times(2)).save(any());
     }
 }
