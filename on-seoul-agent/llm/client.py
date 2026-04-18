@@ -6,6 +6,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmb
 from langchain_openai import ChatOpenAI
 
 from core.config import settings
+from core.exceptions import ConfigurationException
 
 
 class _GeminiEmbeddings(Embeddings):
@@ -57,7 +58,7 @@ def get_chat_model(
             streaming=streaming,
         )
     else:
-        raise ValueError(
+        raise ConfigurationException(
             f"Unknown LLM provider: {selected_provider!r}. Use 'gemini' or 'openai'."
         )
 
