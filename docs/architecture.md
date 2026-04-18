@@ -48,28 +48,32 @@ ai-service/
 ## API Service (Spring Boot)
 >인증, 세션, 데이터 수집, 변경 이력 관리, 알림 발송, 대화 이력을 담당한다.
 
-Gradle 멀티모듈 구성: `app`(Spring Boot 진입점) → `common`(공유 엔티티/DTO) ← `collector`(수집 파이프라인)
+Gradle 멀티모듈 구성: `app`(Spring Boot 진입점) → `domain`(공유 엔티티) ← `collector`(수집 파이프라인), 그리고 모든 모듈이 의존하는 `common`(공통 유틸·전역 예외).
 
 ```
 on-seoul-api/                                    # 루트 (공통 빌드 설정, 소스 없음)
 │
-├── common/                                      # 공유 모듈
+├── common/                                      # 공통 모듈 (프레임워크 의존 최소)
+│   └── exception/
+│       ├── ErrorCode.java                       # 전역 에러 코드
+│       └── OnSeoulApiException.java             # 전역 기반 예외
+│
+├── domain/                                      # 공용 도메인 모듈 (JPA 엔티티 · Repository)
 │   └── domain/
 │       ├── User.java                            # 사용자 엔티티
 │       ├── ChatHistory.java                     # 대화 이력 엔티티 (질문 + 응답)
-│       ├── PublicServiceReservation.java         # 공공서비스 예약 엔티티 (current 테이블)
-│       ├── ServiceChangeLog.java                # 서비스 변경 이력 엔티티 (이벤트 로그)
-│       ├── CollectionHistory.java               # 수집 실행 이력 엔티티
+│       ├── PublicServiceReservation.java        # 공공서비스 예약 엔티티 (current 테이블)
 │       └── NotificationSubscription.java        # 알림 구독 설정 엔티티 (카테고리, 자치구, 키워드)
-│   └── exception/
-│       ├── GlobalExceptionHandler.java
-│       └── ErrorCode.java
-│   └── dto/
-│       ├── ChatRequest.java
-│       ├── ChatResponse.java
-│       └── CollectionResult.java                # 수집 결과 (신규/변경/삭제 건수)
+│   └── repository/
+│       └── PublicServiceReservationRepository.java
 │
-├── collector/                                   # 수집 모듈
+├── collector/                                   # 수집 모듈 (파이프라인 + 운영 엔티티)
+│   └── domain/                                  # 수집 파이프라인 전용 엔티티
+│       ├── CollectionHistory.java               # 수집 실행 이력
+│       ├── ServiceChangeLog.java                # 서비스 변경 이력 (NEW / UPDATED / DELETED)
+│       └── DataSourceCatalog.java               # 수집 대상 API 카탈로그
+│   └── repository/
+│   └── enums/                                   # CollectionStatus, ChangeType
 │   └── service/
 │       ├── CollectionService.java               # Open API 수집 파이프라인 (전체 갱신 + diff 감지)
 │       └── ChangeLogService.java                # 서비스 변경 이력 기록 (NEW / UPDATED / DELETED)
