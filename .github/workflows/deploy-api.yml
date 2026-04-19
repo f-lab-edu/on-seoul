@@ -53,6 +53,7 @@ jobs:
         env:
           SHA: ${{ github.sha }}
           REPO_OWNER: ${{ github.repository_owner }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
           # 배포 디렉토리 생성 (없으면)
           mkdir -p ~/on-seoul
@@ -65,6 +66,7 @@ jobs:
           # .env 파일 생성 또는 업데이트
           echo "API_TAG=${SHA}" > .env
           echo "GITHUB_REPOSITORY_OWNER=${REPO_OWNER,,}" >> .env
+          echo "DB_PASSWORD=${DB_PASSWORD}" >> .env
           
           # Docker Compose 실행
           docker compose pull api
