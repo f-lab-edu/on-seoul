@@ -3,6 +3,18 @@
 FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app
 
+# 필요한 툴 설치 (트러블슈팅용 최소 툴)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    telnet \
+    netcat-openbsd \
+    dnsutils \
+    procps \
+    net-tools \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
 # 보안을 위해 비루트(non-root) 사용자 생성 및 사용
 RUN addgroup --system jazz && adduser --system jazz --ingroup jazz
 USER jazz:jazz
