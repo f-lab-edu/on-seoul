@@ -47,12 +47,26 @@ jobs:
     needs: build
     runs-on: self-hosted          # 서버에 설치된 runner — 배포 전용
     steps:
+      - uses: actions/checkout@v4
+
       - name: Deploy api
         env:
           SHA: ${{ github.sha }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
+          # 배포 디렉토리 생성 (없으면)
+          mkdir -p ~/on-seoul
+          
+          # docker-compose.yml 복사 (checkout된 현재 디렉토리에서)
+          cp docker-compose.yml ~/on-seoul/
+          
           cd ~/on-seoul
+          
+          # .env 파일 생성 또는 업데이트
           echo "API_TAG=${SHA}" > .env
+          echo "GITHUB_REPOSITORY_OWNER=${REPO_OWNER,,}" >> .env
+          
+          # Docker Compose 실행
           docker compose pull api
           docker compose up -d --no-deps api
           docker image prune -f
