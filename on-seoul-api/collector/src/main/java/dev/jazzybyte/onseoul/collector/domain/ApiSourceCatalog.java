@@ -50,10 +50,11 @@ public class ApiSourceCatalog {
 
     @Builder
     public ApiSourceCatalog(String datasetId, String datasetName, String datasetUrl,
-                            boolean active, String tags) {
+                            String apiServicePath, boolean active, String tags) {
         this.datasetId = datasetId;
         this.datasetName = datasetName;
         this.datasetUrl = datasetUrl;
+        this.apiServicePath = apiServicePath;
         this.active = active;
         this.tags = tags;
     }
