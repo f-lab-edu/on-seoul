@@ -1,0 +1,12 @@
+services:
+  api:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/on-seoul-api:${API_TAG:-latest}
+    container_name: on-seoul-api
+    ports:
+      - "48080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
+    env_file:
+      - .env.deploy
+      - .env.secret
+    restart: always

@@ -56,10 +56,10 @@ jobs:
         run: |
           mkdir -p ~/on-seoul
 
-          # docker-compose.yml은 레포 정본 기준으로 항상 갱신
-          cp docker-compose.yml ~/on-seoul/
+          # docker-compose-app.yml은 레포 정본 기준으로 항상 갱신
+          cp docker-compose-app.yml ~/on-seoul/
 
-          # .env.secret 존재 확인 (초기 서버 세팅 필수 — 없으면 배포 중단)
+          # .env.secret 존재 확인 (DB 접속정보 등 민감정보 — 서버에 미리 수동으로 생성해둬야 함)
           if [ ! -f ~/on-seoul/.env.secret ]; then
             echo "ERROR: ~/on-seoul/.env.secret not found. Create it before first deployment."
             exit 1
@@ -67,13 +67,11 @@ jobs:
 
           cd ~/on-seoul
 
-          # .env: compose 변수만 갱신 (이미지 태그, repo owner)
-          touch .env
-          sed -i "/^API_TAG=/d" .env
-          sed -i "/^GITHUB_REPOSITORY_OWNER=/d" .env
-          echo "API_TAG=${SHA}" >> .env
-          echo "GITHUB_REPOSITORY_OWNER=${REPO_OWNER,,}" >> .env
+          # .env.deploy: CI에서 결정되는 변수들 (이미지 태그, 레포 소유자)
+          echo "API_TAG=${SHA}" > .env.deploy
+          echo "GITHUB_REPOSITORY_OWNER=${REPO_OWNER,,}" >> .env.deploy
 
-          docker compose pull api
-          docker compose up -d --no-deps api
+          docker compose -f docker-compose-app.yml --env-file .env.deploy pull api
+          docker compose -f docker-compose-app.yml --env-file .env.deploy up -d --no-deps api
           docker image prune -f
+
