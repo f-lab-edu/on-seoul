@@ -1,10 +1,10 @@
-from typing import Any, Optional
+from typing import Any
 
 
 class OnSeoulAgentException(Exception):
     """AI 서비스 기본 예외 클래스"""
 
-    def __init__(self, message: str, detail: Optional[Any] = None):
+    def __init__(self, message: str, detail: Any | None = None):
         super().__init__(message)
         self.message = message
         self.detail = detail
