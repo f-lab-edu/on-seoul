@@ -1,6 +1,6 @@
 # on-seoul-agent
 
-서울시 공공서비스 예약 정보에 대한 자연어 질의를 처리하는 AI 서비스입니다. FastAPI + LangGraph 기반의 멀티에이전트 오케스트레이션으로 사용자 의도를 분류하고, 적절한 도구를 호출하여 답변을 생성합니다.
+서울시 공공서비스 예약 정보에 대한 자연어 질의를 처리하는 AI 서비스입니다. FastAPI + LangChain 기반의 멀티에이전트 오케스트레이션으로 사용자 의도를 분류하고, 적절한 도구를 호출하여 답변을 생성합니다. (MVP는 LangChain 으로 구축하며, 안정화 이후 LangGraph 로 전환합니다.)
 
 ---
 
@@ -102,7 +102,7 @@ on-seoul-agent/
 ├── routers/
 │   └── chat.py              # POST /chat/stream — SSE 스트리밍 엔드포인트
 ├── agents/
-│   ├── graph.py             # LangGraph 워크플로우 조립
+│   ├── workflow.py          # LangChain(LCEL) 워크플로우 조립 — 이후 LangGraph(graph.py)로 전환 예정
 │   ├── router_agent.py      # 의도 분류
 │   ├── sql_agent.py         # SQL 조회 에이전트
 │   ├── vector_agent.py      # 벡터 검색 에이전트
@@ -112,10 +112,10 @@ on-seoul-agent/
 │   ├── vector_search.py     # pgvector 유사도 검색
 │   └── map_search.py        # 반경 검색 + GeoJSON 반환
 ├── llm/
-│   ├── client.py            # LLM API 호출 추상화 (Claude / GPT)
+│   ├── client.py            # LLM API 호출 추상화 (Gemini / GPT)
 │   └── embedder.py          # 텍스트 → 벡터 변환
 ├── schemas/
-│   ├── state.py             # AgentState (LangGraph 공유 상태)
+│   ├── state.py             # AgentState (LangChain 워크플로우 공유 상태, LangGraph 전환 대비 규약 유지)
 │   ├── events.py            # SSE 이벤트 타입
 │   └── chat.py              # ChatRequest / ChatResponse
 ├── core/
@@ -134,8 +134,8 @@ on-seoul-agent/
 | 영역 | 기술 |
 |---|---|
 | 프레임워크 | FastAPI |
-| 에이전트 오케스트레이션 | LangChain + LangGraph |
-| LLM | OpenAI (Claude / GPT 전환 가능) |
+| 에이전트 오케스트레이션 | LangChain (MVP) → LangGraph (Post-MVP 전환 예정) |
+| LLM | Gemini 2.0 Flash (기본) / GPT-4o-mini (폴백) |
 | DB | PostgreSQL + pgvector (async SQLAlchemy) |
 | 캐시 | Redis |
 | 패키지 관리 | uv |

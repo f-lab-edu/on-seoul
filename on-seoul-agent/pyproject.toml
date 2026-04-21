@@ -1,17 +1,19 @@
 [project]
 name = "on-seoul-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI 서비스(멀티에이전트 오케스트레이션)"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "aiohttp>=3.13.5",
+    "aiolimiter>=1.2.1",
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
     "fastapi==0.135.3",
     "httpx>=0.28.1",
     "langchain>=1.2.15",
     "langchain-community>=0.4.1",
+    "langchain-google-genai>=4.2.2",
     "langchain-openai>=1.1.12",
     "langgraph>=1.1.6",
     "openai>=2.31.0",
@@ -28,4 +30,17 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "ruff>=0.15.10",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "-m 'not external_api'"
+markers = [
+    "external_api: 실제 외부 API를 호출하는 연동 테스트",
+]
+# pytest-asyncio는 테스트마다 새 이벤트 루프를 생성한다.
+# 모듈 레벨 AsyncLimiter 싱글톤이 여러 루프에서 재사용될 때 aiolimiter가 RuntimeWarning을 발생시키는데,
+# 이는 프로덕션(단일 이벤트 루프 서버)에는 영향이 없는 테스트 전용 현상이므로 억제한다.
+filterwarnings = [
+    "ignore:This AsyncLimiter instance is being re-used across loops:RuntimeWarning",
 ]

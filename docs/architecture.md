@@ -21,7 +21,7 @@ ai-service/
 │   ├── vector_search.py           # pgvector 임베딩 유사도 검색
 │   └── map_search.py              # earthdistance + cube 반경 검색, GeoJSON 반환
 ├── llm/
-│   ├── client.py                  # LLM API 호출 추상화 (Claude / GPT)
+│   ├── client.py                  # LLM API 호출 추상화 (Gemini / GPT)
 │   └── embedder.py                # 텍스트 → 벡터 변환 (임베딩 모델 호출)
 ├── schemas/
 │   ├── state.py                   # AgentState — LangGraph 공유 상태 정의

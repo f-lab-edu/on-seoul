@@ -13,8 +13,7 @@
 ```mermaid
 erDiagram
     users {
-        bigserial   id                  PK
-        varchar     email               UK
+        bigserial   id          PK
         varchar     nickname
         varchar     status
     }
@@ -44,9 +43,9 @@ erDiagram
         timestamp   created_at
     }
 
-    users           ||--o{ chat_rooms         : "user_id"
-    chat_rooms      ||--o{ chat_messages      : "room_id"
-    chat_messages   ||--o| chat_agent_traces  : "message_id (논리 참조)"
+    users        ||--o{ chat_rooms        : "user_id"
+    chat_rooms   ||--o{ chat_messages     : "room_id"
+    chat_messages ||--o| chat_agent_traces : "message_id (논리 참조)"
 ```
 
 > `chat_agent_traces`는 `on_ai` DB에 위치하므로 `message_id`는 물리적 FK 없이 논리 참조로 관리한다.
@@ -59,9 +58,7 @@ erDiagram
 
 `chat_rooms`, `chat_messages`는 `on_data`에 둔다. 조회, 페이징, 제목 수정 모두 API 서비스가 처리하는 사용자 도메인 데이터이기 때문이다.
 
-`chat_agent_traces`는 `on_ai`에 둔다. 
-1. AI 서비스(`on_ai_app`)가 LangGraph 실행 완료 후 직접 INSERT할 수 있어야 하는데, `on_data`에 두면 AI 서비스에 쓰기 권한을 별도로 부여해야 하고 서비스 경계가 흐려진다. 
-2. `on_ai`는 AI 서비스가 전담하는 DB이므로 trace 저장 위치로 자연스럽다.
+`chat_agent_traces`는 `on_ai`에 둔다. AI 서비스(`on_ai_app`)가 LangGraph 실행 완료 후 직접 INSERT할 수 있어야 하는데, `on_data`에 두면 AI 서비스에 쓰기 권한을 별도로 부여해야 하고 서비스 경계가 흐려진다.
 
 ### 2. seq 채번: PostgreSQL Sequence
 
