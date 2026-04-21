@@ -1,5 +1,6 @@
-plugins {
-    id 'org.springframework.boot'
+
+tasks.named('bootJar') {
+    archiveFileName = 'app.jar'
 }
 
 dependencies {
@@ -15,3 +16,5 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
     runtimeOnly 'org.postgresql:postgresql'
 }
+
+bootJar.enabled = true

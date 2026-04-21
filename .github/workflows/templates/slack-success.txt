@@ -1,0 +1,5 @@
+✅ *{{COMPONENT_NAME}} 배포 성공*
+- *커밋:* `{{COMMIT_SHA}}` - {{COMMIT_MSG}}
+- *프로젝트:* on-seoul
+- *상태:* 성공 (Success)
+- *내용:* 배포가 성공적으로 완료되었습니다.

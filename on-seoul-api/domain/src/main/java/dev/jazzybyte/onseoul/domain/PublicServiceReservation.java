@@ -171,4 +171,10 @@ public class PublicServiceReservation {
     public void softDelete() {
         this.deletedAt = LocalDateTime.now();
     }
+
+    public void updateCoords(BigDecimal x, BigDecimal y) {
+        this.coordX = x;
+        this.coordY = y;
+        this.lastSyncedAt = LocalDateTime.now();
+    }
 }

@@ -1,0 +1,6 @@
+🚨 *{{COMPONENT_NAME}} 배포 실패*
+- *커밋:* `{{COMMIT_SHA}}` - {{COMMIT_MSG}}
+- *프로젝트:* on-seoul
+- *실패 단계:* {{FAILED_STEP}}
+- *에러 요약:* {{ERROR_MSG}}
+- *상세 로그:* {{RUN_URL}}
