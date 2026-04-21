@@ -96,9 +96,11 @@ on-seoul-api/                                    # 루트 (공통 빌드 설정,
 │   └── scheduler/
 │       └── CollectionScheduler.java             # 일 1회 수집 트리거 → CollectionService → ChangeLogService → NotificationService
 │   └── security/
-│       ├── SecurityConfig.java                  # Spring Security 설정 (세션 기반)
-│       ├── CustomUserDetailsService.java
-│       └── SessionAuthFilter.java               # 요청마다 세션 검증
+│       ├── SecurityConfig.java                  # Spring Security 설정 (Stateless, OAuth2 Login + JWT 검증)
+│       ├── JwtTokenProvider.java                # JWT 생성 / 파싱 / 검증 (Access + Refresh)
+│       ├── JwtAuthenticationFilter.java         # 요청마다 Authorization 헤더에서 JWT 추출 → 인증 객체 설정
+│       ├── OAuth2SuccessHandler.java            # OAuth2 로그인 성공 시 JWT 발급 + 프론트엔드 리다이렉트
+│       └── OAuth2UserService.java               # OAuth2 사용자 정보 로드 + 최초 로그인 시 회원 자동 생성
 │
 └── migration-scripts/                           # DB 마이그레이션 SQL
 ```

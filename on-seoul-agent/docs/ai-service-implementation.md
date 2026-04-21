@@ -46,11 +46,11 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 
 ### Phase 4. 다중 DB 연동 + 개발용 seed 임베딩
 
-- [ ] `core/database.py` — 두 개의 Engine/Session 정의 (`on_ai_app` CRUD용, `on_data_reader` SELECT용)
-- [ ] 세션 DI (`Depends`) 로 라우터/툴에서 주입하도록 구성 
-- [ ] `on_data_reader` 권한 제한(SELECT only) 검증 — `INSERT`/`UPDATE` 시도 시 권한 오류 발생 확인
+- [x] `core/database.py` — 두 개의 Engine/Session 정의 (`on_ai_app` CRUD용, `on_data_reader` SELECT용)
+- [x] 세션 DI (`Depends`) 로 라우터/툴에서 주입하도록 구성 
+- [x] `on_data_reader` 권한 제한(SELECT only) 검증 — `INSERT`/`UPDATE` 시도 시 권한 오류 발생 확인
 - [ ] `on_ai` DDL 적용 스크립트 실행 및 연결 smoke test
-- [ ] `scripts/embed_metadata.py` 최소 구현 — 100 건 seed 데이터 적재 (Agent 개발 중 `service_embeddings` 조회 가능 상태 확보)
+- [x] `scripts/embed_metadata.py` 최소 구현 — 100 건 seed 데이터 적재 (Agent 개발 중 `service_embeddings` 조회 가능 상태 확보)
 
 ### Phase 5. LangChain Agent 구현
 
