@@ -17,7 +17,13 @@ from core.config import settings
 # on_ai DB — AI 서비스 전용 (service_embeddings, chat_agent_traces)
 # ---------------------------------------------------------------------------
 
-_on_ai_engine = create_async_engine(settings.on_ai_database_url, echo=settings.debug)
+# statement_cache_size=0: pgvector 타입(vector)을 asyncpg prepared statement에서 사용할 때
+# 라이브러리 로드 타이밍 문제가 발생할 수 있어 캐시를 비활성화한다.
+_on_ai_engine = create_async_engine(
+    settings.on_ai_database_url,
+    echo=settings.debug,
+    connect_args={"statement_cache_size": 0},
+)
 _OnAiSession = async_sessionmaker(_on_ai_engine, expire_on_commit=False)
 
 

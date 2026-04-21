@@ -90,7 +90,11 @@ _BATCH_SIZE = 20  # 임베딩 API 병렬 호출 단위 (rate limit 고려)
 
 async def run(limit: int | None) -> None:
     on_data_engine = create_async_engine(settings.on_data_database_url, echo=False)
-    on_ai_engine = create_async_engine(settings.on_ai_database_url, echo=False)
+    on_ai_engine = create_async_engine(
+        settings.on_ai_database_url,
+        echo=False,
+        connect_args={"statement_cache_size": 0},  # pgvector + asyncpg prepared statement 호환성
+    )
     OnDataSession = async_sessionmaker(on_data_engine, expire_on_commit=False)
     OnAiSession = async_sessionmaker(on_ai_engine, expire_on_commit=False)
 
@@ -163,7 +167,7 @@ async def _upsert_batch(
                 INSERT INTO service_embeddings
                     (service_id, service_name, metadata, embedding, updated_at)
                 VALUES
-                    (:service_id, :service_name, :metadata::jsonb, :embedding::vector, NOW())
+                    (:service_id, :service_name, CAST(:metadata AS jsonb), CAST(:embedding AS vector), NOW())
                 ON CONFLICT (service_id) DO UPDATE SET
                     service_name = EXCLUDED.service_name,
                     metadata     = EXCLUDED.metadata,
