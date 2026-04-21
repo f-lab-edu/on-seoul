@@ -1,6 +1,10 @@
 package dev.jazzybyte.onseoul.collector.config;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -9,10 +13,15 @@ import java.time.Duration;
 @Getter
 @Setter
 @ConfigurationProperties(prefix = "seoul.api")
+@RequiredArgsConstructor
 public class SeoulApiProperties {
 
-    private String key;
+    @NotBlank(message = "seoul.api.key 설정 값은 필수입니다.")
+    private final String key;
+    // non-final: @Setter로 생성되는 setter를 통해 Spring Boot yml 바인딩 및 테스트 오버라이드 가능
     private String baseUrl = "http://openapi.seoul.go.kr:8088";
+    @Min(value = 10, message = "pageSize는 최소 10 이상이어야 합니다.")
+    @Max(value = 1000, message = "pageSize는 최대 1000 이하여야 합니다.")
     private int pageSize = 200;
     private int maxRetries = 3;
     /** 재시도 간 최대 백오프 대기 시간 (초). 하루 1회 배치이므로 넉넉하게 설정 */
