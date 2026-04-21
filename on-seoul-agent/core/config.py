@@ -31,6 +31,8 @@ class Settings(BaseSettings):
 
     # 임베딩 — Gemini, output_dimensionality=1536 (DDL vector(1536) 기준)
     embedding_model: str = "models/gemini-embedding-2-preview"
+    # Gemini Embedding API rate limit (요청/분). 유료: 최대 1500, 무료: 100. 기본값 60(보수적)
+    gemini_embed_rpm: int = 70
 
 
 settings = Settings()
