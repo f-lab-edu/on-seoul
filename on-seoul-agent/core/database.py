@@ -7,6 +7,7 @@ DB 계정 구성
 """
 
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -57,5 +58,24 @@ async def get_ai_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def get_data_db() -> AsyncGenerator[AsyncSession, None]:
     """on_data DB 세션 — SELECT 전용. tools/sql_search, tools/map_search에서 Depends로 주입."""
+    async with _OnDataSession() as session:
+        yield session
+
+
+# ---------------------------------------------------------------------------
+# 워크플로우 직접 호출용 context manager (FastAPI DI 외부에서 사용)
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def ai_session_ctx() -> AsyncGenerator[AsyncSession, None]:
+    """on_ai DB 세션 context manager — 워크플로우 / 배치 스크립트용."""
+    async with _OnAiSession() as session:
+        yield session
+
+
+@asynccontextmanager
+async def data_session_ctx() -> AsyncGenerator[AsyncSession, None]:
+    """on_data DB 세션 context manager — 워크플로우 / 배치 스크립트용."""
     async with _OnDataSession() as session:
         yield session

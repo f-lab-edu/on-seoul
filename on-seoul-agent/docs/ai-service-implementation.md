@@ -62,10 +62,10 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 
 ### Phase 6. LangChain 워크플로우 구축
 
-- [ ] `agents/workflow.py` — `RunnableBranch` / `RunnableLambda` 로 Router → (SQL | Vector | Map | Fallback) → Answer 분기 조립
-- [ ] 워크플로우 입출력을 `AgentState` 기반으로 통일 (LangGraph 전환 시 교체 용이성 확보)
-- [ ] 실행 완료 훅에서 `chat_agent_traces`(intent, 경로, 소요시간 등) 적재하도록 구성
-- [ ] 워크플로우 단독 실행 테스트 (DB/LLM Mocking으로 전체 흐름 검증)
+- [x] `agents/workflow.py` — `AgentWorkflow` 클래스로 Router → (SQL | Vector | Map | Fallback) → Answer 분기 조립
+- [x] 워크플로우 입출력을 `AgentState` 기반으로 통일 (LangGraph 전환 시 교체 용이성 확보)
+- [x] 실행 완료 훅에서 `chat_agent_traces`(intent, 경로, 소요시간 등) 적재하도록 구성
+- [x] 워크플로우 단독 실행 테스트 (DB/LLM Mocking으로 전체 흐름 검증, 13건)
 
 ---
 
