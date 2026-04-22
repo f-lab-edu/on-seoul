@@ -34,8 +34,9 @@ class Settings(BaseSettings):
 
     # 임베딩 — Gemini, output_dimensionality=1536 (DDL vector(1536) 기준)
     embedding_model: str = "models/gemini-embedding-2-preview"
-    # Gemini Embedding API rate limit (요청/분). 유료: 최대 1500, 무료: 100. 기본값 60(보수적)
-    gemini_embed_rpm: int = 70
+    # Gemini Embedding API rate limit (요청/분). 유료: 최대 1500, 무료: 100.
+    # 버스트 제거 후 실효 간격 = 60/rpm 초. 무료 티어 안전값: 60 이하 권장.
+    gemini_embed_rpm: int = 60
 
 
 settings = Settings()
