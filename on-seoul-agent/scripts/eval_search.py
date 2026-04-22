@@ -20,9 +20,17 @@ from pathlib import Path
 # 프로젝트 루트를 sys.path에 추가 (scripts/ 에서 실행 시 패키지 임포트를 위해)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from langchain_core.embeddings import Embeddings
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from core.config import settings
+try:
+    from core.config import settings
+except Exception as exc:
+    sys.exit(
+        f"[eval_search] 환경변수 설정 오류: {exc}\n"
+        ".env 파일 또는 ON_AI_DATABASE_URL / GOOGLE_API_KEY 환경변수를 확인하세요."
+    )
+
 from llm.client import get_embeddings
 from tools.vector_search import vector_search
 
@@ -84,8 +92,8 @@ def _print_results(results: list[dict]) -> None:
 async def _run_query(
     query: str,
     top_k: int,
-    embeddings,
-    session,
+    embeddings: Embeddings,
+    session: AsyncSession,
 ) -> None:
     _print_header(query)
     query_vector = await embeddings.aembed_query(query)

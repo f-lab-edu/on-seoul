@@ -19,6 +19,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 TOP_K: int = 10
 MIN_SIMILARITY: float = 0.6
 
+# pre-filter로 허용되는 metadata 필드 화이트리스트.
+# 아래 상수에서만 WHERE 절 조건 문자열을 조립하며, 런타임 외부 값은 bind 파라미터로만 전달한다.
+# 새 필드를 추가할 때는 반드시 정적 조건 문자열과 함께 이 상수에 등록해야 한다.
+_ALLOWED_PREFILTER_CLAUSES: dict[str, str] = {
+    "max_class_name": "metadata->>'max_class_name' = :max_class_name",
+    "area_name":      "metadata->>'area_name' = :area_name",
+    "service_status": "metadata->>'service_status' = :service_status",
+}
+
 
 async def vector_search(
     session: AsyncSession,
@@ -58,7 +67,13 @@ async def vector_search(
         service_id, service_name, metadata, similarity 키를 가진 딕셔너리 리스트.
         결과 없으면 빈 리스트.
     """
-    # pre-filter 조건을 정적 템플릿으로 구성. 값은 bind 파라미터 사용.
+    # pre-filter 조건을 화이트리스트(_ALLOWED_PREFILTER_CLAUSES)에서 조립한다.
+    # 조건 문자열은 상수에서만 가져오며, 필터 값은 bind 파라미터로만 전달한다.
+    filter_inputs: dict[str, str | None] = {
+        "max_class_name": max_class_name,
+        "area_name": area_name,
+        "service_status": service_status,
+    }
     pre_filter_clauses: list[str] = []
     bind: dict = {
         "query_vector": str(query_vector),
@@ -66,17 +81,10 @@ async def vector_search(
         "top_k": top_k,
     }
 
-    if max_class_name is not None:
-        pre_filter_clauses.append("metadata->>'max_class_name' = :max_class_name")
-        bind["max_class_name"] = max_class_name
-
-    if area_name is not None:
-        pre_filter_clauses.append("metadata->>'area_name' = :area_name")
-        bind["area_name"] = area_name
-
-    if service_status is not None:
-        pre_filter_clauses.append("metadata->>'service_status' = :service_status")
-        bind["service_status"] = service_status
+    for field, value in filter_inputs.items():
+        if value is not None:
+            pre_filter_clauses.append(_ALLOWED_PREFILTER_CLAUSES[field])
+            bind[field] = value
 
     pre_filter_sql = ""
     if pre_filter_clauses:

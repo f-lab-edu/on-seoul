@@ -157,7 +157,7 @@ async def _fetch_existing_service_ids(session: AsyncSession) -> set[str]:
 
 async def _fetch_rows(session: AsyncSession, limit: int | None) -> list[dict]:
     """on_data.public_service_reservations 에서 소프트 삭제되지 않은 행을 조회한다."""
-    sql = """
+    _BASE_SQL = """
         SELECT
             service_id, service_name, service_gubun,
             max_class_name, min_class_name,
@@ -171,10 +171,14 @@ async def _fetch_rows(session: AsyncSession, limit: int | None) -> list[dict]:
         WHERE deleted_at IS NULL
         ORDER BY id
     """
+    bind: dict = {}
     if limit is not None:
-        sql += f" LIMIT {limit}"
+        sql = text(_BASE_SQL + " LIMIT :limit")
+        bind["limit"] = limit
+    else:
+        sql = text(_BASE_SQL)
 
-    result = await session.execute(text(sql))
+    result = await session.execute(sql, bind)
     keys = result.keys()
     return [dict(zip(keys, row)) for row in result.fetchall()]
 

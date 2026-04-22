@@ -54,6 +54,8 @@ class VectorAgent:
             {"message": state["message"]}
         )
         query_vector = await self._embeddings.aembed_query(refined.refined_query)
+        # TODO(Phase 15): Router Agent가 AgentState에 max_class_name/area_name/service_status를
+        # 채우면 여기서 state에서 추출하여 pre-filter로 전달한다.
         rows = await vector_search(session, query_vector)
         return {
             **state,

@@ -32,7 +32,9 @@ CREATE INDEX IF NOT EXISTS idx_service_embeddings_service_id
 CREATE INDEX IF NOT EXISTS idx_service_embeddings_hnsw
     ON service_embeddings USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
--- 실행 후 ef_search 조정: SET hnsw.ef_search = 40;
+-- ef_search 조정 방법:
+--   세션 레벨(재연결 시 초기화): SET hnsw.ef_search = 40;
+--   영속 적용: ALTER SYSTEM SET hnsw.ef_search = 40; → SELECT pg_reload_conf();
 
 -- ============================================================
 -- chat_agent_traces

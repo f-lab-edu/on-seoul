@@ -6,11 +6,7 @@ Mock DB 세션으로 SQL 실행 경로와 bind 파라미터를 검증한다.
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from tools.vector_search import MIN_SIMILARITY, TOP_K, vector_search
-
-pytestmark = pytest.mark.asyncio
 
 
 def _make_session(rows: list[dict]) -> MagicMock:
@@ -126,3 +122,95 @@ class TestVectorSearchBindParams:
         await vector_search(session, _SAMPLE_VECTOR, min_similarity=0.8)
         bind = session.execute.call_args[0][1]
         assert bind["min_similarity"] == 0.8
+
+    async def test_min_similarity_zero_passes_all_rows(self):
+        """min_similarity=0.0 전달 시 threshold bind 파라미터에 0.0이 정확히 설정된다."""
+        session = _make_session([])
+        await vector_search(session, _SAMPLE_VECTOR, min_similarity=0.0)
+        bind = session.execute.call_args[0][1]
+        assert bind["min_similarity"] == 0.0
+
+
+class TestVectorSearchAllFilters:
+    async def test_all_three_prefilters_present_in_bind(self):
+        """세 pre-filter를 동시에 전달하면 bind에 세 키가 모두 포함된다."""
+        session = _make_session([])
+        await vector_search(
+            session,
+            _SAMPLE_VECTOR,
+            max_class_name="체육",
+            area_name="강남구",
+            service_status="접수중",
+        )
+        bind = session.execute.call_args[0][1]
+        assert bind["max_class_name"] == "체육"
+        assert bind["area_name"] == "강남구"
+        assert bind["service_status"] == "접수중"
+
+    async def test_all_three_prefilters_appear_in_sql_text(self):
+        """세 pre-filter를 동시에 전달하면 SQL 문자열에 세 조건 절이 모두 포함된다."""
+        executed_sql_texts: list[str] = []
+
+        async def _capture_execute(stmt, params=None):
+            # SQLAlchemy text() 객체에서 문자열 추출
+            executed_sql_texts.append(str(stmt))
+            mock_result = MagicMock()
+            mock_result.keys.return_value = ["service_id", "service_name", "metadata", "similarity"]
+            mock_result.fetchall.return_value = []
+            return mock_result
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture_execute)
+
+        await vector_search(
+            session,
+            _SAMPLE_VECTOR,
+            max_class_name="체육",
+            area_name="강남구",
+            service_status="접수중",
+        )
+
+        assert len(executed_sql_texts) == 1
+        sql_text = executed_sql_texts[0]
+        assert "max_class_name" in sql_text, "max_class_name 조건이 SQL에 없음"
+        assert "area_name" in sql_text, "area_name 조건이 SQL에 없음"
+        assert "service_status" in sql_text, "service_status 조건이 SQL에 없음"
+
+    async def test_prefilter_values_not_inlined_in_sql_text(self):
+        """SQL Injection 방지: pre-filter 값이 SQL 문자열에 직접 삽입되지 않는다.
+
+        필터 값은 bind 파라미터로만 전달되어야 한다. SQL 문자열에
+        실제 값(예: '체육', '강남구', '접수중')이 포함되어서는 안 된다.
+        """
+        injected_values = [
+            "'; DROP TABLE service_embeddings; --",
+            "' OR '1'='1",
+            "<script>alert(1)</script>",
+        ]
+
+        executed_sql_texts: list[str] = []
+
+        async def _capture_execute(stmt, params=None):
+            executed_sql_texts.append(str(stmt))
+            mock_result = MagicMock()
+            mock_result.keys.return_value = ["service_id", "service_name", "metadata", "similarity"]
+            mock_result.fetchall.return_value = []
+            return mock_result
+
+        for bad_value in injected_values:
+            executed_sql_texts.clear()
+            session = MagicMock()
+            session.execute = AsyncMock(side_effect=_capture_execute)
+
+            await vector_search(
+                session,
+                _SAMPLE_VECTOR,
+                max_class_name=bad_value,
+                area_name=bad_value,
+                service_status=bad_value,
+            )
+
+            sql_text = executed_sql_texts[0]
+            assert bad_value not in sql_text, (
+                f"SQL Injection 위험: 값 '{bad_value}'이 SQL 문자열에 직접 삽입됨"
+            )
