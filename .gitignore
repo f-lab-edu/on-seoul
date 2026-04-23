@@ -8,6 +8,7 @@ __pycache__/
 !.env.example
 dist/
 *.egg-info/
+.coverage
 
 # Java / Spring Boot
 target/

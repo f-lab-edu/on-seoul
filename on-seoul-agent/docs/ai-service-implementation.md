@@ -112,7 +112,6 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 ### Phase 12. API 엔드포인트
 
 - [ ] `routers/chat.py` — `POST /chat/stream` (room_id/message_id 수신 → LangChain 워크플로우 실행 → SSE 스트리밍)
-- [ ] `routers/notification.py` — `POST /notification/template` (변경 이력 기반 알림 메시지 생성)
 - [ ] `main.py`에 라우터 등록 및 전역 에러 핸들러 구성
 
 ---
