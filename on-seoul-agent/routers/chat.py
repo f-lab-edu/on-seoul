@@ -87,15 +87,15 @@ async def _stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
             "final",
             {
                 "message_id": result["message_id"],
-                "answer": result["answer"],
-                "intent": result["intent"].value if result["intent"] else None,
+                "answer": result.get("answer") or "",
+                "intent": result.get("intent").value if result.get("intent") else None,
                 "title": result.get("title"),
             },
         )
 
-    except Exception as exc:
-        logger.exception("chat/stream 처리 중 예외 발생")
-        yield sse_frame("error", {"message": str(exc)})
+    except Exception:
+        logger.exception("워크플로우 실행 중 오류")
+        yield sse_frame("error", {"message": "서비스 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."})
 
 
 @router.post("/stream")
