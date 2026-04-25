@@ -14,7 +14,7 @@ on-seoul은 네 개의 바운디드 컨텍스트로 구성된다.
 | 인증 (Auth) | on-seoul-api | User |
 | 수집 (Collection) | on-seoul-api | ApiSourceCatalog, PublicServiceReservation, CollectionHistory |
 | 채팅 (Chat) | on-seoul-api | ChatRoom, ChatMessage |
-| AI 에이전트 (AI Agent) | on-seoul-agent (외부) | AgentState, SearchResult |
+| AI 에이전트 (AI Agent) | on-seoul-agent (외부, on_ai DB) | AgentState, SearchResult, ChatAgentTrace |
 
 ```mermaid
 graph LR
@@ -39,15 +39,19 @@ graph LR
         ChatRoom --o ChatMessage
     end
 
-    subgraph AI["AI 에이전트 도메인 (외부 서비스)"]
+    subgraph AI["AI 에이전트 도메인 (외부 서비스, on_ai DB)"]
         direction TB
         AgentWorkflow["Router → SQL/Vector/Map\n→ Answer"]
+        ChatAgentTrace["ChatAgentTrace\n(AR)"]
     end
 
     ChatRoom -. "userId (ID 참조)" .-> User
     CollectionHistory -. "sourceId (ID 참조)" .-> ApiSourceCatalog
     ServiceChangeLog -. "serviceId (자연키 참조)" .-> PublicServiceReservation
     COLLECTION -. "SSE 스트리밍 / 알림 템플릿" .-> AI
+    ChatAgentTrace -. "messageId\n(논리 참조, DB 다름)" .-> ChatMessage
+
+    style ChatAgentTrace fill:#90EE90,stroke:#228B22
     CHAT -. "SSE 릴레이" .-> AI
 
     style User fill:#90EE90,stroke:#228B22
@@ -261,11 +265,48 @@ classDiagram
 
 ## 5. AI 에이전트 도메인 (외부 바운디드 컨텍스트)
 
-`on-seoul-agent` (Python FastAPI)가 담당하는 별도 서비스다. API Service(`on-seoul-api`)와는 포트 인터페이스로만 통신하며, Java 도메인 모델을 공유하지 않는다.
+`on-seoul-agent` (Python FastAPI)가 담당하는 별도 서비스다. 전용 DB(`on_ai`)를 가지며, API Service(`on-seoul-api`)와는 포트 인터페이스로만 통신한다.
+
+### ChatAgentTrace 애그리거트
+
+LangGraph 에이전트 실행 메타데이터를 저장한다. `ASSISTANT` 역할의 메시지에만 생성된다.
+
+```mermaid
+classDiagram
+    class ChatAgentTrace {
+        <<AggregateRoot>>
+        +Long id
+        +Long messageId
+        +JsonB trace
+        +OffsetDateTime createdAt
+    }
+
+    class AgentTracePayload {
+        <<ValueObject>>
+        +List~String~ nodePath
+        +List~ToolCallResult~ toolCalls
+        +Map~String,Long~ durationMs
+    }
+
+    ChatAgentTrace *-- AgentTracePayload : trace (JSONB)
+    ChatAgentTrace ..> ChatMessage : messageId\n논리 참조 (DB 다름, FK 없음)
+```
+
+**설계 결정:**
+
+| 항목 | 내용 |
+|---|---|
+| DB | `on_ai` (on-seoul-agent 전용). `on_data`의 `chat_messages`와 물리 FK 불가 |
+| `messageId` 참조 | 논리 참조(자연키). DB가 달라 JOIN 불가, 조회는 API Service가 message_id로 직접 요청 |
+| `trace` 컬럼 | JSONB. node 경로·tool call 결과·소요 시간 등 실행 메타. 스키마 유연성이 필요해 JSONB 선택 |
+| 생성 조건 | `ChatMessageRole = ASSISTANT`인 메시지에만 생성 (사용자 발화에는 생성 안 함) |
+| 불변성 | 생성 후 수정 없음 (실행 결과 audit log) |
+
+### 서비스 경계 및 포트 인터페이스
 
 ```mermaid
 graph LR
-    subgraph "on-seoul-api (Java)"
+    subgraph "on-seoul-api (Java, on_data DB)"
         ChatUseCase["Chat UseCase"]
         AiStreamPort["AiAgentStreamPort\n(Outbound Port)"]
         NotifyPort["AiAgentNotificationTemplatePort\n(Outbound Port)"]
@@ -273,18 +314,20 @@ graph LR
         ChatUseCase --> NotifyPort
     end
 
-    subgraph "on-seoul-agent (Python) — 외부 BC"
+    subgraph "on-seoul-agent (Python, on_ai DB)"
         Router["Router Agent\n의도 분류"]
         SQL["SQL Agent\n정형 조회"]
         Vector["Vector Agent\n유사도 검색"]
         Map["Map Search\n반경 검색"]
         Answer["Answer Agent\n자연어 답변 생성"]
+        TraceStore["ChatAgentTrace\n(on_ai DB 저장)"]
 
         Router --> SQL
         Router --> Vector
         Router --> Map
         SQL --> Answer
         Vector --> Answer
+        Answer --> TraceStore
     end
 
     AiStreamPort -. "POST /chat/stream\nSSE" .-> Router
@@ -295,7 +338,7 @@ graph LR
 
 | 포트 | 방향 | 프로토콜 | 비고 |
 |---|---|---|---|
-| `AiAgentStreamPort` | API → AI | HTTP SSE (astream_events) | 질문 → 토큰 스트림 |
+| `AiAgentStreamPort` | API → AI | HTTP SSE (astream_events) | 질문 → 토큰 스트림. 완료 후 messageId 포함 |
 | `AiAgentNotificationTemplatePort` | API → AI | HTTP POST/Response | 변경 이벤트 → 알림 메시지 생성 |
 
 ---
@@ -314,5 +357,6 @@ graph LR
 | `ChatRoom.userId` | `User` | ID 참조 | 채팅 ↔ 인증 도메인 경계 분리 |
 | `CollectionHistory.sourceId` | `ApiSourceCatalog` | ID 참조 | 수집 이력이 소스 설정에 느슨하게 의존 |
 | `ServiceChangeLog.serviceId` | `PublicServiceReservation` | 자연키(String) | 서울 API의 고유 ID. 도메인 객체 없이 참조 가능 |
+| `ChatAgentTrace.messageId` | `ChatMessage` | 논리 참조 (DB 다름) | on_ai ↔ on_data 크로스 DB. 물리 FK 불가, GIN 인덱스로 조회 |
 
 > **원칙:** 바운디드 컨텍스트 경계를 넘는 참조는 반드시 ID(또는 자연키)로만 한다. 객체 그래프를 경계 밖으로 노출하지 않는다.
