@@ -1,6 +1,7 @@
 package dev.jazzybyte.onseoul.controller;
 
-import dev.jazzybyte.onseoul.collector.service.CollectionService;
+import dev.jazzybyte.onseoul.adapter.in.web.CollectionController;
+import dev.jazzybyte.onseoul.domain.port.in.CollectDatasetUseCase;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,7 +28,7 @@ class CollectionControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private CollectionService collectionService;
+    private CollectDatasetUseCase collectDatasetUseCase;
 
     @Test
     @DisplayName("POST /admin/collection/trigger 호출 시 collectAll()이 실행되고 200을 반환한다")
@@ -35,6 +36,6 @@ class CollectionControllerTest {
         mockMvc.perform(post("/admin/collection/trigger"))
                 .andExpect(status().isOk());
 
-        verify(collectionService).collectAll();
+        verify(collectDatasetUseCase).collectAll();
     }
 }

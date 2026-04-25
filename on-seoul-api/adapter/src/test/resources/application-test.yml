@@ -1,0 +1,18 @@
+jwt:
+  secret: dGVzdC1zZWNyZXQta2V5LWZvci1qdW5pdC10ZXN0cy10aGlzLWlzLTI1Ni1iaXQ=
+  access-token-minutes: 15
+  refresh-token-minutes: 10080
+
+seoul:
+  api:
+    key: test-key
+    base-url: http://localhost
+    page-size: 200
+    max-retries: 1
+    max-backoff-seconds: 1
+    connect-timeout-ms: 1000
+    response-timeout-seconds: 5
+
+kakao:
+  api:
+    key: test-key

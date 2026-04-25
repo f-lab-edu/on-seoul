@@ -1,0 +1,13 @@
+
+dependencies {
+    implementation project(':domain')
+    implementation 'org.springframework:spring-tx'
+    implementation 'org.springframework:spring-context'
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+    testCompileOnly 'org.projectlombok:lombok'
+    testAnnotationProcessor 'org.projectlombok:lombok'
+}
+
+bootJar.enabled = false
+jar.enabled = true

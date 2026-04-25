@@ -1,7 +1,10 @@
 
 dependencies {
     api project(':common')
-
-    api 'org.springframework.boot:spring-boot-starter-data-jpa'
-    api 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'jakarta.validation:jakarta.validation-api'
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
 }
+
+bootJar.enabled = false
+jar.enabled = true

@@ -56,3 +56,5 @@ firebase-adminsdk*.json
 
 # Gemini
 GEMINI.md
+# Claude Code hooks workspace (handoff logs, session summaries)
+.claude/_workspace/

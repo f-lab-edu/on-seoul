@@ -1,9 +1,18 @@
 package dev.jazzybyte.onseoul;
 
-import dev.jazzybyte.onseoul.collector.service.CollectionService;
-import dev.jazzybyte.onseoul.collector.service.GeocodingService;
-import dev.jazzybyte.onseoul.collector.service.UpsertService;
-import dev.jazzybyte.onseoul.repository.UserRepository;
+import dev.jazzybyte.onseoul.application.service.CollectDatasetService;
+import dev.jazzybyte.onseoul.application.service.GeocodingService;
+import dev.jazzybyte.onseoul.application.service.UpsertService;
+import dev.jazzybyte.onseoul.domain.port.out.GeocodingPort;
+import dev.jazzybyte.onseoul.domain.port.out.LoadApiSourceCatalogPort;
+import dev.jazzybyte.onseoul.domain.port.out.LoadPublicServicePort;
+import dev.jazzybyte.onseoul.domain.port.out.LoadUserPort;
+import dev.jazzybyte.onseoul.domain.port.out.RefreshTokenStorePort;
+import dev.jazzybyte.onseoul.domain.port.out.SaveCollectionHistoryPort;
+import dev.jazzybyte.onseoul.domain.port.out.SavePublicServicePort;
+import dev.jazzybyte.onseoul.domain.port.out.SaveServiceChangeLogPort;
+import dev.jazzybyte.onseoul.domain.port.out.SaveUserPort;
+import dev.jazzybyte.onseoul.domain.port.out.SeoulDatasetFetchPort;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -12,12 +21,6 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
-/**
- * 애플리케이션 컨텍스트 로딩 검증.
- *
- * <p>DB/Redis 실제 연결은 로컬 환경에서 .env를 통한 bootRun으로 검증한다.
- * 자동 설정을 제외해 외부 인프라 없이도 컨텍스트 구성 오류를 감지할 수 있다.</p>
- */
 @Slf4j
 @SpringBootTest
 @TestPropertySource(properties = {
@@ -35,21 +38,17 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 })
 class OnSeoulApiApplicationTests {
 
-    // JPA/Redis가 제외된 테스트 컨텍스트에서 JPA 의존 빈을 대체한다
-    @MockitoBean
-    CollectionService collectionService;
-
-    @MockitoBean
-    UpsertService upsertService;
-
-    @MockitoBean
-    GeocodingService geocodingService;
-
-    @MockitoBean
-    UserRepository userRepository;
-
-    @MockitoBean
-    StringRedisTemplate stringRedisTemplate;
+    @MockitoBean LoadUserPort loadUserPort;
+    @MockitoBean SaveUserPort saveUserPort;
+    @MockitoBean RefreshTokenStorePort refreshTokenStorePort;
+    @MockitoBean LoadPublicServicePort loadPublicServicePort;
+    @MockitoBean SavePublicServicePort savePublicServicePort;
+    @MockitoBean LoadApiSourceCatalogPort loadApiSourceCatalogPort;
+    @MockitoBean SaveCollectionHistoryPort saveCollectionHistoryPort;
+    @MockitoBean SaveServiceChangeLogPort saveServiceChangeLogPort;
+    @MockitoBean SeoulDatasetFetchPort seoulDatasetFetchPort;
+    @MockitoBean GeocodingPort geocodingPort;
+    @MockitoBean StringRedisTemplate stringRedisTemplate;
 
     @Test
     void contextLoads(ApplicationContext applicationContext) {
@@ -67,5 +66,4 @@ class OnSeoulApiApplicationTests {
         }
         log.info("Total dev.jazzybyte.onseoul beans: {}", onSeoulBeans);
     }
-
 }

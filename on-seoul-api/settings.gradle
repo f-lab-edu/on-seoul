@@ -2,5 +2,6 @@ rootProject.name = 'on-seoul-api'
 
 include 'common'
 include 'domain'
-include 'collector'
+include 'application'
+include 'adapter'
 include 'app'
