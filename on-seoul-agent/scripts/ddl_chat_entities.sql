@@ -26,9 +26,15 @@ CREATE TABLE IF NOT EXISTS service_embeddings (
 CREATE INDEX IF NOT EXISTS idx_service_embeddings_service_id
     ON service_embeddings (service_id);
 
--- HNSW 인덱스 (코사인 유사도). 데이터 적재 후 추가한다.
--- CREATE INDEX idx_service_embeddings_hnsw
---     ON service_embeddings USING hnsw (embedding vector_cosine_ops);
+-- HNSW 인덱스 (코사인 유사도). 데이터 적재 완료 후 실행한다.
+-- Phase 9 파라미터: m=16(연결수), ef_construction=64(빌드품질), ef_search=40(쿼리정확도)
+-- 데이터 10000건 이상 시 m=32, ef_construction=128 재검토 권고
+CREATE INDEX IF NOT EXISTS idx_service_embeddings_hnsw
+    ON service_embeddings USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+-- ef_search 조정 방법:
+--   세션 레벨(재연결 시 초기화): SET hnsw.ef_search = 40;
+--   영속 적용: ALTER SYSTEM SET hnsw.ef_search = 40; → SELECT pg_reload_conf();
 
 -- ============================================================
 -- chat_agent_traces

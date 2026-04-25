@@ -1,0 +1,170 @@
+name: deploy ai
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'on-seoul-agent/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest        # GitHub 호스팅 runner — 빌드 전용
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        id: login_ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: docker_push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./on-seoul-agent
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/on-seoul-agent:latest
+            ghcr.io/${{ github.repository_owner }}/on-seoul-agent:${{ github.sha }}
+
+      # Build 단계 실패 알림
+      - name: Load and replace failure template (Build)
+        if: failure()
+        run: |
+          COMPONENT_NAME="on-seoul-agent"
+          if [[ "${{ steps.login_ghcr.outcome }}" == "failure" ]]; then
+            FAILED_STEP="GHCR 로그인"
+            ERROR_MSG="컨테이너 레지스트리 인증 실패"
+          elif [[ "${{ steps.docker_push.outcome }}" == "failure" ]]; then
+            FAILED_STEP="Docker 빌드/푸시"
+            ERROR_MSG="이미지 생성 또는 GHCR 업로드 실패"
+          else
+            FAILED_STEP="기타 빌드 단계"
+            ERROR_MSG="빌드 과정 중 알 수 없는 오류 발생"
+          fi
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          COMMIT_MSG=$(git log -1 --pretty=format:"%s")
+
+          # 템플릿 파일 읽기 및 치환
+          TEMPLATE=$(cat .github/workflows/templates/slack-failure.txt)
+          TEMPLATE="${TEMPLATE//\{\{COMPONENT_NAME\}\}/$COMPONENT_NAME}"
+          TEMPLATE="${TEMPLATE//\{\{FAILED_STEP\}\}/$FAILED_STEP}"
+          TEMPLATE="${TEMPLATE//\{\{ERROR_MSG\}\}/$ERROR_MSG}"
+          TEMPLATE="${TEMPLATE//\{\{RUN_URL\}\}/$RUN_URL}"
+          TEMPLATE="${TEMPLATE//\{\{COMMIT_SHA\}\}/$COMMIT_SHA}"
+          TEMPLATE="${TEMPLATE//\{\{COMMIT_MSG\}\}/$COMMIT_MSG}"
+
+          {
+            echo 'SLACK_MESSAGE<<EOF'
+            echo "$TEMPLATE"
+            echo 'EOF'
+          } >> $GITHUB_ENV
+
+      - name: Slack Notification on Build Failure
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_COLOR: '#ff0000'
+          SLACK_TITLE: '배포 실패 (Build Job)'
+          SLACK_MESSAGE: ${{ env.SLACK_MESSAGE }}
+
+  deploy:
+    needs: build
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy agent
+        id: deploy_agent
+        env:
+          SHA: ${{ github.sha }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          mkdir -p ~/on-seoul
+          cp docker-compose-app.yml ~/on-seoul/
+          if [ ! -f ~/on-seoul/.env.secret ]; then
+            echo "ERROR: ~/on-seoul/.env.secret not found."
+            exit 1
+          fi
+          cd ~/on-seoul
+          echo "AGENT_TAG=${SHA}" > .env.deploy
+          echo "GITHUB_REPOSITORY_OWNER=${REPO_OWNER,,}" >> .env.deploy
+          docker compose -f docker-compose-app.yml --env-file .env.deploy pull agent
+          docker compose -f docker-compose-app.yml --env-file .env.deploy up -d --no-deps agent
+          docker image prune -f
+
+      # 배포 성공 시 템플릿 로드 및 알림
+      - name: Load and replace success template
+        if: success()
+        run: |
+          COMPONENT_NAME="on-seoul-agent"
+          COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          COMMIT_MSG=$(git log -1 --pretty=format:"%s")
+
+          # 템플릿 파일 읽기 및 치환
+          TEMPLATE=$(cat .github/workflows/templates/slack-success.txt)
+          TEMPLATE="${TEMPLATE//\{\{COMPONENT_NAME\}\}/$COMPONENT_NAME}"
+          TEMPLATE="${TEMPLATE//\{\{COMMIT_SHA\}\}/$COMMIT_SHA}"
+          TEMPLATE="${TEMPLATE//\{\{COMMIT_MSG\}\}/$COMMIT_MSG}"
+
+          {
+            echo 'SLACK_MESSAGE<<EOF'
+            echo "$TEMPLATE"
+            echo 'EOF'
+          } >> $GITHUB_ENV
+
+      - name: Slack Notification on Success
+        if: success()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_COLOR: '#36a64f'
+          SLACK_TITLE: '배포 결과'
+          SLACK_MESSAGE: ${{ env.SLACK_MESSAGE }}
+
+      # Deploy 단계 실패 알림
+      - name: Load and replace failure template (Deploy)
+        if: failure()
+        run: |
+          COMPONENT_NAME="on-seoul-agent"
+          if [[ "${{ steps.deploy_agent.outcome }}" == "failure" ]]; then
+            FAILED_STEP="서버 배포 실행"
+            ERROR_MSG="docker-compose 실행 또는 이미지 컨테이너 교체 실패"
+          else
+            FAILED_STEP="기타 배포 단계"
+            ERROR_MSG="서버 환경 또는 권한 설정 중 오류 발생"
+          fi
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          COMMIT_MSG=$(git log -1 --pretty=format:"%s")
+
+          # 템플릿 파일 읽기 및 치환
+          TEMPLATE=$(cat .github/workflows/templates/slack-failure.txt)
+          TEMPLATE="${TEMPLATE//\{\{COMPONENT_NAME\}\}/$COMPONENT_NAME}"
+          TEMPLATE="${TEMPLATE//\{\{FAILED_STEP\}\}/$FAILED_STEP}"
+          TEMPLATE="${TEMPLATE//\{\{ERROR_MSG\}\}/$ERROR_MSG}"
+          TEMPLATE="${TEMPLATE//\{\{RUN_URL\}\}/$RUN_URL}"
+          TEMPLATE="${TEMPLATE//\{\{COMMIT_SHA\}\}/$COMMIT_SHA}"
+          TEMPLATE="${TEMPLATE//\{\{COMMIT_MSG\}\}/$COMMIT_MSG}"
+
+          {
+            echo 'SLACK_MESSAGE<<EOF'
+            echo "$TEMPLATE"
+            echo 'EOF'
+          } >> $GITHUB_ENV
+
+      - name: Slack Notification on Deploy Failure
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_COLOR: '#ff0000'
+          SLACK_TITLE: '배포 실패 (Deploy Job)'
+          SLACK_MESSAGE: ${{ env.SLACK_MESSAGE }}

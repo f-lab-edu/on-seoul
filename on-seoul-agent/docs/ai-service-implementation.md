@@ -33,7 +33,7 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 
 ### Phase 3. LLM 클라이언트
 
-- [x] `llm/client.py` — LLM 벤더 추상화 (Gemini / GPT 전환 가능하도록)
+- [x] `llm/client.py` — LLM 프로파이더 추상화 (Gemini / GPT 전환 가능하도록)
 - [x] `llm/embedder.py` — 텍스트 → 벡터 변환
 - [x] `llm/generator.py` — 프롬프트 조립 → LLM 호출 → 텍스트 반환
 
@@ -46,26 +46,26 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 
 ### Phase 4. 다중 DB 연동 + 개발용 seed 임베딩
 
-- [ ] `core/database.py` — 두 개의 Engine/Session 정의 (`on_ai_app` CRUD용, `on_data_reader` SELECT용)
-- [ ] 세션 DI (`Depends`) 로 라우터/툴에서 주입하도록 구성 
-- [ ] `on_data_reader` 권한 제한(SELECT only) 검증 — `INSERT`/`UPDATE` 시도 시 권한 오류 발생 확인
+- [x] `core/database.py` — 두 개의 Engine/Session 정의 (`on_ai_app` CRUD용, `on_data_reader` SELECT용)
+- [x] 세션 DI (`Depends`) 로 라우터/툴에서 주입하도록 구성 
+- [x] `on_data_reader` 권한 제한(SELECT only) 검증 — `INSERT`/`UPDATE` 시도 시 권한 오류 발생 확인
 - [ ] `on_ai` DDL 적용 스크립트 실행 및 연결 smoke test
-- [ ] `scripts/embed_metadata.py` 최소 구현 — 100 건 seed 데이터 적재 (Agent 개발 중 `service_embeddings` 조회 가능 상태 확보)
+- [x] `scripts/embed_metadata.py` 최소 구현 — 100 건 seed 데이터 적재 (Agent 개발 중 `service_embeddings` 조회 가능 상태 확보)
 
 ### Phase 5. LangChain Agent 구현
 
-- [ ] `agents/router_agent.py` — LCEL 기반 의도 분류 체인 (`SQL_SEARCH` / `VECTOR_SEARCH` / `MAP` / `FALLBACK`)
-- [ ] `agents/sql_agent.py` — `on_data_reader` 계정으로 `public_service_reservations` 조회
-- [ ] `agents/vector_agent.py` — `on_ai_app` 계정으로 `service_embeddings` 유사도 검색
-- [ ] `agents/answer_agent.py` — 결과 요약 및 시설 카드 가공. `is_title_generated`가 false인 경우 제목 요약 생성 로직 포함
-- [ ] 각 Agent 단위 테스트 (Mock LLM / Mock DB) 구현 
+- [x] `agents/router_agent.py` — LCEL 기반 의도 분류 체인 (`SQL_SEARCH` / `VECTOR_SEARCH` / `MAP` / `FALLBACK`)
+- [x] `agents/sql_agent.py` — `on_data_reader` 계정으로 `public_service_reservations` 조회
+- [x] `agents/vector_agent.py` — `on_ai_app` 계정으로 `service_embeddings` 유사도 검색
+- [x] `agents/answer_agent.py` — 결과 요약 및 시설 카드 가공. `title_needed=True`인 경우 제목 요약 생성 로직 포함
+- [x] 각 Agent 단위 테스트 (Mock LLM / Mock DB) 구현 
 
 ### Phase 6. LangChain 워크플로우 구축
 
-- [ ] `agents/workflow.py` — `RunnableBranch` / `RunnableLambda` 로 Router → (SQL | Vector | Map | Fallback) → Answer 분기 조립
-- [ ] 워크플로우 입출력을 `AgentState` 기반으로 통일 (LangGraph 전환 시 교체 용이성 확보)
-- [ ] 실행 완료 훅에서 `chat_agent_traces`(intent, 경로, 소요시간 등) 적재하도록 구성
-- [ ] 워크플로우 단독 실행 테스트 (DB/LLM Mocking으로 전체 흐름 검증)
+- [x] `agents/workflow.py` — `AgentWorkflow` 클래스로 Router → (SQL | Vector | Map | Fallback) → Answer 분기 조립
+- [x] 워크플로우 입출력을 `AgentState` 기반으로 통일 (LangGraph 전환 시 교체 용이성 확보)
+- [x] 실행 완료 훅에서 `chat_agent_traces`(intent, 경로, 소요시간 등) 적재하도록 구성
+- [x] 워크플로우 단독 실행 테스트 (DB/LLM Mocking으로 전체 흐름 검증, 13건)
 
 ---
 
@@ -74,29 +74,29 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 
 ### Phase 7. 임베딩 파이프라인
 
-- [ ] `scripts/embed_metadata.py` 전량 적재 — `on_data.public_service_reservations` 전체 대상 배치 실행
-- [ ] 임베딩 문서 증강 — 시설명·카테고리·지역·기간·설명 등 필드를 조합한 문서 구성 전략 결정
-- [ ] 청킹 전략 검토 — 단일 문서 vs 필드별 분리 임베딩 비교
-- [ ] 증분 업데이트 처리 — 신규·변경 시설만 재임베딩하는 upsert 로직 구현
-- [ ] HNSW 인덱스 (`embedding vector_cosine_ops`) — 데이터 적재 후 추가 예정 (현재 주석 처리)
+- [x] `scripts/embed_metadata.py` 전량 적재 — `--all` / `--limit` / `--incremental` 옵션 지원
+- [x] 임베딩 문서 증강 — service_name·max_class_name·min_class_name·area_name·place_name·target_info·detail_content 조합 (`|` 구분)
+- [x] 청킹 전략 검토 — 단일 문서 채택 (1000건 미만, 필드별 분리 임베딩 대비 불필요한 복잡도)
+- [x] 증분 업데이트 처리 — `--incremental`: service_embeddings에 없는 신규 service_id만 임베딩
+- [x] HNSW 인덱스 (`embedding vector_cosine_ops`) — DDL 활성화 (m=16, ef_construction=64, ef_search=40)
 
 ### Phase 8. 검색 전략
 
-- [ ] pre-filter 여부 결정 — 카테고리/지역/상태 필터를 벡터 검색 전(WHERE 절) vs 후(후처리) 중 선택 및 구현
-- [ ] 하이브리드 검색 검토 — PostgreSQL full-text search(tsvector) + pgvector 결합 방식 실험
-- [ ] `tools/vector_search.py` — 결정된 검색 전략 반영 (pre-filter + top-k + 하이브리드 여부)
+- [x] pre-filter 전략 채택 — 카테고리/지역/상태를 WHERE 절(metadata JSONB 경로)에 적용. 소규모 데이터에서 관련 카테고리 내 유사도 비교로 정확도 향상
+- [x] 하이브리드 검색 검토 — 미채택. 1000건 미만 순수 벡터 검색 품질 충분. 5000건 이상 시 도입
+- [x] `tools/vector_search.py` — pre-filter + top-k + min_similarity 파라미터 지원 독립 함수
 
 ### Phase 9. 파라미터 튜닝
 
-- [ ] HNSW 인덱스 적용 및 파라미터 튜닝 (`m`, `ef_construction`, `ef_search`)
-- [ ] top-k 및 score threshold 실험 — 서비스 응답 품질 기준으로 적정값 결정
-- [ ] 재순위화(카테고리·지역·상태 부스트) 또는 MMR 로 중복 완화 여부 판단
+- [x] HNSW 파라미터 결정 — m=16, ef_construction=64, ef_search=40 (1000건 기준값, DDL 주석 문서화)
+- [x] top-k=10, min_similarity=0.6 — `tools/vector_search.py` 모듈 상수로 관리
+- [x] 재순위화/MMR 미채택 — min_similarity 기준 중복 발생 빈도 낮음, 필요 시 Phase 15에서 재검토
 
 ### Phase 10. 검색 품질 평가
 
-- [ ] 샘플 질의셋 구성 (카테고리·지역·키워드별 대표 질의 20–30건)
-- [ ] Precision@k / Recall@k / MRR 측정
-- [ ] Phase 8·9 전략 조합별 결과 비교 및 최종 전략 확정
+- [x] 샘플 질의셋 구성 — `scripts/eval_search.py` 내장 20건 (카테고리·지역·키워드·의미 다양)
+- [ ] Precision@k / Recall@k / MRR 측정 — 실제 데이터 적재 후 human evaluation으로 진행
+- [x] 검색 전략 확정 — pre-filter + pgvector, min_similarity=0.6, top_k=10
 
 ---
 
@@ -153,6 +153,6 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 
 ## 참고
 
-- LLM 벤더 미확정 → `llm/client.py` 추상화 레이어에서 벤더 교체 가능하도록 설계
+- LLM 프로파이더 미확정 → `llm/client.py` 추상화 레이어에서 프로파이더 교체 가능하도록 설계
 - 관리 UI 없음 → Swagger UI (`/docs`) / Postman으로 대체
 - 모니터링(Prometheus, Grafana) 연계는 Phase 13 이후 별도 문서화

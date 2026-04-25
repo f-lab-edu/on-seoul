@@ -3,9 +3,19 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/on-seoul-api:${API_TAG:-latest}
     container_name: on-seoul-api
     ports:
-      - "49880:8080"
+      - "49891:8080"
     environment:
       - SPRING_PROFILES_ACTIVE=dev
+    env_file:
+      - .env.deploy
+      - .env.secret
+    restart: always
+
+  agent:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/on-seoul-agent:${AGENT_TAG:-latest}
+    container_name: on-seoul-agent
+    ports:
+      - "49890:8000"
     env_file:
       - .env.deploy
       - .env.secret

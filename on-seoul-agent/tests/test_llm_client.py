@@ -14,6 +14,9 @@ from aiolimiter import AsyncLimiter
 from core.exceptions import ConfigurationException
 from llm.client import _GeminiEmbeddings, _rate_limited, get_chat_model, get_embeddings
 
+# 테스트 전용 빠른 limiter — 실제 대기 없이 rate limit 흐름을 검증할 때 주입한다.
+_FAST_LIMITER = AsyncLimiter(max_rate=1000, time_period=0.001)
+
 
 # ---------------------------------------------------------------------------
 # _rate_limited 데코레이터
@@ -107,12 +110,16 @@ class TestRateLimitedDecorator:
 
 class TestGeminiEmbeddings:
     def _make_embeddings(self, vector: list[float] | None = None) -> _GeminiEmbeddings:
-        """mock base를 주입한 _GeminiEmbeddings 인스턴스를 반환한다."""
+        """mock base + 빠른 limiter를 주입한 _GeminiEmbeddings 인스턴스를 반환한다.
+
+        프로덕션 limiter(60초 간격)를 주입하면 테스트가 수십 초 걸리므로
+        _FAST_LIMITER로 교체하여 실제 대기 없이 동작을 검증한다.
+        """
         base = MagicMock()
         base.embed_query.return_value = vector or [0.1, 0.2]
         base.embed_documents.return_value = [vector or [0.1, 0.2]]
         base.aembed_query = AsyncMock(return_value=vector or [0.1, 0.2])
-        return _GeminiEmbeddings(base)
+        return _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
 
     # --- 동기 위임 ---
 
@@ -144,7 +151,7 @@ class TestGeminiEmbeddings:
         """N개 텍스트 → N개 벡터 반환."""
         base = MagicMock()
         base.aembed_query = AsyncMock(side_effect=lambda t: [float(ord(t[0])), 0.0])
-        emb = _GeminiEmbeddings(base)
+        emb = _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
 
         result = await emb.aembed_documents(["abc", "def", "ghi"])
 
@@ -154,10 +161,10 @@ class TestGeminiEmbeddings:
         assert result[2] == [float(ord("g")), 0.0]
 
     async def test_aembed_documents_calls_aembed_query_for_each_text(self):
-        """aembed_documents는 텍스트 수만큼 aembed_query를 호출한다."""
+        """aembed_documents는 텍스트 수만큼 base.aembed_query를 호출한다."""
         base = MagicMock()
         base.aembed_query = AsyncMock(return_value=[0.0])
-        emb = _GeminiEmbeddings(base)
+        emb = _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
 
         texts = ["a", "b", "c", "d"]
         await emb.aembed_documents(texts)
@@ -171,28 +178,73 @@ class TestGeminiEmbeddings:
         assert result == []
 
     async def test_aembed_query_is_rate_limited(self):
-        """aembed_query에 rate limiter가 적용되어 있다.
+        """rate limiter가 적용되어 버스트를 초과하면 실제 지연이 발생한다.
 
-        로컬 tight limiter(max_rate=3, time_period=1)를 직접 주입하여
-        aembed_documents가 6건 처리 시 실제 지연이 발생하는지 확인한다.
-        autouse patch와 무관하게 로컬 limiter를 사용해 독립적으로 검증한다.
+        tight_limiter(max_rate=3, time_period=1) 주입 → 6건 처리 시 1초 이상 소요.
         """
         tight_limiter = AsyncLimiter(max_rate=3, time_period=1)
-
         base = MagicMock()
         base.aembed_query = AsyncMock(return_value=[0.0])
-        emb = _GeminiEmbeddings(base)
+        emb = _GeminiEmbeddings(base, limiter=tight_limiter)
 
-        @_rate_limited(tight_limiter)
-        async def rate_limited_query(text: str) -> list[float]:
-            return await base.aembed_query(text)
-
-        with patch.object(emb, "aembed_query", rate_limited_query):
-            start = time.monotonic()
-            await emb.aembed_documents(["t1", "t2", "t3", "t4", "t5", "t6"])
-            elapsed = time.monotonic() - start
+        start = time.monotonic()
+        await emb.aembed_documents(["t1", "t2", "t3", "t4", "t5", "t6"])
+        elapsed = time.monotonic() - start
 
         assert elapsed >= 1.0, f"rate limit 미적용 — {elapsed:.2f}s 만에 완료됨"
+
+    async def test_aembed_query_retries_on_429(self):
+        """429 수신 시 재시도하여 결과를 반환한다."""
+        call_count = 0
+
+        async def _fail_once(text: str) -> list[float]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise Exception("429 RESOURCE_EXHAUSTED: rate limit")
+            return [0.1, 0.2]
+
+        base = MagicMock()
+        base.aembed_query = AsyncMock(side_effect=_fail_once)
+        emb = _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
+
+        with patch("llm.client.asyncio.sleep", AsyncMock()):
+            result = await emb.aembed_query("test")
+
+        assert result == [0.1, 0.2]
+        assert call_count == 2
+
+    async def test_aembed_query_raises_after_max_retries(self):
+        """최대 재시도 횟수를 초과하면 예외를 올린다."""
+        base = MagicMock()
+        base.aembed_query = AsyncMock(
+            side_effect=Exception("429 RESOURCE_EXHAUSTED: persistent")
+        )
+        emb = _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
+
+        with (
+            patch("llm.client.asyncio.sleep", AsyncMock()),
+            pytest.raises(Exception, match="429"),
+        ):
+            await emb.aembed_query("test")
+
+    async def test_aembed_query_non_429_raises_immediately(self):
+        """429가 아닌 예외는 재시도 없이 즉시 올린다."""
+        call_count = 0
+
+        async def _network_error(text: str) -> list[float]:
+            nonlocal call_count
+            call_count += 1
+            raise ConnectionError("network failure")
+
+        base = MagicMock()
+        base.aembed_query = AsyncMock(side_effect=_network_error)
+        emb = _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
+
+        with pytest.raises(ConnectionError, match="network failure"):
+            await emb.aembed_query("test")
+
+        assert call_count == 1  # 재시도 없음
 
 
 # ---------------------------------------------------------------------------

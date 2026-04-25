@@ -11,7 +11,7 @@ class OnSeoulAgentException(Exception):
 
 
 class LLMException(OnSeoulAgentException):
-    """LLM 벤더(Gemini, OpenAI 등) 호출 관련 예외"""
+    """LLM 프로파이더(Gemini, OpenAI 등) 호출 관련 예외"""
 
     pass
 
