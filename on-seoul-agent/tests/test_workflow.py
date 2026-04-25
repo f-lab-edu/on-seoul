@@ -107,6 +107,7 @@ def _make_ai_session() -> MagicMock:
     session = MagicMock()
     session.execute = AsyncMock()
     session.commit = AsyncMock()
+    session.rollback = AsyncMock()
     return session
 
 

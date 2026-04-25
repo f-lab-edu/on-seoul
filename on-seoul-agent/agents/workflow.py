@@ -172,6 +172,8 @@ async def _save_trace(
     저장 실패 시 로그만 남기고 워크플로우 결과에 영향을 주지 않는다.
     """
     try:
+        # 이전 트랜잭션이 failed 상태(VectorAgent 예외 등)일 수 있으므로 선행 rollback.
+        await session.rollback()
         trace_json = json.dumps(trace, ensure_ascii=False, default=str)
         await session.execute(
             text(
@@ -183,3 +185,7 @@ async def _save_trace(
         await session.commit()
     except Exception as exc:
         logger.warning("trace 저장 실패 (message_id=%s): %s", message_id, exc)
+        try:
+            await session.rollback()
+        except Exception:
+            pass

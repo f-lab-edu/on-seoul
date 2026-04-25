@@ -133,6 +133,8 @@ def get_chat_model(
             google_api_key=settings.google_api_key,
             model=model or settings.gemini_model,
             temperature=temperature,
+            max_retries=3,
+            timeout=30,
         )
     elif selected_provider == "openai":
         if not settings.openai_api_key:
@@ -142,6 +144,8 @@ def get_chat_model(
             model=model or settings.gpt_model,
             temperature=temperature,
             streaming=streaming,
+            max_retries=3,
+            request_timeout=30,
         )
     else:
         raise ConfigurationException(
