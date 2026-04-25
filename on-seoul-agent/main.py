@@ -9,6 +9,7 @@ from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response
 
 from core.logging import setup_logging
+from middleware.metrics import ProcessTimeMiddleware
 from routers import chat
 
 setup_logging()
@@ -41,6 +42,7 @@ class _CatchAllMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(_CatchAllMiddleware)
+app.add_middleware(ProcessTimeMiddleware)
 
 # ---------------------------------------------------------------------------
 # 라우터 등록
