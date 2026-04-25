@@ -1,10 +1,8 @@
 # app 모듈
 
-Spring Boot 진입점 모듈입니다. 인증(OAuth2 + JWT), 수집 스케줄러 트리거, 전역 예외 처리를 담당합니다.
+Spring Boot 부트스트랩 모듈입니다. `OnSeoulApiApplication.java`와 `application.yml`만 포함하며, 실제 비즈니스 로직은 `application` 모듈과 `adapter` 모듈에 위치합니다.
 
-**책임 범위**: HTTP 요청 수신 → 인증/인가 → 서비스 위임 → 응답 반환
-
-수집 파이프라인 구현은 `collector` 모듈이 담당하며, `app` 모듈의 `CollectionScheduler`는 트리거 역할만 합니다.
+**의존**: `adapter` → `application` → `domain` (헥사고날 아키텍처)
 
 ---
 
@@ -13,132 +11,113 @@ Spring Boot 진입점 모듈입니다. 인증(OAuth2 + JWT), 수집 스케줄러
 ```mermaid
 sequenceDiagram
     participant Client
-    participant App as app 모듈
-    participant Google as Google OAuth2
+    participant Security as adapter/in/security
+    participant UseCase as application/service
     participant Redis
 
-    Client->>App: GET /oauth2/authorization/google
-    App->>Google: 리다이렉트 (인가 요청)
-    Google-->>App: GET /login/oauth2/code/google (콜백)
-    App->>App: OAuth2LoginSuccessHandler<br/>users 테이블 upsert
-    App->>Redis: RT:{userId} 저장 (TTL 7일)
-    App-->>Client: { accessToken, refreshToken }
+    Client->>Security: GET /oauth2/authorization/google
+    Security->>Google: 리다이렉트 (인가 요청)
+    Google-->>Security: GET /login/oauth2/code/google (콜백)
+    Security->>UseCase: SocialLoginUseCase.socialLogin(command)
+    UseCase->>UseCase: users 테이블 upsert
+    UseCase->>Redis: RT:{userId} 저장 (TTL 7일)
+    UseCase-->>Security: TokenResponse
+    Security-->>Client: { accessToken, refreshToken }
 
-    Note over Client,App: 인증된 요청
-    Client->>App: Authorization: Bearer {accessToken}
-    App->>App: JwtAuthenticationFilter<br/>토큰 검증 + SecurityContext 설정
-    App-->>Client: 응답
+    Note over Client,Security: 인증된 요청
+    Client->>Security: Authorization: Bearer {accessToken}
+    Security->>Security: JwtAuthenticationFilter<br/>토큰 검증 + SecurityContext 설정
+    Security-->>Client: 응답
 
-    Note over Client,App: 토큰 갱신 (Token Rotation)
-    Client->>App: POST /auth/token/refresh
-    App->>Redis: RT:{userId} 조회 + 삭제
-    App->>Redis: 새 RT:{userId} 저장 (TTL 7일)
-    App-->>Client: { accessToken, refreshToken } (신규 발급)
+    Note over Client,Security: 토큰 갱신 (Token Rotation)
+    Client->>Security: POST /auth/token/refresh
+    Security->>UseCase: RefreshTokenUseCase.refresh(refreshToken)
+    UseCase->>Redis: RT:{userId} 조회 + 삭제
+    UseCase->>Redis: 새 RT:{userId} 저장 (TTL 7일)
+    UseCase-->>Security: TokenResponse
+    Security-->>Client: { accessToken, refreshToken } (신규 발급)
 ```
 
 ---
 
-## 모듈 구조
+## 주요 컴포넌트 위치
 
-```
-app/
-├── OnSeoulApiApplication.java          # Spring Boot 진입점
-├── auth/
-│   ├── AuthController.java             # POST /auth/token/refresh, POST /auth/logout
-│   ├── AuthService.java                # Refresh Token 검증 + Token Rotation + 로그아웃
-│   └── dto/
-│       ├── TokenResponse.java          # { accessToken, refreshToken }
-│       ├── AccessTokenResponse.java    # { accessToken } (단독 반환용)
-│       └── RefreshRequest.java         # { refreshToken } — @NotBlank 검증
-├── controller/
-│   └── CollectionController.java       # POST /admin/collection/trigger
-├── exception/
-│   └── GlobalExceptionHandler.java     # @RestControllerAdvice — 전역 예외 → JSON 응답
-├── scheduler/
-│   └── CollectionScheduler.java        # @Scheduled 매일 08시 수집 트리거
-└── security/
-    ├── SecurityConfig.java             # 보안 필터 체인 구성
-    ├── OAuth2LoginSuccessHandler.java  # 소셜 로그인 성공 처리 — upsert + JWT 발급
-    └── jwt/
-        ├── JwtProvider.java            # HS256 토큰 생성 · 검증
-        └── JwtAuthenticationFilter.java# Bearer 토큰 파싱 + SecurityContext 설정
-```
+### adapter/in/security/
+
+| 클래스 | 역할 |
+|---|---|
+| `SecurityConfig` | 보안 필터 체인 구성 |
+| `OAuth2LoginSuccessHandler` | 소셜 로그인 콜백 수신 → `SocialLoginUseCase` 호출 → JSON 응답 |
+| `JjwtTokenIssuer` | `TokenIssuerPort` 구현체. HS256 토큰 생성 · 검증 (jjwt) |
+| `JwtAuthenticationFilter` | Bearer 토큰 파싱 + SecurityContext 설정 |
+
+### adapter/in/web/
+
+| 클래스 | 역할 |
+|---|---|
+| `AuthController` | `POST /auth/token/refresh`, `POST /auth/logout` |
+| `CollectionController` | `POST /admin/collection/trigger` |
+| `GlobalExceptionHandler` | `@RestControllerAdvice` — OnSeoulApiException → JSON |
+
+### adapter/in/scheduler/
+
+| 클래스 | 역할 |
+|---|---|
+| `CollectionScheduler` | `@Scheduled` 매일 08시 → `CollectDatasetUseCase` 호출 |
+
+### adapter/out/
+
+| 패키지 | 구현 포트 |
+|---|---|
+| `persistence/user/` | `LoadUserPort`, `SaveUserPort` |
+| `persistence/reservation/` | `LoadPublicServicePort`, `SavePublicServicePort` |
+| `persistence/collection/` | `SaveCollectionHistoryPort`, `SaveServiceChangeLogPort` |
+| `redis/` | `RefreshTokenStorePort` |
+| `seoulapi/` | `SeoulDatasetFetchPort` |
+| `kakao/` | `GeocodingPort` |
+
+### application/service/
+
+| 클래스 | 구현 유스케이스 |
+|---|---|
+| `SocialLoginService` | `SocialLoginUseCase` — users upsert + 토큰 발급 + RT 저장 |
+| `RefreshTokenService` | `RefreshTokenUseCase` — RT 검증 + Token Rotation |
+| `LogoutService` | `LogoutUseCase` — RT 삭제 |
+| `CollectDatasetService` | `CollectDatasetUseCase` — 서울 Open API 수집 + upsert |
 
 ---
 
-## 주요 컴포넌트
+## 토큰 정책
 
-### JwtProvider
-
-HS256 알고리즘으로 Access Token / Refresh Token을 생성하고 검증합니다.
-
-| 토큰 | 만료 | 목적 |
+| 토큰 | 만료 | 저장 위치 |
 |---|---|---|
-| Access Token | 15분 (`jwt.access-token-minutes`) | API 인증 |
-| Refresh Token | 7일 (`jwt.refresh-token-minutes`, 기본 10080분) | Access Token 재발급 |
+| Access Token | 15분 (`jwt.access-token-minutes`) | 클라이언트 메모리 |
+| Refresh Token | 7일 (`jwt.refresh-token-minutes` 기본 10080분) | Redis `RT:{userId}` |
 
-- **알고리즘 고정**: `verifyWith(signingKey)`로 서버 키와 알고리즘을 고정하여 알고리즘 혼용 공격을 차단합니다.
-- **만료/변조 분리**: `ExpiredJwtException` → `EXPIRED_TOKEN`, `SignatureException` → `INVALID_TOKEN`으로 구분하여 클라이언트가 원인을 알 수 있도록 합니다.
-- `extractUserIdSafely(token)`: 예외 없이 `Optional<Long>`을 반환합니다. 필터에서 1회 파싱으로 검증과 userId 추출을 동시에 처리할 때 사용합니다.
+**Token Rotation**: `POST /auth/token/refresh` 호출 시 기존 RT를 즉시 삭제하고 새 토큰 쌍을 발급합니다. 탈취된 RT는 1회 사용 후 무효화됩니다.
 
-### OAuth2LoginSuccessHandler
+---
 
-OAuth2 콜백에서 사용자 upsert와 JWT 발급을 처리합니다.
+## SecurityConfig 접근 규칙
 
-```
-인증 성공
-  └─ (provider, provider_id) 기준 users 테이블 upsert
-      ├─ 신규: INSERT
-      └─ 기존: email / nickname 갱신
-  └─ ACTIVE 여부 확인 — SUSPENDED / DELETED → 403 반환
-  └─ AccessToken + RefreshToken 발급
-  └─ Redis: RT:{userId} = refreshToken (TTL 7일)
-  └─ JSON 응답: { accessToken, refreshToken }
-```
-
-> **보안 참고**: Refresh Token을 JSON body로 반환하면 SPA가 `localStorage`에 저장하게 되어 XSS 취약점이 있습니다. 향후 `HttpOnly; Secure; SameSite=Strict` 쿠키로 이동을 권장합니다.
-
-### AuthService — Token Rotation
-
-`POST /auth/token/refresh` 호출 시 기존 Refresh Token을 즉시 폐기하고 새 토큰 쌍을 발급합니다.
-
-```
-1. refreshToken JWT 검증 + userId 추출
-2. Redis RT:{userId} 존재 + 일치 확인
-3. 기존 Refresh Token 삭제 (Redis)
-4. 사용자 status 확인 — ACTIVE가 아니면 FORBIDDEN
-5. 새 AccessToken + RefreshToken 발급
-6. 새 RT:{userId} 저장 (TTL 7일)
-```
-
-탈취된 Refresh Token은 1회 사용 후 즉시 무효화됩니다.
-
-### SecurityConfig
-
-| 경로 | 접근 규칙 |
+| 경로 | 규칙 |
 |---|---|
 | `/actuator/health` | 인증 불필요 |
-| `/auth/**` | 인증 불필요 (`/auth/logout` 포함) |
+| `/auth/**` | 인증 불필요 |
+| `/oauth2/authorization/**`, `/login/oauth2/code/**` | 인증 불필요 |
 | 그 외 모두 (`/admin/**` 포함) | 인증 필요 |
 
-- 세션 사용 안 함 (`STATELESS`)
-- `JwtAuthenticationFilter`를 `UsernamePasswordAuthenticationFilter` 앞에 등록
-- 401 / 403 응답은 `{"code": "UNAUTHORIZED", "message": "..."}` JSON 형태로 반환
+- 세션: `IF_REQUIRED` (OAuth2 Code Flow의 state 검증 위해 필요, API 인증은 JWT 전용)
+- 401 / 403: `{"code": "UNAUTHORIZED", "message": "..."}` JSON 반환
 
 ---
 
-## 예외 처리
-
-`GlobalExceptionHandler`가 `OnSeoulApiException`을 JSON으로 변환합니다.
-
-```json
-{ "code": "EXPIRED_TOKEN", "message": "만료된 토큰입니다." }
-```
+## 예외 코드
 
 | ErrorCode | HTTP | 발생 상황 |
 |---|---|---|
 | `UNAUTHORIZED` | 401 | 인증 정보 없음 |
-| `FORBIDDEN` | 403 | 권한 없음, 비활성 계정 |
+| `FORBIDDEN` | 403 | 권한 없음, 비활성 계정 (SUSPENDED/DELETED) |
 | `EXPIRED_TOKEN` | 401 | JWT 만료 |
 | `INVALID_TOKEN` | 401 | JWT 변조 / 잘못된 형식 |
 | `INVALID_REFRESH_TOKEN` | 401 | Redis에 없는 Refresh Token |
@@ -147,9 +126,8 @@ OAuth2 콜백에서 사용자 upsert와 JWT 발급을 처리합니다.
 
 ## 설정
 
-`application.yml`에 아래 항목을 추가합니다.
-
 ```yaml
+# application.yml 필수 항목
 spring:
   security:
     oauth2:
@@ -159,38 +137,35 @@ spring:
             client-id: ${GOOGLE_CLIENT_ID}
             client-secret: ${GOOGLE_CLIENT_SECRET}
             scope: openid,email,profile
+          kakao:
+            client-id: ${KAKAO_CLIENT_ID}
+            client-secret: ${KAKAO_CLIENT_SECRET}
 
 jwt:
-  secret: ${JWT_SECRET}                  # Base64 인코딩된 HS256 키 (256비트 이상)
-  access-token-minutes: 15               # Access Token 만료 (기본값 15분)
-  refresh-token-minutes: 10080           # Refresh Token 만료 (기본값 7일)
+  secret: ${JWT_SECRET}          # Base64 인코딩된 HS256 키 (256비트 이상)
+  access-token-minutes: 15
+  refresh-token-minutes: 10080
 ```
 
-**JWT_SECRET 생성 예시**:
+**JWT_SECRET 생성:**
 ```bash
 openssl rand -base64 32
 ```
 
-Redis 설정은 루트 `application.yml`의 `spring.data.redis.*` 항목을 사용합니다.
-
 ---
 
-## 테스트
+## 실행 및 테스트
 
 ```bash
-# app 모듈 테스트만 실행
-./gradlew :app:test
+# 전체 빌드
+./gradlew build
 
-# 전체 테스트
+# 개발 서버 실행
+./gradlew :app:bootRun
+
+# 전체 테스트 (ArchUnit 포함)
 ./gradlew test
+
+# 헬스체크
+curl http://localhost:8080/actuator/health
 ```
-
-테스트 커버리지:
-
-| 대상 | 검증 항목 |
-|---|---|
-| `JwtProvider` | 토큰 생성 · 검증 성공, 만료 토큰, 변조 토큰, Refresh Token 구분 |
-| `JwtAuthenticationFilter` | 유효 토큰 → SecurityContext 설정, 헤더 없음 스킵, 만료/변조 → 401 |
-| `AuthService` | Token Rotation, Redis 없는 경우 401, 비활성 계정 403, 로그아웃 후 재사용 차단 |
-| `AuthController` | 갱신 성공, 유효하지 않은 토큰 401, 입력 검증 실패 400 |
-| `SecurityConfig` | `/actuator/health` 미인증 200, 미인증 보호 경로 401, `/admin/**` 미인증 401 |

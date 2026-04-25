@@ -32,38 +32,49 @@ on-seoul 프로젝트의 API 서비스입니다. 인증, 데이터 수집 스케
 
 ## 프로젝트 구조
 
-Gradle 멀티모듈로 구성되어 있으며, 루트는 공통 빌드 설정만 담고 각 서브모듈이 역할을 분담합니다.
+헥사고날 아키텍처(Ports & Adapters)를 적용한 Gradle 멀티모듈 프로젝트입니다.
 
 ```
-on-seoul-api/                        # 루트 (공통 빌드 설정, 소스 없음)
+on-seoul-api/                        # 루트 (공통 빌드 설정)
 ├── common/                          # 공통 유틸 — 전역 예외(ErrorCode, OnSeoulApiException)
-├── domain/                          # 공용 도메인 — PublicServiceReservation 엔티티 · Repository
-├── collector/                       # 수집 모듈 — 서울시 Open API 수집 파이프라인
-│                                    #            (수집 이력/변경 로그/데이터 소스 카탈로그 포함)
-├── app/                             # 앱 모듈 — Spring Boot 진입점, 컨트롤러, 시큐리티
-│   └── src/main/java/.../onseoul/
-│       ├── OnSeoulApiApplication.java
-│       ├── controller/
-│       ├── service/
-│       ├── scheduler/
-│       └── security/
-├── migration-scripts/               # DB 마이그레이션 SQL
+├── domain/                          # 순수 도메인 (프레임워크 무의존)
+│   ├── model/                       # 도메인 POJO (User, ChatRoom, PublicServiceReservation 등)
+│   └── port/
+│       ├── in/                      # 유스케이스 인터페이스 (XxxUseCase, XxxCommand)
+│       └── out/                     # 외부 의존성 인터페이스 (LoadXxxPort, SaveXxxPort 등)
+├── application/                     # 유스케이스 구현체 (spring-tx만 의존)
+│   └── service/                     # SocialLoginService, RefreshTokenService, CollectDatasetService 등
+├── adapter/                         # 모든 어댑터 (Spring/JPA/Redis/WebClient 등 의존)
+│   ├── in/
+│   │   ├── web/                     # REST 컨트롤러, DTO, GlobalExceptionHandler
+│   │   ├── security/                # SecurityConfig, OAuth2LoginSuccessHandler, JwtAuthenticationFilter
+│   │   └── scheduler/               # CollectionScheduler
+│   └── out/
+│       ├── persistence/             # JPA 엔티티 + Repository + PersistenceAdapter
+│       ├── redis/                   # RefreshTokenRedisAdapter
+│       ├── seoulapi/                # SeoulOpenApiAdapter
+│       └── kakao/                   # KakaoGeocodingAdapter
+├── app/                             # 부트스트랩 (OnSeoulApiApplication.java + application.yml)
 ├── docs/                            # 구현 문서
 ├── build.gradle                     # 루트 빌드 설정 (subprojects 공통)
-└── settings.gradle                  # 모듈 선언 (common, domain, collector, app)
+└── settings.gradle                  # 모듈 선언
 ```
 
 ### 모듈 의존 관계
 
 ```
-app       → domain, collector, common
-collector → domain, common
-domain    → common
+adapter ──▶ application ──▶ domain
+   │                          ▲
+   └──────────────────────────┘  (adapter.out이 domain.port.out 구현)
+
+app → adapter, application, domain, common
 ```
 
-- **common**: 프레임워크 의존성 없는 공통 유틸(전역 예외 등). 모든 모듈이 안전하게 의존 가능.
-- **domain**: 서비스 전역에서 공유하는 JPA 엔티티 (`PublicServiceReservation`).
-- **collector**: 수집 파이프라인 + 수집 운영용 엔티티(`CollectionHistory`, `ServiceChangeLog`, `ApiSourceCatalog`). 이 엔티티들은 수집 모듈 내부에서만 사용되므로 외부 노출하지 않습니다.
+- **common**: 프레임워크 의존 없는 공통 유틸(전역 예외). 모든 모듈이 의존 가능.
+- **domain**: Spring/JPA/Redis에 컴파일 의존하지 않는 순수 POJO + 포트 인터페이스.
+- **application**: 유스케이스 구현체. `spring-tx`(@Transactional)만 허용. 어댑터에 의존 금지.
+- **adapter**: 모든 인프라 어댑터. domain 포트를 구현하고 application 유스케이스를 호출함.
+- **app**: Spring Boot 진입점만 담당. 조립(DI)은 Spring이 처리.
 
 ---
 
