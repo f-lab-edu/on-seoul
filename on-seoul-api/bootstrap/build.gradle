@@ -1,6 +1,6 @@
 
 tasks.named('bootJar') {
-    archiveFileName = 'app.jar'
+    archiveFileName = 'bootstrap.jar'
 }
 
 dependencies {
