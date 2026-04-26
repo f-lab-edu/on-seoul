@@ -1,13 +1,17 @@
 package dev.jazzybyte.onseoul;
 
+import dev.jazzybyte.onseoul.adapter.out.aiservice.AiServicePort;
 import dev.jazzybyte.onseoul.application.service.CollectDatasetService;
 import dev.jazzybyte.onseoul.application.service.GeocodingService;
 import dev.jazzybyte.onseoul.application.service.UpsertService;
 import dev.jazzybyte.onseoul.domain.port.out.GeocodingPort;
 import dev.jazzybyte.onseoul.domain.port.out.LoadApiSourceCatalogPort;
+import dev.jazzybyte.onseoul.domain.port.out.LoadChatRoomPort;
 import dev.jazzybyte.onseoul.domain.port.out.LoadPublicServicePort;
 import dev.jazzybyte.onseoul.domain.port.out.LoadUserPort;
 import dev.jazzybyte.onseoul.domain.port.out.RefreshTokenStorePort;
+import dev.jazzybyte.onseoul.domain.port.out.SaveChatMessagePort;
+import dev.jazzybyte.onseoul.domain.port.out.SaveChatRoomPort;
 import dev.jazzybyte.onseoul.domain.port.out.SaveCollectionHistoryPort;
 import dev.jazzybyte.onseoul.domain.port.out.SavePublicServicePort;
 import dev.jazzybyte.onseoul.domain.port.out.SaveServiceChangeLogPort;
@@ -34,7 +38,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
         "spring.security.oauth2.client.registration.google.client-secret=test",
         "spring.security.oauth2.client.registration.google.scope=openid,email,profile",
         "seoul.api.key=test",
-        "kakao.api.key=test"
+        "kakao.api.key=test",
+        "ai.service.url=http://localhost:8000",
+        "ai.service.stream-timeout-seconds=120"
 })
 class OnSeoulApiApplicationTests {
 
@@ -49,6 +55,10 @@ class OnSeoulApiApplicationTests {
     @MockitoBean SeoulDatasetFetchPort seoulDatasetFetchPort;
     @MockitoBean GeocodingPort geocodingPort;
     @MockitoBean StringRedisTemplate stringRedisTemplate;
+    @MockitoBean SaveChatRoomPort saveChatRoomPort;
+    @MockitoBean LoadChatRoomPort loadChatRoomPort;
+    @MockitoBean SaveChatMessagePort saveChatMessagePort;
+    @MockitoBean AiServicePort aiServicePort;
 
     @Test
     void contextLoads(ApplicationContext applicationContext) {

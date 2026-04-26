@@ -1,14 +1,18 @@
 package dev.jazzybyte.onseoul.security;
 
 import dev.jazzybyte.onseoul.adapter.in.security.JjwtTokenIssuer;
+import dev.jazzybyte.onseoul.adapter.out.aiservice.AiServicePort;
 import dev.jazzybyte.onseoul.domain.port.in.CollectDatasetUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.LogoutUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.RefreshTokenUseCase;
 import dev.jazzybyte.onseoul.domain.port.out.GeocodingPort;
 import dev.jazzybyte.onseoul.domain.port.out.LoadApiSourceCatalogPort;
+import dev.jazzybyte.onseoul.domain.port.out.LoadChatRoomPort;
 import dev.jazzybyte.onseoul.domain.port.out.LoadPublicServicePort;
 import dev.jazzybyte.onseoul.domain.port.out.LoadUserPort;
 import dev.jazzybyte.onseoul.domain.port.out.RefreshTokenStorePort;
+import dev.jazzybyte.onseoul.domain.port.out.SaveChatMessagePort;
+import dev.jazzybyte.onseoul.domain.port.out.SaveChatRoomPort;
 import dev.jazzybyte.onseoul.domain.port.out.SaveCollectionHistoryPort;
 import dev.jazzybyte.onseoul.domain.port.out.SavePublicServicePort;
 import dev.jazzybyte.onseoul.domain.port.out.SaveServiceChangeLogPort;
@@ -44,7 +48,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.security.oauth2.client.registration.google.client-secret=test",
         "spring.security.oauth2.client.registration.google.scope=openid,email,profile",
         "seoul.api.key=test",
-        "kakao.api.key=test"
+        "kakao.api.key=test",
+        "ai.service.url=http://localhost:8000",
+        "ai.service.stream-timeout-seconds=120"
 })
 class SecurityConfigTest {
 
@@ -66,6 +72,10 @@ class SecurityConfigTest {
     @MockitoBean CollectDatasetUseCase collectDatasetUseCase;
     @MockitoBean RefreshTokenUseCase refreshTokenUseCase;
     @MockitoBean LogoutUseCase logoutUseCase;
+    @MockitoBean SaveChatRoomPort saveChatRoomPort;
+    @MockitoBean LoadChatRoomPort loadChatRoomPort;
+    @MockitoBean SaveChatMessagePort saveChatMessagePort;
+    @MockitoBean AiServicePort aiServicePort;
 
     @Test
     @DisplayName("GET /actuator/health — 인증 없이 200을 반환한다")

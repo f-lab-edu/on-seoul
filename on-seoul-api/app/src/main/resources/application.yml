@@ -77,6 +77,11 @@ kakao:
   api:
     key: ${KAKAO_REST_API_KEY}
 
+ai:
+  service:
+    url: ${AI_SERVICE_URL:http://localhost:8000}
+    stream-timeout-seconds: 120
+
 management:
   endpoints:
     web:
