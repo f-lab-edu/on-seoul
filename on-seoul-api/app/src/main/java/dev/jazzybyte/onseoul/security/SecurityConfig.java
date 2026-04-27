@@ -43,15 +43,15 @@ public class SecurityConfig {
                         // OAuth2 Code Flow는 redirect → callback 사이에 state를 세션에 저장해야 하므로
                         // IF_REQUIRED 사용. API 인증은 JwtAuthenticationFilter가 JWT로만 처리.
                         session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
+                // 인증 없이 접근이 필요한 엔드포인트만 명시적으로 `permitAll()`로 등록
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health").permitAll()
-                        .requestMatchers("/auth/**").permitAll()
+                        .requestMatchers("/auth/login", "/auth/token/refresh").permitAll()
                         .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .oauth2Login(oauth2 ->
-                        oauth2.successHandler(oauth2LoginSuccessHandler)
-                )
+                        oauth2.successHandler(oauth2LoginSuccessHandler))
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, authException) ->
                                 writeErrorResponse(response, HttpServletResponse.SC_UNAUTHORIZED,
