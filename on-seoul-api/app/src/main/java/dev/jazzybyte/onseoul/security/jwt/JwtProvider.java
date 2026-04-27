@@ -15,6 +15,8 @@ import java.util.Optional;
 
 @Component
 public class JwtProvider {
+    private static final String ACCESS = "access";
+    private static final String REFRESH = "refresh";
 
     private final SecretKey signingKey;
     private final long accessTokenMinutes;
@@ -31,19 +33,21 @@ public class JwtProvider {
         this.refreshTokenMinutes = refreshTokenMinutes;
     }
 
+
     public String generateAccessToken(long userId) {
-        return buildToken(userId, accessTokenMinutes);
+        return buildToken(userId, accessTokenMinutes, ACCESS);
     }
 
     public String generateRefreshToken(long userId) {
-        return buildToken(userId, refreshTokenMinutes);
+        return buildToken(userId, refreshTokenMinutes, REFRESH);
     }
 
-    private String buildToken(long userId, long ttlMinutes) {
+    private String buildToken(long userId, long ttlMinutes, String tokenType) {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + ttlMinutes * 60_000L);
         return Jwts.builder()
                 .subject(String.valueOf(userId))
+                .claim("type", tokenType)
                 .issuedAt(now)
                 .expiration(expiry)
                 .signWith(signingKey)
@@ -56,26 +60,27 @@ public class JwtProvider {
     }
 
     public Long extractUserId(String token) {
-        Claims claims = parseToken(token);
-        return Long.parseLong(claims.getSubject());
+        return Long.parseLong(parseToken(token).getSubject());
     }
 
-    /**
-     * 토큰을 1회 파싱하여 검증과 userId 추출을 동시에 수행한다.
-     *
-     * <p>유효하지 않거나 만료된 토큰은 {@link Optional#empty()}를 반환한다.
-     * 예외를 던지지 않으므로 필터에서 안전하게 사용할 수 있다.</p>
-     *
-     * @param token JWT 토큰 문자열
-     * @return 유효한 토큰이면 userId를 담은 Optional, 그렇지 않으면 empty
-     */
     public Optional<Long> extractUserIdSafely(String token) {
         try {
             Claims claims = parseToken(token);
+            if (!ACCESS.equals(claims.get("type", String.class))) {
+                return Optional.empty();
+            }
             return Optional.of(Long.parseLong(claims.getSubject()));
         } catch (OnSeoulApiException e) {
             return Optional.empty();
         }
+    }
+
+    public Long extractUserIdFromRefreshToken(String token) {
+        Claims claims = parseToken(token);
+        if (!REFRESH.equals(claims.get("type", String.class))) {
+            throw new OnSeoulApiException(ErrorCode.INVALID_TOKEN, "Refresh Token이 아닙니다.");
+        }
+        return Long.parseLong(claims.getSubject());
     }
 
     private Claims parseToken(String token) {
