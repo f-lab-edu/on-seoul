@@ -50,12 +50,8 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
     /** HttpOnly 쿠키로 전달되는 Refresh Token 쿠키 이름. AuthController와 공유. */
     public static final String REFRESH_TOKEN_COOKIE = "refresh_token";
 
-    /** Redis에 저장되는 Refresh Token TTL (7일). application.yml의 refresh-token-minutes와 맞춤. */
-    private static final long REFRESH_TOKEN_TTL_DAYS       = 7L;
-    /** Access Token 쿠키 maxAge = JWT TTL(15분)과 동일하게 설정. */
-    private static final int  ACCESS_TOKEN_MAX_AGE_SECONDS  = 15 * 60;
-    /** Refresh Token 쿠키 maxAge = Redis TTL(7일)과 동일하게 설정. */
-    private static final long REFRESH_TOKEN_MAX_AGE_SECONDS = 7L * 24 * 60 * 60;
+    /** Access Token 쿠키 maxAge. JWT TTL(15분)과 동일하게 설정. */
+    private static final int ACCESS_TOKEN_MAX_AGE_SECONDS = 15 * 60;
 
     private final UserRepository userRepository;
     private final JwtProvider jwtProvider;
@@ -64,6 +60,12 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
     private final String frontendBaseUrl;
     /** 쿠키 Secure 속성 제어. 프로덕션=true, 로컬 HTTP 개발=false (COOKIE_SECURE=false). */
     private final boolean cookieSecure;
+    /**
+     * Refresh Token Redis TTL(분) — JWT 만료 시간과 동기화.
+     * {@link JwtProvider#getRefreshTokenMinutes()}에서 파생하여 단일 소스를 유지한다.
+     * {@code AuthService}의 Redis TTL과 동일한 값을 사용한다.
+     */
+    private final long refreshTokenTtlMinutes;
 
     public OAuth2LoginSuccessHandler(
             final UserRepository userRepository,
@@ -71,22 +73,20 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
             final org.springframework.data.redis.core.StringRedisTemplate redisTemplate,
             @Value("${app.frontend-base-url}") String frontendBaseUrl,
             @Value("${app.cookie-secure:true}") boolean cookieSecure) {
-        this.userRepository  = userRepository;
-        this.jwtProvider     = jwtProvider;
-        this.redisTemplate   = redisTemplate;
-        this.frontendBaseUrl = frontendBaseUrl;
-        this.cookieSecure    = cookieSecure;
+        this.userRepository        = userRepository;
+        this.jwtProvider           = jwtProvider;
+        this.redisTemplate         = redisTemplate;
+        this.frontendBaseUrl       = frontendBaseUrl;
+        this.cookieSecure          = cookieSecure;
+        // JWT 만료 시간을 단일 소스로 사용 — application.yml의 jwt.refresh-token-minutes와 자동 동기화
+        this.refreshTokenTtlMinutes = jwtProvider.getRefreshTokenMinutes();
     }
 
     /**
      * OAuth2 인증 성공 시 호출된다.
      *
-     * <ol>
-     *   <li>provider + providerId로 기존 사용자 조회 → 없으면 INSERT, 있으면 email/nickname UPDATE</li>
-     *   <li>SUSPENDED/DELETED 계정은 토큰 미발급 후 에러 URL로 리다이렉트</li>
-     *   <li>Access/Refresh Token 발급 → Refresh Token을 Redis에 저장 (TTL 7일)</li>
-     *   <li>두 토큰을 HttpOnly 쿠키로 설정 후 프론트엔드 콜백 URL로 리다이렉트</li>
-     * </ol>
+     * SUSPENDED/DELETED 계정은 토큰 미발급 후 에러 URL로 리다이렉트
+     * 두 토큰을 HttpOnly 쿠키로 설정 후 프론트엔드 콜백 URL로 리다이렉트
      */
     @Override
     public void onAuthenticationSuccess(HttpServletRequest request,
@@ -132,8 +132,8 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
                                 .build()
                 ));
 
-        // SUSPENDED/DELETED 계정은 토큰 발급 없이 에러 리다이렉트
-        if (user.getStatus() != UserStatus.ACTIVE) {
+        // 비활성화된 계정은 토큰 발급 없이 에러 URL로 리다이렉트
+        if (!user.getStatus().isActive()) {
             response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=forbidden");
             return;
         }
@@ -141,10 +141,10 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         String accessToken  = jwtProvider.generateAccessToken(user.getId());
         String refreshToken = jwtProvider.generateRefreshToken(user.getId());
 
-        // Refresh Token을 Redis에 저장. 키: "RT:{userId}", TTL = 7일
-        // 로그아웃/강제만료 시 이 키를 삭제하면 Refresh Token 무효화 가능
+        // Refresh Token을 Redis에 저장. 키: "RT:{userId}"
+        // TTL = jwt.refresh-token-minutes (AuthService와 동일한 소스) → 로그아웃/강제만료 시 키 삭제로 무효화
         String redisKey = "RT:" + user.getId();
-        redisTemplate.opsForValue().set(redisKey, refreshToken, REFRESH_TOKEN_TTL_DAYS, TimeUnit.DAYS);
+        redisTemplate.opsForValue().set(redisKey, refreshToken, refreshTokenTtlMinutes, TimeUnit.MINUTES);
 
         // 두 토큰을 HttpOnly 쿠키로 설정 후 프론트엔드 콜백 페이지로 리다이렉트
         response.addHeader(HttpHeaders.SET_COOKIE, buildAccessCookie(accessToken).toString());
@@ -173,7 +173,8 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
     /**
      * Refresh Token 쿠키를 생성한다.
      *
-     * <p>path="/auth"로 제한하여 refresh/logout 요청에만 전송되도록 노출 범위를 줄인다.</p>
+     * <p>path="/auth"로 제한하여 refresh/logout 요청에만 전송되도록 노출 범위를 줄인다.
+     * maxAge는 JWT 만료 시간({@code jwt.refresh-token-minutes})과 항상 동기화된다.</p>
      *
      * @param token 발급된 Refresh Token JWT 문자열
      */
@@ -183,7 +184,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
                 .secure(cookieSecure)
                 .sameSite("Strict")
                 .path("/auth")
-                .maxAge(REFRESH_TOKEN_MAX_AGE_SECONDS)
+                .maxAge(java.time.Duration.ofMinutes(refreshTokenTtlMinutes))
                 .build();
     }
 

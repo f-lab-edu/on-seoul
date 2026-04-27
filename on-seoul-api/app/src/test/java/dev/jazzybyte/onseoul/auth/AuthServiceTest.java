@@ -16,6 +16,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,8 +63,7 @@ class AuthServiceTest {
         String redisKey = "RT:" + userId;
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get(redisKey)).thenReturn(refreshToken);
-        when(redisTemplate.delete(redisKey)).thenReturn(true);
+        when(valueOperations.getAndDelete(redisKey)).thenReturn(refreshToken);
         when(userRepository.findById(userId)).thenReturn(Optional.of(activeUser(userId)));
 
         TokenResponse result = authService.refresh(refreshToken);
@@ -72,9 +72,10 @@ class AuthServiceTest {
         assertThat(result.refreshToken()).isNotBlank();
         assertThat(jwtProvider.extractUserId(result.accessToken())).isEqualTo(userId);
         assertThat(jwtProvider.extractUserId(result.refreshToken())).isEqualTo(userId);
-        // Old token must be deleted and new one stored
-        verify(redisTemplate).delete(redisKey);
-        verify(valueOperations).set(eq(redisKey), anyString(), eq(7L), any());
+        // getAndDelete로 원자적 삭제됨 — 별도 delete 호출 없음
+        verify(redisTemplate, never()).delete(anyString());
+        // Redis TTL = jwt.refresh-token-minutes (JwtProvider 단일 소스)
+        verify(valueOperations).set(eq(redisKey), anyString(), eq(10080L), eq(TimeUnit.MINUTES));
     }
 
     @Test
@@ -85,16 +86,14 @@ class AuthServiceTest {
         String redisKey = "RT:" + userId;
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get(redisKey)).thenReturn(oldRefreshToken);
-        when(redisTemplate.delete(redisKey)).thenReturn(true);
+        when(valueOperations.getAndDelete(redisKey)).thenReturn(oldRefreshToken);
         when(userRepository.findById(userId)).thenReturn(Optional.of(activeUser(userId)));
 
-        TokenResponse result = authService.refresh(oldRefreshToken);
+        authService.refresh(oldRefreshToken);
 
-        // JWT timestamps differ by at least 1ms → different compact strings
-        // In practice they can be equal only if issued within the same second;
-        // the important invariant is that the old token is deleted from Redis.
-        verify(redisTemplate).delete(redisKey);
+        // getAndDelete가 원자적으로 기존 토큰을 소비함 — 별도 delete 호출 없음
+        verify(redisTemplate, never()).delete(anyString());
+        verify(valueOperations).getAndDelete(redisKey);
     }
 
     @Test
@@ -105,7 +104,7 @@ class AuthServiceTest {
         String redisKey = "RT:" + userId;
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get(redisKey)).thenReturn(null);
+        when(valueOperations.getAndDelete(redisKey)).thenReturn(null);
 
         assertThatThrownBy(() -> authService.refresh(refreshToken))
                 .isInstanceOf(OnSeoulApiException.class);
@@ -120,7 +119,8 @@ class AuthServiceTest {
         String redisKey = "RT:" + userId;
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get(redisKey)).thenReturn(differentToken);
+        // getAndDelete: 꺼낸 값이 달라도 키는 이미 삭제됨 — 재사용 불가
+        when(valueOperations.getAndDelete(redisKey)).thenReturn(differentToken);
 
         assertThatThrownBy(() -> authService.refresh(refreshToken))
                 .isInstanceOf(OnSeoulApiException.class);
@@ -137,8 +137,7 @@ class AuthServiceTest {
         when(suspendedUser.getStatus()).thenReturn(UserStatus.SUSPENDED);
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get(redisKey)).thenReturn(refreshToken);
-        when(redisTemplate.delete(redisKey)).thenReturn(true);
+        when(valueOperations.getAndDelete(redisKey)).thenReturn(refreshToken);
         when(userRepository.findById(userId)).thenReturn(Optional.of(suspendedUser));
 
         assertThatThrownBy(() -> authService.refresh(refreshToken))
@@ -157,8 +156,7 @@ class AuthServiceTest {
         when(deletedUser.getStatus()).thenReturn(UserStatus.DELETED);
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get(redisKey)).thenReturn(refreshToken);
-        when(redisTemplate.delete(redisKey)).thenReturn(true);
+        when(valueOperations.getAndDelete(redisKey)).thenReturn(refreshToken);
         when(userRepository.findById(userId)).thenReturn(Optional.of(deletedUser));
 
         assertThatThrownBy(() -> authService.refresh(refreshToken))

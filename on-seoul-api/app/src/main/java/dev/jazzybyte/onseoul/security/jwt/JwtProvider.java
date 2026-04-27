@@ -75,6 +75,14 @@ public class JwtProvider {
         }
     }
 
+    /**
+     * Refresh Token의 JWT 만료 시간(분)을 반환한다.
+     * Redis TTL 및 쿠키 maxAge 계산의 단일 소스(single source of truth)로 사용된다.
+     */
+    public long getRefreshTokenMinutes() {
+        return refreshTokenMinutes;
+    }
+
     public Long extractUserIdFromRefreshToken(String token) {
         Claims claims = parseToken(token);
         if (!REFRESH.equals(claims.get("type", String.class))) {

@@ -138,7 +138,8 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
                 .contains("Path=/auth");
 
         // Redis에 RT 저장
-        verify(valueOps).set(eq("RT:1"), anyString(), eq(7L), eq(TimeUnit.DAYS));
+        // TTL = jwt.refresh-token-minutes (10080 = 7일). JwtProvider 단일 소스
+        verify(valueOps).set(eq("RT:1"), anyString(), eq(10080L), eq(TimeUnit.MINUTES));
     }
 
     @Test
@@ -214,7 +215,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         assertThat(res.getStatus()).isEqualTo(302);
         assertThat(res.getRedirectedUrl()).contains("status=success");
         assertThat(findSetCookieValue(res, OAuth2LoginSuccessHandler.ACCESS_TOKEN_COOKIE)).isNotNull();
-        verify(valueOps).set(eq("RT:3"), anyString(), eq(7L), eq(TimeUnit.DAYS));
+        verify(valueOps).set(eq("RT:3"), anyString(), eq(10080L), eq(TimeUnit.MINUTES));
     }
 
     @Test
