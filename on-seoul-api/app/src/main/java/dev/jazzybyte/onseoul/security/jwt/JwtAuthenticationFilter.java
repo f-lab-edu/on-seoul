@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.security.jwt;
 
+import dev.jazzybyte.onseoul.security.OAuth2LoginSuccessHandler;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -8,6 +9,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.WebUtils;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -51,10 +53,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     }
 
     private String resolveToken(HttpServletRequest request) {
+        // 1순위: Authorization: Bearer 헤더 (API/모바일 클라이언트)
         String bearerToken = request.getHeader(AUTHORIZATION_HEADER);
         if (StringUtils.hasText(bearerToken) && bearerToken.startsWith(BEARER_PREFIX)) {
             return bearerToken.substring(BEARER_PREFIX.length());
         }
-        return null;
+        // 2순위: access_token HttpOnly 쿠키 (브라우저/SPA 클라이언트)
+        jakarta.servlet.http.Cookie cookie =
+                WebUtils.getCookie(request, OAuth2LoginSuccessHandler.ACCESS_TOKEN_COOKIE);
+        return cookie != null ? cookie.getValue() : null;
     }
 }

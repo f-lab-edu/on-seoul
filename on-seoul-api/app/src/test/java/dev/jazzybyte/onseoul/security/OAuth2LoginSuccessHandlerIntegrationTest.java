@@ -1,7 +1,5 @@
 package dev.jazzybyte.onseoul.security;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.jazzybyte.onseoul.auth.dto.TokenResponse;
 import dev.jazzybyte.onseoul.domain.User;
 import dev.jazzybyte.onseoul.domain.UserStatus;
 import dev.jazzybyte.onseoul.repository.UserRepository;
@@ -14,6 +12,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.http.HttpHeaders;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -22,6 +21,7 @@ import org.springframework.security.oauth2.core.user.DefaultOAuth2User;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,14 +34,14 @@ import static org.mockito.Mockito.*;
 
 /**
  * OAuth2LoginSuccessHandler 통합 검증.
- * Spring 컨텍스트 없이 핸들러 로직(upsert, JWT 발급, Redis 저장)을 직접 검증한다.
+ * Spring 컨텍스트 없이 핸들러 로직(upsert, JWT 발급, Redis 저장, 쿠키 설정, 리다이렉트)을 직접 검증한다.
  */
 @ExtendWith(MockitoExtension.class)
 class OAuth2LoginSuccessHandlerIntegrationTest {
 
-    // application-test.yml 의 JWT secret 과 동일한 값
     private static final String TEST_SECRET =
             "dGVzdC1zZWNyZXQta2V5LWZvci1qdW5pdC10ZXN0cy10aGlzLWlzLTI1Ni1iaXQ=";
+    private static final String FRONTEND_BASE_URL = "http://localhost:3000";
 
     @Mock private UserRepository userRepository;
     @Mock private StringRedisTemplate redisTemplate;
@@ -49,12 +49,13 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
 
     private OAuth2LoginSuccessHandler handler;
     private JwtProvider jwtProvider;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
     void setUp() {
         jwtProvider = new JwtProvider(TEST_SECRET, 15L, 10080L);
-        handler = new OAuth2LoginSuccessHandler(userRepository, jwtProvider, redisTemplate, objectMapper);
+        // cookieSecure=false: 테스트 환경은 HTTP
+        handler = new OAuth2LoginSuccessHandler(
+                userRepository, jwtProvider, redisTemplate, FRONTEND_BASE_URL, false);
     }
 
     private void stubRedis() {
@@ -91,11 +92,20 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         return res;
     }
 
+    /** Set-Cookie 헤더 목록에서 특정 쿠키 이름을 가진 값을 찾아 반환한다. */
+    private String findSetCookieValue(MockHttpServletResponse res, String cookieName) {
+        Collection<String> headers = res.getHeaders(HttpHeaders.SET_COOKIE);
+        return headers.stream()
+                .filter(h -> h.startsWith(cookieName + "="))
+                .findFirst()
+                .orElse(null);
+    }
+
     // ── Google ────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("Google 신규 로그인 — users INSERT + JWT 발급 + Redis(RT:{id}) 저장")
-    void google_new_user_returns_jwt_and_stores_refresh_token() throws Exception {
+    @DisplayName("Google 신규 로그인 — users INSERT + 쿠키 설정 + 성공 리다이렉트")
+    void google_new_user_sets_cookies_and_redirects() throws Exception {
         Map<String, Object> attrs = Map.of(
                 "id", "google-uid-001",
                 "email", "new@gmail.com",
@@ -109,11 +119,25 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
 
         MockHttpServletResponse res = invoke(googleToken(attrs));
 
-        assertThat(res.getStatus()).isEqualTo(200);
-        TokenResponse token = objectMapper.readValue(res.getContentAsString(), TokenResponse.class);
-        assertThat(token.accessToken()).isNotBlank();
-        assertThat(token.refreshToken()).isNotBlank();
-        assertThat(jwtProvider.extractUserId(token.accessToken())).isEqualTo(1L);
+        // 302 리다이렉트 — 성공 콜백 URL
+        assertThat(res.getStatus()).isEqualTo(302);
+        assertThat(res.getRedirectedUrl()).isEqualTo(FRONTEND_BASE_URL + "/oauth/callback?status=success");
+
+        // access_token 쿠키: HttpOnly, maxAge=900, path="/"
+        String accessHeader = findSetCookieValue(res, OAuth2LoginSuccessHandler.ACCESS_TOKEN_COOKIE);
+        assertThat(accessHeader).isNotNull()
+                .contains("HttpOnly")
+                .contains("Max-Age=900")
+                .contains("Path=/");
+
+        // refresh_token 쿠키: HttpOnly, maxAge=604800, path="/auth"
+        String refreshHeader = findSetCookieValue(res, OAuth2LoginSuccessHandler.REFRESH_TOKEN_COOKIE);
+        assertThat(refreshHeader).isNotNull()
+                .contains("HttpOnly")
+                .contains("Max-Age=604800")
+                .contains("Path=/auth");
+
+        // Redis에 RT 저장
         verify(valueOps).set(eq("RT:1"), anyString(), eq(7L), eq(TimeUnit.DAYS));
     }
 
@@ -133,14 +157,14 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
 
         MockHttpServletResponse res = invoke(googleToken(attrs));
 
-        assertThat(res.getStatus()).isEqualTo(200);
-        verify(userRepository).save(existing);                      // 기존 객체 save
-        verify(userRepository, never()).save(argThat(u -> u != existing)); // 새 객체 save 없음
+        assertThat(res.getStatus()).isEqualTo(302);
+        verify(userRepository).save(existing);
+        verify(userRepository, never()).save(argThat(u -> u != existing));
     }
 
     @Test
-    @DisplayName("SUSPENDED 계정 — 403 반환, 토큰 미발급, Redis 미저장")
-    void suspended_user_is_blocked() throws Exception {
+    @DisplayName("SUSPENDED 계정 — 에러 리다이렉트, 쿠키 미발급, Redis 미저장")
+    void suspended_user_redirects_to_error_without_tokens() throws Exception {
         Map<String, Object> attrs = Map.of(
                 "id", "google-uid-002",
                 "email", "bad@gmail.com",
@@ -154,15 +178,21 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
 
         MockHttpServletResponse res = invoke(googleToken(attrs));
 
-        assertThat(res.getStatus()).isEqualTo(403);
+        // 에러 리다이렉트
+        assertThat(res.getStatus()).isEqualTo(302);
+        assertThat(res.getRedirectedUrl()).isEqualTo(FRONTEND_BASE_URL + "/oauth/callback?error=forbidden");
+
+        // 토큰 쿠키 미발급
+        assertThat(findSetCookieValue(res, OAuth2LoginSuccessHandler.ACCESS_TOKEN_COOKIE)).isNull();
+        assertThat(findSetCookieValue(res, OAuth2LoginSuccessHandler.REFRESH_TOKEN_COOKIE)).isNull();
         verifyNoInteractions(valueOps);
     }
 
     // ── Kakao ─────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("Kakao 신규 로그인 — 중첩 속성(kakao_account/properties) 파싱 + JWT 발급")
-    void kakao_new_user_parses_nested_attributes() throws Exception {
+    @DisplayName("Kakao 신규 로그인 — 중첩 속성(kakao_account/properties) 파싱 + 쿠키 설정")
+    void kakao_new_user_parses_nested_attributes_and_sets_cookies() throws Exception {
         Map<String, Object> kakaoAccount = new HashMap<>();
         kakaoAccount.put("email", "kakao@kakao.com");
         Map<String, Object> properties = new HashMap<>();
@@ -181,10 +211,9 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
 
         MockHttpServletResponse res = invoke(kakaoToken(attrs));
 
-        assertThat(res.getStatus()).isEqualTo(200);
-        TokenResponse token = objectMapper.readValue(res.getContentAsString(), TokenResponse.class);
-        assertThat(token.accessToken()).isNotBlank();
-        assertThat(jwtProvider.extractUserId(token.accessToken())).isEqualTo(3L);
+        assertThat(res.getStatus()).isEqualTo(302);
+        assertThat(res.getRedirectedUrl()).contains("status=success");
+        assertThat(findSetCookieValue(res, OAuth2LoginSuccessHandler.ACCESS_TOKEN_COOKIE)).isNotNull();
         verify(valueOps).set(eq("RT:3"), anyString(), eq(7L), eq(TimeUnit.DAYS));
     }
 
@@ -204,6 +233,6 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
 
         MockHttpServletResponse res = invoke(kakaoToken(attrs));
 
-        assertThat(res.getStatus()).isEqualTo(200);
+        assertThat(res.getStatus()).isEqualTo(302);
     }
 }
