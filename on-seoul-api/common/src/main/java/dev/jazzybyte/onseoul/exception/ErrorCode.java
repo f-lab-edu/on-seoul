@@ -13,6 +13,13 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public enum ErrorCode {
 
+    // ── 인증 (AUTH_*) ──────────────────────────────────────────────────────
+    UNAUTHORIZED(401, "UNAUTHORIZED", "인증이 필요합니다."),
+    FORBIDDEN(403, "FORBIDDEN", "접근 권한이 없습니다."),
+    INVALID_TOKEN(401, "INVALID_TOKEN", "유효하지 않은 토큰입니다."),
+    EXPIRED_TOKEN(401, "EXPIRED_TOKEN", "만료된 토큰입니다."),
+    INVALID_REFRESH_TOKEN(401, "INVALID_REFRESH_TOKEN", "유효하지 않은 리프레시 토큰입니다."),
+
     // ── 수집 파이프라인 (COLLECT_*) ────────────────────────────────────────
     COLLECT_API_SERVER_ERROR(502, "COLLECT_API_SERVER_ERROR", "외부 API 서버 오류가 발생했습니다."),
     COLLECT_API_CLIENT_ERROR(400, "COLLECT_API_CLIENT_ERROR", "외부 API 요청이 잘못되었습니다."),

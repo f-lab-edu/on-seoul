@@ -3,10 +3,12 @@ package dev.jazzybyte.onseoul;
 import dev.jazzybyte.onseoul.collector.service.CollectionService;
 import dev.jazzybyte.onseoul.collector.service.GeocodingService;
 import dev.jazzybyte.onseoul.collector.service.UpsertService;
+import dev.jazzybyte.onseoul.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
@@ -23,7 +25,13 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
         "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration," +
         "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration," +
         "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration," +
-        "org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration"
+        "org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration",
+        "jwt.secret=dGVzdC1zZWNyZXQta2V5LWZvci1qdW5pdC10ZXN0cy10aGlzLWlzLTI1Ni1iaXQ=",
+        "spring.security.oauth2.client.registration.google.client-id=test",
+        "spring.security.oauth2.client.registration.google.client-secret=test",
+        "spring.security.oauth2.client.registration.google.scope=openid,email,profile",
+        "seoul.api.key=test",
+        "kakao.api.key=test"
 })
 class OnSeoulApiApplicationTests {
 
@@ -36,6 +44,12 @@ class OnSeoulApiApplicationTests {
 
     @MockitoBean
     GeocodingService geocodingService;
+
+    @MockitoBean
+    UserRepository userRepository;
+
+    @MockitoBean
+    StringRedisTemplate stringRedisTemplate;
 
     @Test
     void contextLoads(ApplicationContext applicationContext) {
