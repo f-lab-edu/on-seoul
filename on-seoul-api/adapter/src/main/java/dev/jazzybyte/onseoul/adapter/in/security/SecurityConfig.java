@@ -3,6 +3,7 @@ package dev.jazzybyte.onseoul.adapter.in.security;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.jazzybyte.onseoul.domain.port.out.TokenIssuerPort;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.MediaType;
@@ -16,6 +17,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
+@Slf4j
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
@@ -38,15 +40,15 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
+                // 인증 없이 접근이 필요한 엔드포인트만 명시적으로 `permitAll()`로 등록
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health").permitAll()
-                        .requestMatchers("/auth/**").permitAll()
+                        .requestMatchers("/auth/login", "/auth/token/refresh", "/auth/logout").permitAll()
                         .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .oauth2Login(oauth2 ->
-                        oauth2.successHandler(oauth2LoginSuccessHandler)
-                )
+                        oauth2.successHandler(oauth2LoginSuccessHandler))
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, authException) ->
                                 writeErrorResponse(response, HttpServletResponse.SC_UNAUTHORIZED,
@@ -68,7 +70,8 @@ public class SecurityConfig {
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
             objectMapper.writeValue(response.getWriter(), Map.of("code", code, "message", message));
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            log.warn("에러 응답 작성 실패: {}", e.getMessage());
         }
     }
 }

@@ -17,6 +17,9 @@ import java.util.Optional;
 @Component
 public class JjwtTokenIssuer implements TokenIssuerPort {
 
+    private static final String ACCESS = "access";
+    private static final String REFRESH = "refresh";
+
     private final SecretKey signingKey;
     private final long accessTokenMinutes;
     private final long refreshTokenMinutes;
@@ -34,19 +37,20 @@ public class JjwtTokenIssuer implements TokenIssuerPort {
 
     @Override
     public String generateAccessToken(long userId) {
-        return buildToken(userId, accessTokenMinutes);
+        return buildToken(userId, accessTokenMinutes, ACCESS);
     }
 
     @Override
     public String generateRefreshToken(long userId) {
-        return buildToken(userId, refreshTokenMinutes);
+        return buildToken(userId, refreshTokenMinutes, REFRESH);
     }
 
-    private String buildToken(long userId, long ttlMinutes) {
+    private String buildToken(long userId, long ttlMinutes, String tokenType) {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + ttlMinutes * 60_000L);
         return Jwts.builder()
                 .subject(String.valueOf(userId))
+                .claim("type", tokenType)
                 .issuedAt(now)
                 .expiration(expiry)
                 .signWith(signingKey)
@@ -60,18 +64,36 @@ public class JjwtTokenIssuer implements TokenIssuerPort {
 
     @Override
     public Long extractUserId(String token) {
-        Claims claims = parseToken(token);
-        return Long.parseLong(claims.getSubject());
+        return Long.parseLong(parseToken(token).getSubject());
     }
 
     @Override
     public Optional<Long> extractUserIdSafely(String token) {
         try {
             Claims claims = parseToken(token);
+            if (!ACCESS.equals(claims.get("type", String.class))) {
+                return Optional.empty();
+            }
             return Optional.of(Long.parseLong(claims.getSubject()));
         } catch (OnSeoulApiException e) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * Refresh Token의 JWT 만료 시간(분)을 반환한다.
+     * Redis TTL 및 쿠키 maxAge 계산의 단일 소스(single source of truth)로 사용된다.
+     */
+    public long getRefreshTokenMinutes() {
+        return refreshTokenMinutes;
+    }
+
+    public Long extractUserIdFromRefreshToken(String token) {
+        Claims claims = parseToken(token);
+        if (!REFRESH.equals(claims.get("type", String.class))) {
+            throw new OnSeoulApiException(ErrorCode.INVALID_TOKEN, "Refresh Token이 아닙니다.");
+        }
+        return Long.parseLong(claims.getSubject());
     }
 
     private Claims parseToken(String token) {

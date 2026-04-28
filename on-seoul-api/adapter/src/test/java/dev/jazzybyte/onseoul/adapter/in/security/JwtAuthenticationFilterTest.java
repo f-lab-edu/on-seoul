@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.adapter.in.security;
 
 import dev.jazzybyte.onseoul.domain.port.out.TokenIssuerPort;
 import jakarta.servlet.FilterChain;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
@@ -121,6 +122,40 @@ class JwtAuthenticationFilterTest {
 
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
         verify(tokenIssuerPort, never()).extractUserIdSafely(any());
+        verify(filterChain).doFilter(request, response);
+    }
+
+    @Test
+    @DisplayName("Authorization 헤더 없이 access_token 쿠키가 있으면 쿠키로 인증한다")
+    void doFilterInternal_validAccessTokenCookie_setsAuthentication() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setCookies(new Cookie(OAuth2LoginSuccessHandler.ACCESS_TOKEN_COOKIE, "cookie-token"));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        when(tokenIssuerPort.extractUserIdSafely("cookie-token")).thenReturn(Optional.of(77L));
+
+        filter.doFilter(request, response, filterChain);
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
+        assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal()).isEqualTo(77L);
+        assertThat(request.getAttribute("userId")).isEqualTo(77L);
+        verify(filterChain).doFilter(request, response);
+    }
+
+    @Test
+    @DisplayName("Authorization 헤더가 Bearer를 포함하면 쿠키보다 헤더를 우선한다")
+    void doFilterInternal_headerTakesPriorityOverCookie() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("Authorization", "Bearer header-token");
+        request.setCookies(new Cookie(OAuth2LoginSuccessHandler.ACCESS_TOKEN_COOKIE, "cookie-token"));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        when(tokenIssuerPort.extractUserIdSafely("header-token")).thenReturn(Optional.of(10L));
+
+        filter.doFilter(request, response, filterChain);
+
+        verify(tokenIssuerPort).extractUserIdSafely("header-token");
+        verify(tokenIssuerPort, never()).extractUserIdSafely("cookie-token");
         verify(filterChain).doFilter(request, response);
     }
 }

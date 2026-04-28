@@ -44,6 +44,7 @@ spring:
             redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
             scope:
               - profile_nickname
+              - account_email
             client-name: Kakao
         provider:
           google:
@@ -57,6 +58,11 @@ spring:
             user-info-uri: https://kapi.kakao.com/v2/user/me
             user-name-attribute: id
     
+app:
+  frontend-base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
+  # HTTPS 환경에서는 true(기본값). 로컬 HTTP 개발 시 COOKIE_SECURE=false 로 재정의.
+  cookie-secure: ${COOKIE_SECURE:true}
+
 jwt:
   secret: ${JWT_SECRET}
   access-token-minutes: 15

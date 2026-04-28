@@ -10,6 +10,7 @@ import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.security.oauth2.client.servlet.OAuth2ClientWebSecurityAutoConfiguration;
 import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration;
 import org.springframework.boot.autoconfigure.security.servlet.SecurityFilterAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -17,6 +18,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -26,8 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         excludeAutoConfiguration = {
                 SecurityAutoConfiguration.class,
                 SecurityFilterAutoConfiguration.class,
-                org.springframework.boot.autoconfigure.security.oauth2.client.servlet.OAuth2ClientAutoConfiguration.class,
-                org.springframework.boot.autoconfigure.security.oauth2.client.servlet.OAuth2ClientWebSecurityAutoConfiguration.class
+                OAuth2ClientWebSecurityAutoConfiguration.class
         })
 class AuthControllerTest {
 
@@ -39,6 +40,8 @@ class AuthControllerTest {
 
     @MockitoBean
     private LogoutUseCase logoutUseCase;
+
+    // ── refresh ───────────────────────────────────────────────────
 
     @Test
     @DisplayName("POST /auth/token/refresh - 유효한 토큰으로 새 Access Token과 Refresh Token을 반환한다")
@@ -52,15 +55,6 @@ class AuthControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accessToken").value("new-access-token"))
                 .andExpect(jsonPath("$.refreshToken").value("new-refresh-token"));
-    }
-
-    @Test
-    @DisplayName("POST /auth/token/refresh - refreshToken 필드가 빈 문자열이면 400을 반환한다")
-    void refresh_blankRefreshToken_returns400() throws Exception {
-        mockMvc.perform(post("/auth/token/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"refreshToken\":\"\"}"))
-                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -85,6 +79,8 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.code").value("INVALID_REFRESH_TOKEN"));
     }
 
+    // ── logout ────────────────────────────────────────────────────
+
     @Test
     @DisplayName("POST /auth/logout - 인증된 사용자가 로그아웃하면 204를 반환한다")
     void logout_authenticatedUser_returns204() throws Exception {
@@ -93,5 +89,16 @@ class AuthControllerTest {
         mockMvc.perform(post("/auth/logout")
                         .requestAttr("userId", 42L))
                 .andExpect(status().isNoContent());
+
+        verify(logoutUseCase).logout(42L);
+    }
+
+    @Test
+    @DisplayName("POST /auth/logout - userId 없이 로그아웃하면 204를 반환한다 (토큰 만료 상태)")
+    void logout_withoutUserId_returns204() throws Exception {
+        mockMvc.perform(post("/auth/logout"))
+                .andExpect(status().isNoContent());
+
+        verify(logoutUseCase, never()).logout(anyLong());
     }
 }

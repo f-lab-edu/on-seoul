@@ -20,6 +20,11 @@ import java.util.Map;
 @Component
 public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
 
+    /** HttpOnly 쿠키로 전달되는 Access Token 쿠키 이름. JwtAuthenticationFilter와 공유. */
+    public static final String ACCESS_TOKEN_COOKIE  = "access_token";
+    /** HttpOnly 쿠키로 전달되는 Refresh Token 쿠키 이름. AuthController와 공유. */
+    public static final String REFRESH_TOKEN_COOKIE = "refresh_token";
+
     private final SocialLoginUseCase socialLoginUseCase;
     private final ObjectMapper objectMapper;
 
