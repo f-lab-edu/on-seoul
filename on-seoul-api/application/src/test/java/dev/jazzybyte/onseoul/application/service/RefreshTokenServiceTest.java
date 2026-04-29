@@ -49,7 +49,7 @@ class RefreshTokenServiceTest {
 
         doNothing().when(tokenIssuerPort).validateToken(refreshToken);
         when(tokenIssuerPort.extractUserId(refreshToken)).thenReturn(userId);
-        when(refreshTokenStorePort.find(userId)).thenReturn(Optional.of(refreshToken));
+        when(refreshTokenStorePort.getAndDelete(userId)).thenReturn(Optional.of(refreshToken));
         when(loadUserPort.findById(userId)).thenReturn(Optional.of(activeUser(userId)));
         when(tokenIssuerPort.generateAccessToken(userId)).thenReturn("new-access-token");
         when(tokenIssuerPort.generateRefreshToken(userId)).thenReturn("new-refresh-token");
@@ -58,8 +58,8 @@ class RefreshTokenServiceTest {
 
         assertThat(result.accessToken()).isEqualTo("new-access-token");
         assertThat(result.refreshToken()).isEqualTo("new-refresh-token");
-        verify(refreshTokenStorePort).delete(userId);
-        verify(refreshTokenStorePort).save(userId, "new-refresh-token");
+        verify(refreshTokenStorePort, never()).delete(userId);
+        verify(refreshTokenStorePort).save(eq(userId), eq("new-refresh-token"), anyLong());
     }
 
     @Test
@@ -70,7 +70,7 @@ class RefreshTokenServiceTest {
 
         doNothing().when(tokenIssuerPort).validateToken(refreshToken);
         when(tokenIssuerPort.extractUserId(refreshToken)).thenReturn(userId);
-        when(refreshTokenStorePort.find(userId)).thenReturn(Optional.empty());
+        when(refreshTokenStorePort.getAndDelete(userId)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.refresh(refreshToken))
                 .isInstanceOf(OnSeoulApiException.class);
@@ -84,7 +84,7 @@ class RefreshTokenServiceTest {
 
         doNothing().when(tokenIssuerPort).validateToken(refreshToken);
         when(tokenIssuerPort.extractUserId(refreshToken)).thenReturn(userId);
-        when(refreshTokenStorePort.find(userId)).thenReturn(Optional.of("different-token"));
+        when(refreshTokenStorePort.getAndDelete(userId)).thenReturn(Optional.of("different-token"));
 
         assertThatThrownBy(() -> service.refresh(refreshToken))
                 .isInstanceOf(OnSeoulApiException.class);
@@ -100,7 +100,7 @@ class RefreshTokenServiceTest {
 
         doNothing().when(tokenIssuerPort).validateToken(refreshToken);
         when(tokenIssuerPort.extractUserId(refreshToken)).thenReturn(userId);
-        when(refreshTokenStorePort.find(userId)).thenReturn(Optional.of(refreshToken));
+        when(refreshTokenStorePort.getAndDelete(userId)).thenReturn(Optional.of(refreshToken));
         when(loadUserPort.findById(userId)).thenReturn(Optional.of(suspended));
 
         assertThatThrownBy(() -> service.refresh(refreshToken))

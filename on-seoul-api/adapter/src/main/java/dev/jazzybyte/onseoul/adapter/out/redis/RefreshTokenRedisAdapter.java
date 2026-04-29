@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit;
 @Component
 class RefreshTokenRedisAdapter implements RefreshTokenStorePort {
 
-    private static final long TTL_DAYS = 7L;
+    private static final String KEY_PREFIX = "RT:";
 
     private final StringRedisTemplate redisTemplate;
 
@@ -19,17 +19,18 @@ class RefreshTokenRedisAdapter implements RefreshTokenStorePort {
     }
 
     @Override
-    public void save(Long userId, String refreshToken) {
-        redisTemplate.opsForValue().set("RT:" + userId, refreshToken, TTL_DAYS, TimeUnit.DAYS);
+    public void save(Long userId, String refreshToken, long ttlMinutes) {
+        redisTemplate.opsForValue().set(KEY_PREFIX + userId, refreshToken, ttlMinutes, TimeUnit.MINUTES);
     }
 
     @Override
-    public Optional<String> find(Long userId) {
-        return Optional.ofNullable(redisTemplate.opsForValue().get("RT:" + userId));
+    public Optional<String> getAndDelete(Long userId) {
+        String value = redisTemplate.opsForValue().getAndDelete(KEY_PREFIX + userId);
+        return Optional.ofNullable(value);
     }
 
     @Override
     public void delete(Long userId) {
-        redisTemplate.delete("RT:" + userId);
+        redisTemplate.delete(KEY_PREFIX + userId);
     }
 }

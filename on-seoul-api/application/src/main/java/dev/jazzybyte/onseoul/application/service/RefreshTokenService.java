@@ -31,16 +31,14 @@ public class RefreshTokenService implements RefreshTokenUseCase {
         tokenIssuerPort.validateToken(refreshToken);
         Long userId = tokenIssuerPort.extractUserId(refreshToken);
 
-        String stored = refreshTokenStorePort.find(userId)
+        // 원자적 GET+DELETE: TOCTOU 경합 방지. 동시 요청 중 하나만 값을 가져온다.
+        String stored = refreshTokenStorePort.getAndDelete(userId)
                 .orElseThrow(() -> new OnSeoulApiException(
                         ErrorCode.INVALID_REFRESH_TOKEN, "유효하지 않은 리프레시 토큰입니다."));
 
         if (!stored.equals(refreshToken)) {
             throw new OnSeoulApiException(ErrorCode.INVALID_REFRESH_TOKEN, "유효하지 않은 리프레시 토큰입니다.");
         }
-
-        // Invalidate old token immediately (rotation)
-        refreshTokenStorePort.delete(userId);
 
         User user = loadUserPort.findById(userId)
                 .orElseThrow(() -> new OnSeoulApiException(ErrorCode.FORBIDDEN, "사용자를 찾을 수 없습니다."));
@@ -50,7 +48,7 @@ public class RefreshTokenService implements RefreshTokenUseCase {
 
         String newAccessToken = tokenIssuerPort.generateAccessToken(userId);
         String newRefreshToken = tokenIssuerPort.generateRefreshToken(userId);
-        refreshTokenStorePort.save(userId, newRefreshToken);
+        refreshTokenStorePort.save(userId, newRefreshToken, tokenIssuerPort.getRefreshTokenMinutes());
 
         return new TokenResponse(newAccessToken, newRefreshToken);
     }
