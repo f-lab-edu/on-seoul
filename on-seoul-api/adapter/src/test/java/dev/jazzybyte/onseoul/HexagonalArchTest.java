@@ -17,9 +17,25 @@ class HexagonalArchTest {
                     "org.springframework..",
                     "jakarta.persistence..",
                     "com.fasterxml..");
-
     @ArchTest
     static final ArchRule application_must_not_depend_on_adapter = noClasses()
             .that().resideInAPackage("..application..")
             .should().dependOnClassesThat().resideInAPackage("..adapter..");
+
+    @ArchTest
+    static final ArchRule inbound_adapter_must_not_depend_on_outbound_adapter = noClasses()
+            .that().resideInAPackage("..adapter.in..")
+            .should().dependOnClassesThat().resideInAPackage("..adapter.out..");
+
+    @ArchTest
+    static final ArchRule collector_must_not_depend_on_domain_model = noClasses()
+            .that().resideInAPackage("..collector..")
+            .should().dependOnClassesThat().resideInAPackage("..domain.model..")
+            .allowEmptyShould(true);
+
+    @ArchTest
+    static final ArchRule bootstrap_must_not_depend_on_domain_model = noClasses()
+            .that().resideInAPackage("..bootstrap..")
+            .should().dependOnClassesThat().resideInAPackage("..domain.model..")
+            .allowEmptyShould(true);
 }

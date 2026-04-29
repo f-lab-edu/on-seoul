@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.adapter.out.aiservice;
 
+import dev.jazzybyte.onseoul.domain.port.out.AiServiceStreamPort;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -14,7 +15,7 @@ import java.time.Duration;
 import java.util.Map;
 
 @Component
-public class AiServiceAdapter implements AiServicePort {
+public class AiServiceAdapter implements AiServiceStreamPort {
 
     private final WebClient webClient;
     private final AiServiceProperties properties;

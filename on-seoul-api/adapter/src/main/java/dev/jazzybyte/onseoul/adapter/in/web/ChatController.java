@@ -1,8 +1,8 @@
 package dev.jazzybyte.onseoul.adapter.in.web;
 
-import dev.jazzybyte.onseoul.adapter.out.aiservice.AiServicePort;
 import dev.jazzybyte.onseoul.domain.port.in.SendQueryCommand;
 import dev.jazzybyte.onseoul.domain.port.in.SendQueryUseCase;
+import dev.jazzybyte.onseoul.domain.port.out.AiServiceStreamPort;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
@@ -18,10 +18,10 @@ import java.io.IOException;
 public class ChatController {
 
     private final SendQueryUseCase sendQueryUseCase;
-    private final AiServicePort aiServicePort;
+    private final AiServiceStreamPort aiServicePort;
 
     public ChatController(final SendQueryUseCase sendQueryUseCase,
-                          final AiServicePort aiServicePort) {
+                          final AiServiceStreamPort aiServicePort) {
         this.sendQueryUseCase = sendQueryUseCase;
         this.aiServicePort = aiServicePort;
     }
