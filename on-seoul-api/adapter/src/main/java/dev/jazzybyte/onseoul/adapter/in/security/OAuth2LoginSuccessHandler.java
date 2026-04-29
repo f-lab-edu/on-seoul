@@ -4,6 +4,8 @@ import dev.jazzybyte.onseoul.domain.port.in.SocialLoginCommand;
 import dev.jazzybyte.onseoul.domain.port.in.SocialLoginUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.TokenResponse;
 import dev.jazzybyte.onseoul.domain.port.out.TokenIssuerPort;
+import dev.jazzybyte.onseoul.exception.ErrorCode;
+import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,11 +35,12 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
     /** HttpOnly 쿠키로 전달되는 Refresh Token 쿠키 이름. AuthController와 공유. */
     public static final String REFRESH_TOKEN_COOKIE = "refresh_token";
 
-    private static final int ACCESS_TOKEN_MAX_AGE_SECONDS = 900; // 15분
-
     private final SocialLoginUseCase socialLoginUseCase;
     private final String frontendBaseUrl;
     private final boolean cookieSecure;
+    /** Access Token 쿠키 maxAge. JWT TTL과 동기화 — TokenIssuerPort 단일 소스. */
+    private final long accessTokenMinutes;
+    /** Refresh Token 쿠키 maxAge. JWT TTL과 동기화 — TokenIssuerPort 단일 소스. */
     private final long refreshTokenMinutes;
 
     public OAuth2LoginSuccessHandler(
@@ -48,6 +51,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         this.socialLoginUseCase = socialLoginUseCase;
         this.frontendBaseUrl = frontendBaseUrl;
         this.cookieSecure = cookieSecure;
+        this.accessTokenMinutes  = tokenIssuerPort.getAccessTokenMinutes();
         this.refreshTokenMinutes = tokenIssuerPort.getRefreshTokenMinutes();
     }
 
@@ -64,11 +68,16 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
                 : oauth2User.getAttribute("id");
         String providerId = idAttr != null ? idAttr.toString() : null;
 
+        if (providerId == null) {
+            response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=server_error");
+            return;
+        }
+
         String email;
         String nickname;
         if ("kakao".equals(provider)) {
             Map<String, Object> kakaoAccount = oauth2User.getAttribute("kakao_account");
-            Map<String, Object> properties = oauth2User.getAttribute("properties");
+            Map<String, Object> properties   = oauth2User.getAttribute("properties");
             email    = kakaoAccount != null ? (String) kakaoAccount.get("email") : null;
             nickname = properties   != null ? (String) properties.get("nickname") : null;
         } else {
@@ -84,14 +93,16 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
             response.addHeader("Set-Cookie", buildRefreshCookie(tokenResponse.refreshToken()).toString());
             response.sendRedirect(frontendBaseUrl + "/oauth/callback?status=success");
 
-        } catch (dev.jazzybyte.onseoul.exception.OnSeoulApiException ex) {
-            response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=forbidden");
+        } catch (OnSeoulApiException ex) {
+            // FORBIDDEN = SUSPENDED/DELETED 계정. 그 외 OnSeoulApiException은 서버 내부 오류.
+            String errorParam = ex.getErrorCode() == ErrorCode.FORBIDDEN ? "forbidden" : "server_error";
+            response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=" + errorParam);
         }
     }
 
     /**
      * Access Token HttpOnly 쿠키를 생성한다.
-     * maxAge = 15분(900초), path = "/".
+     * maxAge = accessTokenMinutes(분), path = "/".
      */
     public ResponseCookie buildAccessCookie(String token) {
         return ResponseCookie.from(ACCESS_TOKEN_COOKIE, token)
@@ -99,7 +110,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
                 .secure(cookieSecure)
                 .sameSite("Strict")
                 .path("/")
-                .maxAge(ACCESS_TOKEN_MAX_AGE_SECONDS)
+                .maxAge(Duration.ofMinutes(accessTokenMinutes))
                 .build();
     }
 

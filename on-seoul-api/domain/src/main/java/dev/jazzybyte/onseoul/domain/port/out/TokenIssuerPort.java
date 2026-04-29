@@ -8,5 +8,6 @@ public interface TokenIssuerPort {
     void validateToken(String token);
     Long extractUserId(String token);
     Optional<Long> extractUserIdSafely(String token);
+    long getAccessTokenMinutes();
     long getRefreshTokenMinutes();
 }

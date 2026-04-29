@@ -38,6 +38,9 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
+                // IF_REQUIRED: OAuth2 Authorization Code Flow에서 state 파라미터를
+                // HttpSessionOAuth2AuthorizationRequestRepository가 세션에 저장해야 하므로
+                // STATELESS 불가. 콜백 완료 후 세션은 사용되지 않는다.
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 // 인증 없이 접근이 필요한 엔드포인트만 명시적으로 `permitAll()`로 등록
