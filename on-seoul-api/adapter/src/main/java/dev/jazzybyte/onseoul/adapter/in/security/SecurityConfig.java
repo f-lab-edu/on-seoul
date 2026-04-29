@@ -13,6 +13,7 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.savedrequest.NullRequestCache;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -43,6 +44,10 @@ public class SecurityConfig {
                 // STATELESS 불가. 콜백 완료 후 세션은 사용되지 않는다.
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
+                // 401 응답 경로에서 ExceptionTranslationFilter가 HttpSessionRequestCache.saveRequest()를
+                // 호출해 불필요한 세션을 생성하는 것을 방지.
+                // JWT + 쿠키 기반 인증에서 SavedRequest는 사용되지 않으므로 NullRequestCache로 대체.
+                .requestCache(cache -> cache.requestCache(new NullRequestCache()))
                 // 인증 없이 접근이 필요한 엔드포인트만 명시적으로 `permitAll()`로 등록
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health").permitAll()
