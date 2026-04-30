@@ -62,6 +62,8 @@ app:
   frontend-base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
   # HTTPS 환경에서는 true(기본값). 로컬 HTTP 개발 시 COOKIE_SECURE=false 로 재정의.
   cookie-secure: ${COOKIE_SECURE:true}
+  # HMAC-SHA256 쿠키 서명 키 — 32바이트 이상의 랜덤 값을 Base64 인코딩. 필수 환경변수.
+  cookie-signing-key: ${COOKIE_SIGNING_KEY}
 
 jwt:
   secret: ${JWT_SECRET}

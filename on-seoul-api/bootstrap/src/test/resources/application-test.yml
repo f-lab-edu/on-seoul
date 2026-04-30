@@ -57,3 +57,7 @@ seoul:
 kakao:
   api:
     key: test-key
+
+app:
+  # 테스트용 32바이트 (256-bit) Base64 인코딩 서명 키 (올바운드: AAAA...AA==)
+  cookie-signing-key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=

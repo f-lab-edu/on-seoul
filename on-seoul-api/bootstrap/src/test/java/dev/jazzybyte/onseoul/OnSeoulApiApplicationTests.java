@@ -36,7 +36,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
         "seoul.api.key=test",
         "kakao.api.key=test",
         "ai.service.url=http://localhost:8000",
-        "ai.service.stream-timeout-seconds=120"
+        "ai.service.stream-timeout-seconds=120",
+        "app.cookie-signing-key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 })
 class OnSeoulApiApplicationTests {
 
