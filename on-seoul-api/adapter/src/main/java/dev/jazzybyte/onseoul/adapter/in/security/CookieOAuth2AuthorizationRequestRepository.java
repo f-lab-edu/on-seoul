@@ -3,8 +3,10 @@ package dev.jazzybyte.onseoul.adapter.in.security;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
@@ -14,12 +16,16 @@ import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationResp
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.WebUtils;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * OAuth2 인증 요청(state 포함)을 HttpOnly 쿠키에 저장하는 Stateless 구현.
@@ -30,7 +36,8 @@ import java.util.Map;
  * state 검증에 실패해 인증이 깨지는 문제가 있다.</p>
  *
  * <h3>쿠키 직렬화 방식</h3>
- * <p>{@link OAuth2AuthorizationRequest}의 필드를 JSON으로 직렬화한 뒤 Base64url 인코딩해 쿠키에 저장한다.
+ * <p>{@link OAuth2AuthorizationRequest}의 필드를 JSON으로 직렬화한 뒤 Base64url 인코딩하고
+ * HMAC-SHA256 서명을 붙여 {@code {payload}.{sig}} 형태로 쿠키에 저장한다.
  * 인증 완료 후({@link #removeAuthorizationRequest}) 쿠키를 즉시 만료시킨다.</p>
  *
  * <h3>SameSite=Lax 사유</h3>
@@ -38,34 +45,61 @@ import java.util.Map;
  * {@code SameSite=Strict}이면 콜백 쿠키가 전송되지 않아 인증이 실패한다.
  * {@code Lax}는 GET 리다이렉트는 허용하므로 OAuth2 콜백 흐름과 호환된다.</p>
  */
+@Slf4j
 @Component
 public class CookieOAuth2AuthorizationRequestRepository
         implements AuthorizationRequestRepository<OAuth2AuthorizationRequest> {
 
     static final String COOKIE_NAME = "oauth2_auth_request";
     private static final int COOKIE_MAX_AGE_SECONDS = 600; // 10분 — OAuth2 플로우 완료에 충분
+    private static final String HMAC_ALGORITHM = "HmacSHA256";
 
     private final ObjectMapper objectMapper;
     private final boolean cookieSecure;
+    private final byte[] signingKeyBytes;
 
     public CookieOAuth2AuthorizationRequestRepository(
             final ObjectMapper objectMapper,
-            @Value("${app.cookie-secure:true}") boolean cookieSecure) {
+            @Value("${app.cookie-secure:true}") boolean cookieSecure,
+            @Value("${app.cookie-signing-key}") String base64SigningKey) {
         this.objectMapper = objectMapper;
         this.cookieSecure = cookieSecure;
+        this.signingKeyBytes = Base64.getDecoder().decode(base64SigningKey);
     }
 
     @Override
     public OAuth2AuthorizationRequest loadAuthorizationRequest(HttpServletRequest request) {
-        jakarta.servlet.http.Cookie cookie = WebUtils.getCookie(request, COOKIE_NAME);
+        Cookie cookie = WebUtils.getCookie(request, COOKIE_NAME);
         if (cookie == null) {
             return null;
         }
+        String cookieValue = cookie.getValue();
+        int dotIndex = cookieValue.lastIndexOf('.');
+        if (dotIndex < 0) {
+            log.warn("oauth2 쿠키 서명 검증 실패");
+            return null;
+        }
+        String payload = cookieValue.substring(0, dotIndex);
+        String sig = cookieValue.substring(dotIndex + 1);
+
         try {
-            String json = new String(
-                    Base64.getUrlDecoder().decode(cookie.getValue()), StandardCharsets.UTF_8);
+            String expectedSig = computeHmac(payload);
+            if (!MessageDigest.isEqual(
+                    expectedSig.getBytes(StandardCharsets.UTF_8),
+                    sig.getBytes(StandardCharsets.UTF_8))) {
+                log.warn("oauth2 쿠키 서명 검증 실패");
+                return null;
+            }
+            String json = new String(Base64.getUrlDecoder().decode(payload), StandardCharsets.UTF_8);
             return deserialize(json);
+        } catch (IllegalArgumentException e) {
+            log.warn("oauth2 쿠키 Base64 디코딩 실패: {}", e.getMessage());
+            return null;
+        } catch (JsonProcessingException e) {
+            log.warn("oauth2 쿠키 JSON 역직렬화 실패: {}", e.getMessage());
+            return null;
         } catch (Exception e) {
+            log.warn("oauth2 쿠키 처리 중 예상치 못한 오류: {}", e.getMessage());
             return null;
         }
     }
@@ -80,10 +114,11 @@ public class CookieOAuth2AuthorizationRequestRepository
         }
         try {
             String json = objectMapper.writeValueAsString(toMap(authorizationRequest));
-            String encoded = Base64.getUrlEncoder().withoutPadding()
+            String payload = Base64.getUrlEncoder().withoutPadding()
                     .encodeToString(json.getBytes(StandardCharsets.UTF_8));
+            String sig = computeHmac(payload);
             response.addHeader(HttpHeaders.SET_COOKIE,
-                    buildCookie(encoded, COOKIE_MAX_AGE_SECONDS).toString());
+                    buildCookie(payload + "." + sig, COOKIE_MAX_AGE_SECONDS).toString());
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("OAuth2 authorization request 직렬화 실패", e);
         }
@@ -92,12 +127,25 @@ public class CookieOAuth2AuthorizationRequestRepository
     @Override
     public OAuth2AuthorizationRequest removeAuthorizationRequest(HttpServletRequest request,
                                                                   HttpServletResponse response) {
-        OAuth2AuthorizationRequest authorizationRequest = loadAuthorizationRequest(request);
-        expireCookie(response);
-        return authorizationRequest;
+        OAuth2AuthorizationRequest saved = loadAuthorizationRequest(request);
+        if (saved != null) {
+            expireCookie(response);
+        }
+        return saved;
     }
 
     // ── 내부 헬퍼 ──────────────────────────────────────────────────
+
+    private String computeHmac(String payload) {
+        try {
+            Mac mac = Mac.getInstance(HMAC_ALGORITHM);
+            mac.init(new SecretKeySpec(signingKeyBytes, HMAC_ALGORITHM));
+            byte[] hmacBytes = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(hmacBytes);
+        } catch (Exception e) {
+            throw new IllegalStateException("HMAC-SHA256 서명 계산 실패", e);
+        }
+    }
 
     private void expireCookie(HttpServletResponse response) {
         response.addHeader(HttpHeaders.SET_COOKIE, buildCookie("", 0).toString());
@@ -115,16 +163,20 @@ public class CookieOAuth2AuthorizationRequestRepository
     }
 
     private Map<String, Object> toMap(OAuth2AuthorizationRequest req) {
+        Map<String, Object> filteredAttributes = req.getAttributes().entrySet().stream()
+                .filter(e -> !"code_verifier".equals(e.getKey()))
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
+                        (a, b) -> a, LinkedHashMap::new));
+
         Map<String, Object> map = new LinkedHashMap<>();
-        map.put("authorizationUri",       req.getAuthorizationUri());
-        map.put("grantType",              req.getGrantType().getValue());
-        map.put("responseType",           req.getResponseType().getValue());
-        map.put("clientId",               req.getClientId());
-        map.put("redirectUri",            req.getRedirectUri());
-        map.put("scopes",                 req.getScopes());
-        map.put("state",                  req.getState());
-        map.put("additionalParameters",   req.getAdditionalParameters());
-        map.put("attributes",             req.getAttributes());
+        map.put("authorizationUri",        req.getAuthorizationUri());
+        map.put("responseType",            req.getResponseType().getValue());
+        map.put("clientId",                req.getClientId());
+        map.put("redirectUri",             req.getRedirectUri());
+        map.put("scopes",                  req.getScopes());
+        map.put("state",                   req.getState());
+        map.put("additionalParameters",    req.getAdditionalParameters());
+        map.put("attributes",              filteredAttributes);
         map.put("authorizationRequestUri", req.getAuthorizationRequestUri());
         return map;
     }
@@ -135,11 +187,10 @@ public class CookieOAuth2AuthorizationRequestRepository
                 json, new TypeReference<Map<String, Object>>() {});
 
         String responseType = (String) map.get("responseType");
-
-        OAuth2AuthorizationRequest.Builder builder =
-                OAuth2AuthorizationResponseType.CODE.getValue().equals(responseType)
-                        ? OAuth2AuthorizationRequest.authorizationCode()
-                        : OAuth2AuthorizationRequest.authorizationCode(); // 현재 Code Flow만 지원
+        if (!OAuth2AuthorizationResponseType.CODE.getValue().equals(responseType)) {
+            throw new IllegalStateException("지원하지 않는 responseType: " + responseType);
+        }
+        OAuth2AuthorizationRequest.Builder builder = OAuth2AuthorizationRequest.authorizationCode();
 
         List<?> rawScopes = (List<?>) map.get("scopes");
         LinkedHashSet<String> scopes = new LinkedHashSet<>();
