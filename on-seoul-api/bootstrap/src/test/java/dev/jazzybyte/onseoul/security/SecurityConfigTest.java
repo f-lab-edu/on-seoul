@@ -1,7 +1,6 @@
 package dev.jazzybyte.onseoul.security;
 
 import dev.jazzybyte.onseoul.adapter.in.security.JwtTokenIssuer;
-import dev.jazzybyte.onseoul.adapter.out.aiservice.AiServicePort;
 import dev.jazzybyte.onseoul.domain.port.in.CollectDatasetUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.LogoutUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.RefreshTokenUseCase;
@@ -33,7 +32,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.mockito.Mockito.doNothing;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -75,7 +76,6 @@ class SecurityConfigTest {
     @MockitoBean SaveChatRoomPort saveChatRoomPort;
     @MockitoBean LoadChatRoomPort loadChatRoomPort;
     @MockitoBean SaveChatMessagePort saveChatMessagePort;
-    @MockitoBean AiServicePort aiServicePort;
 
     @Test
     @DisplayName("GET /actuator/health — 인증 없이 200을 반환한다")

@@ -13,7 +13,6 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-import org.springframework.security.web.savedrequest.NullRequestCache;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -25,13 +24,16 @@ public class SecurityConfig {
 
     private final TokenIssuerPort tokenIssuerPort;
     private final OAuth2LoginSuccessHandler oauth2LoginSuccessHandler;
+    private final CookieOAuth2AuthorizationRequestRepository authorizationRequestRepository;
     private final ObjectMapper objectMapper;
 
     public SecurityConfig(final TokenIssuerPort tokenIssuerPort,
                           final OAuth2LoginSuccessHandler oauth2LoginSuccessHandler,
+                          final CookieOAuth2AuthorizationRequestRepository authorizationRequestRepository,
                           final ObjectMapper objectMapper) {
         this.tokenIssuerPort = tokenIssuerPort;
         this.oauth2LoginSuccessHandler = oauth2LoginSuccessHandler;
+        this.authorizationRequestRepository = authorizationRequestRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -39,15 +41,10 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
-                // IF_REQUIRED: OAuth2 Authorization Code Flow에서 state 파라미터를
-                // HttpSessionOAuth2AuthorizationRequestRepository가 세션에 저장해야 하므로
-                // STATELESS 불가. 콜백 완료 후 세션은 사용되지 않는다.
+                // STATELESS: OAuth2 state를 CookieOAuth2AuthorizationRequestRepository가
+                // 쿠키로 관리하므로 서버 세션 불필요. 분산 환경에서도 state 검증이 정상 동작한다.
                 .sessionManagement(session ->
-                        session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
-                // 401 응답 경로에서 ExceptionTranslationFilter가 HttpSessionRequestCache.saveRequest()를
-                // 호출해 불필요한 세션을 생성하는 것을 방지.
-                // JWT + 쿠키 기반 인증에서 SavedRequest는 사용되지 않으므로 NullRequestCache로 대체.
-                .requestCache(cache -> cache.requestCache(new NullRequestCache()))
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 // 인증 없이 접근이 필요한 엔드포인트만 명시적으로 `permitAll()`로 등록
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health").permitAll()
@@ -55,8 +52,10 @@ public class SecurityConfig {
                         .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**").permitAll()
                         .anyRequest().authenticated()
                 )
-                .oauth2Login(oauth2 ->
-                        oauth2.successHandler(oauth2LoginSuccessHandler))
+                .oauth2Login(oauth2 -> oauth2
+                        .authorizationEndpoint(endpoint -> endpoint
+                                .authorizationRequestRepository(authorizationRequestRepository))
+                        .successHandler(oauth2LoginSuccessHandler))
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, authException) ->
                                 writeErrorResponse(response, HttpServletResponse.SC_UNAUTHORIZED,
