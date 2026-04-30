@@ -8,6 +8,7 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok'
     testCompileOnly 'org.projectlombok:lombok'
     testAnnotationProcessor 'org.projectlombok:lombok'
+    testImplementation 'io.projectreactor:reactor-test'
 }
 
 bootJar.enabled = false
