@@ -1,9 +1,5 @@
 package dev.jazzybyte.onseoul;
 
-import dev.jazzybyte.onseoul.adapter.out.aiservice.AiServicePort;
-import dev.jazzybyte.onseoul.application.service.CollectDatasetService;
-import dev.jazzybyte.onseoul.application.service.GeocodingService;
-import dev.jazzybyte.onseoul.application.service.UpsertService;
 import dev.jazzybyte.onseoul.domain.port.out.GeocodingPort;
 import dev.jazzybyte.onseoul.domain.port.out.LoadApiSourceCatalogPort;
 import dev.jazzybyte.onseoul.domain.port.out.LoadChatRoomPort;
@@ -58,7 +54,6 @@ class OnSeoulApiApplicationTests {
     @MockitoBean SaveChatRoomPort saveChatRoomPort;
     @MockitoBean LoadChatRoomPort loadChatRoomPort;
     @MockitoBean SaveChatMessagePort saveChatMessagePort;
-    @MockitoBean AiServicePort aiServicePort;
 
     @Test
     void contextLoads(ApplicationContext applicationContext) {
