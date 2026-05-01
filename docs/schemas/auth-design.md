@@ -7,9 +7,7 @@
 ## 인증 플로우
 
 ```
-사용자 → Google OAuth 2.0 → API 서비스 (JWT 발급)
-                                   ↓
-                             AI 서비스 (JWT 검증)
+사용자 → Google OAuth 2.0 → API 서비스 (JWT 발급 및 검증)
 ```
 
 1. 사용자가 Google 소셜 로그인 요청
@@ -17,7 +15,7 @@
 3. `provider_id`(google_id)로 `user_oauth_providers` 조회
    - 존재하면: `users.id` 반환 → JWT 발급
    - 없으면: `users` INSERT → `user_oauth_providers` INSERT → JWT 발급
-4. 이후 요청은 JWT로 인증. AI 서비스도 동일한 JWT를 검증
+4. 이후 모든 요청은 API 서비스가 JWT를 검증한다
 5. JWT payload에 내부 `users.id`를 담아 사용. `google_id`는 최초 연동 시에만 사용
 
 ## JWT 설계
