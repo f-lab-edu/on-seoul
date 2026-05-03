@@ -4,9 +4,9 @@ on_ai.chat_agent_traces 테이블에서 최근 N건을 조회하고,
 각 row의 trace JSONB 필드가 필수 키를 포함하는지 검증한다.
 
 필수 키:
-  - intent     : str, SQL_SEARCH / VECTOR_SEARCH / MAP / FALLBACK 중 하나
-  - nodes      : list, 실행 노드 경로
-  - elapsed_sec: float, 소요 시간
+  - intent    : str, SQL_SEARCH / VECTOR_SEARCH / MAP / FALLBACK 중 하나
+  - node_path : list, 실행 노드 경로 (workflow.py 저장 키명)
+  - elapsed_ms: int, 소요 시간(ms) (workflow.py 저장 키명)
 
 사용법:
   uv run python -m scripts.verify_traces [--limit N]
@@ -25,7 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _VALID_INTENTS = frozenset({"SQL_SEARCH", "VECTOR_SEARCH", "MAP", "FALLBACK"})
-_REQUIRED_KEYS = ("intent", "nodes", "elapsed_sec")
+_REQUIRED_KEYS = ("intent", "node_path", "elapsed_ms")
 
 
 def verify_trace_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -46,15 +46,15 @@ def verify_trace_row(row: dict[str, Any]) -> dict[str, Any]:
     if intent not in _VALID_INTENTS:
         missing.append("intent")
 
-    # nodes 검증: 존재하며 list이어야 한다
-    nodes = trace.get("nodes")
-    if not isinstance(nodes, list):
-        missing.append("nodes")
+    # node_path 검증: 존재하며 list이어야 한다
+    node_path = trace.get("node_path")
+    if not isinstance(node_path, list):
+        missing.append("node_path")
 
-    # elapsed_sec 검증: 존재하며 숫자(int/float)이어야 한다
-    elapsed_sec = trace.get("elapsed_sec")
-    if not isinstance(elapsed_sec, (int, float)):
-        missing.append("elapsed_sec")
+    # elapsed_ms 검증: 존재하며 int이어야 한다 (workflow.py: int((time.monotonic() - start) * 1000))
+    elapsed_ms = trace.get("elapsed_ms")
+    if not isinstance(elapsed_ms, int):
+        missing.append("elapsed_ms")
 
     status = "PASS" if not missing else "FAIL"
     return {"message_id": message_id, "status": status, "missing_keys": missing}
