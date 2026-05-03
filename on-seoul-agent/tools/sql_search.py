@@ -19,6 +19,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 TOP_K: int = 10
 
+
+def _escape_like(value: str) -> str:
+    """ILIKE 패턴에서 와일드카드 문자를 이스케이프한다.
+
+    PostgreSQL ILIKE의 특수 문자(%·_·\\)를 리터럴로 취급하도록
+    백슬래시로 이스케이프한다. SQL 쪽에는 ESCAPE '\\' 절을 함께 사용한다.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 _RESULT_COLUMNS = """
     service_id, service_name, max_class_name, min_class_name,
     area_name, place_name, service_status, payment_type,
@@ -85,9 +94,9 @@ async def sql_search(
         # OR 절(두 컬럼 개별 ILIKE)을 사용하면 BitmapOr 결합 비용 추정 실패로
         # 인덱스를 무시하므로, 단일 연결 표현식을 사용한다.
         conditions.append(
-            "(COALESCE(service_name, '') || ' ' || COALESCE(place_name, '')) ILIKE :keyword"
+            "(COALESCE(service_name, '') || ' ' || COALESCE(place_name, '')) ILIKE :keyword ESCAPE '\\'"
         )
-        bind["keyword"] = f"%{keyword}%"
+        bind["keyword"] = f"%{_escape_like(keyword)}%"
 
     where = " AND ".join(conditions)
     sql = text(f"""
