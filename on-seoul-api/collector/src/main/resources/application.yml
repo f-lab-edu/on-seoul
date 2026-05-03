@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: on-seoul-collector
+
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: false
+    open-in-view: false
+
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+
+seoul:
+  api:
+    key: ${SEOUL_OPENAPI_KEY}
+    base-url: http://openapi.seoul.go.kr:8088
+    page-size: 200
+    max-retries: 3
+    max-backoff-seconds: 10
+    connect-timeout-ms: 10000
+    response-timeout-seconds: 30
+
+kakao:
+  api:
+    key: ${KAKAO_REST_API_KEY}
