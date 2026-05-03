@@ -13,6 +13,7 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -43,8 +44,12 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 // STATELESS: OAuth2 state를 CookieOAuth2AuthorizationRequestRepository가
                 // 쿠키로 관리하므로 서버 세션 불필요. 분산 환경에서도 state 검증이 정상 동작한다.
-                .sessionManagement(session ->
-                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                // NullAuthenticatedSessionStrategy: OAuth2 인증 성공 후
+                // AbstractAuthenticationProcessingFilter가 SessionAuthenticationStrategy를
+                // 실행하면서 세션을 생성하는 것을 차단한다.
+                .sessionManagement(session -> session
+                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                        .sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy()))
                 // 인증 없이 접근이 필요한 엔드포인트만 명시적으로 `permitAll()`로 등록
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health").permitAll()
