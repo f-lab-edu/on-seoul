@@ -22,12 +22,8 @@ const eslintConfig = [
   },
   {
     rules: {
-      // 잔존 console.log 금지 (CLAUDE.md E-1)
       "no-console": ["warn", { allow: ["warn", "error"] }],
-      // any 타입 금지 (CLAUDE.md D-1)
       "@typescript-eslint/no-explicit-any": "error",
-      // unknown 수신 후 타입가드 없이 사용 금지
-      "@typescript-eslint/no-unsafe-assignment": "off",
     },
   },
 ];

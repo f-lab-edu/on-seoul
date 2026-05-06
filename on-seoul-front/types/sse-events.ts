@@ -12,7 +12,6 @@ export type ToolName = "sql_search" | "vector_search" | "map_search";
 export type SseEvent =
   | { type: "agent_start"; agent: AgentName }
   | { type: "tool_call"; tool: ToolName; args: unknown }
-  | { type: "tool_result"; tool: string; ok: boolean }
   | { type: "token"; delta: string }
   | { type: "done"; messageId: number }
   | { type: "error"; message: string };
