@@ -94,7 +94,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body: json !== undefined ? JSON.stringify(json) : undefined,
   };
 
-  const url = path.startsWith("http") ? path : `${getBaseUrl()}${path}`;
+  // 절대 URL을 허용하면 외부 오리진에 `credentials: 'include'`로 호출되어 쿠키가
+  // 의도치 않게 노출될 수 있다. 항상 baseUrl 기준의 상대 경로만 허용한다.
+  if (!path.startsWith("/")) {
+    throw new Error(`apiClient path must start with "/", got: ${path}`);
+  }
+  const url = `${getBaseUrl()}${path}`;
   const res = await fetch(url, init);
 
   if (res.status === 401) {

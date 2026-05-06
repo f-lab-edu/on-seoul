@@ -149,6 +149,19 @@ describe("apiClient", () => {
     expect(refreshCount).toBe(1);
   });
 
+  it("절대 URL(http://...)은 거부한다 — 외부 오리진에 쿠키 노출 방지", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(apiClient.get("https://evil.example.com/steal")).rejects.toThrow(
+      /must start with "\/"/,
+    );
+    await expect(apiClient.get("http://evil.example.com/steal")).rejects.toThrow(
+      /must start with "\/"/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("DELETE 204 응답은 undefined를 반환한다", async () => {
     vi.stubGlobal(
       "fetch",
