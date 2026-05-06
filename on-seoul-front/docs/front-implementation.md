@@ -50,38 +50,41 @@ Next.js 15 App Router 기반 웹 프론트엔드 구현 순서.
 ## Epic 2 — `feat/auth`
 > Phase 4–7 | Google OAuth 2.0 + httpOnly 쿠키 인증, 401 single-flight refresh
 
+> **Vitest 도입 시점**: Phase 4 시작 시 설치. 이후 `lib/api-client.ts`와 `hooks/useChatStream.ts` 두 파일만 테스트 대상으로 고정하고 컴포넌트·페이지는 제외한다.
+
 > 백엔드 시퀀스: `oauth-jwt-flow` 스킬 정본. 콜백 성공 시 `302 → /oauth/callback?status=success` + Set-Cookie(access_token / refresh_token, SameSite=Strict).
 
 ### Phase 4. API 클라이언트 (`lib/api-client.ts`)
 
-- [ ] `fetch` 래퍼 — `credentials: 'include'` 기본 적용
-- [ ] 401 인터셉터 — `/auth/refresh` **single-flight** 1회 재시도 (동시 401 5건 → refresh 1번)
-- [ ] Refresh 자체가 401 → `auth:logout` window event 발행 → 즉시 실패
-- [ ] `/auth/refresh` 호출 시 `_retry` 플래그로 무한루프 차단
-- [ ] `get` / `post` / `delete` 헬퍼, 204 응답은 `undefined` 반환
-- [ ] 단위 테스트 — fetch 모킹으로 single-flight / 무한루프 방지 / refresh 401 시 logout 이벤트 검증
+- [x] `fetch` 래퍼 — `credentials: 'include'` 기본 적용
+- [x] 401 인터셉터 — `/auth/refresh` **single-flight** 1회 재시도 (동시 401 5건 → refresh 1번)
+- [x] Refresh 자체가 401 → `auth:logout` window event 발행 → 즉시 실패
+- [x] `/auth/refresh` 호출 시 `_retry` 플래그로 무한루프 차단
+- [x] `get` / `post` / `delete` 헬퍼, 204 응답은 `undefined` 반환
+- [x] Vitest 설치 (`pnpm add -D vitest @vitest/coverage-v8`) — 이 Phase에 최초 도입
+- [x] 단위 테스트 6건 — fetch 모킹으로 single-flight / 무한루프 방지 / refresh 401 시 logout 이벤트 검증
 
 ### Phase 5. 로그인·콜백 페이지
 
-- [ ] `app/(auth)/login/page.tsx` — `NEXT_PUBLIC_OAUTH_LOGIN_URL` 진입 링크 (서버 컴포넌트)
-- [ ] `app/(auth)/oauth/callback/page.tsx` — `'use client'`. `searchParams.status === 'success'` → `/`, `error=forbidden` → `/login?error=forbidden`. 쿠키 처리는 백엔드 책임이므로 본 페이지는 라우팅만
-- [ ] `?error` 메시지 노출 영역 (`/login`)
-- [ ] 로그인 페이지에서 `localStorage` / `document.cookie` 직접 접근이 없는지 정적 lint 규칙 추가 검토
+- [x] `app/(auth)/login/page.tsx` — `NEXT_PUBLIC_OAUTH_LOGIN_URL` 진입 링크 (서버 컴포넌트)
+- [x] `app/(auth)/oauth/callback/page.tsx` — `'use client'`. `status === 'success'` → `/`, `error=forbidden` → `/login?error=forbidden`. 쿠키 처리는 백엔드 책임이므로 본 페이지는 라우팅만
+- [x] `?error=forbidden` 메시지 노출 영역 (`/login`)
+- [x] 로그인 페이지에서 `localStorage` / `document.cookie` 직접 접근 없음 (QA 확인)
 
-검증: `/login` → 백엔드 OAuth → Google 동의 → `/oauth/callback?status=success` → `/` 도착 시 토큰이 URL/스토리지에 노출되지 않음 확인
+검증: `/login` → 백엔드 OAuth → Google 동의 → `/oauth/callback?status=success` → `/` 도착 시 토큰이 URL/스토리지에 노출되지 않음 확인 (백엔드 연동 시 수동 검증 필요)
 
 ### Phase 6. `useAuth` 훅
 
-- [ ] `apiClient.get<User>('/auth/me')`로 현재 사용자 조회 → `user` / `loading` 상태 노출
-- [ ] `auth:logout` window event 구독 → `setUser(null)` + `/login` 라우팅
-- [ ] `logout()` — `POST /auth/logout` 호출 후 라우팅, 실패해도 로컬 상태 정리
-- [ ] 채팅 layout / 보호 페이지에서 사용 (loading 동안 깜빡임 방지)
+- [x] `apiClient.get<User>('/auth/me')`로 현재 사용자 조회 → `user` / `loading` 상태 노출
+- [x] `auth:logout` window event 구독 → `setUser(null)` + `/login` 라우팅
+- [x] `logout()` — `POST /auth/logout` 호출 후 라우팅, 실패해도 로컬 상태 정리
+- [x] 채팅 layout / 보호 페이지에서 사용 (`(chat)/page.tsx` placeholder에서 사용 중)
 
 ### Phase 7. 인증 가드
 
-- [ ] `app/(chat)/layout.tsx` 또는 미들웨어에서 `/auth/me` 401 → `/login` 리다이렉트
-- [ ] CORS / SameSite=Strict 동작 확인 — same-site 또는 reverse proxy 구성 검증
-- [ ] 수동 시나리오 테스트
+- [x] `app/(chat)/layout.tsx` — 서버에서 `/auth/me` 호출 (cookies() forward, 화이트리스트 적용) → 401/403 시 `/login` redirect
+- [ ] CORS / SameSite=Strict 동작 확인 — same-site 또는 reverse proxy 구성 검증 (백엔드 연동 시 수동 검증 필요)
+- [ ] 수동 시나리오 테스트 (백엔드 연동 후)
   - 비로그인 보호 페이지 접근 → `/login` 라우팅
   - Access 만료 → API 401 → refresh → 재시도 성공 (UX 끊김 없음)
   - Refresh 만료 → refresh 401 → 자동 로그아웃
@@ -113,7 +116,7 @@ Next.js 15 App Router 기반 웹 프론트엔드 구현 순서.
   - `error` → 에러 메시지 + 재시도 버튼 노출
 - [ ] AbortController로 도중 취소 지원
 - [ ] TanStack Query 사용 금지 (SSE는 별도 단일 진입점)
-- [ ] 단위 테스트 — Mock ReadableStream으로 토큰 누적 / 에러 분기 / 취소 동작 검증
+- [ ] 단위 테스트 — Mock ReadableStream으로 토큰 누적 / 에러 분기 / 취소 동작 검증 (Vitest)
 
 ### Phase 10. 챗봇 UI
 
@@ -154,9 +157,11 @@ Next.js 15 App Router 기반 웹 프론트엔드 구현 순서.
 
 ### Phase 13. 테스트
 
-- [ ] `lib/api-client.ts` 단위 테스트 (single-flight, 401 → refresh, refresh 401 → logout)
-- [ ] `useChatStream` 단위 테스트 (이벤트 디스패치, 토큰 누적, 취소)
-- [ ] 컴포넌트 스냅샷 / 인터랙션 테스트(필요 최소)
+> **범위 고정**: Vitest는 코어 2개 파일(`api-client`, `useChatStream`)만 관리한다. 컴포넌트·페이지 스냅샷/인터랙션 테스트는 도입하지 않는다.
+
+- [ ] `lib/api-client.ts` 테스트 보완 (Phase 4에서 작성한 케이스 최종 점검)
+- [ ] `useChatStream` 테스트 보완 (Phase 9에서 작성한 케이스 최종 점검)
+- [ ] `pnpm test` CI 연결 확인
 - [ ] Playwright E2E (선택) — 로그인 → 채팅 → 로그아웃 시나리오, 백엔드는 모킹
 
 ### Phase 14. 접근성·UX 마감

@@ -26,6 +26,7 @@
 | 서버 상태 | TanStack Query |
 | SSE 처리 | 커스텀 훅 (`useChatStream`) |
 | 클라이언트 상태 | useState / useReducer / Context |
+| 테스트 | Vitest (코어 2개만: `api-client`, `useChatStream`) |
 | 지도 (POST-MVP) | 카카오맵 JavaScript SDK |
 | 배포 | Vercel |
 
@@ -152,8 +153,11 @@ pnpm install
 pnpm dev          # http://localhost:3000
 pnpm lint
 pnpm typecheck
+pnpm test         # Vitest — api-client, useChatStream 코어만
 pnpm build
 ```
+
+> **테스트 범위**: 컴포넌트·페이지는 테스트 대상에서 제외한다. `lib/api-client.ts`(single-flight, 401 refresh 인터셉터)와 `hooks/useChatStream.ts`(이벤트 디스패치, 토큰 누적, 취소) 두 파일만 Vitest로 관리한다. Vitest는 Epic 2 Phase 4(`api-client` 구현) 시점에 도입한다.
 
 ---
 
