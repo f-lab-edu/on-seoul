@@ -6,6 +6,7 @@ import dev.jazzybyte.onseoul.domain.model.ServiceChangeLog;
 import dev.jazzybyte.onseoul.domain.port.out.LoadPublicServicePort;
 import dev.jazzybyte.onseoul.domain.port.out.SavePublicServicePort;
 import dev.jazzybyte.onseoul.domain.port.out.SaveServiceChangeLogPort;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,19 +20,12 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class UpsertService {
 
     private final LoadPublicServicePort loadPublicServicePort;
     private final SavePublicServicePort savePublicServicePort;
     private final SaveServiceChangeLogPort saveServiceChangeLogPort;
-
-    public UpsertService(final LoadPublicServicePort loadPublicServicePort,
-                         final SavePublicServicePort savePublicServicePort,
-                         final SaveServiceChangeLogPort saveServiceChangeLogPort) {
-        this.loadPublicServicePort = loadPublicServicePort;
-        this.savePublicServicePort = savePublicServicePort;
-        this.saveServiceChangeLogPort = saveServiceChangeLogPort;
-    }
 
     @Transactional
     public UpsertResult upsert(List<PublicServiceReservation> incoming, Long collectionId) {

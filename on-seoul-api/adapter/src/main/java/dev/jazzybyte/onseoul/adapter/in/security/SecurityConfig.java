@@ -61,7 +61,7 @@ public class SecurityConfig {
                         // 전파되지 않아 불필요하게 인가가 막히는 경우를 방지한다.
                         .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
                         .requestMatchers("/actuator/health", "/error").permitAll()
-                        .requestMatchers("/auth/**").permitAll()
+                        .requestMatchers("/auth/token/refresh", "/auth/logout").permitAll()
                         .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**").permitAll()
                         .anyRequest().authenticated()
                 )
@@ -73,14 +73,14 @@ public class SecurityConfig {
                         .authenticationEntryPoint((request,
                                                    response,
                                                    authException) -> {
-                            log.warn("인증 실패 - URI: {}, 사유: {}", request.getRequestURI(), authException.getMessage());
+                            log.warn("[Security] 인증 실패 - URI: {}, 사유: {}", request.getRequestURI(), authException.getMessage());
                             writeErrorResponse(response, HttpServletResponse.SC_UNAUTHORIZED,
                                     "UNAUTHORIZED", "인증이 필요합니다.");
                         })
                         .accessDeniedHandler((request,
                                               response,
                                               accessDeniedException) -> {
-                            log.warn("인가 실패 - URI: {}, 사유: {}", request.getRequestURI(), accessDeniedException.getMessage());
+                            log.warn("[Security] 인가 실패 - URI: {}, 사유: {}", request.getRequestURI(), accessDeniedException.getMessage());
                             writeErrorResponse(response, HttpServletResponse.SC_FORBIDDEN,
                                     "FORBIDDEN", "접근 권한이 없습니다.");
 
@@ -100,7 +100,7 @@ public class SecurityConfig {
             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
             objectMapper.writeValue(response.getWriter(), Map.of("code", code, "message", message));
         } catch (Exception e) {
-            log.warn("에러 응답 작성 실패: {}", e.getMessage());
+            log.warn("[Security] 에러 응답 작성 실패: {}", e.getMessage());
         }
     }
 }

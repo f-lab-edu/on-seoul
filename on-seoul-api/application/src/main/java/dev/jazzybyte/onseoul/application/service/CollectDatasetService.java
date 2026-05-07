@@ -10,6 +10,7 @@ import dev.jazzybyte.onseoul.domain.port.out.LoadPublicServicePort;
 import dev.jazzybyte.onseoul.domain.port.out.SaveCollectionHistoryPort;
 import dev.jazzybyte.onseoul.domain.port.out.SavePublicServicePort;
 import dev.jazzybyte.onseoul.domain.port.out.SeoulDatasetFetchPort;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -19,6 +20,7 @@ import java.util.Set;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class CollectDatasetService implements CollectDatasetUseCase {
 
     private final LoadApiSourceCatalogPort catalogPort;
@@ -28,22 +30,6 @@ public class CollectDatasetService implements CollectDatasetUseCase {
     private final SeoulDatasetFetchPort fetchPort;
     private final UpsertService upsertService;
     private final GeocodingService geocodingService;
-
-    public CollectDatasetService(final LoadApiSourceCatalogPort catalogPort,
-                                 final SaveCollectionHistoryPort historyPort,
-                                 final LoadPublicServicePort loadPublicServicePort,
-                                 final SavePublicServicePort savePublicServicePort,
-                                 final SeoulDatasetFetchPort fetchPort,
-                                 final UpsertService upsertService,
-                                 final GeocodingService geocodingService) {
-        this.catalogPort = catalogPort;
-        this.historyPort = historyPort;
-        this.loadPublicServicePort = loadPublicServicePort;
-        this.savePublicServicePort = savePublicServicePort;
-        this.fetchPort = fetchPort;
-        this.upsertService = upsertService;
-        this.geocodingService = geocodingService;
-    }
 
     @Override
     public void collectAll() {
