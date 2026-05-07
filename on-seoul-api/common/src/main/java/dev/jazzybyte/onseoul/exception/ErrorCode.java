@@ -16,7 +16,7 @@ public enum ErrorCode {
     // ── 인증 (AUTH_*) ──────────────────────────────────────────────────────
     UNAUTHORIZED(401, "UNAUTHORIZED", "인증이 필요합니다."),
     FORBIDDEN(403, "FORBIDDEN", "접근 권한이 없습니다."),
-    USER_NOT_FOUND(401, "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."),
+    USER_NOT_FOUND(404, "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."),
     INVALID_TOKEN(401, "INVALID_TOKEN", "유효하지 않은 토큰입니다."),
     EXPIRED_TOKEN(401, "EXPIRED_TOKEN", "만료된 토큰입니다."),
     INVALID_REFRESH_TOKEN(401, "INVALID_REFRESH_TOKEN", "유효하지 않은 리프레시 토큰입니다."),

@@ -3,12 +3,12 @@ package dev.jazzybyte.onseoul.auth;
 import dev.jazzybyte.onseoul.adapter.in.security.OAuth2LoginSuccessHandler;
 import dev.jazzybyte.onseoul.adapter.in.web.AuthController;
 import dev.jazzybyte.onseoul.adapter.in.web.GlobalExceptionHandler;
-import dev.jazzybyte.onseoul.domain.model.User;
 import dev.jazzybyte.onseoul.domain.model.UserStatus;
+import dev.jazzybyte.onseoul.domain.port.in.GetMeUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.LogoutUseCase;
+import dev.jazzybyte.onseoul.domain.port.in.MeResult;
 import dev.jazzybyte.onseoul.domain.port.in.RefreshTokenUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.TokenResponse;
-import dev.jazzybyte.onseoul.domain.port.out.LoadUserPort;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import jakarta.servlet.http.Cookie;
@@ -31,9 +31,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-import java.time.OffsetDateTime;
-import java.util.Optional;
-
 @WebMvcTest(controllers = {AuthController.class, GlobalExceptionHandler.class},
         excludeAutoConfiguration = {
                 SecurityAutoConfiguration.class,
@@ -55,7 +52,7 @@ class AuthControllerTest {
     private OAuth2LoginSuccessHandler cookieHelper;
 
     @MockitoBean
-    private LoadUserPort loadUserPort;
+    private GetMeUseCase getMeUseCase;
 
     // ── refresh ───────────────────────────────────────────────────
 
@@ -142,9 +139,7 @@ class AuthControllerTest {
     @Test
     @DisplayName("GET /auth/me - 유효한 토큰으로 사용자 정보를 반환한다")
     void me_validToken_returnsUserInfo() throws Exception {
-        User activeUser = new User(1L, "kakao", "kakao-123", "hong@example.com", "홍길동",
-                UserStatus.ACTIVE, OffsetDateTime.now(), OffsetDateTime.now());
-        when(loadUserPort.findById(1L)).thenReturn(Optional.of(activeUser));
+        when(getMeUseCase.getMe(1L)).thenReturn(new MeResult(1L, "홍길동", UserStatus.ACTIVE));
 
         mockMvc.perform(get("/auth/me")
                         .requestAttr("userId", 1L))
@@ -161,19 +156,39 @@ class AuthControllerTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
 
-        verifyNoInteractions(loadUserPort);
+        verifyNoInteractions(getMeUseCase);
     }
 
     @Test
     @DisplayName("GET /auth/me - SUSPENDED 계정이면 403을 반환한다")
     void me_suspendedUser_returns403() throws Exception {
-        User suspendedUser = new User(2L, "kakao", "kakao-456", "suspended@example.com", "정지됨",
-                UserStatus.SUSPENDED, OffsetDateTime.now(), OffsetDateTime.now());
-        when(loadUserPort.findById(2L)).thenReturn(Optional.of(suspendedUser));
+        when(getMeUseCase.getMe(2L)).thenThrow(new OnSeoulApiException(ErrorCode.FORBIDDEN));
 
         mockMvc.perform(get("/auth/me")
                         .requestAttr("userId", 2L))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+    }
+
+    @Test
+    @DisplayName("GET /auth/me - DELETED 계정이면 403을 반환한다")
+    void me_deletedUser_returns403() throws Exception {
+        when(getMeUseCase.getMe(3L)).thenThrow(new OnSeoulApiException(ErrorCode.FORBIDDEN));
+
+        mockMvc.perform(get("/auth/me")
+                        .requestAttr("userId", 3L))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+    }
+
+    @Test
+    @DisplayName("GET /auth/me - 유효한 userId지만 DB에 사용자가 없으면 401을 반환한다")
+    void me_userNotFound_returns401() throws Exception {
+        when(getMeUseCase.getMe(99L)).thenThrow(new OnSeoulApiException(ErrorCode.UNAUTHORIZED));
+
+        mockMvc.perform(get("/auth/me")
+                        .requestAttr("userId", 99L))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
     }
 }

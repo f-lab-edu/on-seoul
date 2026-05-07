@@ -1,37 +1,28 @@
 package dev.jazzybyte.onseoul.adapter.in.web;
 
 import dev.jazzybyte.onseoul.adapter.in.security.OAuth2LoginSuccessHandler;
-import dev.jazzybyte.onseoul.domain.model.User;
-import dev.jazzybyte.onseoul.domain.model.UserStatus;
+import dev.jazzybyte.onseoul.domain.port.in.GetMeUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.LogoutUseCase;
+import dev.jazzybyte.onseoul.domain.port.in.MeResult;
 import dev.jazzybyte.onseoul.domain.port.in.RefreshTokenUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.TokenResponse;
-import dev.jazzybyte.onseoul.domain.port.out.LoadUserPort;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/auth")
+@RequiredArgsConstructor
 public class AuthController {
 
     private final RefreshTokenUseCase refreshTokenUseCase;
     private final LogoutUseCase logoutUseCase;
     private final OAuth2LoginSuccessHandler cookieHelper;
-    private final LoadUserPort loadUserPort;
-
-    public AuthController(final RefreshTokenUseCase refreshTokenUseCase,
-                          final LogoutUseCase logoutUseCase,
-                          final OAuth2LoginSuccessHandler cookieHelper,
-                          final LoadUserPort loadUserPort) {
-        this.refreshTokenUseCase = refreshTokenUseCase;
-        this.logoutUseCase = logoutUseCase;
-        this.cookieHelper = cookieHelper;
-        this.loadUserPort = loadUserPort;
-    }
+    private final GetMeUseCase getMeUseCase;
 
     @PostMapping("/token/refresh")
     public ResponseEntity<Void> refresh(
@@ -64,11 +55,7 @@ public class AuthController {
         if (userId == null) {
             throw new OnSeoulApiException(ErrorCode.UNAUTHORIZED);
         }
-        User user = loadUserPort.findById(userId)
-                .orElseThrow(() -> new OnSeoulApiException(ErrorCode.USER_NOT_FOUND));
-        if (user.getStatus() == UserStatus.SUSPENDED || user.getStatus() == UserStatus.DELETED) {
-            throw new OnSeoulApiException(ErrorCode.FORBIDDEN);
-        }
-        return ResponseEntity.ok(new MeResponse(user.getId(), user.getNickname(), user.getStatus().name()));
+        MeResult result = getMeUseCase.getMe(userId);
+        return ResponseEntity.ok(new MeResponse(result.id(), result.nickname(), result.status()));
     }
 }

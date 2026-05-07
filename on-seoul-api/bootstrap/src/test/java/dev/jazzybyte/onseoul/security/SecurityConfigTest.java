@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.security;
 
 import dev.jazzybyte.onseoul.adapter.in.security.JwtTokenIssuer;
 import dev.jazzybyte.onseoul.domain.port.in.CollectDatasetUseCase;
+import dev.jazzybyte.onseoul.domain.port.in.GetMeUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.LogoutUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.RefreshTokenUseCase;
 import dev.jazzybyte.onseoul.domain.port.out.GeocodingPort;
@@ -30,6 +31,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -74,6 +76,7 @@ class SecurityConfigTest {
     @MockitoBean CollectDatasetUseCase collectDatasetUseCase;
     @MockitoBean RefreshTokenUseCase refreshTokenUseCase;
     @MockitoBean LogoutUseCase logoutUseCase;
+    @MockitoBean GetMeUseCase getMeUseCase;
     @MockitoBean SaveChatRoomPort saveChatRoomPort;
     @MockitoBean LoadChatRoomPort loadChatRoomPort;
     @MockitoBean SaveChatMessagePort saveChatMessagePort;
@@ -178,5 +181,16 @@ class SecurityConfigTest {
         mockMvc.perform(get("/some-protected-path")
                         .cookie(new jakarta.servlet.http.Cookie("access_token", expiredToken)))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("GET /auth/me — 토큰 없이 요청하면 Spring Security가 컨트롤러 진입 전 401을 반환한다")
+    void me_withoutToken_returns401() throws Exception {
+        mockMvc.perform(get("/auth/me"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(getMeUseCase);
     }
 }
