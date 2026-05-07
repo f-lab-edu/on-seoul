@@ -53,7 +53,6 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           {oauthUrl ? (
             <a
               href={oauthUrl}
-              rel="noopener noreferrer"
               className={buttonVariants({ size: "lg", className: "w-full" })}
             >
               Google 계정으로 계속하기
