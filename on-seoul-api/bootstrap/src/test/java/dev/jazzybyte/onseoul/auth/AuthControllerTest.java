@@ -3,9 +3,12 @@ package dev.jazzybyte.onseoul.auth;
 import dev.jazzybyte.onseoul.adapter.in.security.OAuth2LoginSuccessHandler;
 import dev.jazzybyte.onseoul.adapter.in.web.AuthController;
 import dev.jazzybyte.onseoul.adapter.in.web.GlobalExceptionHandler;
+import dev.jazzybyte.onseoul.domain.model.User;
+import dev.jazzybyte.onseoul.domain.model.UserStatus;
 import dev.jazzybyte.onseoul.domain.port.in.LogoutUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.RefreshTokenUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.TokenResponse;
+import dev.jazzybyte.onseoul.domain.port.out.LoadUserPort;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import jakarta.servlet.http.Cookie;
@@ -24,8 +27,12 @@ import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.time.OffsetDateTime;
+import java.util.Optional;
 
 @WebMvcTest(controllers = {AuthController.class, GlobalExceptionHandler.class},
         excludeAutoConfiguration = {
@@ -46,6 +53,9 @@ class AuthControllerTest {
 
     @MockitoBean
     private OAuth2LoginSuccessHandler cookieHelper;
+
+    @MockitoBean
+    private LoadUserPort loadUserPort;
 
     // ── refresh ───────────────────────────────────────────────────
 
@@ -125,5 +135,45 @@ class AuthControllerTest {
                 .andExpect(header().exists(HttpHeaders.SET_COOKIE));
 
         verify(logoutUseCase, never()).logout(anyLong());
+    }
+
+    // ── me ────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("GET /auth/me - 유효한 토큰으로 사용자 정보를 반환한다")
+    void me_validToken_returnsUserInfo() throws Exception {
+        User activeUser = new User(1L, "kakao", "kakao-123", "hong@example.com", "홍길동",
+                UserStatus.ACTIVE, OffsetDateTime.now(), OffsetDateTime.now());
+        when(loadUserPort.findById(1L)).thenReturn(Optional.of(activeUser));
+
+        mockMvc.perform(get("/auth/me")
+                        .requestAttr("userId", 1L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(1))
+                .andExpect(jsonPath("$.nickname").value("홍길동"))
+                .andExpect(jsonPath("$.status").value("ACTIVE"));
+    }
+
+    @Test
+    @DisplayName("GET /auth/me - 토큰 없으면 401을 반환한다")
+    void me_noToken_returns401() throws Exception {
+        mockMvc.perform(get("/auth/me"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(loadUserPort);
+    }
+
+    @Test
+    @DisplayName("GET /auth/me - SUSPENDED 계정이면 403을 반환한다")
+    void me_suspendedUser_returns403() throws Exception {
+        User suspendedUser = new User(2L, "kakao", "kakao-456", "suspended@example.com", "정지됨",
+                UserStatus.SUSPENDED, OffsetDateTime.now(), OffsetDateTime.now());
+        when(loadUserPort.findById(2L)).thenReturn(Optional.of(suspendedUser));
+
+        mockMvc.perform(get("/auth/me")
+                        .requestAttr("userId", 2L))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
     }
 }
