@@ -26,10 +26,13 @@ interface MessageListProps {
 export function MessageList({ messages, streamState }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  // 새 메시지 추가/스트리밍 토큰 누적 시 하단으로 스크롤.
+  // 새 메시지 추가/스트림 phase 전환 시 하단으로 스크롤.
+  // streamState 객체 전체를 의존성으로 두면 매 토큰마다 재실행되어 불필요. phase + messages 길이만 추적.
+  // 토큰 누적 중 부드러운 애니메이션은 오히려 뚝뚝 끊겨 보이므로 "auto"로 즉시 스크롤.
+  const streamPhase = streamState.phase;
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages.length, streamState]);
+    bottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+  }, [messages.length, streamPhase]);
 
   const streamingContent =
     streamState.phase === "streaming" ? streamState.content : "";

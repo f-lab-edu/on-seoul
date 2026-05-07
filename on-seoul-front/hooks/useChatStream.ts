@@ -112,6 +112,8 @@ export function useChatStream(): UseChatStreamResult {
               safeSetState({ phase: "streaming", content, trace: [...trace] });
               break;
             case "token":
+              // 백엔드가 비정상적으로 비-string delta를 보내면 누적 시 "[object Object]" 등 오염 방지.
+              if (typeof event.delta !== "string") break;
               content += event.delta;
               safeSetState({ phase: "streaming", content, trace: [...trace] });
               break;
@@ -144,8 +146,7 @@ export function useChatStream(): UseChatStreamResult {
           trace: [...trace],
         });
       } catch (e) {
-        if (e instanceof DOMException && e.name === "AbortError") return;
-        if ((e as Error)?.name === "AbortError") return;
+        if (e instanceof Error && e.name === "AbortError") return;
         const message = e instanceof Error ? e.message : "스트림 처리 중 오류가 발생했습니다.";
         safeSetState({ phase: "error", message, content, trace: [...trace] });
       }
