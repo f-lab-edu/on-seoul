@@ -24,19 +24,21 @@ export default function ChatPage() {
   // done 이벤트를 한 번만 messages에 반영하기 위한 가드.
   const lastCommittedDoneId = useRef<number | null>(null);
 
+  const doneMessageId = state.phase === "done" ? state.messageId : null;
+  const doneContent = state.phase === "done" ? state.content : null;
   useEffect(() => {
-    if (state.phase !== "done") return;
-    if (lastCommittedDoneId.current === state.messageId) return;
-    lastCommittedDoneId.current = state.messageId;
+    if (doneMessageId === null) return;
+    if (lastCommittedDoneId.current === doneMessageId) return;
+    lastCommittedDoneId.current = doneMessageId;
     setMessages((prev) => [
       ...prev,
       {
-        id: `assistant-${state.messageId}`,
+        id: `assistant-${doneMessageId}`,
         role: "ASSISTANT",
-        content: state.content,
+        content: doneContent ?? "",
       },
     ]);
-  }, [state]);
+  }, [doneMessageId, doneContent]);
 
   function handleSubmit(question: string) {
     setMessages((prev) => [

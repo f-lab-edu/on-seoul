@@ -9,7 +9,8 @@ import type { User } from "@/types/auth";
 interface UseAuthResult {
   user: User | null;
   loading: boolean;
-  error: string | null;
+  /** 사용자 정보 조회 실패 여부. 사용자에게 노출할 메시지는 호출 측에서 결정한다. */
+  error: boolean;
   logout: () => Promise<void>;
 }
 
@@ -19,13 +20,14 @@ interface UseAuthResult {
  *
  * 401(인증 만료)과 5xx/네트워크 일시 장애를 구분한다.
  * - 401만 `user = null` 처리(비로그인 상태 확정)
- * - 그 외 오류는 `user`를 변경하지 않고 `error` 메시지로 노출해 재시도 UX를 가능하게 한다.
+ * - 그 외 오류는 `user`를 변경하지 않고 `error = true`만 노출 — 메시지는 호출 측이 한글로 결정.
+ *   (raw `Error.message`는 백엔드 영문 메시지일 수 있어 사용자 노출에 부적합)
  */
 export function useAuth(): UseAuthResult {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<boolean>(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,16 +37,15 @@ export function useAuth(): UseAuthResult {
         const me = await apiClient.get<User>("/auth/me");
         if (cancelled) return;
         setUser(me);
-        setError(null);
+        setError(false);
       } catch (e) {
         if (cancelled) return;
         if (e instanceof ApiError && e.status === 401) {
           setUser(null);
-          setError(null);
+          setError(false);
         } else {
-          // 5xx/네트워크 장애는 비로그인으로 단정하지 않는다. 사용자 상태는 그대로 두고 에러만 노출.
-          const message = e instanceof Error ? e.message : "사용자 정보를 불러오지 못했습니다.";
-          setError(message);
+          // 5xx/네트워크 장애는 비로그인으로 단정하지 않는다. 사용자 상태는 그대로 두고 에러 플래그만 세움.
+          setError(true);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -53,7 +54,7 @@ export function useAuth(): UseAuthResult {
 
     const onLogout = () => {
       setUser(null);
-      setError(null);
+      setError(false);
       router.push("/login");
     };
     window.addEventListener(AUTH_LOGOUT_EVENT, onLogout);
@@ -70,7 +71,7 @@ export function useAuth(): UseAuthResult {
       // 서버 실패해도 클라이언트 상태는 정리해 사용자 흐름을 막지 않는다.
     }
     setUser(null);
-    setError(null);
+    setError(false);
     router.push("/login");
   }, [router]);
 
