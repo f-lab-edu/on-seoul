@@ -20,12 +20,12 @@ Next.js 15 App Router 기반 웹 프론트엔드 구현 순서.
 
 - [x] Next.js 15 App Router 스캐폴딩 (`pnpm create next-app`, TypeScript strict, Tailwind, ESLint)
 - [x] 디렉토리 구조 생성 (`app/(auth)/`, `app/(chat)/`, `app/api/`, `components/`, `hooks/`, `lib/`, `types/`)
-- [x] `tsconfig.json` — `strict: true`, `@/*` alias 설정
-- [x] `.env.example` — `NEXT_PUBLIC_API_BASE_URL`, `API_BASE_URL`, `NEXT_PUBLIC_OAUTH_LOGIN_URL` 정의
-- [x] ESLint 규칙 — `console.log` warn, `any` error
-- [x] `package.json` scripts — `dev`, `build`, `lint`, `typecheck`
+- [x] `tsconfig.json` — `strict: true`, `noUncheckedIndexedAccess: true`, `forceConsistentCasingInFileNames: true`, `@/*` alias 설정
+- [x] `.env.example` — `NEXT_PUBLIC_API_BASE_URL`, `API_BASE_URL`, `NEXT_PUBLIC_OAUTH_LOGIN_URL` 정의 (각 변수 용도 주석 포함)
+- [x] ESLint 규칙 — `console.log` error (warn/error 허용), `any` error
+- [x] `package.json` scripts — `dev`, `build`, `lint`, `typecheck`, `test`
 
-검증: `pnpm dev` 기동 후 `http://localhost:3000` 기본 페이지 렌더, `pnpm typecheck && pnpm lint` 통과 ✅
+검증: `pnpm typecheck && pnpm lint && pnpm test` 통과 ✅ (QA PASS / 코드리뷰 APPROVE)
 
 ### Phase 2. shadcn/ui 셋업
 

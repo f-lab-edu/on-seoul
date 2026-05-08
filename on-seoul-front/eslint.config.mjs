@@ -22,7 +22,9 @@ const eslintConfig = [
   },
   {
     rules: {
-      "no-console": ["warn", { allow: ["warn", "error"] }],
+      // console.log 잔존 금지 (CLAUDE.md E-1). warn/error는 허용.
+      "no-console": ["error", { allow: ["warn", "error"] }],
+      // any 타입 금지 (CLAUDE.md D-1)
       "@typescript-eslint/no-explicit-any": "error",
     },
   },

@@ -44,8 +44,8 @@ describe("apiClient", () => {
 
     expect(data).toEqual({ id: 1, nickname: "vito" });
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe(`${BASE}/auth/me`);
-    expect(calls[0].init?.credentials).toBe("include");
+    expect(calls[0]!.url).toBe(`${BASE}/auth/me`);
+    expect(calls[0]!.init?.credentials).toBe("include");
   });
 
   it("401 발생 시 refresh 후 원요청을 1회 재시도한다", async () => {

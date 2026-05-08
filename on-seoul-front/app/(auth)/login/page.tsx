@@ -28,9 +28,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
     <main className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>온서울에 로그인</CardTitle>
+          <CardTitle>온서울에 오신 것을 환영합니다</CardTitle>
           <CardDescription>
-            서울시 공공서비스 예약을 도와드릴게요.
+            Google 계정으로 로그인하고 서울시 공공서비스 예약을 시작해보세요.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
