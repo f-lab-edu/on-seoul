@@ -25,6 +25,7 @@ LangGraph 전환 시:
 import json
 import logging
 import time
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from sqlalchemy import text
@@ -119,6 +120,64 @@ class AgentWorkflow:
             await _save_trace(ai_session, state["message_id"], trace_payload)
 
         return state
+
+    async def stream(
+        self,
+        state: AgentState,
+        *,
+        data_session: AsyncSession,
+        ai_session: AsyncSession,
+    ) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
+        """워크플로우를 단계별로 실행하며 진행 이벤트와 최종 결과를 yield한다.
+
+        Yields:
+            ("progress", {"step": str, "message": str}) — 각 단계 시작 전
+            ("result", AgentState)                      — 최종 완료 상태
+        """
+        start = time.monotonic()
+        node_path: list[str] = []
+
+        try:
+            # ── 1. Router: 의도 분류 ──────────────────────────────────────
+            yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
+            state = await self._router.classify(state)
+            node_path.append("router")
+            intent: IntentType = state["intent"]
+
+            # ── 2. Branch: 의도별 검색 ───────────────────────────────────
+            yield "progress", {"step": "searching", "message": "관련 정보를 검색하고 있습니다..."}
+            state = await self._dispatch(state, intent, data_session, ai_session, node_path)
+
+            # ── 3. Answer: 자연어 답변 생성 ──────────────────────────────
+            yield "progress", {"step": "answering", "message": "답변을 생성하고 있습니다..."}
+            state = await self._answer.answer(state)
+            node_path.append("answer")
+
+        except Exception as exc:
+            logger.exception("워크플로우 실행 중 오류")
+            try:
+                await ai_session.rollback()
+            except Exception:
+                pass
+            state = {
+                **state,
+                "error": str(exc),
+                "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+            }
+            node_path.append("error")
+
+        # try/except 완료 후 — trace 저장 및 최종 결과 yield
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        trace_payload: dict[str, Any] = {
+            "intent": state.get("intent"),
+            "node_path": node_path,
+            "elapsed_ms": elapsed_ms,
+            "error": state.get("error"),
+        }
+        state = {**state, "trace": trace_payload}
+        await _save_trace(ai_session, state["message_id"], trace_payload)
+
+        yield "result", state
 
     async def _dispatch(
         self,

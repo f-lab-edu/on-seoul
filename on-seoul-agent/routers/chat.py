@@ -3,16 +3,14 @@
 흐름:
     ChatRequest 수신
     → AgentState 구성 (title_needed = message_id == 1)
-    → AgentWorkflow.run()
+    → AgentWorkflow.stream() 단계별 실행
     → SSE StreamingResponse 반환
 
-SSE 이벤트 3종:
+SSE 이벤트:
+    event: progress       — 워크플로우 진행 단계 안내 (routing / searching / answering)
     event: final          — 워크플로우 정상 완료
     event: workflow_error — 워크플로우 내부 에러 (fallback 답변 포함)
     event: error          — 세션/DB 레벨 예외
-
-현재 Phase에서는 워크플로우 완료 후 단일 이벤트를 발행한다.
-Phase 15(LangGraph 전환) 시 토큰 스트리밍으로 확장한다.
 """
 
 import json
@@ -89,25 +87,30 @@ async def _stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
 
     try:
         async with data_session_ctx() as data_session, ai_session_ctx() as ai_session:
-            result = await _get_workflow().run(
+            async for event_type, data in _get_workflow().stream(
                 state,
                 data_session=data_session,
                 ai_session=ai_session,
-            )
+            ):
+                if event_type == "progress":
+                    # 단계별 진행 안내 이벤트를 즉시 클라이언트로 전송
+                    yield sse_frame("progress", data)
 
-        intent = result.get("intent")
-        payload = {
-            "message_id": result["message_id"],
-            "answer": result.get("answer") or "",
-            "intent": intent.value if intent is not None else None,
-            "title": result.get("title"),
-        }
-        if result.get("error"):
-            payload["error"] = result["error"]
-            # 워크플로우가 완료됐지만 내부 오류로 fallback 답변을 반환한 경우
-            yield sse_frame("workflow_error", payload)
-        else:
-            yield sse_frame("final", payload)
+                elif event_type == "result":
+                    result = data
+                    intent = result.get("intent")
+                    payload = {
+                        "message_id": result["message_id"],
+                        "answer": result.get("answer") or "",
+                        "intent": intent.value if intent is not None else None,
+                        "title": result.get("title"),
+                    }
+                    if result.get("error"):
+                        payload["error"] = result["error"]
+                        # 워크플로우가 완료됐지만 내부 오류로 fallback 답변을 반환한 경우
+                        yield sse_frame("workflow_error", payload)
+                    else:
+                        yield sse_frame("final", payload)
 
     except Exception:
         # 세션·DB 레벨 예외 — 워크플로우 진입 자체가 실패한 경우

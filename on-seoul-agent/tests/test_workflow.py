@@ -424,6 +424,88 @@ class TestTraceStorage:
 
 
 # ---------------------------------------------------------------------------
+# stream() — 진행 이벤트 + 최종 결과
+# ---------------------------------------------------------------------------
+
+
+class TestWorkflowStream:
+    async def _collect(self, gen) -> list[tuple[str, dict]]:
+        events = []
+        async for event_type, data in gen:
+            events.append((event_type, data))
+        return events
+
+    async def test_stream_yields_progress_then_result(self):
+        """stream()은 progress 이벤트 3개 후 result를 yield한다."""
+        _, data_session = _make_sql_agent([])
+        workflow = AgentWorkflow(
+            router=_make_router(IntentType.SQL_SEARCH),
+            sql_agent=_make_sql_agent([])[0],
+            answer_agent=_make_answer_agent("답변"),
+        )
+        events = await self._collect(
+            workflow.stream(_make_state(), data_session=data_session, ai_session=_make_ai_session())
+        )
+
+        types = [e for e, _ in events]
+        assert types == ["progress", "progress", "progress", "result"]
+
+    async def test_stream_progress_steps(self):
+        """progress 이벤트의 step 값이 routing → searching → answering 순서로 온다."""
+        _, data_session = _make_sql_agent([])
+        workflow = AgentWorkflow(
+            router=_make_router(IntentType.SQL_SEARCH),
+            sql_agent=_make_sql_agent([])[0],
+            answer_agent=_make_answer_agent(),
+        )
+        events = await self._collect(
+            workflow.stream(_make_state(), data_session=data_session, ai_session=_make_ai_session())
+        )
+
+        progress_steps = [data["step"] for t, data in events if t == "progress"]
+        assert progress_steps == ["routing", "searching", "answering"]
+
+    async def test_stream_result_has_answer(self):
+        """result 이벤트의 answer 필드가 정상적으로 채워진다."""
+        _, data_session = _make_sql_agent([])
+        workflow = AgentWorkflow(
+            router=_make_router(IntentType.FALLBACK),
+            answer_agent=_make_answer_agent("스트림 답변"),
+        )
+        events = await self._collect(
+            workflow.stream(_make_state(), data_session=data_session, ai_session=_make_ai_session())
+        )
+
+        result_events = [(t, d) for t, d in events if t == "result"]
+        assert len(result_events) == 1
+        _, result = result_events[0]
+        assert result["answer"] == "스트림 답변"
+        assert result["error"] is None
+
+    async def test_stream_error_yields_result_with_error(self):
+        """Router 예외 시 progress(routing) 후 바로 result(error)가 온다."""
+        router = RouterAgent.__new__(RouterAgent)
+        chain = MagicMock()
+        chain.ainvoke = AsyncMock(side_effect=RuntimeError("LLM 오류"))
+        router._chain = chain
+
+        _, data_session = _make_sql_agent([])
+        workflow = AgentWorkflow(router=router, answer_agent=_make_answer_agent())
+        events = await self._collect(
+            workflow.stream(_make_state(), data_session=data_session, ai_session=_make_ai_session())
+        )
+
+        types = [t for t, _ in events]
+        # routing progress 후 result (searching/answering은 실행 안 됨)
+        assert types[0] == "progress"
+        assert types[-1] == "result"
+
+        _, result = events[-1]
+        assert result["error"] is not None
+        assert "LLM 오류" in result["error"]
+
+
+# ---------------------------------------------------------------------------
 # 오류 처리
 # ---------------------------------------------------------------------------
 
