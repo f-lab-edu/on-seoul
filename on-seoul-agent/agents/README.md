@@ -140,7 +140,7 @@ LLM이 SQL을 직접 생성하지 않습니다. 사용자 메시지에서 필터
 2. 정제된 문장을 Gemini 임베딩 모델로 벡터화합니다.
 3. `on_ai.service_embeddings`에서 코사인 유사도 상위 K개를 반환합니다.
 
-조회에는 `tools.vector_search.vector_search()`를 사용합니다. pre-filter(`max_class_name`, `area_name`, `service_status`) 지원은 Phase 15에서 Router Agent가 해당 필드를 AgentState에 채우면 연동합니다.
+조회에는 `tools.vector_search.vector_search()`를 사용합니다. `vector_search`는 post-filter 전략을 사용합니다 — 전체 임베딩에서 유사도 상위 `scan_k`를 먼저 뽑고, 서브쿼리 외부에서 `max_class_name`·`area_name`·`service_status` 필터를 적용합니다. Phase 14에서 Vector Agent가 메시지로부터 이 파라미터를 추출해 `vector_search`에 전달하는 연동을 구현합니다.
 
 ---
 
