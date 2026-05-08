@@ -24,6 +24,11 @@ _on_ai_engine = create_async_engine(
     settings.on_ai_database_url,
     echo=settings.debug,
     connect_args={"statement_cache_size": 0},
+    # SSE 클라이언트 연결 해제 시 uvicorn이 task를 cancel하면 asyncpg의
+    # graceful terminate가 CancelledError로 실패한다. pool_pre_ping은 다음
+    # 요청에서 해당 연결을 재사용하기 전에 살아있는지 확인해 stale 연결을 방지한다.
+    pool_pre_ping=True,
+    pool_recycle=300,  # 5분 이상 유휴 연결 재생성 (네트워크 레벨 타임아웃 방지)
 )
 _OnAiSession = async_sessionmaker(_on_ai_engine, expire_on_commit=False)
 
@@ -32,7 +37,12 @@ _OnAiSession = async_sessionmaker(_on_ai_engine, expire_on_commit=False)
 # on_data DB — 정형 데이터 읽기 전용 (public_service_reservations 등)
 # ---------------------------------------------------------------------------
 
-_on_data_engine = create_async_engine(settings.on_data_database_url, echo=settings.debug)
+_on_data_engine = create_async_engine(
+    settings.on_data_database_url,
+    echo=settings.debug,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
 _OnDataSession = async_sessionmaker(_on_data_engine, expire_on_commit=False)
 
 
