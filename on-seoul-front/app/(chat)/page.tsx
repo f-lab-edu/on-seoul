@@ -54,7 +54,7 @@ export default function ChatPage() {
   return (
     <main className="mx-auto flex h-dvh max-w-3xl flex-col">
       <header className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h1 className="text-base font-medium">서울시 AI 도우미</h1>
+        <h1 className="text-base font-medium">온 에이전트</h1>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {loading ? (
             <span>불러오는 중…</span>
