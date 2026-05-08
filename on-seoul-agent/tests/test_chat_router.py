@@ -366,6 +366,72 @@ class TestChatStreamRouter:
         )
         assert response.status_code == 422
 
+    async def test_workflow_internal_error_returns_workflow_error_event(self, client: AsyncClient):
+        """워크플로우 내부 오류(error 필드 있음) → workflow_error 이벤트가 발행된다.
+
+        workflow.stream()이 result에 error를 담아 반환하는 경우(fallback 답변 포함)
+        _stream()이 workflow_error 프레임을 발행해야 한다.
+        """
+        final_state = _make_final_state(
+            message_id=2,
+            error="LLM 오류",
+            answer="죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+        )
+
+        async def _error_stream(*args, **kwargs):
+            yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
+            yield "result", final_state
+
+        with patch("routers.chat._workflow") as mock_wf, patch(
+            "routers.chat.ai_session_ctx", _make_session_ctx()
+        ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
+            mock_wf.stream = _error_stream
+
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 2, "message": "테스트"},
+            )
+
+        assert response.status_code == 200
+        events = _parse_sse_events(response.content)
+        event_types = [e["event"] for e in events]
+        assert "workflow_error" in event_types
+
+        workflow_error_events = [e for e in events if e["event"] == "workflow_error"]
+        assert len(workflow_error_events) == 1
+        data = workflow_error_events[0]["data"]
+        assert data["error"] == "LLM 오류"
+        assert data["answer"] == "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+        assert data["message_id"] == 2
+
+    async def test_workflow_error_event_order_is_progress_then_workflow_error(self, client: AsyncClient):
+        """workflow_error 이벤트는 progress 이벤트 이후에 발행된다."""
+        final_state = _make_final_state(
+            error="검색 실패",
+            answer="죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+        )
+
+        async def _error_stream(*args, **kwargs):
+            yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
+            yield "result", final_state
+
+        with patch("routers.chat._workflow") as mock_wf, patch(
+            "routers.chat.ai_session_ctx", _make_session_ctx()
+        ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
+            mock_wf.stream = _error_stream
+
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "테스트"},
+            )
+
+        events = _parse_sse_events(response.content)
+        event_types = [e["event"] for e in events]
+        assert event_types[0] == "progress"
+        assert event_types[-1] == "workflow_error"
+        # final 이벤트는 발행되지 않는다
+        assert "final" not in event_types
+
 
 class TestMainEndpoints:
     """main.py 전역 핸들러 및 헬스체크 테스트."""
