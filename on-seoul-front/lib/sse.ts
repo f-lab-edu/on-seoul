@@ -48,7 +48,8 @@ export async function* parseSseStream(
  * `event:` 값을 data JSON의 `type` 필드로 주입 (data에 type이 없는 경우).
  */
 function extractChunk(chunk: string): unknown {
-  const lines = chunk.split("\n");
+  // \r\n 종결 프록시(NGINX 등) 호환을 위해 \r 제거 후 분할.
+  const lines = chunk.split("\n").map((l) => l.replace(/\r$/, ""));
   let eventType: string | null = null;
   const dataLines: string[] = [];
 
@@ -66,10 +67,18 @@ function extractChunk(chunk: string): unknown {
 
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    // event 필드를 type으로 주입 (data에 이미 type이 있으면 우선)
-    if (eventType !== null && !("type" in parsed) && !("step" in parsed)) {
-      parsed.type = eventType;
+
+    if (!("type" in parsed) && !("step" in parsed)) {
+      if (eventType !== null) {
+        // event: 라인이 있으면 그 값을 type으로 주입.
+        parsed.type = eventType;
+      } else if ("message_id" in parsed && "answer" in parsed) {
+        // event: 라인 없이 최종 응답만 오는 경우 shape으로 추론.
+        // error 필드가 있으면 workflow_error, 없으면 final.
+        parsed.type = parsed["error"] != null ? "workflow_error" : "final";
+      }
     }
+
     return parsed;
   } catch {
     // 잘못된 JSON 청크는 무시 (백엔드 keepalive 코멘트 등).

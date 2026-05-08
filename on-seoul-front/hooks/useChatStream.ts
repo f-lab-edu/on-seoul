@@ -130,7 +130,8 @@ export function useChatStream(): UseChatStreamResult {
               safeSetState({ phase: "streaming", content, trace: [...trace] });
               break;
             case "final":
-              // 백엔드가 SSE event: final 로 전체 답변을 한 번에 전달.
+              // 백엔드는 token 없이 final 단독으로 전체 답변을 전달한다.
+              // token + final 혼용 시 누적 content가 폐기되므로 백엔드와 합의 유지 필요.
               safeSetState({
                 phase: "done",
                 messageId: event.message_id,

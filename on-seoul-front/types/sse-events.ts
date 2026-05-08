@@ -23,7 +23,7 @@ export type SseTypedEvent =
   | { type: "token"; delta: string }
   | { type: "done"; messageId: number }
   | { type: "final"; message_id: number; answer: string }
-  | { type: "workflow_error"; message_id: number; answer: string; error: string }
+  | { type: "workflow_error"; message_id: number; answer: string; error: string; intent?: string; title?: string }
   | { type: "error"; message: string };
 
 export type SseEvent = SseProgressEvent | SseTypedEvent;
