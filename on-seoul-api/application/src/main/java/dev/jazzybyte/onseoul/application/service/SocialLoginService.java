@@ -11,26 +11,20 @@ import dev.jazzybyte.onseoul.domain.port.out.SaveUserPort;
 import dev.jazzybyte.onseoul.domain.port.out.TokenIssuerPort;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class SocialLoginService implements SocialLoginUseCase {
 
     private final LoadUserPort loadUserPort;
     private final SaveUserPort saveUserPort;
     private final TokenIssuerPort tokenIssuerPort;
     private final RefreshTokenStorePort refreshTokenStorePort;
-
-    public SocialLoginService(final LoadUserPort loadUserPort,
-                              final SaveUserPort saveUserPort,
-                              final TokenIssuerPort tokenIssuerPort,
-                              final RefreshTokenStorePort refreshTokenStorePort) {
-        this.loadUserPort = loadUserPort;
-        this.saveUserPort = saveUserPort;
-        this.tokenIssuerPort = tokenIssuerPort;
-        this.refreshTokenStorePort = refreshTokenStorePort;
-    }
 
     @Override
     @Transactional
@@ -46,6 +40,8 @@ public class SocialLoginService implements SocialLoginUseCase {
             throw new OnSeoulApiException(ErrorCode.FORBIDDEN, "비활성화된 계정입니다.");
         }
 
+        log.info("[Security] 소셜 로그인 - userId={}, provider={}, providerId={}",
+                user.getId(), user.getProvider(), user.getProviderId());
         String accessToken = tokenIssuerPort.generateAccessToken(user.getId());
         String refreshToken = tokenIssuerPort.generateRefreshToken(user.getId());
         refreshTokenStorePort.save(user.getId(), refreshToken, tokenIssuerPort.getRefreshTokenMinutes());
