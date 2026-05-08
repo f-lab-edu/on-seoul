@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AUTH_LOGOUT_EVENT } from "@/lib/api-client";
 import { assertNever } from "@/lib/assert-never";
 import { parseSseStream } from "@/lib/sse";
+import { isSseProgressEvent } from "@/types/sse-events";
 import type { SseEvent } from "@/types/sse-events";
 
 export interface ChatStreamInput {
@@ -104,8 +105,15 @@ export function useChatStream(): UseChatStreamResult {
 
         const reader = res.body.getReader();
         for await (const raw of parseSseStream(reader, ctrl.signal)) {
-          // 백엔드 events 정본의 mirror 타입(SseEvent)으로 좁힌다.
           const event = raw as SseEvent;
+
+          // 백엔드가 step 필드로 보내는 진행 상태 메시지는 trace에 누적.
+          if (isSseProgressEvent(event)) {
+            trace.push(`⏳ ${event.message}`);
+            safeSetState({ phase: "streaming", content, trace: [...trace] });
+            continue;
+          }
+
           switch (event.type) {
             case "agent_start":
               trace.push(`▶ ${event.agent}`);
@@ -121,10 +129,28 @@ export function useChatStream(): UseChatStreamResult {
               content += event.delta;
               safeSetState({ phase: "streaming", content, trace: [...trace] });
               break;
+            case "final":
+              // 백엔드가 SSE event: final 로 전체 답변을 한 번에 전달.
+              safeSetState({
+                phase: "done",
+                messageId: event.message_id,
+                content: event.answer,
+                trace: [...trace],
+              });
+              return;
             case "done":
               safeSetState({
                 phase: "done",
                 messageId: event.messageId,
+                content,
+                trace: [...trace],
+              });
+              return;
+            case "workflow_error":
+              // 백엔드가 워크플로우 오류 시 사용자용 answer와 기술적 error를 함께 전달.
+              safeSetState({
+                phase: "error",
+                message: event.answer,
                 content,
                 trace: [...trace],
               });
