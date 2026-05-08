@@ -26,7 +26,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +39,14 @@ from schemas.state import AgentState, IntentType
 from tools.map_search import map_search
 
 logger = logging.getLogger(__name__)
+
+# stream()이 yield하는 이벤트 타입.
+# "progress" 이벤트는 각 단계 시작을 알리는 안내 메시지이고,
+# "result" 이벤트는 워크플로우 최종 상태(AgentState)를 전달한다.
+_StreamEvent = (
+    tuple[Literal["progress"], dict[str, str]]
+    | tuple[Literal["result"], AgentState]
+)
 
 
 class AgentWorkflow:
@@ -127,12 +135,18 @@ class AgentWorkflow:
         *,
         data_session: AsyncSession,
         ai_session: AsyncSession,
-    ) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
+    ) -> AsyncGenerator[_StreamEvent, None]:
         """워크플로우를 단계별로 실행하며 진행 이벤트와 최종 결과를 yield한다.
 
         Yields:
             ("progress", {"step": str, "message": str}) — 각 단계 시작 전
             ("result", AgentState)                      — 최종 완료 상태
+
+        설계:
+            trace 저장은 finally 블록에서 수행하여 rollback 실패 등 예외 경로에서도
+            세션 상태와 관계없이 저장을 시도한다(_save_trace 내부에서 best-effort 처리).
+            yield "result"는 finally 블록 밖에 배치한다 — async generator의 finally 내
+            yield는 generator.close() 시 RuntimeError를 유발하기 때문이다.
         """
         start = time.monotonic()
         node_path: list[str] = []
@@ -166,17 +180,20 @@ class AgentWorkflow:
             }
             node_path.append("error")
 
-        # try/except 완료 후 — trace 저장 및 최종 결과 yield
-        elapsed_ms = int((time.monotonic() - start) * 1000)
-        trace_payload: dict[str, Any] = {
-            "intent": state.get("intent"),
-            "node_path": node_path,
-            "elapsed_ms": elapsed_ms,
-            "error": state.get("error"),
-        }
-        state = {**state, "trace": trace_payload}
-        await _save_trace(ai_session, state["message_id"], trace_payload)
+        finally:
+            # trace 저장 — rollback 실패 후 세션이 오염된 경우에도 저장을 시도한다.
+            # _save_trace는 내부에서 모든 예외를 포착하므로 여기서 예외가 전파되지 않는다.
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            trace_payload: dict[str, Any] = {
+                "intent": state.get("intent"),
+                "node_path": node_path,
+                "elapsed_ms": elapsed_ms,
+                "error": state.get("error"),
+            }
+            state = {**state, "trace": trace_payload}
+            await _save_trace(ai_session, state["message_id"], trace_payload)
 
+        # finally 블록 밖에서 yield — generator.close() 시 도달하지 않아 RuntimeError를 피한다.
         yield "result", state
 
     async def _dispatch(

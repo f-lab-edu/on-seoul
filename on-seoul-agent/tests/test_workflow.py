@@ -483,26 +483,32 @@ class TestWorkflowStream:
         assert result["error"] is None
 
     async def test_stream_error_yields_result_with_error(self):
-        """Router 예외 시 progress(routing) 후 바로 result(error)가 온다."""
+        """Router 예외 시 progress(routing) 1개 후 result(error)가 온다.
+
+        searching/answering progress는 emit되지 않아야 한다.
+        """
         router = RouterAgent.__new__(RouterAgent)
         chain = MagicMock()
         chain.ainvoke = AsyncMock(side_effect=RuntimeError("LLM 오류"))
         router._chain = chain
 
         _, data_session = _make_sql_agent([])
+        ai_session = _make_ai_session()
         workflow = AgentWorkflow(router=router, answer_agent=_make_answer_agent())
         events = await self._collect(
-            workflow.stream(_make_state(), data_session=data_session, ai_session=_make_ai_session())
+            workflow.stream(_make_state(), data_session=data_session, ai_session=ai_session)
         )
 
         types = [t for t, _ in events]
-        # routing progress 후 result (searching/answering은 실행 안 됨)
-        assert types[0] == "progress"
-        assert types[-1] == "result"
+        # routing progress 1개 후 result — searching/answering은 실행 안 됨
+        assert types == ["progress", "result"]
 
         _, result = events[-1]
         assert result["error"] is not None
         assert "LLM 오류" in result["error"]
+
+        # 오류 경로에서 rollback이 호출된다
+        ai_session.rollback.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

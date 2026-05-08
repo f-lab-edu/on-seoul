@@ -44,6 +44,7 @@ def _get_workflow() -> AgentWorkflow:
         _workflow = AgentWorkflow()
     return _workflow
 
+
 # SSE 응답 헤더 — 프록시/CDN 버퍼링 방지
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
