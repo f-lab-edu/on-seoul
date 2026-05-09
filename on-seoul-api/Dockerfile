@@ -20,8 +20,8 @@ RUN addgroup --system jazz && adduser --system jazz --ingroup jazz
 USER jazz:jazz
 
 # Gradle 빌드로 생성된 JAR 파일을 복사
-# on-seoul-api/app/build.gradle 에서 archiveFileName = 'app.jar'로 설정됨
-COPY app/build/libs/app.jar app.jar
+# on-seoul-api/bootstrap/build.gradle 에서 archiveFileName = 'bootstrap.jar'로 설정됨
+COPY bootstrap/build/libs/bootstrap.jar app.jar
 
 # 서비스 포트 노출
 EXPOSE 8080

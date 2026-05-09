@@ -25,7 +25,8 @@ LangGraph 전환 시:
 import json
 import logging
 import time
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, Literal
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +39,14 @@ from schemas.state import AgentState, IntentType
 from tools.map_search import map_search
 
 logger = logging.getLogger(__name__)
+
+# stream()이 yield하는 이벤트 타입.
+# "progress" 이벤트는 각 단계 시작을 알리는 안내 메시지이고,
+# "result" 이벤트는 워크플로우 최종 상태(AgentState)를 전달한다.
+_StreamEvent = (
+    tuple[Literal["progress"], dict[str, str]]
+    | tuple[Literal["result"], AgentState]
+)
 
 
 class AgentWorkflow:
@@ -119,6 +128,73 @@ class AgentWorkflow:
             await _save_trace(ai_session, state["message_id"], trace_payload)
 
         return state
+
+    async def stream(
+        self,
+        state: AgentState,
+        *,
+        data_session: AsyncSession,
+        ai_session: AsyncSession,
+    ) -> AsyncGenerator[_StreamEvent, None]:
+        """워크플로우를 단계별로 실행하며 진행 이벤트와 최종 결과를 yield한다.
+
+        Yields:
+            ("progress", {"step": str, "message": str}) — 각 단계 시작 전
+            ("result", AgentState)                      — 최종 완료 상태
+
+        설계:
+            trace 저장은 finally 블록에서 수행하여 rollback 실패 등 예외 경로에서도
+            세션 상태와 관계없이 저장을 시도한다(_save_trace 내부에서 best-effort 처리).
+            yield "result"는 finally 블록 밖에 배치한다 — async generator의 finally 내
+            yield는 generator.close() 시 RuntimeError를 유발하기 때문이다.
+        """
+        start = time.monotonic()
+        node_path: list[str] = []
+
+        try:
+            # ── 1. Router: 의도 분류 ──────────────────────────────────────
+            yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
+            state = await self._router.classify(state)
+            node_path.append("router")
+            intent: IntentType = state["intent"]
+
+            # ── 2. Branch: 의도별 검색 ───────────────────────────────────
+            yield "progress", {"step": "searching", "message": "관련 정보를 검색하고 있습니다..."}
+            state = await self._dispatch(state, intent, data_session, ai_session, node_path)
+
+            # ── 3. Answer: 자연어 답변 생성 ──────────────────────────────
+            yield "progress", {"step": "answering", "message": "답변을 생성하고 있습니다..."}
+            state = await self._answer.answer(state)
+            node_path.append("answer")
+
+        except Exception as exc:
+            logger.exception("워크플로우 실행 중 오류")
+            try:
+                await ai_session.rollback()
+            except Exception:
+                pass
+            state = {
+                **state,
+                "error": str(exc),
+                "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+            }
+            node_path.append("error")
+
+        finally:
+            # trace 저장 — rollback 실패 후 세션이 오염된 경우에도 저장을 시도한다.
+            # _save_trace는 내부에서 모든 예외를 포착하므로 여기서 예외가 전파되지 않는다.
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            trace_payload: dict[str, Any] = {
+                "intent": state.get("intent"),
+                "node_path": node_path,
+                "elapsed_ms": elapsed_ms,
+                "error": state.get("error"),
+            }
+            state = {**state, "trace": trace_payload}
+            await _save_trace(ai_session, state["message_id"], trace_payload)
+
+        # finally 블록 밖에서 yield — generator.close() 시 도달하지 않아 RuntimeError를 피한다.
+        yield "result", state
 
     async def _dispatch(
         self,
