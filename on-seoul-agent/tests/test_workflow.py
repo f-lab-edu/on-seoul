@@ -206,7 +206,11 @@ class TestVectorWorkflow:
         )
 
         assert result["intent"] == IntentType.VECTOR_SEARCH
-        assert result["vector_results"] == rows
+        # 하이브리드 검색(RRF) 이후 결과에는 rrf_score가 추가된다.
+        # service_id가 보존되었는지 확인한다.
+        assert result["vector_results"] is not None
+        service_ids = [r["service_id"] for r in result["vector_results"]]
+        assert "V001" in service_ids
         assert result["answer"] == "체험관 안내입니다."
 
     async def test_vector_search_trace_includes_vector_node(self):
