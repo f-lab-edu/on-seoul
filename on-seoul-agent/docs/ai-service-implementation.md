@@ -149,7 +149,7 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
   - 전환 이유: pgvector HNSW 인덱스는 WHERE 조건과 동시에 동작하지 않아, pre-filter 시 sequential scan으로 빠짐
 - [x] `agents/vector_agent.py` — **post-filter 파라미터 전달 추가** (Phase 14 하이브리드 경로 유지): 메시지에서 `max_class_name`·`area_name`·`service_status` 추출 후 `vector_search` 호출 시 함께 전달
 - [x] 단위 테스트 — post-filter 구조 검증 + Phase 14 하이브리드 경로(BM25 + post-filter 벡터 → RRF)와의 통합 검증
-- [ ] 문서 업데이트 — `docs/tools/vector_search.md`, `docs/hybrid-search-strategy.md`
+- [x] 문서 업데이트 — `docs/tools/vector_search.md`, `docs/hybrid-search-strategy.md`
 
 ### Phase 16. 통합 테스트 및 최적화
 
