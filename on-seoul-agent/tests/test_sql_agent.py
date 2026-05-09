@@ -146,10 +146,12 @@ class TestSqlAgent:
         sql_str = str(session.execute.call_args[0][0])
         bind = session.execute.call_args[0][1]
 
+        from tools.sql_search import _escape_like
+
         # 악성 문자열이 SQL 텍스트에 직접 포함되어선 안 된다
         assert malicious not in sql_str
-        # 대신 bind 파라미터로만 전달되어야 한다 (ILIKE 패턴 래핑 포함)
-        assert bind["keyword"] == f"%{malicious}%"
+        # _escape_like 처리 후 %...% 래핑되어 bind 파라미터로만 전달되어야 한다
+        assert bind["keyword"] == f"%{_escape_like(malicious)}%"
 
     async def test_search_returns_empty_list_when_no_rows(self):
         """DB 결과가 없으면 sql_results는 빈 리스트다."""

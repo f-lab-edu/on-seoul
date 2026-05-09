@@ -39,8 +39,7 @@ class SeoulOpenApiClientTest {
 
     @BeforeEach
     void setUp() {
-        properties = new SeoulApiProperties();
-        properties.setKey("TEST_API_KEY");
+        properties = new SeoulApiProperties("TEST_API_KEY");
         properties.setBaseUrl(mockWebServer.url("/").toString());
         properties.setPageSize(1000);
         properties.setMaxRetries(3);
@@ -78,8 +77,7 @@ class SeoulOpenApiClientTest {
     @DisplayName("전체 건수가 pageSize를 초과하면 여러 페이지를 순차적으로 수집한다")
     void fetchAll_multiple_pages() {
         // pageSize=3, 총 5건 → 2페이지 필요 (1-3, 4-5)
-        SeoulApiProperties smallPage = new SeoulApiProperties();
-        smallPage.setKey("TEST_API_KEY");
+        SeoulApiProperties smallPage = new SeoulApiProperties("TEST_API_KEY");
         smallPage.setBaseUrl(mockWebServer.url("/").toString());
         smallPage.setPageSize(3);
 

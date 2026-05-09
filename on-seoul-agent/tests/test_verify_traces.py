@@ -96,16 +96,29 @@ class TestVerifyTraces:
         assert result["status"] == "FAIL"
         assert "node_path" in result["missing_keys"]
 
-    async def test_elapsed_ms_must_be_numeric(self):
-        """elapsed_ms가 숫자가 아니면 FAIL로 분류된다."""
+    async def test_elapsed_ms_must_be_int(self):
+        """elapsed_ms가 int가 아니면 FAIL로 분류된다."""
         from scripts.verify_traces import verify_trace_row
 
         trace = {
             "intent": "MAP",
             "node_path": ["router", "map_search"],
-            "elapsed_ms": "fast",  # not a number
+            "elapsed_ms": "fast",  # not an int
         }
         result = verify_trace_row({"message_id": 8, "trace": trace})
+        assert result["status"] == "FAIL"
+        assert "elapsed_ms" in result["missing_keys"]
+
+    async def test_elapsed_ms_float_fails(self):
+        """elapsed_ms가 float이면 FAIL로 분류된다 (workflow는 int로 저장)."""
+        from scripts.verify_traces import verify_trace_row
+
+        trace = {
+            "intent": "SQL_SEARCH",
+            "node_path": ["router", "sql_agent", "answer"],
+            "elapsed_ms": 1.23,  # float, not int
+        }
+        result = verify_trace_row({"message_id": 9, "trace": trace})
         assert result["status"] == "FAIL"
         assert "elapsed_ms" in result["missing_keys"]
 

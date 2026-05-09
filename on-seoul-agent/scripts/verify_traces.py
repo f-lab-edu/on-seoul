@@ -51,9 +51,9 @@ def verify_trace_row(row: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(node_path, list):
         missing.append("node_path")
 
-    # elapsed_ms 검증: 존재하며 숫자(int/float)이어야 한다
+    # elapsed_ms 검증: 존재하며 int이어야 한다 
     elapsed_ms = trace.get("elapsed_ms")
-    if not isinstance(elapsed_ms, (int, float)):
+    if not isinstance(elapsed_ms, int):
         missing.append("elapsed_ms")
 
     status = "PASS" if not missing else "FAIL"

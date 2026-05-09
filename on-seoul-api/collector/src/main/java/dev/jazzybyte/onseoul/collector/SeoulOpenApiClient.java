@@ -63,15 +63,13 @@ public class SeoulOpenApiClient {
         SeoulApiResponse firstPage = fetchPage(serviceName, 1, pageSize);
         int totalCount = firstPage.getListTotalCount();
 
-        List<PublicServiceRow> result = new ArrayList<>();
-
         if (totalCount == 0 || firstPage.getRows().isEmpty()) {
             log.info("서울시 Open API 수집 결과 없으므로 수집 생략. serviceName={}", serviceName);
-            return result;
+            return List.of();
         }
 
         log.info("서울시 Open API 수집 시작: serviceName={}, 전체={}건", serviceName, totalCount);
-        result = new ArrayList<>(totalCount);
+        List<PublicServiceRow> result = new ArrayList<>(totalCount);
         result.addAll(firstPage.getRows());
 
         for (int start = pageSize + 1; start <= totalCount; start += pageSize) {

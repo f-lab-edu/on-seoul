@@ -227,10 +227,13 @@ class TestSqlSearchSqlInjection:
             )
 
     async def test_keyword_injection_value_only_in_bind(self):
-        """keyword의 악성 값은 bind 파라미터로만 전달된다 (ILIKE 패턴 래핑 포함)."""
+        """keyword의 악성 값은 bind 파라미터로만 전달되고, LIKE 와일드카드는 이스케이프된다."""
+        from tools.sql_search import _escape_like
+
         malicious = "'; DROP TABLE public_service_reservations; --"
         session = _make_session([])
         await sql_search(session, keyword=malicious)
 
         bind = session.execute.call_args[0][1]
-        assert bind["keyword"] == f"%{malicious}%"
+        # _escape_like 처리 후 %...% 래핑되어야 한다
+        assert bind["keyword"] == f"%{_escape_like(malicious)}%"

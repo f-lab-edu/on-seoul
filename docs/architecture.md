@@ -94,7 +94,8 @@ on-seoul-api/                                    # 루트 (공통 빌드 설정,
 │   └── client/
 │       └── AiServiceClient.java                 # FastAPI SSE 스트림 수신 (WebClient)
 │   └── scheduler/
-│       └── CollectionScheduler.java             # 일 1회 수집 트리거 → CollectionService → ChangeLogService → NotificationService
+│       └── CollectionScheduler.java             # 일 1회 수집 트리거 → CollectionService 
+│                                                        → ChangeLogService → NotificationService
 │   └── security/
 │       ├── SecurityConfig.java                  # Spring Security 설정 (Stateless, OAuth2 Login + JWT 검증)
 │       ├── JwtTokenProvider.java                # JWT 생성 / 파싱 / 검증 (Access + Refresh)

@@ -77,10 +77,14 @@ class _GeminiEmbeddings(Embeddings):
         self._limiter = limiter if limiter is not None else _gemini_embed_limiter
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        raise NotImplementedError("Use aembed_documents — sync path has no rate limiting.")
+        # rate limiting 없이 실행됨 — 가능하면 aembed_documents를 사용할 것
+        logger.warning("embed_documents: sync 경로는 rate limiting이 적용되지 않습니다. aembed_documents 사용을 권장합니다.")
+        return self._base.embed_documents(texts)
 
     def embed_query(self, text: str) -> list[float]:
-        raise NotImplementedError("Use aembed_query — sync path has no rate limiting.")
+        # rate limiting 없이 실행됨 — 가능하면 aembed_query를 사용할 것
+        logger.warning("embed_query: sync 경로는 rate limiting이 적용되지 않습니다. aembed_query 사용을 권장합니다.")
+        return self._base.embed_query(text)
 
     async def _aembed_once(self, text: str) -> list[float]:
         """rate-limited 단일 API 호출. aembed_query 의 retry 진입점."""

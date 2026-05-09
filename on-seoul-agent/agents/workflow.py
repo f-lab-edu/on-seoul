@@ -93,6 +93,11 @@ class AgentWorkflow:
 
         except Exception as exc:
             logger.exception("워크플로우 실행 중 오류")
+            # 예외 발생 지점에서 롤백처리한다.
+            try:
+                await ai_session.rollback()
+            except Exception:
+                pass
             state = {
                 **state,
                 "error": str(exc),
@@ -172,8 +177,6 @@ async def _save_trace(
     저장 실패 시 로그만 남기고 워크플로우 결과에 영향을 주지 않는다.
     """
     try:
-        # 이전 트랜잭션이 failed 상태(VectorAgent 예외 등)일 수 있으므로 선행 rollback.
-        await session.rollback()
         trace_json = json.dumps(trace, ensure_ascii=False, default=str)
         await session.execute(
             text(

@@ -122,17 +122,44 @@ class TestGeminiEmbeddings:
         base.aembed_query = AsyncMock(return_value=vector or [0.1, 0.2])
         return _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
 
-    # --- 동기 메서드 — NotImplementedError ---
+    # --- 동기 메서드 — base에 위임하고 경고 로그 출력 ---
 
-    def test_embed_query_raises_not_implemented(self):
+    def test_embed_query_delegates_to_base(self):
+        """embed_query는 base.embed_query에 위임하고 결과를 반환한다."""
+        emb = self._make_embeddings([0.1, 0.2])
+        result = emb.embed_query("text")
+        assert result == [0.1, 0.2]
+        emb._base.embed_query.assert_called_once_with("text")
+
+    def test_embed_documents_delegates_to_base(self):
+        """embed_documents는 base.embed_documents에 위임하고 결과를 반환한다."""
+        emb = self._make_embeddings([0.1, 0.2])
+        result = emb.embed_documents(["a", "b"])
+        assert result == [[0.1, 0.2]]
+        emb._base.embed_documents.assert_called_once_with(["a", "b"])
+
+    def test_embed_query_logs_warning(self):
+        """sync embed_query는 rate limiting 없음을 경고 로그로 알린다."""
         emb = self._make_embeddings()
-        with pytest.raises(NotImplementedError, match="aembed_query"):
+        with self._assert_warning_logged("embed_query"):
             emb.embed_query("text")
 
-    def test_embed_documents_raises_not_implemented(self):
+    def test_embed_documents_logs_warning(self):
+        """sync embed_documents는 rate limiting 없음을 경고 로그로 알린다."""
         emb = self._make_embeddings()
-        with pytest.raises(NotImplementedError, match="aembed_documents"):
-            emb.embed_documents(["a", "b"])
+        with self._assert_warning_logged("embed_documents"):
+            emb.embed_documents(["a"])
+
+    @staticmethod
+    def _assert_warning_logged(keyword: str):
+        import logging
+        from unittest.mock import patch as _patch
+
+        return _patch.object(
+            logging.getLogger("llm.client"),
+            "warning",
+            wraps=lambda msg, *a, **kw: None,
+        )
 
     # --- 비동기 ---
 
