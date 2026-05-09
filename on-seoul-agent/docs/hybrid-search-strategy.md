@@ -106,7 +106,40 @@ CREATE INDEX idx_service_embeddings_bm25
 
 ### 커스텀 사전 적용 검토
 
-`pg_search`에서 `korean_lindera`의 KoDic 사전은 Rust 바이너리에 내장되어 있어 런타임 교체가 불가능하다. 도메인 용어("따릉이", "한강공원" 등) 추가가 필요하면 사전 자체가 이미 KoDic이라 다수의 서울 지명/공공시설 용어가 포함되어 있다. 추가가 필요한 용어에 대해서는 AI 서비스의 에이전트(또는 tool)에서 쿼리 확장으로 처리한다.
+`pg_search`에서 `korean_lindera`의 KoDic 사전은 Rust 바이너리에 내장되어 있어 런타임 교체가 불가능하다. `user_dictionary` 지정은 SQL API 레벨에서 지원되지 않으며, 커스텀 사전을 적용하려면 ParadeDB 소스 빌드가 필요하다 ([관련 소스](https://github.com/paradedb/paradedb/blob/main/tokenizers/src/lindera.rs)).
+
+**우회 전략: Python 레이어 쿼리 토크나이징 (Phase 14)**
+
+DB에서 색인 시 `korean_lindera`가 자동으로 형태소 분석하는 것은 그대로 두고, **쿼리 전송 전에 Python에서 lindera-py로 사전 토크나이징**하는 방식으로 우회한다.
+
+```python
+# llm/tokenizer.py
+from lindera_py import Tokenizer
+
+DOMAIN_TOKENS = {"따릉이", "한강공원", "세빛섬"}  # KoDic 미등록 도메인 용어
+
+def tokenize_query(text: str) -> list[str]:
+    tokenizer = Tokenizer.from_config({"dictionary": {"kind": "KoDic"}})
+    tokens = [t.text for t in tokenizer.tokenize(text)]
+    # 도메인 용어 원문 보존: 토크나이징으로 분리된 경우 원문 추가
+    if text in DOMAIN_TOKENS:
+        tokens = [text] + tokens
+    return tokens
+```
+
+토큰 목록을 `bm25_search` 도구에 전달하면 ParadeDB BM25 조건으로 변환한다.
+
+```python
+# tools/bm25_search.py — 토큰 배열 → BM25 검색 조건 변환
+def build_bm25_query(tokens: list[str]) -> str:
+    return " ".join(tokens)  # ParadeDB @@@: 공백 구분 토큰 OR 매칭
+
+# SQL 조건
+# WHERE service_name @@@ $1 OR metadata @@@ $1
+# $1 = "따릉이 대여소" → "따릉이", "대여소" 개별 매칭
+```
+
+이 방식의 장점: Rust 바이너리 빌드 없이 Python 코드 수정만으로 도메인 용어를 즉시 추가할 수 있다. 색인 측(`pg_search`)과 쿼리 측(Python) 토크나이저를 동일 KoDic 기반으로 맞춰 토큰 불일치를 최소화한다.
 
 ---
 
@@ -217,7 +250,7 @@ WHERE status = 'OPEN' AND service_name LIKE '%수영장%'
 `vector_search`는 post-filter 전략을 기본으로 사용한다. 전체 임베딩에서 유사도 상위 `scan_k`를 먼저 뽑고, 서브쿼리 외부에서 metadata 필터를 적용한다. pgvector HNSW 인덱스는 WHERE 조건과 동시에 동작하지 않아 pre-filter를 적용하면 sequential scan으로 빠지기 때문이다.
 
 ```sql
--- $1 = 임베딩 벡터, $2 = min_similarity, scan_k = top_k × 5
+-- $1 = 임베딩 벡터, $2 = min_similarity, scan_k = top_k × SCAN_K_MULTIPLIER(기본 5)
 SELECT service_id, service_name, metadata, similarity
 FROM (
     SELECT
@@ -230,12 +263,15 @@ FROM (
     ORDER BY embedding <=> $1::vector
     LIMIT :scan_k          -- HNSW 인덱스 활용, 전체 대상 검색
 ) candidates
-WHERE metadata->>'max_class_name' = :max_class_name  -- post-filter (None이면 미적용)
+WHERE metadata->>'max_class_name' = :max_class_name  -- post-filter (None이면 절 생략)
   AND metadata->>'area_name'      = :area_name
+  AND metadata->>'service_status' = :service_status
 LIMIT :top_k;
 ```
 
-pre-filter 대비 장점: HNSW 인덱스를 전체 데이터에 적용하므로 의미적으로 가장 가까운 결과를 놓치지 않는다. `scan_k`(`top_k × 5`, 기본 50건)를 충분히 크게 잡아 필터 탈락으로 인한 결과 부족을 완충한다.
+pre-filter 대비 장점: HNSW 인덱스를 전체 데이터에 적용하므로 의미적으로 가장 가까운 결과를 놓치지 않는다. `scan_k`(`top_k × SCAN_K_MULTIPLIER`, 기본 50건)를 충분히 크게 잡아 필터 탈락으로 인한 결과 부족을 완충한다.
+
+필터 파라미터(`max_class_name`, `area_name`, `service_status`)는 `VectorAgent`의 질의 정제 단계에서 LLM이 추출한다. `_RefinedQuery` 스키마에 필터 필드를 포함시켜 질의 정제와 필터 추출을 한 번의 LLM 호출로 처리한다. 필터가 None이면 해당 조건 절은 SQL에 포함되지 않는다.
 
 ---
 
@@ -247,7 +283,7 @@ pre-filter 대비 장점: HNSW 인덱스를 전체 데이터에 적용하므로 
 
 ```sql
 -- $1 = 임베딩 벡터, $2 = min_similarity
--- scan_k = top_k × SCAN_K_MULTIPLIER (기본 50)
+-- scan_k = top_k × SCAN_K_MULTIPLIER (기본 SCAN_K_MULTIPLIER=5, scan_k=50)
 SELECT service_id, service_name, metadata, similarity
 FROM (
     SELECT
@@ -260,10 +296,18 @@ FROM (
     ORDER BY embedding <=> $1::vector
     LIMIT :scan_k                      -- HNSW 인덱스로 전체 대상 검색
 ) candidates
--- post-filter: 필터 파라미터가 있을 때만 조건 추가
-WHERE metadata->>'area_name' = :area_name
+-- post-filter: 필터 파라미터가 있을 때만 조건 추가 (None이면 해당 절 생략)
+WHERE metadata->>'max_class_name' = :max_class_name
+  AND metadata->>'area_name'      = :area_name
+  AND metadata->>'service_status' = :service_status
 LIMIT :top_k;
 ```
+
+필터 파라미터 추출 흐름:
+
+1. `VectorAgent.search`에서 LLM이 사용자 질의를 정제할 때 `_RefinedQuery`로 `refined_query`와 함께 `max_class_name`, `area_name`, `service_status`를 함께 추출한다.
+2. None이 아닌 필터만 `vector_search` 키워드 인자로 전달하며, None인 필터는 SQL WHERE 절에 포함되지 않는다.
+3. 필터 값은 항상 bind 파라미터로 전달하여 SQL injection을 방지한다.
 
 ### BM25 검색 (단독)
 

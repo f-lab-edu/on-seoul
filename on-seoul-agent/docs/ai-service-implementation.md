@@ -125,22 +125,39 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 - [x] `middleware/metrics.py` — 요청별 지연시간 및 토큰 사용량 측정
 - [x] `chat_agent_traces` 저장 데이터 검증 (라우팅 결과/도구 호출/응답 스니펫 정합성)
 
-### Phase 14. vector_search post-filter 전환
+### Phase 14. Python 레이어 BM25 쿼리 토크나이징 및 하이브리드 검색 신설
 
-- [ ] `tools/vector_search.py` — pre-filter(WHERE 절) 방식을 post-filter(서브쿼리) 방식으로 교체
+> ParadeDB Lindera의 `user_dictionary` 지정은 SQL API 레벨에서 지원되지 않으며, 커스텀 사전 적용은 소스 빌드가 필요하다.
+> 대신 Python에서 lindera-py로 쿼리를 사전 토크나이징한 뒤 BM25 검색 조건을 구성하는 방식으로 우회한다.
+
+- [x] `pyproject.toml` — `lindera-py` 의존성 추가
+- [x] `llm/tokenizer.py` — Lindera KoDic 사전 기반 형태소 분석기 래퍼 구현. 도메인 용어("따릉이", "한강공원" 등) 확장을 위한 사용자 정의 토큰 목록(`DOMAIN_TOKENS`) 지원
+- [x] `tools/bm25_search.py` — 토큰 배열을 받아 ParadeDB BM25 쿼리(`service_name @@@ $1 OR metadata @@@ $1`)를 실행하고 `(service_id, bm25_score)` 목록을 반환하는 독립 함수 구현. DB 세션은 `Depends`로 주입
+- [x] `agents/vector_agent.py` — **하이브리드 검색 경로 신설** (이 Phase에서 추가하는 범위):
+  - 사용자 쿼리를 `tokenizer`로 토크나이징 → `bm25_search` 호출
+  - 기존 `vector_search` 호출 결과와 병렬로 수집
+  - 두 결과를 RRF(Reciprocal Rank Fusion)로 결합하여 `AgentState.search_results`에 저장
+- [x] 단위 테스트 — 토크나이징 결과(도메인 용어 보존), `bm25_search` DB 쿼리 변환, RRF 결합 순위 검증
+
+### Phase 15. vector_search post-filter 전환
+
+> Phase 14에서 신설한 하이브리드 경로의 **vector_search 호출 부분**만 수정한다. BM25 경로와 RRF 결합 로직은 건드리지 않는다.
+
+- [x] `tools/vector_search.py` — pre-filter(WHERE 절) 방식을 post-filter(서브쿼리) 방식으로 교체
   - 전체 임베딩에서 유사도 상위 `scan_k`(`top_k × SCAN_K_MULTIPLIER`) 를 먼저 추출
   - 서브쿼리 외부에서 `max_class_name`·`area_name`·`service_status` 필터 적용
   - 전환 이유: pgvector HNSW 인덱스는 WHERE 조건과 동시에 동작하지 않아, pre-filter 시 sequential scan으로 빠짐
-- [ ] `agents/vector_agent.py` — 메시지에서 post-filter 파라미터(`max_class_name`, `area_name`, `service_status`) 추출 후 `vector_search`에 전달
-- [ ] 기존 `vector_search` 단위 테스트를 post-filter 구조에 맞게 업데이트
+- [x] `agents/vector_agent.py` — **post-filter 파라미터 전달 추가** (Phase 14 하이브리드 경로 유지): 메시지에서 `max_class_name`·`area_name`·`service_status` 추출 후 `vector_search` 호출 시 함께 전달
+- [x] 단위 테스트 — post-filter 구조 검증 + Phase 14 하이브리드 경로(BM25 + post-filter 벡터 → RRF)와의 통합 검증
+- [ ] 문서 업데이트 — `docs/tools/vector_search.md`, `docs/hybrid-search-strategy.md`
 
-### Phase 15. 통합 테스트 및 최적화
+### Phase 16. 통합 테스트 및 최적화
 
 - [ ] `pytest-asyncio` 기반 각 Agent 및 워크플로우 통합 테스트
 - [ ] `on_data_reader` 권한 제한(SELECT only) 회귀 테스트
 - [ ] `/chat/stream` 시나리오별 E2E 테스트 (첫 질문 시 제목 생성 여부 포함)
 
-### Phase 16. LangGraph 전환 (Post-MVP)
+### Phase 17. LangGraph 전환 (Post-MVP)
 
 - [ ] `agents/graph.py` — LangChain `RunnableBranch` 구조를 LangGraph `StateGraph`로 재구성
 - [ ] 노드 등록 및 조건부 엣지(Conditional Edges)로 라우팅 교체
