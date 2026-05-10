@@ -34,6 +34,7 @@ public class SecurityConfig {
     private final OAuth2LoginSuccessHandler oauth2LoginSuccessHandler;
     private final CookieOAuth2AuthorizationRequestRepository authorizationRequestRepository;
     private final ObjectMapper objectMapper;
+    private final String frontendBaseUrl;
 
     @Value("${app.cors.allowed-origins}")
     private String corsAllowedOriginsRaw;
@@ -41,11 +42,13 @@ public class SecurityConfig {
     public SecurityConfig(final TokenIssuerPort tokenIssuerPort,
                           final OAuth2LoginSuccessHandler oauth2LoginSuccessHandler,
                           final CookieOAuth2AuthorizationRequestRepository authorizationRequestRepository,
-                          final ObjectMapper objectMapper) {
+                          final ObjectMapper objectMapper,
+                          @Value("${app.frontend-base-url}") final String frontendBaseUrl) {
         this.tokenIssuerPort = tokenIssuerPort;
         this.oauth2LoginSuccessHandler = oauth2LoginSuccessHandler;
         this.authorizationRequestRepository = authorizationRequestRepository;
         this.objectMapper = objectMapper;
+        this.frontendBaseUrl = frontendBaseUrl;
     }
 
     @Bean
@@ -78,7 +81,13 @@ public class SecurityConfig {
                 .oauth2Login(oauth2 -> oauth2
                         .authorizationEndpoint(endpoint -> endpoint
                                 .authorizationRequestRepository(authorizationRequestRepository))
-                        .successHandler(oauth2LoginSuccessHandler))
+                        .successHandler(oauth2LoginSuccessHandler)
+                        // OAuth2 인증 실패 시 Spring Security 기본값(/login?error)은 API 서버에서
+                        // 401을 반환하므로 프론트엔드 콜백 URL로 직접 리다이렉트한다.
+                        .failureHandler((request, response, exception) -> {
+                            log.warn("[Security] OAuth2 인증 실패 - {}: {}", exception.getClass().getSimpleName(), exception.getMessage());
+                            response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=auth_failed");
+                        }))
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request,
                                                    response,
