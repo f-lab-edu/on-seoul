@@ -100,62 +100,41 @@ Next.js 15 App Router 기반 웹 프론트엔드 구현 순서.
 
 ### Phase 8. SSE Route Handler 프록시 (`app/api/query/route.ts`)
 
-- [ ] `POST` 핸들러 — 요청 본문 검증(zod) → 백엔드 `${API_BASE_URL}/api/query`로 forward
-- [ ] 요청 쿠키(`access_token`)를 그대로 전달, 토큰을 본문/URL/응답 헤더로 노출 금지
-- [ ] 응답을 `text/event-stream`으로 그대로 스트리밍 (ReadableStream pipethrough)
-- [ ] AbortController 연결 — 클라이언트 disconnect 시 백엔드 요청도 취소
-- [ ] 백엔드 5xx / 타임아웃 시 `event: error` 1건 emit 후 종료
+- [x] `POST` 핸들러 — 요청 본문 검증(zod: `question` string·min1, `roomId?` int·positive) → 백엔드 `${API_BASE_URL}/query`로 forward
+- [x] 요청 쿠키(`access_token`)를 그대로 전달, 토큰을 본문/URL/응답 헤더로 노출 금지
+- [x] 응답을 `text/event-stream`으로 그대로 스트리밍 (ReadableStream pipethrough)
+- [x] `req.signal` 연결 — 클라이언트 disconnect 시 upstream fetch AbortError → 499 반환
+- [x] 백엔드 5xx / 타임아웃 시 `event: error` 1건 emit 후 스트림 종료 (절대규칙 B.4)
 
 ### Phase 9. `hooks/useChatStream.ts`
 
-- [ ] `fetch + ReadableStream` 기반 SSE 파서 (`lib/sse.ts` 분리). `EventSource` 사용 금지 (POST + 쿠키 forward 필요)
-- [ ] 이벤트 디스패치 — discriminated union switch, `default: assertNever(event)`
-  - `agent_start` / `tool_call` / `tool_result` → 진행 상태 누적 (`agent-trace`)
+- [x] `fetch + ReadableStream` 기반 SSE 파서 (`lib/sse.ts` 분리). `EventSource` 사용 금지 (POST + 쿠키 forward 필요)
+- [x] 이벤트 디스패치 — discriminated union switch, `default: assertNever(event)`
+  - `agent_start` / `tool_call` → 진행 상태 누적 (`agent-trace`)
+  - step 기반 진행 메시지(`isSseProgressEvent`) → trace 누적
   - `token` → 본문 누적
-  - `done` → 메시지 확정 + `messageId` 보존
-  - `error` → 에러 메시지 + 재시도 버튼 노출
-- [ ] AbortController로 도중 취소 지원
-- [ ] TanStack Query 사용 금지 (SSE는 별도 단일 진입점)
-- [ ] 단위 테스트 — Mock ReadableStream으로 토큰 누적 / 에러 분기 / 취소 동작 검증 (Vitest)
+  - `done` / `final` → 메시지 확정 + `messageId` 보존
+  - `workflow_error` / `error` → 에러 메시지 + 재시도 버튼 노출
+- [x] AbortController로 도중 취소 지원
+- [x] TanStack Query 사용 금지 (SSE는 별도 단일 진입점)
+- [x] 단위 테스트 4건 — Mock ReadableStream으로 토큰 누적 / 에러 분기 / 취소 동작 / HTTP 500 검증 (Vitest)
 
 ### Phase 10. 챗봇 UI
 
-- [ ] `components/chat/chat-input.tsx` — 메시지 입력 + 전송 (Enter / Shift+Enter)
-- [ ] `components/chat/message-list.tsx` — 가상 스크롤(필요 시), 자동 하단 고정
-- [ ] `components/chat/message-bubble.tsx` — USER / ASSISTANT 렌더, 마크다운(필요 시)
-- [ ] `components/chat/agent-trace.tsx` — `agent_start` / `tool_call` / `tool_result` 진행 표시
-- [ ] 스트림 도중 단절 → 메시지 확정 + 재시도 버튼 (조용한 실패 금지)
+- [x] `components/chat/chat-input.tsx` — 메시지 입력 + 전송 (Enter / Shift+Enter), IME 조합 중 Enter 차단
+- [x] `components/chat/message-list.tsx` — 자동 하단 고정 (phase/length 변경 시 스크롤)
+- [x] `components/chat/message-bubble.tsx` — USER(우측) / ASSISTANT(좌측) 렌더, 스트리밍 커서 펄스
+- [x] `components/chat/agent-trace.tsx` — 진행 상태 trace 목록 표시
+- [x] 스트림 도중 단절 → 에러 메시지 + 재시도 버튼 노출 (조용한 실패 금지, 절대규칙 B.4)
 
-검증: `/` 진입 → 질의 입력 → SSE 토큰 실시간 누적 → `done` 이후 카드/링크 정상 렌더
-
----
-
-## Epic 4 — `feat/chat-history`
-> Phase 11–12 | 대화 목록·이력 캐싱, [roomId] 라우팅
-
-### Phase 11. 대화 이력 (TanStack Query)
-
-- [ ] `GET /chat/rooms` 쿼리 — 사이드바 목록
-- [ ] `GET /chat/rooms/{id}/messages` 쿼리 — 기존 대화 이어가기
-- [ ] 새 대화 mutation — 첫 응답 `done` 이후 백엔드가 채워준 제목으로 invalidate
-- [ ] 캐시 키 / staleTime 정책 결정 (목록 30s, 이력 영구)
-
-### Phase 12. 라우팅·레이아웃
-
-- [ ] `app/(chat)/layout.tsx` — 사이드바(대화 목록) + 본문 이중 컬럼
-- [ ] `app/(chat)/page.tsx` — 새 대화 시작
-- [ ] `app/(chat)/[roomId]/page.tsx` — 기존 대화 로드 후 `useChatStream` 연결
-- [ ] 첫 응답 전까지 제목 "새 대화"로 표기, `done` 이후 백엔드 제목으로 교체
-- [ ] 로그아웃 시 TanStack Query 캐시 전체 invalidate
-
-검증: 새 대화 → 응답 완료 → 사이드바 제목 자동 갱신 → 새로고침 후 동일 이력 복원
+검증: `/` 진입 → 질의 입력 → SSE 토큰 실시간 누적 → `done`/`final` 이후 메시지 확정 렌더 ✅ (백엔드 연동 수동 검증 완료)
 
 ---
 
-## Epic 5 — `feat/front-polish`
-> Phase 13–15 | 테스트, 접근성, 배포
+## Epic 4 — `feat/front-polish`
+> Phase 11-13 | 테스트, 접근성, 배포
 
-### Phase 13. 테스트
+### Phase 11. 테스트
 
 > **범위 고정**: Vitest는 코어 2개 파일(`api-client`, `useChatStream`)만 관리한다. 컴포넌트·페이지 스냅샷/인터랙션 테스트는 도입하지 않는다.
 
@@ -164,14 +143,14 @@ Next.js 15 App Router 기반 웹 프론트엔드 구현 순서.
 - [ ] `pnpm test` CI 연결 확인
 - [ ] Playwright E2E (선택) — 로그인 → 채팅 → 로그아웃 시나리오, 백엔드는 모킹
 
-### Phase 14. 접근성·UX 마감
+### Phase 12. 접근성·UX 마감
 
 - [ ] 키보드 내비게이션 — 입력창 / 버튼 / 사이드바 항목
 - [ ] `prefers-reduced-motion` 대응
 - [ ] 에러 / 로딩 상태 일관성 (`Skeleton`, `Toast`)
 - [ ] 모바일 우선 레이아웃 점검 (PC 반응형은 POST-MVP)
 
-### Phase 15. 배포 (Vercel)
+### Phase 13. 배포 (Vercel)
 
 - [ ] Vercel 프로젝트 연동 — `NEXT_PUBLIC_API_BASE_URL` / `API_BASE_URL` / `NEXT_PUBLIC_OAUTH_LOGIN_URL` 환경변수 등록
 - [ ] 백엔드와 same-site 또는 reverse proxy 구성 합의(SameSite=Strict 쿠키 전송 보장)
@@ -179,6 +158,28 @@ Next.js 15 App Router 기반 웹 프론트엔드 구현 순서.
 - [ ] `pnpm build` 사이즈·LCP 점검
 
 검증: Production URL에서 로그인 → 채팅 → 로그아웃 플로우 완전 동작, 토큰이 URL / 스토리지 / 응답 본문에 노출되지 않음
+
+---
+
+## Epic 5 — `feat/chat-history`
+> Phase 14-15 | 대화 목록·이력 캐싱, [roomId] 라우팅
+
+### Phase 14. 대화 이력 (TanStack Query)
+
+- [ ] `GET /chat/rooms` 쿼리 — 사이드바 목록
+- [ ] `GET /chat/rooms/{id}/messages` 쿼리 — 기존 대화 이어가기
+- [ ] 새 대화 mutation — 첫 응답 `done` 이후 백엔드가 채워준 제목으로 invalidate
+- [ ] 캐시 키 / staleTime 정책 결정 (목록 30s, 이력 영구)
+
+### Phase 15. 라우팅·레이아웃
+
+- [ ] `app/(chat)/layout.tsx` — 사이드바(대화 목록) + 본문 이중 컬럼
+- [ ] `app/(chat)/page.tsx` — 새 대화 시작
+- [ ] `app/(chat)/[roomId]/page.tsx` — 기존 대화 로드 후 `useChatStream` 연결
+- [ ] 첫 응답 전까지 제목 "새 대화"로 표기, `done` 이후 백엔드 제목으로 교체
+- [ ] 로그아웃 시 TanStack Query 캐시 전체 invalidate
+
+검증: 새 대화 → 응답 완료 → 사이드바 제목 자동 갱신 → 새로고침 후 동일 이력 복원
 
 ---
 
