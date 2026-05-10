@@ -40,6 +40,8 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
     private final SocialLoginUseCase socialLoginUseCase;
     private final String frontendBaseUrl;
     private final boolean cookieSecure;
+    /** 쿠키 SameSite 속성. 기본값 Strict. */
+    private final String cookieSameSite;
     /** Access Token 쿠키 maxAge. JWT TTL과 동기화 — TokenIssuerPort 단일 소스. */
     private final long accessTokenMinutes;
     /** Refresh Token 쿠키 maxAge. JWT TTL과 동기화 — TokenIssuerPort 단일 소스. */
@@ -49,10 +51,12 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
             final SocialLoginUseCase socialLoginUseCase,
             final TokenIssuerPort tokenIssuerPort,
             @Value("${app.frontend-base-url}") String frontendBaseUrl,
-            @Value("${app.cookie-secure:true}") boolean cookieSecure) {
+            @Value("${app.cookie-secure:true}") boolean cookieSecure,
+            @Value("${app.cookie-same-site:Strict}") String cookieSameSite) {
         this.socialLoginUseCase = socialLoginUseCase;
         this.frontendBaseUrl = frontendBaseUrl;
         this.cookieSecure = cookieSecure;
+        this.cookieSameSite = cookieSameSite;
         this.accessTokenMinutes  = tokenIssuerPort.getAccessTokenMinutes();
         this.refreshTokenMinutes = tokenIssuerPort.getRefreshTokenMinutes();
     }
@@ -114,7 +118,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         return ResponseCookie.from(ACCESS_TOKEN_COOKIE, token)
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Strict")
+                .sameSite(cookieSameSite)
                 .path("/")
                 .maxAge(Duration.ofMinutes(accessTokenMinutes))
                 .build();
@@ -128,7 +132,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         return ResponseCookie.from(REFRESH_TOKEN_COOKIE, token)
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Strict")
+                .sameSite(cookieSameSite)
                 .path("/auth")
                 .maxAge(Duration.ofMinutes(refreshTokenMinutes))
                 .build();
@@ -142,7 +146,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         return ResponseCookie.from(ACCESS_TOKEN_COOKIE, "")
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Strict")
+                .sameSite(cookieSameSite)
                 .path("/")
                 .maxAge(0)
                 .build();
@@ -156,7 +160,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         return ResponseCookie.from(REFRESH_TOKEN_COOKIE, "")
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Strict")
+                .sameSite(cookieSameSite)
                 .path("/auth")
                 .maxAge(0)
                 .build();
