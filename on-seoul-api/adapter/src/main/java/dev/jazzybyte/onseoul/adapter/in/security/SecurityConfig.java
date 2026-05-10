@@ -5,9 +5,9 @@ import dev.jazzybyte.onseoul.domain.port.out.TokenIssuerPort;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -34,6 +34,9 @@ public class SecurityConfig {
     private final OAuth2LoginSuccessHandler oauth2LoginSuccessHandler;
     private final CookieOAuth2AuthorizationRequestRepository authorizationRequestRepository;
     private final ObjectMapper objectMapper;
+
+    @Value("${app.cors.allowed-origins}")
+    private String corsAllowedOriginsRaw;
 
     public SecurityConfig(final TokenIssuerPort tokenIssuerPort,
                           final OAuth2LoginSuccessHandler oauth2LoginSuccessHandler,
@@ -114,13 +117,17 @@ public class SecurityConfig {
 
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
+        List<String> allowedOrigins = Arrays.stream(corsAllowedOriginsRaw.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("http://office.aift.kr:*", "https://office.aift.kr:*",
-                "http://localhost:*", "https://localhost:*"));
-        config.setAllowedMethods(List.of("*"));
+        config.setAllowedOriginPatterns(allowedOrigins);
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true); // 쿠키(access_token, refresh_token) 전송 필요
-        config.setMaxAge(600L); //
+        config.setMaxAge(600L); // preflight 캐시 10분
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
