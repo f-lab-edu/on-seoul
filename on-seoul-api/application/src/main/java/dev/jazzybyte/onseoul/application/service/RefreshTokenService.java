@@ -9,22 +9,17 @@ import dev.jazzybyte.onseoul.domain.port.out.RefreshTokenStorePort;
 import dev.jazzybyte.onseoul.domain.port.out.TokenIssuerPort;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 @Service
+@RequiredArgsConstructor
 public class RefreshTokenService implements RefreshTokenUseCase {
 
     private final TokenIssuerPort tokenIssuerPort;
     private final RefreshTokenStorePort refreshTokenStorePort;
     private final LoadUserPort loadUserPort;
 
-    public RefreshTokenService(final TokenIssuerPort tokenIssuerPort,
-                               final RefreshTokenStorePort refreshTokenStorePort,
-                               final LoadUserPort loadUserPort) {
-        this.tokenIssuerPort = tokenIssuerPort;
-        this.refreshTokenStorePort = refreshTokenStorePort;
-        this.loadUserPort = loadUserPort;
-    }
 
     @Override
     public TokenResponse refresh(String refreshToken) {

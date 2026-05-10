@@ -8,6 +8,7 @@ import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseCookie;
 import org.springframework.security.core.Authentication;
@@ -27,6 +28,7 @@ import java.util.Map;
  * <p>성공: {@code {frontendBaseUrl}/oauth/callback?status=success}</p>
  * <p>SUSPENDED/DELETED 계정: {@code {frontendBaseUrl}/oauth/callback?error=forbidden}</p>
  */
+@Slf4j
 @Component
 public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
 
@@ -69,6 +71,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         String providerId = idAttr != null ? idAttr.toString() : null;
 
         if (providerId == null) {
+            log.warn("[Security] OAuth2 로그인 실패: providerId 누락 - (provider={})", provider);
             response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=server_error");
             return;
         }
@@ -91,11 +94,14 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
 
             response.addHeader("Set-Cookie", buildAccessCookie(tokenResponse.accessToken()).toString());
             response.addHeader("Set-Cookie", buildRefreshCookie(tokenResponse.refreshToken()).toString());
+            log.info("[Security] OAuth2 로그인 성공: provider={}, providerId={}, email={}", provider, providerId, email);
             response.sendRedirect(frontendBaseUrl + "/oauth/callback?status=success");
 
         } catch (OnSeoulApiException ex) {
             // FORBIDDEN = SUSPENDED/DELETED 계정. 그 외 OnSeoulApiException은 서버 내부 오류.
             String errorParam = ex.getErrorCode() == ErrorCode.FORBIDDEN ? "forbidden" : "server_error";
+            log.warn("[Security] OAuth2 로그인 실패: provider={}, providerId={}, email={}, error={}",
+                    provider, providerId, email, ex.getMessage());
             response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=" + errorParam);
         }
     }
@@ -108,7 +114,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         return ResponseCookie.from(ACCESS_TOKEN_COOKIE, token)
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Strict")
+                .sameSite("Lax")
                 .path("/")
                 .maxAge(Duration.ofMinutes(accessTokenMinutes))
                 .build();
@@ -122,7 +128,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         return ResponseCookie.from(REFRESH_TOKEN_COOKIE, token)
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Strict")
+                .sameSite("Lax")
                 .path("/auth")
                 .maxAge(Duration.ofMinutes(refreshTokenMinutes))
                 .build();
@@ -136,7 +142,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         return ResponseCookie.from(ACCESS_TOKEN_COOKIE, "")
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Strict")
+                .sameSite("Lax")
                 .path("/")
                 .maxAge(0)
                 .build();
@@ -150,7 +156,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         return ResponseCookie.from(REFRESH_TOKEN_COOKIE, "")
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Strict")
+                .sameSite("Lax")
                 .path("/auth")
                 .maxAge(0)
                 .build();

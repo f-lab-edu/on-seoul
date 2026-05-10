@@ -5,25 +5,21 @@ import dev.jazzybyte.onseoul.domain.port.in.SendQueryCommand;
 import dev.jazzybyte.onseoul.domain.port.in.SendQueryUseCase;
 import dev.jazzybyte.onseoul.domain.port.in.SendQueryUseCase.PrepareResult;
 import dev.jazzybyte.onseoul.domain.port.out.AiServiceStreamPort;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class ChatStreamService implements QueryAndStreamUseCase {
-
-    private static final Logger log = LoggerFactory.getLogger(ChatStreamService.class);
 
     private final SendQueryUseCase sendQueryUseCase;
     private final AiServiceStreamPort aiServiceStreamPort;
-
-    public ChatStreamService(final SendQueryUseCase sendQueryUseCase,
-                             final AiServiceStreamPort aiServiceStreamPort) {
-        this.sendQueryUseCase = sendQueryUseCase;
-        this.aiServiceStreamPort = aiServiceStreamPort;
-    }
 
     @Override
     public Flux<String> streamAndSave(SendQueryCommand command) {

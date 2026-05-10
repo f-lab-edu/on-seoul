@@ -82,9 +82,9 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 
 ### Phase 8. 검색 전략
 
-- [x] pre-filter 전략 채택 — 카테고리/지역/상태를 WHERE 절(metadata JSONB 경로)에 적용. 소규모 데이터에서 관련 카테고리 내 유사도 비교로 정확도 향상
+- [x] ~~pre-filter 전략 채택~~ → Phase 14에서 post-filter로 전환 (pgvector HNSW 인덱스 활용 문제)
 - [x] 하이브리드 검색 검토 — 미채택. 1000건 미만 순수 벡터 검색 품질 충분. 5000건 이상 시 도입
-- [x] `tools/vector_search.py` — pre-filter + top-k + min_similarity 파라미터 지원 독립 함수
+- [x] `tools/vector_search.py` — top-k + min_similarity 파라미터 지원 독립 함수
 
 ### Phase 9. 파라미터 튜닝
 
@@ -105,33 +105,42 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 
 ### Phase 11. Tools (Domain Logic)
 
-- [ ] `tools/sql_search.py` — 카테고리/지역/날짜 필터를 SQL Query로 변환 및 실행
-- [ ] `tools/map_search.py` — `coord_x/y` 기준 반경 검색 (PostgreSQL earthdistance/cube 활용)
-- [ ] `tools/vector_search.py` 와 Agent 연동 검증 (Epic 3 산출물 재사용)
+- [x] `tools/sql_search.py` — 카테고리/지역/날짜 필터를 SQL Query로 변환 및 실행
+- [x] `tools/map_search.py` — `coord_x/y` 기준 반경 검색 (PostgreSQL earthdistance/cube 활용)
+- [x] `tools/vector_search.py` 와 Agent 연동 검증 (Epic 3 산출물 재사용)
 
 ### Phase 12. API 엔드포인트
 
-- [ ] `routers/chat.py` — `POST /chat/stream` (room_id/message_id 수신 → LangChain 워크플로우 실행 → SSE 스트리밍)
-- [ ] `main.py`에 라우터 등록 및 전역 에러 핸들러 구성
+- [x] `routers/chat.py` — `POST /chat/stream` (room_id/message_id 수신 → LangChain 워크플로우 실행 → SSE 스트리밍)
+- [x] `main.py`에 라우터 등록 및 전역 에러 핸들러 구성
 
 ---
 
 ## Epic 5 — `feat/infra-polish`
-> Phase 13–15 | 관측가능성, 통합 테스트, LangGraph 전환
+> Phase 13–16 | 관측가능성, 검색 전략 개선, 통합 테스트, LangGraph 전환
 
 ### Phase 13. 관측가능성 (Observability)
 
-- [ ] Redis 연결 설정 (Agent 응답 캐싱 및 Rate Limiting)
-- [ ] `middleware/metrics.py` — 요청별 지연시간 및 토큰 사용량 측정
-- [ ] `chat_agent_traces` 저장 데이터 검증 (라우팅 결과/도구 호출/응답 스니펫 정합성)
+- [x] Redis 연결 설정 (Agent 응답 캐싱 및 Rate Limiting)
+- [x] `middleware/metrics.py` — 요청별 지연시간 및 토큰 사용량 측정
+- [x] `chat_agent_traces` 저장 데이터 검증 (라우팅 결과/도구 호출/응답 스니펫 정합성)
 
-### Phase 14. 통합 테스트 및 최적화
+### Phase 14. vector_search post-filter 전환
+
+- [ ] `tools/vector_search.py` — pre-filter(WHERE 절) 방식을 post-filter(서브쿼리) 방식으로 교체
+  - 전체 임베딩에서 유사도 상위 `scan_k`(`top_k × SCAN_K_MULTIPLIER`) 를 먼저 추출
+  - 서브쿼리 외부에서 `max_class_name`·`area_name`·`service_status` 필터 적용
+  - 전환 이유: pgvector HNSW 인덱스는 WHERE 조건과 동시에 동작하지 않아, pre-filter 시 sequential scan으로 빠짐
+- [ ] `agents/vector_agent.py` — 메시지에서 post-filter 파라미터(`max_class_name`, `area_name`, `service_status`) 추출 후 `vector_search`에 전달
+- [ ] 기존 `vector_search` 단위 테스트를 post-filter 구조에 맞게 업데이트
+
+### Phase 15. 통합 테스트 및 최적화
 
 - [ ] `pytest-asyncio` 기반 각 Agent 및 워크플로우 통합 테스트
 - [ ] `on_data_reader` 권한 제한(SELECT only) 회귀 테스트
 - [ ] `/chat/stream` 시나리오별 E2E 테스트 (첫 질문 시 제목 생성 여부 포함)
 
-### Phase 15. LangGraph 전환 (Post-MVP)
+### Phase 16. LangGraph 전환 (Post-MVP)
 
 - [ ] `agents/graph.py` — LangChain `RunnableBranch` 구조를 LangGraph `StateGraph`로 재구성
 - [ ] 노드 등록 및 조건부 엣지(Conditional Edges)로 라우팅 교체
