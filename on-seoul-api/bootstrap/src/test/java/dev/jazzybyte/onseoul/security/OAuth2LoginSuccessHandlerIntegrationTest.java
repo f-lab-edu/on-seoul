@@ -48,7 +48,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
     @BeforeEach
     void setUp() {
         tokenIssuer = new JwtTokenIssuer(TEST_SECRET, 15L, 10080L);
-        handler = new OAuth2LoginSuccessHandler(socialLoginUseCase, tokenIssuer, FRONTEND_BASE_URL, false, "Strict");
+        handler = new OAuth2LoginSuccessHandler(socialLoginUseCase, tokenIssuer, FRONTEND_BASE_URL, false, "Strict", "");
     }
 
     private OAuth2AuthenticationToken googleToken(Map<String, Object> attrs) {

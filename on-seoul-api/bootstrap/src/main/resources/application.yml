@@ -61,6 +61,9 @@ app:
   # HTTPS 환경에서는 true(기본값). 로컬 HTTP 개발 시 COOKIE_SECURE=false 로 재정의.
   cookie-secure: ${COOKIE_SECURE:true}
   cookie-same-site: ${COOKIE_SAME_SITE:Strict} # Strict, Lax, None 중 선택. 로컬 개발 시 None으로 재정의 권장.
+  # 쿠키 Domain 속성. 서브도메인 간 공유 시 ".jazzz.dev" 형식으로 설정.
+  # 로컬 개발에서는 빈 값(기본값)으로 두면 localhost에만 스코프됨.
+  cookie-domain: ${COOKIE_DOMAIN:}
   # HMAC-SHA256 쿠키 서명 키 — 32바이트 이상의 랜덤 값을 Base64 인코딩. 필수 환경변수.
   cookie-signing-key: ${COOKIE_SIGNING_KEY}
   cors:
