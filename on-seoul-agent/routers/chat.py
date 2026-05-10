@@ -107,7 +107,8 @@ async def _stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
                         "title": result.get("title"),
                     }
                     if result.get("error"):
-                        payload["error"] = result["error"]
+                        logger.error("workflow error: %s", result["error"])
+                        payload["error"] = "서비스 처리 중 오류가 발생했습니다."
                         # 워크플로우가 완료됐지만 내부 오류로 fallback 답변을 반환한 경우
                         yield sse_frame("workflow_error", payload)
                     else:

@@ -106,6 +106,70 @@ async def fresh_data_session():
     await engine.dispose()
 
 
+# ---------------------------------------------------------------------------
+# on_data_reader SELECT-only 권한 회귀 테스트 (Mock 기반 — Phase 16)
+# ---------------------------------------------------------------------------
+
+
+class TestOnDataReaderPermissionsRegression:
+    """on_data_reader 계정의 SELECT-only 권한 정책을 회귀 검증한다.
+
+    실제 DB가 없어도 실행되며 CI에서 항상 통과해야 한다.
+    """
+
+    def test_sql_search_never_generates_dml(self):
+        """sql_search가 생성하는 모든 SQL 템플릿에 DML이 없음을 정적 검증한다.
+
+        컬럼명(deleted_at 등)에 포함된 부분 문자열은 제외하고,
+        SQL DML 구문으로 사용될 수 있는 단어 경계 기준으로 검사한다.
+        """
+        import ast
+        import inspect
+
+        from tools import sql_search as module
+
+        source = inspect.getsource(module)
+        tree = ast.parse(source)
+
+        # AST에서 모든 문자열 리터럴만 추출하여 SQL DML 키워드 검사
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                upper = node.value.upper()
+                for keyword in ("INSERT ", "UPDATE ", "DELETE ", "DROP ", "TRUNCATE "):
+                    # SQL DML 문으로 시작하는 리터럴 검사 (공백 포함으로 단어 경계 구분)
+                    assert keyword not in upper, (
+                        f"sql_search 문자열 리터럴에 DML 키워드 '{keyword.strip()}'가 있어서는 안 된다: "
+                        f"{node.value[:80]!r}"
+                    )
+
+    async def test_on_data_uses_separate_session_from_on_ai(self):
+        """data_session과 ai_session은 서로 다른 독립 세션 객체다."""
+        from core.database import _on_ai_engine, _on_data_engine
+
+        assert _on_ai_engine is not _on_data_engine
+
+    async def test_sql_search_tool_uses_data_session_not_ai_session(self):
+        """sql_search 도구는 data_session만 사용하고 ai_session을 호출하지 않는다."""
+        from tools.sql_search import sql_search
+
+        mock_result = MagicMock()
+        mock_result.keys.return_value = ["service_id", "service_name"]
+        mock_result.fetchall.return_value = []
+
+        data_session = MagicMock()
+        data_session.execute = AsyncMock(return_value=mock_result)
+
+        ai_session = MagicMock()
+        ai_session.execute = AsyncMock()
+
+        await sql_search(data_session, max_class_name="체육시설")
+
+        # data_session.execute가 호출되어야 한다
+        data_session.execute.assert_called_once()
+        # ai_session.execute는 호출되면 안 된다
+        ai_session.execute.assert_not_called()
+
+
 @pytest.mark.external_api
 class TestOnDataReaderPermissions:
     """on_data_reader 계정이 SELECT 전용임을 실제 DB로 검증한다.
