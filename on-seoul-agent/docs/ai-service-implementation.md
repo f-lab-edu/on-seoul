@@ -153,17 +153,17 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 
 ### Phase 16. 통합 테스트 및 최적화
 
-- [ ] `pytest-asyncio` 기반 각 Agent 및 워크플로우 통합 테스트
-- [ ] `on_data_reader` 권한 제한(SELECT only) 회귀 테스트
-- [ ] `/chat/stream` 시나리오별 E2E 테스트 (첫 질문 시 제목 생성 여부 포함)
+- [x] `pytest-asyncio` 기반 각 Agent 및 워크플로우 통합 테스트 (`tests/test_integration_workflow.py` — 시나리오 6건)
+- [ ] `on_data_reader` 권한 제한(SELECT only) 회귀 테스트 (실제 DB 필요 — `@pytest.mark.external_api` 로 별도 진행)
+- [x] `/chat/stream` 시나리오별 E2E 테스트 (`tests/test_chat_router.py` — 첫 질문 제목 생성 포함 40건)
 
 ### Phase 17. LangGraph 전환 (Post-MVP)
 
-- [ ] `agents/graph.py` — LangChain `RunnableBranch` 구조를 LangGraph `StateGraph`로 재구성
-- [ ] 노드 등록 및 조건부 엣지(Conditional Edges)로 라우팅 교체
-- [ ] `trace_node` 를 그래프 종단 노드로 분리하고 `checkpoint` 와의 정합성 확인
-- [ ] 기존 LangChain 워크플로우와 동일 입출력 유지 (회귀 테스트 통과가 전환 기준)
-- [ ] 자기 교정(Self-Correction) Agent 구현 - 그래프의 'Cycle' 기능을 활용하여 답변이 부실하면 다시 검색 노드로 돌아가는 루프를 구현
+- [x] `agents/graph.py` — LangChain `RunnableBranch` 구조를 LangGraph `StateGraph`로 재구성
+- [x] 노드 등록 및 조건부 엣지(Conditional Edges)로 라우팅 교체
+- [x] `trace_node` 를 그래프 종단 노드로 분리하고 `checkpoint` 와의 정합성 확인
+- [x] 기존 LangChain 워크플로우와 동일 입출력 유지 (회귀 테스트 통과가 전환 기준 — `tests/test_graph.py` 31건 PASS)
+- [x] 자기 교정(Self-Correction) Agent 구현 - 그래프의 'Cycle' 기능을 활용하여 답변이 부실하면 다시 검색 노드로 돌아가는 루프를 구현
 
 ---
 

@@ -49,3 +49,9 @@ addopts = "-m 'not external_api'"
 markers = [
     "external_api: 실제 외부 API를 호출하는 연동 테스트",
 ]
+filterwarnings = [
+    # LangGraph 내부 Unix-domain socket / asyncio event loop 미닫힘 경고.
+    # 두 경우 모두 langgraph·pytest-asyncio 라이브러리 내부에서 발생하며
+    # 프로덕션(단일 이벤트 루프 서버)에는 영향 없는 테스트 전용 현상이다.
+    "ignore::ResourceWarning",
+]
