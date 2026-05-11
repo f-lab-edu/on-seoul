@@ -807,13 +807,11 @@ class TestSelfCorrectionInfiniteLoopRegression:
             f"router_error 가 1회 초과 기록됨: {graph._node_path}"
         )
 
-    async def test_retry_count_stuck_at_zero_when_router_raises(self):
-        """known bug: router 가 예외를 던지면 _node_path 에 'router_error' 만 추가되어
-        is_retry=False 가 되고 retry_count 가 0으로 고정된다.
+    async def test_retry_count_increments_after_router_error_path(self):
+        """수정(Phase 17): router_error 경로 재진입 시 retry_count가 올바르게 1로 증가한다.
 
-        이 버그가 수정되어 retry_count가 1로 올바르게 증가하면,
-        pytest.fail()이 호출되어 FAIL로 빨간불이 켜진다.
-        is_retry 탐지 로직 수정 시 이 테스트를 함께 제거하거나 조건을 갱신할 것.
+        is_retry = any(p.startswith("router") for p in self._node_path)
+        "router_error"도 재진입으로 인식하므로 retry_count가 0으로 고정되지 않는다.
         """
         _, data_session = _sql_agent([])
 
@@ -832,34 +830,22 @@ class TestSelfCorrectionInfiniteLoopRegression:
             answer_agent=_answer_agent(),
         )
 
-        # 직접 _router_node 두 번 호출 — 첫 호출 후 path 상태를 검사
         graph._data_session = data_session
         graph._ai_session = _ai_session()
         graph._start = time.monotonic()
         graph._node_path = []
         state = _state()
 
-        # 1차 호출
+        # 1차 호출 — is_retry=False (path 비어있음), retry_count=0
         result1 = await graph._router_node(state)
         assert graph._node_path == ["router_error"]
         assert result1["retry_count"] == 0
         assert result1["error"] == "router_error"
 
-        # 2차 호출 — 자기 교정으로 재진입했다고 가정.
-        # _node_path에 "router_error"만 있으므로 is_retry("router" in path)=False,
-        # retry_count가 0으로 고정되는 버그를 확인한다.
+        # 2차 호출 — _node_path에 "router_error"가 있으므로 is_retry=True, retry_count=1
         result2 = await graph._router_node(state)
-        if result2["retry_count"] != 0:
-            # 버그가 수정된 경우 — 테스트를 갱신할 것
-            pytest.fail(
-                "BUG FIXED: retry_count is no longer stuck at 0 after router_error cycle. "
-                "Remove or update this test alongside the is_retry fix."
-            )
-        # BUG CONFIRMED: retry_count가 재시도 시에도 0으로 고정됨
-        pytest.xfail(
-            "known: _router_node 예외 시 _node_path에 'router_error'가 추가되어 "
-            "is_retry 검사('router' in path)가 False를 반환, retry_count가 0으로 고정됨. "
-            "is_retry 탐지 로직 수정 시 이 테스트를 함께 제거하거나 조건을 갱신할 것."
+        assert result2["retry_count"] == 1, (
+            f"router_error 경로 재진입 시 retry_count가 1이어야 하는데 {result2['retry_count']}임"
         )
 
     async def test_self_correction_edge_skips_retry_when_answer_present(self):

@@ -274,10 +274,11 @@ class AgentGraph:
     async def _router_node(self, state: AgentState) -> dict[str, Any]:
         """RouterAgent.classify() 호출 — intent 설정.
 
-        재진입 감지: _node_path에 이미 "router"가 있으면 자기 교정 재시도이므로
+        재진입 감지: _node_path에 "router" 또는 "router_error"가 있으면 자기 교정 재시도이므로
         retry_count를 1로 올리고 이전 error를 클리어한다.
+        ("router_error" prefix도 포함해야 예외 경로 재진입을 올바르게 감지한다.)
         """
-        is_retry = "router" in self._node_path
+        is_retry = any(p.startswith("router") for p in self._node_path)
         retry_count = 1 if is_retry else state.get("retry_count", 0)
 
         try:
