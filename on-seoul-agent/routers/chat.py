@@ -84,6 +84,7 @@ async def _stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
         title=None,
         trace=None,
         error=None,
+        retry_count=0,
     )
 
     try:
