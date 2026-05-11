@@ -93,7 +93,7 @@ def _vector_agent(rows: list[dict]) -> tuple[VectorAgent, MagicMock, AsyncMock]:
     agent._refine_chain = refine_chain
 
     embeddings = MagicMock()
-    embeddings.aembed_query = AsyncMock(return_value=[0.1] * 1536)
+    embeddings.aembed_query = AsyncMock(return_value=[0.1] * 3)
     agent._embeddings = embeddings
 
     mock_result = MagicMock()

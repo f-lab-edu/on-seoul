@@ -36,6 +36,7 @@ def _make_final_state(**kwargs) -> AgentState:
         title=None,
         trace={"node_path": ["router", "sql_agent", "answer"], "elapsed_ms": 100},
         error=None,
+        retry_count=0,
     )
     base.update(kwargs)
     return base
@@ -400,7 +401,7 @@ class TestChatStreamRouter:
         workflow_error_events = [e for e in events if e["event"] == "workflow_error"]
         assert len(workflow_error_events) == 1
         data = workflow_error_events[0]["data"]
-        assert data["error"] == "LLM 오류"
+        assert data["error"] == "서비스 처리 중 오류가 발생했습니다."
         assert data["answer"] == "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
         assert data["message_id"] == 2
 
