@@ -11,10 +11,14 @@ import dev.jazzybyte.onseoul.domain.port.out.SaveChatMessagePort;
 import dev.jazzybyte.onseoul.domain.port.out.SaveChatRoomPort;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class SendQueryService implements SendQueryUseCase {
 
     private static final int TITLE_MAX_LENGTH = 50;
@@ -22,14 +26,6 @@ public class SendQueryService implements SendQueryUseCase {
     private final SaveChatRoomPort saveChatRoomPort;
     private final LoadChatRoomPort loadChatRoomPort;
     private final SaveChatMessagePort saveChatMessagePort;
-
-    public SendQueryService(final SaveChatRoomPort saveChatRoomPort,
-                            final LoadChatRoomPort loadChatRoomPort,
-                            final SaveChatMessagePort saveChatMessagePort) {
-        this.saveChatRoomPort = saveChatRoomPort;
-        this.loadChatRoomPort = loadChatRoomPort;
-        this.saveChatMessagePort = saveChatMessagePort;
-    }
 
     @Override
     @Transactional
@@ -52,8 +48,9 @@ public class SendQueryService implements SendQueryUseCase {
     private ChatRoom resolveRoom(SendQueryCommand command) {
         if (command.roomId() == null) {
             String title = truncate(command.question(), TITLE_MAX_LENGTH);
-            ChatRoom newRoom = ChatRoom.create(command.userId(), title);
-            return saveChatRoomPort.save(newRoom);
+            ChatRoom savedRoom = saveChatRoomPort.save(ChatRoom.create(command.userId(), title));
+            log.info("[Chat] 새 ChatRoom 생성 - roomId={}, userId={}, title={}", savedRoom.getId(), command.userId(), title);
+            return savedRoom;
         }
         return loadChatRoomPort.findById(command.roomId())
                 .orElseThrow(() -> new OnSeoulApiException(ErrorCode.CHAT_ROOM_NOT_FOUND));

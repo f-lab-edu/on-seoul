@@ -3,6 +3,7 @@ package dev.jazzybyte.onseoul.adapter.out.aiservice;
 import dev.jazzybyte.onseoul.domain.port.out.AiServiceStreamPort;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
@@ -14,6 +15,7 @@ import reactor.core.publisher.Flux;
 import java.time.Duration;
 import java.util.concurrent.TimeoutException;
 
+@Slf4j
 @Component
 public class AiServiceAdapter implements AiServiceStreamPort {
 
@@ -29,6 +31,8 @@ public class AiServiceAdapter implements AiServiceStreamPort {
     @Override
     public Flux<String> stream(String question, long roomId, long messageId, Double lat, Double lng) {
         AiChatRequest body = new AiChatRequest(roomId, messageId, question, lat, lng);
+        log.info("[Chat] 스트림 요청 to AI 서비스 - ({})", body);
+
         return webClient.post()
                 .uri("/chat/stream")
                 .contentType(MediaType.APPLICATION_JSON)

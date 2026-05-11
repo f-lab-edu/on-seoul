@@ -76,7 +76,7 @@ public class CookieOAuth2AuthorizationRequestRepository
         String cookieValue = cookie.getValue();
         int dotIndex = cookieValue.lastIndexOf('.');
         if (dotIndex < 0) {
-            log.warn("oauth2 쿠키 서명 검증 실패");
+            log.warn("[Security] oauth2 쿠키 서명 검증 실패");
             return null;
         }
         String payload = cookieValue.substring(0, dotIndex);
@@ -87,19 +87,19 @@ public class CookieOAuth2AuthorizationRequestRepository
             if (!MessageDigest.isEqual(
                     expectedSig.getBytes(StandardCharsets.UTF_8),
                     sig.getBytes(StandardCharsets.UTF_8))) {
-                log.warn("oauth2 쿠키 서명 검증 실패");
+                log.warn("[Security] oauth2 쿠키 서명 검증 실패");
                 return null;
             }
             String json = new String(Base64.getUrlDecoder().decode(payload), StandardCharsets.UTF_8);
             return deserialize(json);
         } catch (IllegalArgumentException e) {
-            log.warn("oauth2 쿠키 Base64 디코딩 실패: {}", e.getMessage());
+            log.warn("[Security] oauth2 쿠키 Base64 디코딩 실패: {}", e.getMessage());
             return null;
         } catch (JsonProcessingException e) {
-            log.warn("oauth2 쿠키 JSON 역직렬화 실패: {}", e.getMessage());
+            log.warn("[Security] oauth2 쿠키 JSON 역직렬화 실패: {}", e.getMessage());
             return null;
         } catch (Exception e) {
-            log.warn("oauth2 쿠키 처리 중 예상치 못한 오류: {}", e.getMessage());
+            log.warn("[Security] oauth2 쿠키 처리 중 예상치 못한 오류: {}", e.getMessage());
             return null;
         }
     }

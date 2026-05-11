@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -15,8 +16,13 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -42,6 +48,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))  // 추가
                 .csrf(AbstractHttpConfigurer::disable)
                 // STATELESS: OAuth2 state를 CookieOAuth2AuthorizationRequestRepository가
                 // 쿠키로 관리하므로 서버 세션 불필요. 분산 환경에서도 state 검증이 정상 동작한다.
@@ -61,7 +68,7 @@ public class SecurityConfig {
                         // 전파되지 않아 불필요하게 인가가 막히는 경우를 방지한다.
                         .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
                         .requestMatchers("/actuator/health", "/error").permitAll()
-                        .requestMatchers("/auth/**").permitAll()
+                        .requestMatchers("/auth/token/refresh", "/auth/logout").permitAll()
                         .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**").permitAll()
                         .anyRequest().authenticated()
                 )
@@ -73,14 +80,14 @@ public class SecurityConfig {
                         .authenticationEntryPoint((request,
                                                    response,
                                                    authException) -> {
-                            log.warn("인증 실패 - URI: {}, 사유: {}", request.getRequestURI(), authException.getMessage());
+                            log.warn("[Security] 인증 실패 - URI: {}, 사유: {}", request.getRequestURI(), authException.getMessage());
                             writeErrorResponse(response, HttpServletResponse.SC_UNAUTHORIZED,
                                     "UNAUTHORIZED", "인증이 필요합니다.");
                         })
                         .accessDeniedHandler((request,
                                               response,
                                               accessDeniedException) -> {
-                            log.warn("인가 실패 - URI: {}, 사유: {}", request.getRequestURI(), accessDeniedException.getMessage());
+                            log.warn("[Security] 인가 실패 - URI: {}, 사유: {}", request.getRequestURI(), accessDeniedException.getMessage());
                             writeErrorResponse(response, HttpServletResponse.SC_FORBIDDEN,
                                     "FORBIDDEN", "접근 권한이 없습니다.");
 
@@ -100,7 +107,23 @@ public class SecurityConfig {
             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
             objectMapper.writeValue(response.getWriter(), Map.of("code", code, "message", message));
         } catch (Exception e) {
-            log.warn("에러 응답 작성 실패: {}", e.getMessage());
+            log.warn("[Security] 에러 응답 작성 실패: {}", e.getMessage());
         }
+    }
+
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOriginPatterns(List.of("http://office.aift.kr:*", "https://office.aift.kr:*",
+                "http://localhost:*", "https://localhost:*"));
+        config.setAllowedMethods(List.of("*"));
+        config.setAllowedHeaders(List.of("*"));
+        config.setAllowCredentials(true); // 쿠키(access_token, refresh_token) 전송 필요
+        config.setMaxAge(600L); //
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
     }
 }
