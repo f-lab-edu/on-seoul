@@ -3,7 +3,7 @@
 흐름:
     ChatRequest 수신
     → AgentState 구성 (title_needed = message_id == 1)
-    → AgentWorkflow.stream() 단계별 실행
+    → AgentGraph.stream() 단계별 실행 (LangGraph StateGraph)
     → SSE StreamingResponse 반환
 
 SSE 이벤트:
@@ -21,7 +21,7 @@ from collections.abc import AsyncGenerator
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from agents.workflow import AgentWorkflow
+from agents.graph import AgentGraph
 from core.database import ai_session_ctx, data_session_ctx
 from schemas.chat import ChatRequest
 from schemas.state import AgentState
@@ -32,17 +32,17 @@ router = APIRouter()
 
 # Lazy initialization — import 시점이 아닌 첫 요청 시 초기화한다.
 # import 시점에 환경변수(GOOGLE_API_KEY 등)가 없으면 ConfigurationException이 발생하므로,
-# AgentWorkflow() 생성을 첫 요청까지 미룬다.
-# 테스트에서는 patch("routers.chat._workflow")로 None이 아닌 mock을 주입하면
-# _get_workflow()가 mock을 반환하므로 기존 패치 방식이 그대로 동작한다.
-_workflow: AgentWorkflow | None = None
+# AgentGraph() 생성을 첫 요청까지 미룬다.
+# 테스트에서는 patch("routers.chat._graph")로 None이 아닌 mock을 주입하면
+# _get_graph()가 mock을 반환하므로 기존 패치 방식이 그대로 동작한다.
+_graph: AgentGraph | None = None
 
 
-def _get_workflow() -> AgentWorkflow:
-    global _workflow
-    if _workflow is None:
-        _workflow = AgentWorkflow()
-    return _workflow
+def _get_graph() -> AgentGraph:
+    global _graph
+    if _graph is None:
+        _graph = AgentGraph()
+    return _graph
 
 
 # SSE 응답 헤더 — 프록시/CDN 버퍼링 방지
@@ -89,7 +89,7 @@ async def _stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
 
     try:
         async with data_session_ctx() as data_session, ai_session_ctx() as ai_session:
-            async for event_type, data in _get_workflow().stream(
+            async for event_type, data in _get_graph().stream(
                 state,
                 data_session=data_session,
                 ai_session=ai_session,

@@ -124,7 +124,7 @@ class TestFirstMessageTitle:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -159,7 +159,7 @@ class TestFirstMessageTitle:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -189,7 +189,7 @@ class TestSubsequentMessageNoTitle:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -224,7 +224,7 @@ class TestSubsequentMessageNoTitle:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -254,7 +254,7 @@ class TestSqlSearchEventOrder:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -280,7 +280,7 @@ class TestSqlSearchEventOrder:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -308,7 +308,7 @@ class TestSqlSearchEventOrder:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -344,7 +344,7 @@ class TestFallbackScenario:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -370,7 +370,7 @@ class TestFallbackScenario:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -479,7 +479,7 @@ class TestWorkflowInternalError:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -514,7 +514,7 @@ class TestWorkflowInternalError:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -545,7 +545,7 @@ class TestSessionLevelError:
         """세션/DB 레벨 예외 → error 이벤트가 1개 반환되고 오류 내용이 노출되지 않는다."""
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -572,7 +572,7 @@ class TestSessionLevelError:
         """세션 레벨 예외 시 SSE 이벤트가 정확히 1개만 발행된다."""
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -604,7 +604,7 @@ class TestSseResponseHeaders:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
@@ -627,7 +627,7 @@ class TestSseResponseHeaders:
 
         with (
             patch(
-                "routers.chat._workflow"
+                "routers.chat._graph"
             ) as mock_wf,
             patch(
                 "routers.chat.ai_session_ctx", _session_ctx()
