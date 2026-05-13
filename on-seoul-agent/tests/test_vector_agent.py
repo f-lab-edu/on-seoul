@@ -253,17 +253,29 @@ class TestVectorAgent:
             assert call_session is mock_session
 
     async def test_bm25_search_called_with_tokens(self):
-        """bm25_search가 토크나이징된 토큰으로 호출된다."""
+        """bm25_search가 stopword 필터링된 토큰으로 호출된다."""
         agent = _make_agent("체험 시설", [0.1])
         mock_session = MagicMock()
 
+        # "시설"은 _BM25_STOPWORDS에 포함되므로 필터링 후 ["체험"]만 전달된다.
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])), \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])) as mock_bm25, \
              patch("agents.vector_agent.tokenize_query", return_value=["체험", "시설"]):
             await agent.search(_make_state(), mock_session)
             call_tokens, call_session = mock_bm25.call_args[0]
-            assert call_tokens == ["체험", "시설"]
+            assert call_tokens == ["체험"]
             assert call_session is mock_session
+
+    async def test_bm25_skipped_when_all_tokens_are_stopwords(self):
+        """모든 토큰이 stopword이면 bm25_search를 호출하지 않는다."""
+        agent = _make_agent("예약 서비스", [0.1])
+        mock_session = MagicMock()
+
+        with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])), \
+             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])) as mock_bm25, \
+             patch("agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]):
+            await agent.search(_make_state(), mock_session)
+            mock_bm25.assert_not_called()
 
 
 class TestHybridSearchRrf:
@@ -292,6 +304,21 @@ class TestHybridSearchRrf:
         service_ids = {r["service_id"] for r in result["vector_results"]}
         assert "S001" in service_ids
         assert "S002" in service_ids
+
+    async def test_bm25_only_result_preserves_metadata(self):
+        """BM25 전용 결과(벡터 검색에 없는 service_id)의 메타데이터가 유지된다."""
+        vector_rows = [{"service_id": "S001", "service_name": "체험관", "similarity": 0.85}]
+        bm25_rows = [{"service_id": "S002", "service_name": "한강수영장", "bm25_score": 3.0}]
+        agent = _make_agent("한강 수영", [0.1])
+        mock_session = MagicMock()
+
+        with _patch_search(vector_rows, bm25_rows):
+            result = await agent.search(_make_state(), mock_session)
+
+        bm25_only = next(r for r in result["vector_results"] if r["service_id"] == "S002")
+        # BM25 전용 결과도 service_name이 누락되지 않아야 한다
+        assert bm25_only.get("service_name") == "한강수영장"
+        assert "rrf_score" in bm25_only
 
     async def test_rrf_boost_for_overlap(self):
         """두 검색 결과에 모두 등장한 service_id가 더 높은 rrf_score를 갖는다."""

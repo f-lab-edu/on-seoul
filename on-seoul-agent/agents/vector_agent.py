@@ -42,6 +42,15 @@ _TOP_K: int = 10  # RRF 결합 결과 최대 반환 수
 
 _ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"])
 
+# 이 서비스의 모든 문서에 공통으로 등장하는 고빈도 어휘.
+# BM25는 IDF 기반이므로 전 문서에 걸쳐 빈도가 높은 단어는 IDF ≈ 0이 되어
+# 스코어에 기여하지 못한다. BM25 쿼리 전송 전 이 목록으로 필터링하여
+# 변별력 없는 토큰을 제거한다. 유효 토큰이 없으면 BM25를 건너뛴다.
+_BM25_STOPWORDS: frozenset[str] = frozenset({
+    "예약", "서울", "서울시", "공공", "서비스", "공공서비스",
+    "접수", "신청", "이용", "안내", "시설", "프로그램",
+})
+
 
 class _RefinedQuery(BaseModel):
     refined_query: str
@@ -100,14 +109,16 @@ def _rrf_merge(
         sid = row["service_id"]
         scores[sid] = scores.get(sid, 0.0) + 1.0 / (k + rank)
 
-    # vector_rows 메타데이터를 service_id 기준으로 인덱싱
+    # 메타데이터 인덱싱 — 벡터 결과 우선, 없으면 BM25 결과에서 보완
+    # BM25 전용 결과(벡터 검색에 없는 service_id)도 메타데이터가 유지된다.
     vector_meta: dict[str, dict] = {r["service_id"]: r for r in vector_rows}
+    bm25_meta: dict[str, dict] = {r["service_id"]: r for r in bm25_rows}
 
     merged = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
 
     result = []
     for sid, rrf_score in merged:
-        base = dict(vector_meta.get(sid, {"service_id": sid}))
+        base = dict(vector_meta.get(sid, bm25_meta.get(sid, {"service_id": sid})))
         base["rrf_score"] = rrf_score
         result.append(base)
 
@@ -147,6 +158,8 @@ class VectorAgent:
         tokens = tokenize_query(refined.refined_query)
 
         # asyncpg 단일 연결은 동시 쿼리를 허용하지 않으므로 순차 실행한다.
+        # TODO: 커넥션 풀에서 별도 세션을 할당하면 asyncio.gather로 병렬 실행 가능.
+        #       search() 시그니처 변경(세션 주입 방식)과 함께 latency 병목 시점에 도입 검토.
         # 각 검색이 실패해도 나머지 결과로 RRF 결합이 가능하도록 독립 예외 처리한다.
         try:
             vector_rows: list[dict] = await vector_search(
@@ -160,11 +173,17 @@ class VectorAgent:
             logger.warning("vector_search 실패, 빈 결과로 대체", exc_info=True)
             vector_rows = []
 
-        try:
-            bm25_rows: list[dict] = await bm25_search(tokens, session)
-        except Exception:
-            logger.warning("bm25_search 실패, 빈 결과로 대체", exc_info=True)
-            bm25_rows = []
+        # 공통어(IDF ≈ 0) 필터링 후 유효 토큰이 있을 때만 BM25 실행.
+        # 전 문서 공통 어휘는 BM25 변별력에 기여하지 않으므로 제거한다.
+        bm25_tokens = [t for t in tokens if t not in _BM25_STOPWORDS]
+        bm25_rows: list[dict] = []
+        if bm25_tokens:
+            try:
+                bm25_rows = await bm25_search(bm25_tokens, session)
+            except Exception:
+                logger.warning("bm25_search 실패, 빈 결과로 대체", exc_info=True)
+        else:
+            logger.debug("유효 BM25 토큰 없음 — 벡터 단독 검색으로 진행")
 
         merged = _rrf_merge(vector_rows, bm25_rows, top_k=_TOP_K)
 
