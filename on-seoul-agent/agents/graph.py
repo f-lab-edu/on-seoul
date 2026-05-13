@@ -240,9 +240,18 @@ class AgentGraph:
     ) -> AsyncGenerator[_StreamEvent, None]:
         """그래프를 실행하며 진행 이벤트와 최종 결과를 yield한다.
 
+        LangGraph astream()으로 노드 완료 시점마다 진행 이벤트를 emit한다.
+        각 progress 이벤트는 "방금 완료된 노드" 기준으로 "다음 단계"를 안내한다.
+
         Yields:
-            ("progress", {"step": str, "message": str}) — 각 단계 시작 전
+            ("progress", {"step": str, "message": str}) — 각 단계 전환 시점
             ("result", AgentState)                      — 최종 완료 상태
+
+        진행 이벤트 타이밍:
+            graph 시작 전        → routing  "질문을 분석하고 있습니다..."
+            router_node 완료 후  → searching "관련 정보를 검색하고 있습니다..."
+                                   (FALLBACK/error 시 → answering 즉시)
+            search node 완료 후  → answering "답변을 생성하고 있습니다..."
         """
         self._data_session = data_session
         self._ai_session = ai_session
@@ -252,20 +261,44 @@ class AgentGraph:
         if "retry_count" not in state:
             state = {**state, "retry_count": 0}
 
+        # 그래프 시작 전: routing 단계 진입 알림
         yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
-        yield "progress", {"step": "searching", "message": "관련 정보를 검색하고 있습니다..."}
-        yield "progress", {"step": "answering", "message": "답변을 생성하고 있습니다..."}
+
+        # state 누적 — astream()은 노드별 업데이트만 반환하므로 직접 합산
+        accumulated: dict[str, Any] = dict(state)
+        # 중복 emit 방지 (self-correction 루프에서 노드가 재실행될 수 있음)
+        _search_progress_emitted = False
+        _answer_progress_emitted = False
+
+        _SEARCH_NODES = frozenset({"sql_node", "vector_node", "map_node"})
 
         token = _ACTIVE_GRAPH.set(self)
         try:
-            result: AgentState = await AgentGraph._compiled_graph.ainvoke(
+            async for chunk in AgentGraph._compiled_graph.astream(
                 state,
                 config={"recursion_limit": 10},
-            )  # type: ignore[arg-type]
+            ):
+                node_name: str = next(iter(chunk))
+                node_updates: dict[str, Any] = chunk[node_name]
+                accumulated.update(node_updates)
+
+                if node_name == "router_node" and not _search_progress_emitted:
+                    _search_progress_emitted = True
+                    intent = accumulated.get("intent")
+                    # FALLBACK이거나 router_node 에러 시 검색 없이 바로 답변 단계로 간다.
+                    if intent in (IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH, IntentType.MAP):
+                        yield "progress", {"step": "searching", "message": "관련 정보를 검색하고 있습니다..."}
+                    else:
+                        _answer_progress_emitted = True
+                        yield "progress", {"step": "answering", "message": "답변을 생성하고 있습니다..."}
+
+                elif node_name in _SEARCH_NODES and not _answer_progress_emitted:
+                    _answer_progress_emitted = True
+                    yield "progress", {"step": "answering", "message": "답변을 생성하고 있습니다..."}
         finally:
             _ACTIVE_GRAPH.reset(token)
 
-        yield "result", result
+        yield "result", accumulated  # type: ignore[misc]
 
     # ---------------------------------------------------------------------------
     # 노드 구현 (인스턴스 메서드 — _ACTIVE_GRAPH를 통해 dispatch 함수에서 호출)

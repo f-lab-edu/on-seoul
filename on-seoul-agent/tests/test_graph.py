@@ -683,8 +683,8 @@ class TestAgentGraphStream:
         assert "searching" in progress_steps
         assert "answering" in progress_steps
 
-    async def test_stream_fallback_has_three_progress_then_result(self):
-        """FALLBACK: progress × 3 → result."""
+    async def test_stream_fallback_has_two_progress_then_result(self):
+        """FALLBACK: 검색 노드가 없으므로 routing + answering = progress × 2 → result."""
         _, data_session = _sql_agent([])
         graph = AgentGraph(
             router=_router(IntentType.FALLBACK),
@@ -695,7 +695,11 @@ class TestAgentGraphStream:
         )
 
         types = [e for e, _ in events]
-        assert types.count("progress") == 3
+        progress_steps = [d["step"] for t, d in events if t == "progress"]
+        assert types.count("progress") == 2
+        assert "routing" in progress_steps
+        assert "answering" in progress_steps
+        assert "searching" not in progress_steps
         assert types[-1] == "result"
 
 
