@@ -286,7 +286,14 @@ class AgentGraph:
             self._node_path.append("router")
             updates: dict[str, Any] = {"intent": new_state["intent"], "retry_count": retry_count}
             if is_retry:
+                # 재진입 시 이전 패스의 검색 결과가 state에 잔존하면
+                # answer_node가 신규 결과와 구(舊) 결과를 합쳐 LLM에 전달한다.
+                # error 외에 검색 결과도 함께 초기화한다.
                 updates["error"] = None
+                updates["sql_results"] = None
+                updates["vector_results"] = None
+                updates["map_results"] = None
+                updates["refined_query"] = None
             return updates
         except Exception as exc:
             logger.exception("router_node 실행 오류")
