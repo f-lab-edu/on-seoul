@@ -28,7 +28,7 @@ async def vector_search(
 | `query_vector` | `list[float]` | 쿼리 임베딩 벡터 (차원: 768) |
 | `max_class_name` | `str \| None` | post-filter: 대분류 카테고리. None이면 미적용 |
 | `area_name` | `str \| None` | post-filter: 자치구. None이면 미적용 |
-| `service_status` | `str \| None` | post-filter: 예약 상태. None이면 미적용 |
+| `service_status` | `str \| None` | post-filter: 예약 상태 (접수중·예약마감·접수종료·예약일시중지·안내중). None이면 미적용 |
 | `top_k` | `int` | 반환할 최대 결과 수. 기본값: 10 |
 | `min_similarity` | `float` | 코사인 유사도 하한 (0~1). 기본값: 0.6. post-filter 단계에서 적용 |
 

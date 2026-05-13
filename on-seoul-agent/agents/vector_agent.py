@@ -32,7 +32,7 @@ _REFINE_SYSTEM = """\
 질의에서 다음 필터 정보를 추출할 수 있으면 함께 반환하세요. 명시되지 않은 경우 null로 설정하세요.
 - max_class_name: 대분류 카테고리 (예: 체육, 문화, 교육, 시설, 진료). 질의에 명확한 카테고리가 없으면 null.
 - area_name: 지역구 이름 (예: 강남구, 마포구). 질의에 지역이 없으면 null.
-- service_status: 예약 상태 (예: 접수중, 접수마감, 안내중). 질의에 상태가 없으면 null.
+- service_status: 예약 상태 (접수중·예약마감·접수종료·예약일시중지·안내중 중 하나). 질의에 상태가 없으면 null.
 """
 
 _REFINE_HUMAN = "사용자 질의: {message}"
@@ -40,7 +40,7 @@ _REFINE_HUMAN = "사용자 질의: {message}"
 _RRF_K: int = 60  # RRF 공식 상수 (표준값 60)
 _TOP_K: int = 10  # RRF 결합 결과 최대 반환 수
 
-_ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(["접수중", "마감", "취소", "이용가능"])
+_ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"])
 
 
 class _RefinedQuery(BaseModel):

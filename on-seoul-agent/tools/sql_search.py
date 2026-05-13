@@ -63,7 +63,7 @@ async def sql_search(
     area_name:
         서울 자치구 이름 필터 (예: 강남구). None이면 미적용.
     service_status:
-        예약 상태 필터 (접수중·접수예정·마감·대기). None이면 미적용.
+        예약 상태 필터 (접수중·예약마감·접수종료·예약일시중지·안내중). None이면 미적용.
     keyword:
         service_name 또는 place_name에 대한 ILIKE 검색 키워드. None이면 미적용.
     top_k:

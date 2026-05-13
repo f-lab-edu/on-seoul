@@ -395,7 +395,7 @@ class TestServiceStatusValidation:
 
     def test_all_valid_statuses_accepted(self):
         """모든 허용 값 목록이 통과된다."""
-        allowed = ["접수중", "마감", "취소", "이용가능"]
+        allowed = ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
         for status in allowed:
             rq = _RefinedQuery(refined_query="체육 시설", service_status=status)
             assert rq.service_status == status
