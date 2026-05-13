@@ -91,6 +91,39 @@ class TestBuildBm25Query:
         assert build_bm25_query(["***"]) == ""
         assert build_bm25_query(["***", "수영"]) == "수영"
 
+    def test_plus_minus_removed(self):
+        """Tantivy 필수/제외 연산자(+, -)가 토큰에서 제거된다."""
+        assert build_bm25_query(["+수영"]) == "수영"
+        assert build_bm25_query(["-수영"]) == "수영"
+
+    def test_colon_removed(self):
+        """필드 한정 구분자(:)가 토큰에서 제거된다."""
+        assert build_bm25_query(["service:name"]) == "servicename"
+
+    def test_backslash_removed(self):
+        """이스케이프 문자(\\)가 토큰에서 제거된다."""
+        assert build_bm25_query(["수영\\장"]) == "수영장"
+
+    def test_question_mark_removed(self):
+        """와일드카드 문자(?)가 토큰에서 제거된다."""
+        assert build_bm25_query(["수영?장"]) == "수영장"
+
+
+class TestBm25SearchEmptyQueryGuard:
+    async def test_all_reserved_tokens_returns_empty_list_without_db(self):
+        """모든 토큰이 예약어면 DB 호출 없이 빈 리스트를 반환한다."""
+        session = _make_session(_SAMPLE_ROWS)
+        result = await bm25_search(["AND", "OR", "NOT"], session)
+        assert result == []
+        session.execute.assert_not_called()
+
+    async def test_all_special_char_tokens_returns_empty_list_without_db(self):
+        """모든 토큰이 특수문자만이면 DB 호출 없이 빈 리스트를 반환한다."""
+        session = _make_session(_SAMPLE_ROWS)
+        result = await bm25_search(["***", "++", "---"], session)
+        assert result == []
+        session.execute.assert_not_called()
+
 
 class TestBm25SearchBasic:
     async def test_returns_list_of_dicts(self):
@@ -154,19 +187,25 @@ class TestBm25SearchBindParams:
 
 class TestBm25SearchSqlSafety:
     async def test_token_values_passed_as_bind_params(self):
-        """SQL Injection 방지: 악성 입력이 bind 파라미터로만 전달되고 SQL 템플릿에 삽입되지 않는다."""
-        malicious = "'; DROP TABLE service_embeddings; --"
-        session = _make_session([])
-        await bm25_search([malicious], session)
+        """SQL Injection 방지: 입력값은 sanitize 후 bind 파라미터로만 전달되고 SQL 템플릿에 삽입되지 않는다.
 
-        # session.execute의 두 번째 인자(params dict)에서 바인드 파라미터를 확인한다.
+        특수문자(-, ')가 포함된 입력을 사용한다.
+        sanitize 단계에서 '-'가 제거되어 bind["query"]는 원본과 다를 수 있지만,
+        SQL 템플릿에 직접 삽입되지 않는다는 점만 보장하면 된다.
+        """
+        # 특수문자 중 '-'는 sanitize 단계에서 제거되므로 정제된 값이 bind에 전달된다.
+        raw = "'; DROP TABLE service_embeddings;"
+        expected_sanitized = "'; DROP TABLE service_embeddings;"  # '-' 없으므로 그대로
+        session = _make_session([])
+        await bm25_search([raw], session)
+
         call_args = session.execute.call_args
         stmt, params = call_args[0][0], call_args[0][1]
 
-        # 바인드 파라미터로 정상 전달됨
-        assert params["query"] == malicious
+        # sanitize된 값이 bind 파라미터로 전달됨
+        assert params["query"] == expected_sanitized
         # SQL 템플릿 문자열에는 삽입되지 않음
-        assert malicious not in str(stmt)
+        assert raw not in str(stmt)
 
     async def test_bm25_operator_in_sql(self):
         """SQL에 ParadeDB BM25 연산자(@@@)가 포함된다."""

@@ -16,8 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 BM25_LIMIT: int = 50
 
 # ParadeDB(Tantivy) 쿼리 파서가 특수하게 해석하는 문자.
-# 토큰에 포함되면 접두사 검색·구문 검색·퍼지 등 의도치 않은 동작이 발생한다.
-_BM25_SPECIAL: re.Pattern[str] = re.compile(r'["*~^(){}\[\]]')
+# 토큰에 포함되면 접두사 검색·구문 검색·퍼지·필수/제외·필드 한정 등
+# 의도치 않은 동작이 발생한다.
+# +  : 필수 조건 (+term)
+# -  : 제외 조건 (-term)
+# :  : 필드 한정 쿼리 (field:value)
+# \  : 이스케이프 문자
+# ?  : 단일 문자 와일드카드
+# *~^"(){}[] : 접두사·퍼지·부스팅·구문·그룹 검색
+_BM25_SPECIAL: re.Pattern[str] = re.compile(r'[+\-:?\\*~^(){}\[\]"]')
 
 # Tantivy 논리 연산 예약어.
 # 토큰으로 그대로 전달되면 AND·OR·NOT 등 논리 검색으로 해석되어 결과가 왜곡된다.
@@ -78,6 +85,9 @@ async def bm25_search(
         return []
 
     query_str = build_bm25_query(tokens)
+    if not query_str:
+        # 모든 토큰이 특수문자/예약어로 제거된 경우 DB 호출을 생략한다.
+        return []
 
     sql = text("""
         SELECT
