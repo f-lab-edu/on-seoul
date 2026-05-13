@@ -30,19 +30,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Lazy initialization — import 시점이 아닌 첫 요청 시 초기화한다.
-# import 시점에 환경변수(GOOGLE_API_KEY 등)가 없으면 ConfigurationException이 발생하므로,
-# AgentGraph() 생성을 첫 요청까지 미룬다.
-# 테스트에서는 patch("routers.chat._graph")로 None이 아닌 mock을 주입하면
-# _get_graph()가 mock을 반환하므로 기존 패치 방식이 그대로 동작한다.
+# _graph는 테스트 전용 patch 인터셉터다.
+# - 프로덕션: None 유지 → _get_graph()가 요청마다 새 AgentGraph 인스턴스를 반환한다.
+#   AgentGraph._compiled_graph(ClassVar)는 최초 1회만 컴파일되어 재사용되므로 비용 없음.
+
+# - 테스트: patch("routers.chat._graph", mock)로 None이 아닌 값을 주입하면
+#   _get_graph()가 mock을 반환하므로 기존 패치 방식이 그대로 동작한다.
 _graph: AgentGraph | None = None
 
 
 def _get_graph() -> AgentGraph:
-    global _graph
-    if _graph is None:
-        _graph = AgentGraph()
-    return _graph
+    if _graph is not None:
+        return _graph
+    return AgentGraph()
 
 
 # SSE 응답 헤더 — 프록시/CDN 버퍼링 방지
