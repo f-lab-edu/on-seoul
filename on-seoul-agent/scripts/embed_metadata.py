@@ -255,6 +255,8 @@ if __name__ == "__main__":
         limit = None
     elif args.limit is not None:
         limit = args.limit
+    elif args.incremental:
+        limit = None  # 증분은 전체 조회 후 필터링해야 의미 있음
     else:
         limit = 100  # seed 기본값
 
