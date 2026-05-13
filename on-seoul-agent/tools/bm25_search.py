@@ -8,16 +8,28 @@ SQL Injection 방지: 쿼리 문자열은 bind 파라미터(:query)로만 전달
 FastAPI Depends로 주입되지 않고 Agent에서 직접 호출되는 내부 도구다.
 """
 
+import re
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 BM25_LIMIT: int = 50
+
+# ParadeDB(Tantivy) 쿼리 파서가 특수하게 해석하는 문자.
+# 토큰에 포함되면 접두사 검색·구문 검색·퍼지 등 의도치 않은 동작이 발생한다.
+_BM25_SPECIAL: re.Pattern[str] = re.compile(r'["*~^(){}\[\]]')
+
+# Tantivy 논리 연산 예약어.
+# 토큰으로 그대로 전달되면 AND·OR·NOT 등 논리 검색으로 해석되어 결과가 왜곡된다.
+_BM25_RESERVED: frozenset[str] = frozenset({"AND", "OR", "NOT", "TO", "IN"})
 
 
 def build_bm25_query(tokens: list[str]) -> str:
     """토큰 배열을 ParadeDB BM25 쿼리 문자열로 변환한다.
 
     ParadeDB @@@: 공백으로 구분된 토큰을 OR 매칭한다.
+    각 토큰에서 Tantivy 특수문자를 제거하고 예약어를 필터링하여
+    의도치 않은 쿼리 동작을 방지한다.
 
     Parameters
     ----------
@@ -27,9 +39,14 @@ def build_bm25_query(tokens: list[str]) -> str:
     Returns
     -------
     str
-        공백 구분 토큰 문자열. 빈 리스트이면 빈 문자열.
+        공백 구분 토큰 문자열. 빈 리스트이거나 안전한 토큰이 없으면 빈 문자열.
     """
-    return " ".join(tokens)
+    safe = []
+    for t in tokens:
+        t = _BM25_SPECIAL.sub("", t)
+        if t and t.upper() not in _BM25_RESERVED:
+            safe.append(t)
+    return " ".join(safe)
 
 
 async def bm25_search(

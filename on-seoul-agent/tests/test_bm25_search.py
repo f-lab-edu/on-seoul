@@ -42,6 +42,55 @@ class TestBuildBm25Query:
         """빈 토큰 리스트는 빈 문자열을 반환한다."""
         assert build_bm25_query([]) == ""
 
+    def test_special_chars_removed(self):
+        """Tantivy 특수문자(*, ~, ^, ", (, ), {, }, [, ])가 토큰에서 제거된다."""
+        assert build_bm25_query(["체육*관"]) == "체육관"
+        assert build_bm25_query(["수영~장"]) == "수영장"
+        assert build_bm25_query(['"따릉이"']) == "따릉이"
+        assert build_bm25_query(["(공원)"]) == "공원"
+        assert build_bm25_query(["[강당]"]) == "강당"
+        assert build_bm25_query(["{센터}"]) == "센터"
+        assert build_bm25_query(["접수^중"]) == "접수중"
+
+    def test_reserved_words_filtered_uppercase(self):
+        """대문자 Tantivy 예약어(AND, OR, NOT, TO, IN)는 필터링된다."""
+        assert build_bm25_query(["AND"]) == ""
+        assert build_bm25_query(["OR"]) == ""
+        assert build_bm25_query(["NOT"]) == ""
+        assert build_bm25_query(["TO"]) == ""
+        assert build_bm25_query(["IN"]) == ""
+
+    def test_reserved_words_filtered_lowercase(self):
+        """소문자 예약어도 대소문자 무관하게 필터링된다."""
+        assert build_bm25_query(["and"]) == ""
+        assert build_bm25_query(["or"]) == ""
+        assert build_bm25_query(["not"]) == ""
+        assert build_bm25_query(["to"]) == ""
+        assert build_bm25_query(["in"]) == ""
+
+    def test_reserved_words_mixed_case_filtered(self):
+        """혼합 대소문자 예약어(And, Or, Not ...)도 필터링된다."""
+        assert build_bm25_query(["And"]) == ""
+        assert build_bm25_query(["Or"]) == ""
+        assert build_bm25_query(["Not"]) == ""
+
+    def test_reserved_words_removed_from_token_list(self):
+        """예약어가 포함된 리스트에서 예약어만 제거되고 나머지 토큰은 유지된다."""
+        result = build_bm25_query(["수영", "AND", "강습"])
+        assert result == "수영 강습"
+
+    def test_special_chars_and_reserved_word_combined(self):
+        """특수문자 제거 후 예약어가 되는 토큰도 필터링된다."""
+        # "AND*" → 특수문자 제거 → "AND" → 예약어 필터링
+        assert build_bm25_query(["AND*"]) == ""
+        # "(OR)" → 특수문자 제거 → "OR" → 예약어 필터링
+        assert build_bm25_query(["(OR)"]) == ""
+
+    def test_token_becomes_empty_after_special_char_removal(self):
+        """특수문자만으로 구성된 토큰은 제거 후 빈 문자열이 되어 결과에 포함되지 않는다."""
+        assert build_bm25_query(["***"]) == ""
+        assert build_bm25_query(["***", "수영"]) == "수영"
+
 
 class TestBm25SearchBasic:
     async def test_returns_list_of_dicts(self):
