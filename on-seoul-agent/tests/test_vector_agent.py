@@ -639,3 +639,48 @@ class TestHydrationDataFreshness:
             assert "metadata" not in result["vector_results"][0] or \
                    result["vector_results"][0].get("metadata") is None
 
+    async def test_hydration_drops_rows_missing_in_source(self):
+        """임베딩에는 있지만 원본 테이블에 없는 service_id는 vector_results에서 제외된다."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from agents.vector_agent import VectorAgent
+        from schemas.state import AgentState
+
+        agent = VectorAgent.__new__(VectorAgent)
+        refined = MagicMock()
+        refined.refined_query = "수영장"
+        refined.max_class_name = None
+        refined.area_name = None
+        refined.service_status = None
+        agent._refine_chain = MagicMock()
+        agent._refine_chain.ainvoke = AsyncMock(return_value=refined)
+        agent._embeddings = MagicMock()
+        agent._embeddings.aembed_query = AsyncMock(return_value=[0.1] * 768)
+
+        # 검색 결과: S001과 S002 두 건
+        vector_rows = [
+            {"service_id": "S001", "service_name": "n1", "metadata": {}, "similarity": 0.9},
+            {"service_id": "S002", "service_name": "n2", "metadata": {}, "similarity": 0.8},
+        ]
+        # 원본에는 S001만 존재 (S002는 soft-delete됨)
+        hydrated = [
+            {"service_id": "S001", "service_name": "마포 수영장", "service_status": "접수중"},
+        ]
+
+        with (
+            patch("agents.vector_agent.vector_search", AsyncMock(return_value=vector_rows)),
+            patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
+            patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)),
+        ):
+            state: AgentState = {
+                "room_id": 1, "message_id": 1, "message": "수영장",
+                "title_needed": False, "intent": None, "lat": None, "lng": None,
+                "refined_query": None, "sql_results": None, "vector_results": None,
+                "map_results": None, "answer": None, "title": None, "trace": None,
+                "error": None, "retry_count": 0,
+            }
+            result = await agent.search(state, MagicMock(), MagicMock())
+
+            ids = [r["service_id"] for r in result["vector_results"]]
+            assert ids == ["S001"]
+
