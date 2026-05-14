@@ -80,7 +80,7 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 필터 파라미터
    - **BM25 경로**: `llm/tokenizer.py` (Lindera KoDic + `DOMAIN_TOKENS`)로 토큰화 → `tools/bm25_search` 호출 → `(service_id, bm25_score)` 목록
    - **Vector 경로**: Gemini 임베딩 → `tools/vector_search` 호출 (post-filter 적용)
 3. **RRF 결합** — 두 결과의 순위를 Reciprocal Rank Fusion으로 결합한다.
-4. **원본 Hydration (data_session)** — RRF 결과의 `service_id`로 `tools/hydrate_services`를 호출하여 `public_service_reservations` 최신 원본 행을 가져온다. 임베딩 metadata의 stale 필드(`service_status`·`receipt_*_dt` 등) 우회 목적. 원본 누락 또는 hydration 실패 시 해당 행은 결과에서 제외된다.
+4. **원본 Hydration (data_session)** — RRF 결과의 `service_id`로 `tools/hydrate_services`를 호출하여 `public_service_reservations` 최신 원본 행을 가져온다. 임베딩 metadata의 stale 필드(`service_status`·`receipt_*_dt` 등) 우회 목적. 개별 service_id 가 원본 테이블에 없거나 soft-delete 된 경우 해당 행만 결과에서 제외된다. `hydrate_services` 도구 호출 자체가 예외를 던지면 `vector_results = []` 로 폴백하여 stale metadata 가 답변에 노출되지 않도록 한다.
 5. `vector_results`에 hydrated 결과 + `rrf_score`를 저장한다. 스키마는 `sql_results`와 동일.
 
 | 입출력 | 필드 |
@@ -168,7 +168,7 @@ RRF 결합 후 추출한 `service_id` 리스트로 `public_service_reservations`
 | `session` | `on_data_reader` 계정 AsyncSession (SELECT 전용) |
 | `service_ids` | 검색 순위 순서대로 정렬된 `service_id` 리스트 |
 
-반환: 입력 순서를 유지한 원본 행 리스트. 원본에 없거나 soft-delete된 service_id는 자동 제외. 스키마는 `sql_search`와 동일.
+반환: 입력 순서를 유지한 원본 행 리스트. 원본에 없거나 soft-delete된 service_id는 자동 제외. 스키마는 `sql_search` 와 동일. 컬럼 목록은 `docs/tools/hydrate_services.md` 를 참조한다.
 
 ### 4-4. `map_search` — 위치 기반 반경 검색
 

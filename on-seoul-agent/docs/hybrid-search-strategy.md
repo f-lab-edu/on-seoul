@@ -314,7 +314,7 @@ pre-filter 대비 장점: HNSW 인덱스를 전체 데이터에 적용하므로 
 
 | 용도 | 출처 | 컬럼 예시 |
 |---|---|---|
-| 의미 검색 (임베딩 입력) | `service_embeddings.embedding` | `service_name`, `area_name`, `max_class_name`, `target_info` (가공된 텍스트) |
+| 의미 검색 (임베딩 입력) | `service_embeddings.embedding` | `service_name`, `max_class_name`, `min_class_name`, `area_name`, `place_name`, `target_info`, `detail_content` (앞 300자) |
 | 키워드 검색 (BM25) | `service_embeddings.service_name`, `service_embeddings.metadata` | `service_name`, `metadata` JSONB |
 | 답변 표시 (Hydration) | `public_service_reservations` | 모든 표시 컬럼 — 특히 자주 바뀌는 `service_status`, `receipt_*_dt`, `service_url` |
 
@@ -322,7 +322,7 @@ pre-filter 대비 장점: HNSW 인덱스를 전체 데이터에 적용하므로 
 
 ### Hydration 흐름
 
-```
+```text
 VectorAgent.search()
   1. 질의 정제 + 임베딩
   2. vector_search (ai_session)
@@ -341,10 +341,10 @@ VectorAgent.search()
 
 | 변경된 필드 | 임베딩 재생성 | 사유 |
 |---|---|---|
-| `service_name`, `area_name`, `max_class_name`, `target_info` | **필요** | 의미 공간 자체가 달라짐 |
+| `service_name`, `max_class_name`, `min_class_name`, `area_name`, `place_name`, `target_info`, `detail_content` (앞 300자) | **필요** | 의미 공간 자체가 달라짐 |
 | `service_status`, `receipt_*_dt`, `service_open_*_dt`, `service_url`, `payment_type` | 불필요 | Hydration이 매 답변마다 최신 값을 끌어오므로 임베딩 갱신 불필요 |
 
-`scripts/embed_metadata.py`는 `--incremental` 모드에서 `service_change_log`를 읽어 의미 컬럼이 변경된 service_id만 재임베딩한다. 이로 인해 임베딩 비용을 최소화하면서도 답변 정확도는 유지된다.
+현재 `scripts/embed_metadata.py --incremental` 은 `service_embeddings` 에 아직 적재되지 않은 신규 `service_id` 만 임베딩한다. 의미 컬럼이 변경된 기존 행의 재임베딩 트리거는 현 시점에 자동화되어 있지 않으며, `service_change_log` 기반 변경분 감지는 향후 과제(Phase 19 예정)다. 임시 우회로 변경된 행은 수동으로 삭제 후 `--incremental` 재실행한다.
 
 ### 누락·실패 처리
 
