@@ -76,15 +76,19 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 필터 파라미터
 > Phase 14에서 BM25 경로가 신설되어 **하이브리드 검색**으로 동작한다.
 
 1. **질의 정제** — LLM으로 사용자 질의를 벡터 검색용 문장으로 정제하고, post-filter용 파라미터(`max_class_name`, `area_name`, `service_status`)를 함께 추출한다.
-2. **이중 경로 병렬 실행**
+2. **이중 경로 실행 (ai_session)**
    - **BM25 경로**: `llm/tokenizer.py` (Lindera KoDic + `DOMAIN_TOKENS`)로 토큰화 → `tools/bm25_search` 호출 → `(service_id, bm25_score)` 목록
    - **Vector 경로**: Gemini 임베딩 → `tools/vector_search` 호출 (post-filter 적용)
-3. **RRF 결합** — 두 결과의 순위를 Reciprocal Rank Fusion으로 결합하여 `vector_results`에 저장한다.
+3. **RRF 결합** — 두 결과의 순위를 Reciprocal Rank Fusion으로 결합한다.
+4. **원본 Hydration (data_session)** — RRF 결과의 `service_id`로 `tools/hydrate_services`를 호출하여 `public_service_reservations` 최신 원본 행을 가져온다. 임베딩 metadata의 stale 필드(`service_status`·`receipt_*_dt` 등) 우회 목적. 원본 누락 또는 hydration 실패 시 해당 행은 결과에서 제외된다.
+5. `vector_results`에 hydrated 결과 + `rrf_score`를 저장한다. 스키마는 `sql_results`와 동일.
 
 | 입출력 | 필드 |
 |---|---|
 | **in** | `message` |
 | **out** | `refined_query`, `vector_results` |
+
+> Phase 18부터 VectorAgent.search()는 `ai_session`(검색) + `data_session`(hydration) 두 세션을 모두 받는다.
 
 **BM25 도입 배경**: ParadeDB Lindera의 `user_dictionary`는 SQL API 레벨에서 지원되지 않아 커스텀 사전 적용에 소스 빌드가 필요했다. Python 레이어에서 lindera-py로 사전 토크나이징한 뒤 BM25 쿼리 조건을 구성하는 방식으로 우회한다. 도메인 용어(예: "따릉이", "한강공원")는 `DOMAIN_TOKENS` 화이트리스트로 보존된다.
 
@@ -155,6 +159,17 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 필터 파라미터
 
 반환: `(service_id, bm25_score)` 목록. Vector Agent에서 vector 결과와 RRF로 결합된다.
 
+### 4-3.5. `hydrate_services` — 검색 결과 원본 hydration (Phase 18 신설)
+
+RRF 결합 후 추출한 `service_id` 리스트로 `public_service_reservations`에서 최신 원본 행을 조회한다. 임베딩 metadata의 stale 필드를 우회하여 답변 정확도를 보장한다.
+
+| 파라미터 | 설명 |
+|---|---|
+| `session` | `on_data_reader` 계정 AsyncSession (SELECT 전용) |
+| `service_ids` | 검색 순위 순서대로 정렬된 `service_id` 리스트 |
+
+반환: 입력 순서를 유지한 원본 행 리스트. 원본에 없거나 soft-delete된 service_id는 자동 제외. 스키마는 `sql_search`와 동일.
+
 ### 4-4. `map_search` — 위치 기반 반경 검색
 
 PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도) 기준 반경 내 시설을 거리 오름차순으로 조회하고 GeoJSON FeatureCollection으로 반환한다. lat/lng 미전송 시 FALLBACK으로 대체된다.
@@ -202,8 +217,8 @@ PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도
 | 노드 / 작업 | 세션 | DB | 대상 테이블 |
 |---|---|---|---|
 | sql_node → `sql_search` | `data_session` | `on_data` | `public_service_reservations` |
-| vector_node → `vector_search` | `ai_session` | `on_ai` | `service_embeddings` |
-| vector_node → `bm25_search` | `ai_session` | `on_ai` | `service_embeddings` (ParadeDB BM25) |
+| vector_node → `vector_search` / `bm25_search` | `ai_session` | `on_ai` | `service_embeddings` |
+| vector_node → `hydrate_services` | `data_session` | `on_data` | `public_service_reservations` |
 | map_node → `map_search` | `data_session` | `on_data` | `public_service_reservations` (earthdistance) |
 | trace_node | `ai_session` | `on_ai` | `chat_agent_traces` |
 
@@ -310,5 +325,6 @@ needs_retry = not answer.strip() and retry_count == 0
 | Phase 15 | vector_search post-filter | pre-filter(WHERE) → post-filter(서브쿼리) 전환. Vector Agent에서 post-filter 파라미터 전달 |
 | Phase 16 | 통합 테스트 | `test_integration_workflow.py`, `test_chat_router.py` E2E 시나리오 |
 | Phase 17 | LangGraph 전환 | `agents/graph.py` 신설(`AgentGraph`), Self-Correction 사이클, `AgentState.retry_count` 추가, `_router_node` 예외 시 fallback_answer fast-path, `recursion_limit=10` |
+| Phase 18 | 원본 hydration 도입 | `tools/hydrate_services` 신설, VectorAgent에서 RRF 후 `public_service_reservations` 조회. 답변 컨텍스트가 항상 최신 원본 값을 사용하도록 변경. `AnswerAgent._normalize`의 metadata 언팩 분기 제거. |
 
 `AgentState` 입출력 규약을 유지하므로 각 Agent 클래스(`router_agent.py`, `sql_agent.py`, `vector_agent.py`, `answer_agent.py`)는 수정 없이 재사용된다. `agents/workflow.py` (LCEL)는 레거시로 유지된다.
