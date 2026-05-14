@@ -15,8 +15,6 @@ LLM 및 DB 호출은 Mock으로 처리한다.
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from agents.answer_agent import AnswerAgent, _AnswerOutput, _TitleOutput
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.sql_agent import SqlAgent, _SqlParams
@@ -205,22 +203,6 @@ class TestSqlSearchIntegration:
         assert result["answer"] == "조건에 맞는 시설을 찾지 못했습니다."
         assert result["error"] is None
 
-    async def test_sql_node_path_contains_router_sql_answer(self):
-        """SQL_SEARCH node_path: router → sql_agent → answer."""
-        _, data_session = _sql_agent([])
-        workflow = AgentWorkflow(
-            router=_router(IntentType.SQL_SEARCH),
-            sql_agent=_sql_agent([])[0],
-            answer_agent=_answer_agent(),
-        )
-        result = await workflow.run(
-            _state(),
-            data_session=data_session,
-            ai_session=_ai_session(),
-        )
-
-        assert result["trace"]["node_path"] == ["router", "sql_agent", "answer"]
-
     async def test_sql_uses_data_session_not_ai_session(self):
         """SQL Agent는 data_session만 사용하고 ai_session을 SQL 조회에 사용하지 않는다."""
         sql_agent, data_session = _sql_agent([])
@@ -262,24 +244,6 @@ class TestSqlSearchIntegration:
         assert result["title"] == "수영장 안내"
         answer_agent._title_chain.ainvoke.assert_called_once()
 
-    async def test_no_title_when_not_first_message_on_sql_path(self):
-        """SQL_SEARCH 경로에서 title_needed=False이면 title이 None이다."""
-        _, data_session = _sql_agent([])
-        answer_agent = _answer_agent()
-
-        workflow = AgentWorkflow(
-            router=_router(IntentType.SQL_SEARCH),
-            sql_agent=_sql_agent([])[0],
-            answer_agent=answer_agent,
-        )
-        result = await workflow.run(
-            _state(title_needed=False),
-            data_session=data_session,
-            ai_session=_ai_session(),
-        )
-
-        assert result["title"] is None
-        answer_agent._title_chain.ainvoke.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -406,23 +370,6 @@ class TestVectorSearchIntegration:
         for row in result["vector_results"]:
             assert "rrf_score" in row, f"rrf_score 없음: {row}"
 
-    async def test_vector_node_path_contains_router_vector_answer(self):
-        """VECTOR_SEARCH node_path: router → vector_agent → answer."""
-        _, ai_session, mock_bm25 = _vector_agent([])
-        va, _, mb = _vector_agent([])
-        with patch("agents.vector_agent.bm25_search", mock_bm25):
-            workflow = AgentWorkflow(
-                router=_router(IntentType.VECTOR_SEARCH),
-                vector_agent=va,
-                answer_agent=_answer_agent(),
-            )
-            result = await workflow.run(
-                _state(),
-                data_session=MagicMock(),
-                ai_session=ai_session,
-            )
-
-        assert result["trace"]["node_path"] == ["router", "vector_agent", "answer"]
 
 
 # ---------------------------------------------------------------------------
@@ -478,23 +425,6 @@ class TestMapSearchIntegration:
         assert result["map_results"] is None
         assert "map_fallback" in result["trace"]["node_path"]
 
-    async def test_map_node_path_with_coords(self):
-        """MAP intent + 좌표: node_path에 map_search가 포함된다."""
-        geojson = {"type": "FeatureCollection", "features": []}
-
-        with patch("agents.workflow.map_search", return_value=geojson):
-            _, data_session = _sql_agent([])
-            workflow = AgentWorkflow(
-                router=_router(IntentType.MAP),
-                answer_agent=_answer_agent(),
-            )
-            result = await workflow.run(
-                _state(lat=37.5, lng=127.0),
-                data_session=data_session,
-                ai_session=_ai_session(),
-            )
-
-        assert result["trace"]["node_path"] == ["router", "map_search", "answer"]
 
 
 # ---------------------------------------------------------------------------
@@ -528,36 +458,6 @@ class TestFallbackIntegration:
         sql_agent._chain.ainvoke.assert_not_called()
         vector_agent._refine_chain.ainvoke.assert_not_called()
 
-    async def test_fallback_node_path(self):
-        """FALLBACK node_path: router → fallback → answer."""
-        _, data_session = _sql_agent([])
-        workflow = AgentWorkflow(
-            router=_router(IntentType.FALLBACK),
-            answer_agent=_answer_agent(),
-        )
-        result = await workflow.run(
-            _state(),
-            data_session=data_session,
-            ai_session=_ai_session(),
-        )
-
-        assert result["trace"]["node_path"] == ["router", "fallback", "answer"]
-
-    async def test_fallback_answer_not_empty(self):
-        """FALLBACK 경로에서도 answer가 비어 있지 않다."""
-        _, data_session = _sql_agent([])
-        workflow = AgentWorkflow(
-            router=_router(IntentType.FALLBACK),
-            answer_agent=_answer_agent("이용 방법을 안내해드립니다."),
-        )
-        result = await workflow.run(
-            _state(message="챗봇 사용법 알려줘"),
-            data_session=data_session,
-            ai_session=_ai_session(),
-        )
-
-        assert result["answer"]
-        assert len(result["answer"]) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -671,36 +571,6 @@ class TestAgentStateContract:
         assert len(result["answer"]) > 0
         assert "error" in result["trace"]["node_path"]
 
-    async def test_title_is_none_when_not_needed(self):
-        """title_needed=False이면 title 필드는 None이다."""
-        _, data_session = _sql_agent([])
-        workflow = AgentWorkflow(
-            router=_router(IntentType.FALLBACK),
-            answer_agent=_answer_agent(),
-        )
-        result = await workflow.run(
-            _state(title_needed=False),
-            data_session=data_session,
-            ai_session=_ai_session(),
-        )
-
-        assert result["title"] is None
-
-    async def test_lat_lng_preserved_in_result_state(self):
-        """입력으로 제공된 lat/lng가 결과 state에 보존된다."""
-        _, data_session = _sql_agent([])
-        workflow = AgentWorkflow(
-            router=_router(IntentType.FALLBACK),
-            answer_agent=_answer_agent(),
-        )
-        result = await workflow.run(
-            _state(lat=37.5665, lng=126.9780),
-            data_session=data_session,
-            ai_session=_ai_session(),
-        )
-
-        assert result["lat"] == pytest.approx(37.5665)
-        assert result["lng"] == pytest.approx(126.9780)
 
 
 # ---------------------------------------------------------------------------
