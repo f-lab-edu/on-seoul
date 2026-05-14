@@ -12,15 +12,9 @@ SQL Injection 방지:
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# sql_search._RESULT_COLUMNS와 동일하게 유지하여
-# vector_results와 sql_results의 스키마를 일치시킨다.
-_RESULT_COLUMNS = """
-    service_id, service_name, max_class_name, min_class_name,
-    area_name, place_name, service_status, payment_type,
-    service_url, receipt_start_dt, receipt_end_dt,
-    service_open_start_dt, service_open_end_dt,
-    coord_x, coord_y, target_info
-"""
+from tools._result_columns import PUBLIC_SERVICE_RESERVATIONS_COLUMNS
+
+_RESULT_COLUMNS = PUBLIC_SERVICE_RESERVATIONS_COLUMNS
 
 
 async def hydrate_services(
