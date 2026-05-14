@@ -811,46 +811,41 @@ class TestSelfCorrectionInfiniteLoopRegression:
             f"router_error 가 1회 초과 기록됨: {graph._node_path}"
         )
 
-    async def test_retry_count_increments_after_router_error_path(self):
-        """수정(Phase 17): router_error 경로 재진입 시 retry_count가 올바르게 1로 증가한다.
+    async def test_retry_prep_node_increments_retry_count_and_clears_results(self):
+        """retry_prep_node가 retry_count를 1 증가시키고 이전 검색 결과를 초기화한다.
 
-        is_retry = any(p.startswith("router") for p in self._node_path)
-        "router_error"도 재진입으로 인식하므로 retry_count가 0으로 고정되지 않는다.
+        재시도 제어는 retry_count 단일 필드로 자기 완결되며,
+        _node_path 기반 재진입 감지에 의존하지 않는다.
         """
         _, data_session = _sql_agent([])
-
-        router_agent = RouterAgent.__new__(RouterAgent)
-        chain = MagicMock()
-
-        # sync callable — AsyncMock이 side_effect를 호출 후 async로 감싸므로 async def 불필요
-        def _raise_runtime(*_a, **_kw):
-            raise RuntimeError("router_error")
-
-        chain.ainvoke = AsyncMock(side_effect=_raise_runtime)
-        router_agent._chain = chain
-
-        graph = AgentGraph(
-            router=router_agent,
-            answer_agent=_answer_agent(),
-        )
-
+        graph = AgentGraph(answer_agent=_answer_agent())
         graph._data_session = data_session
         graph._ai_session = _ai_session()
         graph._start = time.monotonic()
         graph._node_path = []
-        state = _state()
 
-        # 1차 호출 — is_retry=False (path 비어있음), retry_count=0
-        result1 = await graph._router_node(state)
-        assert graph._node_path == ["router_error"]
-        assert result1["retry_count"] == 0
-        assert result1["error"] == "router_error"
+        stale_state: AgentState = {
+            **_state(),
+            "retry_count": 0,
+            "sql_results": [{"service_id": "S001"}],
+            "vector_results": [{"service_id": "S002"}],
+            "map_results": {"type": "FeatureCollection"},
+            "refined_query": "테니스장",
+            "error": "이전 에러",
+        }
 
-        # 2차 호출 — _node_path에 "router_error"가 있으므로 is_retry=True, retry_count=1
-        result2 = await graph._router_node(state)
-        assert result2["retry_count"] == 1, (
-            f"router_error 경로 재진입 시 retry_count가 1이어야 하는데 {result2['retry_count']}임"
-        )
+        result = await graph._retry_prep_node(stale_state)
+
+        # retry_count 증가
+        assert result["retry_count"] == 1
+        # 이전 검색 결과 및 error 초기화
+        assert result["sql_results"] is None
+        assert result["vector_results"] is None
+        assert result["map_results"] is None
+        assert result["refined_query"] is None
+        assert result["error"] is None
+        # node_path 기록
+        assert "retry_prep" in graph._node_path
 
     async def test_self_correction_edge_skips_retry_when_answer_present(self):
         """수정(Phase 17): answer가 있으면 error 유무와 무관하게 trace_node로 진행한다.
@@ -881,7 +876,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
             "error": None,
             "retry_count": 0,
         }
-        assert graph._self_correction_edge(state_empty_answer) == "router_node"
+        assert graph._self_correction_edge(state_empty_answer) == "retry_prep_node"
 
         # retry_count >= 1 이면 항상 trace_node
         state_after_retry = {**state_empty_answer, "retry_count": 1}

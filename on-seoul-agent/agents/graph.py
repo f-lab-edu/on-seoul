@@ -13,19 +13,21 @@
       ↓
     answer_node          — AnswerAgent.answer()
       ↓
-    (self_correction)    — 빈 답변일 때만 재시도 + retry_count==0 → router_node 재진입
+    (self_correction)    — 빈 답변일 때만 재시도 + retry_count==0 → retry_prep_node 경유
       ↓ (정상) 또는 사이클
+    [retry_prep_node]    — retry_count 증가 + 이전 검색 결과 초기화 → router_node 재진입
     trace_node           — chat_agent_traces 저장 (best-effort, 종단 노드)
       ↓
     END
 
 자기 교정(Self-Correction):
     answer_node 완료 후 answer.strip()이 비어 있고 retry_count == 0인 경우에만
-    router_node로 돌아가 재검색을 시도한다.
+    retry_prep_node → router_node 경로를 탄다.
     retry_count >= 1이면 trace_node로 진행하여 무한 루프를 방지한다.
 
-    router_node 재진입 시 retry_count를 1로 올려 무한 루프를 방지한다.
-    (_node_path에 이미 "router"가 있으면 재진입으로 판단)
+    retry_prep_node가 retry_count 증가와 이전 검색 결과 초기화를 담당하므로
+    router_node는 state["retry_count"]를 읽기만 하면 된다.
+    _node_path는 순수하게 디버깅/트레이스 목적으로만 사용된다.
 
 메모리 설계:
     CompiledGraph는 AgentGraph._compiled_graph에 클래스 수준으로 캐시된다.
@@ -98,6 +100,10 @@ async def _dispatch_trace_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_GRAPH.get()._trace_node(state)
 
 
+async def _dispatch_retry_prep_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_GRAPH.get()._retry_prep_node(state)
+
+
 def _dispatch_route_by_intent(state: AgentState) -> str:
     return _ACTIVE_GRAPH.get()._route_by_intent(state)
 
@@ -120,6 +126,7 @@ def _build_shared_graph() -> Any:
     builder.add_node("vector_node", _dispatch_vector_node)
     builder.add_node("map_node", _dispatch_map_node)
     builder.add_node("answer_node", _dispatch_answer_node)
+    builder.add_node("retry_prep_node", _dispatch_retry_prep_node)
     builder.add_node("trace_node", _dispatch_trace_node)
 
     builder.add_edge(START, "router_node")
@@ -144,10 +151,12 @@ def _build_shared_graph() -> Any:
         _dispatch_self_correction_edge,
         {
             "trace_node": "trace_node",
-            "router_node": "router_node",
+            "retry_prep_node": "retry_prep_node",
         },
     )
 
+    # 재시도 준비 완료 후 router_node로 재진입
+    builder.add_edge("retry_prep_node", "router_node")
     builder.add_edge("trace_node", END)
 
     return builder.compile()
@@ -307,36 +316,38 @@ class AgentGraph:
     async def _router_node(self, state: AgentState) -> dict[str, Any]:
         """RouterAgent.classify() 호출 — intent 설정.
 
-        재진입 감지: _node_path에 "router" 또는 "router_error"가 있으면 자기 교정 재시도이므로
-        retry_count를 1로 올리고 이전 error를 클리어한다.
-        ("router_error" prefix도 포함해야 예외 경로 재진입을 올바르게 감지한다.)
+        재시도 여부는 state["retry_count"] > 0으로 판단한다.
+        이전 검색 결과 초기화와 retry_count 증가는 retry_prep_node에서 완료되므로
+        이 노드는 순수하게 의도 분류만 담당한다.
         """
-        is_retry = any(p.startswith("router") for p in self._node_path)
-        retry_count = 1 if is_retry else state.get("retry_count", 0)
-
         try:
             new_state = await self._router.classify(state)
             self._node_path.append("router")
-            updates: dict[str, Any] = {"intent": new_state["intent"], "retry_count": retry_count}
-            if is_retry:
-                # 재진입 시 이전 패스의 검색 결과가 state에 잔존하면
-                # answer_node가 신규 결과와 구(舊) 결과를 합쳐 LLM에 전달한다.
-                # error 외에 검색 결과도 함께 초기화한다.
-                updates["error"] = None
-                updates["sql_results"] = None
-                updates["vector_results"] = None
-                updates["map_results"] = None
-                updates["refined_query"] = None
-            return updates
+            return {"intent": new_state["intent"]}
         except Exception as exc:
             logger.exception("router_node 실행 오류")
             self._node_path.append("router_error")
-            fallback_answer = "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
             return {
                 "error": str(exc),
-                "answer": fallback_answer,
-                "retry_count": retry_count,
+                "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
             }
+
+    async def _retry_prep_node(self, state: AgentState) -> dict[str, Any]:
+        """자기 교정 재시도 준비 노드.
+
+        _self_correction_edge에서 answer가 비어 재시도가 결정될 때만 실행된다.
+        retry_count를 1 증가시키고 이전 검색 결과를 초기화한다.
+        이 노드에서 초기화가 완료되므로 router_node는 분류에만 집중한다.
+        """
+        self._node_path.append("retry_prep")
+        return {
+            "retry_count": (state.get("retry_count") or 0) + 1,
+            "error": None,
+            "sql_results": None,
+            "vector_results": None,
+            "map_results": None,
+            "refined_query": None,
+        }
 
     async def _sql_node(self, state: AgentState) -> dict[str, Any]:
         """SqlAgent.search() 호출 — sql_results 설정."""
@@ -446,8 +457,9 @@ class AgentGraph:
     def _self_correction_edge(self, state: AgentState) -> str:
         """answer_node 완료 후 자기 교정 여부를 결정한다.
 
-        answer.strip()이 비어 있고 retry_count == 0인 경우에만 router_node로 복귀한다.
-        answer가 있거나 retry_count >= 1이면 trace_node로 진행하여 무한 루프를 방지한다.
+        answer가 비어 있고 retry_count == 0이면 retry_prep_node → router_node 경로를 탄다.
+        retry_prep_node가 retry_count를 1로 올리므로 다음 순회에서는 이 분기에 진입하지 않는다.
+        재시도 여부 판단은 state["retry_count"]만으로 자기 완결된다.
         """
         retry_count = state.get("retry_count", 0)
         answer = state.get("answer") or ""
@@ -455,7 +467,7 @@ class AgentGraph:
         needs_retry = not answer.strip() and retry_count == 0
 
         if needs_retry:
-            return "router_node"
+            return "retry_prep_node"
         return "trace_node"
 
 
