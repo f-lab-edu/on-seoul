@@ -306,6 +306,56 @@ pre-filter 대비 장점: HNSW 인덱스를 전체 데이터에 적용하므로 
 
 ---
 
+## 원본 데이터 Hydration
+
+`service_embeddings`는 의미 검색의 인덱스로만 사용한다. 답변 생성에 필요한 컨텍스트는 RRF 결합 후 `service_id`를 키로 `public_service_reservations` 원본 테이블에서 다시 조회하여 채운다. 임베딩 시점에 스냅샷된 `service_status`·`receipt_start_dt`·`receipt_end_dt` 등이 stale 상태로 답변에 들어가는 것을 막기 위함이다.
+
+### 컬럼 책임 분리
+
+| 용도 | 출처 | 컬럼 예시 |
+|---|---|---|
+| 의미 검색 (임베딩 입력) | `service_embeddings.embedding` | `service_name`, `area_name`, `max_class_name`, `target_info` (가공된 텍스트) |
+| 키워드 검색 (BM25) | `service_embeddings.service_name`, `service_embeddings.metadata` | `service_name`, `metadata` JSONB |
+| 답변 표시 (Hydration) | `public_service_reservations` | 모든 표시 컬럼 — 특히 자주 바뀌는 `service_status`, `receipt_*_dt`, `service_url` |
+
+**원칙**: 임베딩 metadata는 검색 후처리(post-filter 등)에만 쓰고, 사용자에게 노출되는 표시 값은 항상 원본 테이블에서 가져온다.
+
+### Hydration 흐름
+
+```
+VectorAgent.search()
+  1. 질의 정제 + 임베딩
+  2. vector_search (ai_session)
+  3. bm25_search    (ai_session)
+  4. _rrf_merge → service_id 리스트
+  5. hydrate_services(data_session, service_ids)
+     - public_service_reservations에서 WHERE service_id = ANY(:service_ids) AND deleted_at IS NULL
+     - 입력 순서(RRF 순위) 유지
+     - 원본 누락분 자동 제외
+  6. rrf_score 병합 후 vector_results에 할당
+```
+
+### 임베딩 ↔ 원본 동기화 정책
+
+수집 스케줄러는 매일 1회 `service_change_log`에 변경분을 기록한다. 임베딩 재생성 트리거는 다음과 같다:
+
+| 변경된 필드 | 임베딩 재생성 | 사유 |
+|---|---|---|
+| `service_name`, `area_name`, `max_class_name`, `target_info` | **필요** | 의미 공간 자체가 달라짐 |
+| `service_status`, `receipt_*_dt`, `service_open_*_dt`, `service_url`, `payment_type` | 불필요 | Hydration이 매 답변마다 최신 값을 끌어오므로 임베딩 갱신 불필요 |
+
+`scripts/embed_metadata.py`는 `--incremental` 모드에서 `service_change_log`를 읽어 의미 컬럼이 변경된 service_id만 재임베딩한다. 이로 인해 임베딩 비용을 최소화하면서도 답변 정확도는 유지된다.
+
+### 누락·실패 처리
+
+| 상황 | 처리 |
+|---|---|
+| 임베딩엔 있지만 원본 테이블에 service_id 미존재 | 결과에서 제외 (검색 결과 누락으로 인지) |
+| 원본 행이 soft-delete (`deleted_at IS NOT NULL`) | 결과에서 제외 |
+| `hydrate_services` 자체가 예외 (DB 다운 등) | `vector_results = []`로 fallback. stale metadata로 답변하지 않는다. Self-correction이 빈 답변을 재시도로 전환할 수 있다. |
+
+---
+
 ## 검색 쿼리 구조
 
 ### 시맨틱 검색 (post-filter)
