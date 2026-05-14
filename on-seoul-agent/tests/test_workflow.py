@@ -3,7 +3,8 @@
 DB와 LLM을 모두 Mock으로 대체하여 라우팅 → 검색 → 답변 전체 흐름을 검증한다.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from contextlib import contextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 from agents.answer_agent import AnswerAgent, _AnswerOutput, _TitleOutput
@@ -87,6 +88,21 @@ def _make_vector_agent(rows: list[dict]) -> tuple[VectorAgent, MagicMock]:
     session.execute = AsyncMock(return_value=mock_result)
     session.commit = AsyncMock()  # trace 저장 시 commit 필요
     return agent, session
+
+
+@contextmanager
+def _patch_hydrate(rows: list[dict]):
+    """hydrate_services를 patch하여 vector_rows의 service_id를 그대로 hydrated rows로 흉내낸다."""
+    meta_by_id = {r["service_id"]: dict(r) for r in rows}
+
+    async def _fake_hydrate(_session, service_ids):
+        return [dict(meta_by_id[sid]) for sid in service_ids if sid in meta_by_id]
+
+    with patch(
+        "agents.vector_agent.hydrate_services",
+        new=AsyncMock(side_effect=_fake_hydrate),
+    ):
+        yield
 
 
 def _make_answer_agent(answer: str = "답변입니다.", title: str | None = None) -> AnswerAgent:
@@ -199,11 +215,12 @@ class TestVectorWorkflow:
             vector_agent=vector_agent,
             answer_agent=_make_answer_agent("체험관 안내입니다."),
         )
-        result = await workflow.run(
-            _make_state(message="아이랑 체험할 수 있는 곳"),
-            data_session=MagicMock(),  # VECTOR_SEARCH에서 사용 안 함
-            ai_session=ai_session,
-        )
+        with _patch_hydrate(rows):
+            result = await workflow.run(
+                _make_state(message="아이랑 체험할 수 있는 곳"),
+                data_session=MagicMock(),  # VECTOR_SEARCH에서 사용 안 함
+                ai_session=ai_session,
+            )
 
         assert result["intent"] == IntentType.VECTOR_SEARCH
         # 하이브리드 검색(RRF) 이후 결과에는 rrf_score가 추가된다.

@@ -215,7 +215,7 @@ class AgentWorkflow:
             node_path.append("sql_agent")
 
         elif intent == IntentType.VECTOR_SEARCH:
-            state = await self._vector.search(state, ai_session)
+            state = await self._vector.search(state, ai_session, data_session)
             node_path.append("vector_agent")
 
         elif intent == IntentType.MAP:

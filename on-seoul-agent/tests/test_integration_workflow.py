@@ -12,6 +12,7 @@ LLM 및 DB 호출은 Mock으로 처리한다.
 - 컴포넌트 간 데이터 전달 정확성
 """
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -105,6 +106,27 @@ def _vector_agent(rows: list[dict]) -> tuple[VectorAgent, MagicMock, AsyncMock]:
 
     mock_bm25 = AsyncMock(return_value=[])
     return agent, session, mock_bm25
+
+
+@contextmanager
+def _patch_hydrate(*row_sets: list[dict]):
+    """hydrate_services를 patch하여 입력된 rows의 service_id를 그대로 hydrated rows로 흉내낸다.
+
+    여러 row_set(예: vector_rows, bm25_rows)을 받아 union하여 메타데이터를 구성한다.
+    """
+    meta_by_id: dict[str, dict] = {}
+    for rows in row_sets:
+        for r in rows:
+            meta_by_id.setdefault(r["service_id"], dict(r))
+
+    async def _fake_hydrate(_session, service_ids):
+        return [dict(meta_by_id[sid]) for sid in service_ids if sid in meta_by_id]
+
+    with patch(
+        "agents.vector_agent.hydrate_services",
+        new=AsyncMock(side_effect=_fake_hydrate),
+    ):
+        yield
 
 
 def _answer_agent(answer: str = "테스트 답변입니다.", title: str = "테스트 제목") -> AnswerAgent:
@@ -278,7 +300,7 @@ class TestVectorSearchIntegration:
         vector_agent, ai_session, mock_bm25 = _vector_agent(rows)
         answer_agent = _answer_agent("자연체험관을 추천합니다.")
 
-        with patch("agents.vector_agent.bm25_search", mock_bm25):
+        with patch("agents.vector_agent.bm25_search", mock_bm25), _patch_hydrate(rows):
             workflow = AgentWorkflow(
                 router=_router(IntentType.VECTOR_SEARCH),
                 vector_agent=vector_agent,
@@ -348,7 +370,7 @@ class TestVectorSearchIntegration:
         vector_agent, ai_session, mock_bm25 = _vector_agent(vector_rows)
         mock_bm25.return_value = bm25_rows
 
-        with patch("agents.vector_agent.bm25_search", mock_bm25):
+        with patch("agents.vector_agent.bm25_search", mock_bm25), _patch_hydrate(vector_rows, bm25_rows):
             workflow = AgentWorkflow(
                 router=_router(IntentType.VECTOR_SEARCH),
                 vector_agent=vector_agent,
@@ -369,7 +391,7 @@ class TestVectorSearchIntegration:
         rows = [{"service_id": "V001", "service_name": "수영장", "similarity": 0.88}]
         vector_agent, ai_session, mock_bm25 = _vector_agent(rows)
 
-        with patch("agents.vector_agent.bm25_search", mock_bm25):
+        with patch("agents.vector_agent.bm25_search", mock_bm25), _patch_hydrate(rows):
             workflow = AgentWorkflow(
                 router=_router(IntentType.VECTOR_SEARCH),
                 vector_agent=vector_agent,
@@ -741,7 +763,7 @@ class TestWorkflowStreamIntegration:
         rows = [{"service_id": "V001", "service_name": "체험관", "similarity": 0.9}]
         vector_agent, ai_session, mock_bm25 = _vector_agent(rows)
 
-        with patch("agents.vector_agent.bm25_search", mock_bm25):
+        with patch("agents.vector_agent.bm25_search", mock_bm25), _patch_hydrate(rows):
             workflow = AgentWorkflow(
                 router=_router(IntentType.VECTOR_SEARCH),
                 vector_agent=vector_agent,
