@@ -72,3 +72,24 @@ class TestHydrateMissingRows:
         result = await hydrate_services(session, ["S001", "S002", "S003"])
         assert len(result) == 1
         assert result[0]["service_id"] == "S001"
+
+
+class TestHydrateSqlSafety:
+    async def test_service_ids_passed_as_bind_param(self):
+        """service_id 값은 bind 파라미터로 전달되고 SQL 템플릿에 직접 삽입되지 않는다."""
+        malicious = "'; DROP TABLE public_service_reservations; --"
+        session = _make_session([])
+        await hydrate_services(session, [malicious])
+
+        stmt, params = session.execute.call_args[0][0], session.execute.call_args[0][1]
+        # bind 파라미터로 전달됨
+        assert params["service_ids"] == [malicious]
+        # SQL 템플릿 문자열에는 삽입되지 않음
+        assert malicious not in str(stmt)
+
+    async def test_deleted_at_filter_in_sql(self):
+        """soft-delete 필터(deleted_at IS NULL)가 SQL에 포함된다."""
+        session = _make_session([])
+        await hydrate_services(session, ["S001"])
+        stmt = session.execute.call_args[0][0]
+        assert "deleted_at IS NULL" in str(stmt)
