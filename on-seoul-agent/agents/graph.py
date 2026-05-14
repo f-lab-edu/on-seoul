@@ -20,20 +20,15 @@
       ↓
     END
 
-자기 교정(Self-Correction):
-    answer_node 완료 후 answer.strip()이 비어 있고 retry_count == 0인 경우에만
-    retry_prep_node → router_node 경로를 탄다.
-    retry_count >= 1이면 trace_node로 진행하여 무한 루프를 방지한다.
-
-    retry_prep_node가 retry_count 증가와 이전 검색 결과 초기화를 담당하므로
-    router_node는 state["retry_count"]를 읽기만 하면 된다.
-    _node_path는 순수하게 디버깅/트레이스 목적으로만 사용된다.
+책임 분리:
+    노드·엣지 구현  → agents/nodes.py (GraphNodes)
+    그래프 조립·실행 → 이 파일 (AgentGraph)
 
 메모리 설계:
     CompiledGraph는 AgentGraph._compiled_graph에 클래스 수준으로 캐시된다.
-    노드 함수는 contextvars.ContextVar(_ACTIVE_GRAPH)로 현재 인스턴스를 조회하는
-    모듈 수준 함수이므로, CompiledGraph → AgentGraph 역참조(순환 참조)가 발생하지 않는다.
-    AgentGraph 인스턴스는 테스트 종료 후 즉시 GC될 수 있다.
+    노드 함수는 contextvars.ContextVar(_ACTIVE_NODES)로 현재 GraphNodes 인스턴스를
+    조회하는 모듈 수준 함수이므로, CompiledGraph → AgentGraph 역참조(순환 참조)가
+    발생하지 않는다.
 
 세션 주입:
     data_session : on_data DB (SQL 검색 — SqlAgent)
@@ -41,33 +36,30 @@
 """
 
 import contextvars
-import json
 import logging
-import time
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar, Literal
 
 from langgraph.graph import END, START, StateGraph
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.answer_agent import AnswerAgent
+from agents.nodes import GraphNodes
 from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.vector_agent import VectorAgent
 from schemas.state import AgentState, IntentType
-from tools.map_search import map_search
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Context variable — run()/stream() 실행 중 현재 AgentGraph 인스턴스를 보유한다.
-# 모듈 수준 dispatch 함수들이 이것을 통해 인스턴스 메서드를 호출한다.
+# Context variable — run()/stream() 실행 중 현재 GraphNodes 인스턴스를 보유한다.
+# 모듈 수준 dispatch 함수들이 이것을 통해 노드 메서드를 호출한다.
 # CompiledGraph → AgentGraph 역참조를 만들지 않기 위한 핵심 설계.
 # ---------------------------------------------------------------------------
 
-_ACTIVE_GRAPH: contextvars.ContextVar["AgentGraph"] = contextvars.ContextVar(
-    "_active_graph"
+_ACTIVE_NODES: contextvars.ContextVar[GraphNodes] = contextvars.ContextVar(
+    "_active_nodes"
 )
 
 # ---------------------------------------------------------------------------
@@ -77,39 +69,39 @@ _ACTIVE_GRAPH: contextvars.ContextVar["AgentGraph"] = contextvars.ContextVar(
 
 
 async def _dispatch_router_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_GRAPH.get()._router_node(state)
-
-
-async def _dispatch_sql_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_GRAPH.get()._sql_node(state)
-
-
-async def _dispatch_vector_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_GRAPH.get()._vector_node(state)
-
-
-async def _dispatch_map_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_GRAPH.get()._map_node(state)
-
-
-async def _dispatch_answer_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_GRAPH.get()._answer_node(state)
-
-
-async def _dispatch_trace_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_GRAPH.get()._trace_node(state)
+    return await _ACTIVE_NODES.get().router_node(state)
 
 
 async def _dispatch_retry_prep_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_GRAPH.get()._retry_prep_node(state)
+    return await _ACTIVE_NODES.get().retry_prep_node(state)
+
+
+async def _dispatch_sql_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().sql_node(state)
+
+
+async def _dispatch_vector_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().vector_node(state)
+
+
+async def _dispatch_map_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().map_node(state)
+
+
+async def _dispatch_answer_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().answer_node(state)
+
+
+async def _dispatch_trace_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().trace_node(state)
 
 
 def _dispatch_route_by_intent(state: AgentState) -> str:
-    return _ACTIVE_GRAPH.get()._route_by_intent(state)
+    return _ACTIVE_NODES.get().route_by_intent(state)
 
 
 def _dispatch_self_correction_edge(state: AgentState) -> str:
-    return _ACTIVE_GRAPH.get()._self_correction_edge(state)
+    return _ACTIVE_NODES.get().self_correction_edge(state)
 
 
 # ---------------------------------------------------------------------------
@@ -122,11 +114,11 @@ def _build_shared_graph() -> Any:
     builder: StateGraph = StateGraph(AgentState)
 
     builder.add_node("router_node", _dispatch_router_node)
+    builder.add_node("retry_prep_node", _dispatch_retry_prep_node)
     builder.add_node("sql_node", _dispatch_sql_node)
     builder.add_node("vector_node", _dispatch_vector_node)
     builder.add_node("map_node", _dispatch_map_node)
     builder.add_node("answer_node", _dispatch_answer_node)
-    builder.add_node("retry_prep_node", _dispatch_retry_prep_node)
     builder.add_node("trace_node", _dispatch_trace_node)
 
     builder.add_edge(START, "router_node")
@@ -171,7 +163,8 @@ _StreamEvent = (
 class AgentGraph:
     """LangGraph StateGraph 기반 멀티에이전트 워크플로우.
 
-    AgentWorkflow와 동일한 인터페이스를 제공한다:
+    그래프 조립과 실행 인터페이스만 담당한다. 노드·엣지 구현은 GraphNodes에 위임한다.
+
         run(state, *, data_session, ai_session) → AgentState
         stream(state, *, data_session, ai_session) → AsyncGenerator[_StreamEvent]
 
@@ -188,18 +181,12 @@ class AgentGraph:
         vector_agent: VectorAgent | None = None,
         answer_agent: AnswerAgent | None = None,
     ) -> None:
-        self._router = router or RouterAgent()
-        self._sql = sql_agent or SqlAgent()
-        self._vector = vector_agent or VectorAgent()
-        self._answer = answer_agent or AnswerAgent()
-
-        # 런타임 세션 — run()/stream() 진입 시 설정된다.
-        self._data_session: AsyncSession | None = None
-        self._ai_session: AsyncSession | None = None
-        # 실행 시작 시각 (elapsed_ms 계산)
-        self._start: float = 0.0
-        # 노드 실행 경로 기록
-        self._node_path: list[str] = []
+        self._nodes = GraphNodes(
+            router=router or RouterAgent(),
+            sql_agent=sql_agent or SqlAgent(),
+            vector_agent=vector_agent or VectorAgent(),
+            answer_agent=answer_agent or AnswerAgent(),
+        )
 
         # 그래프는 클래스 수준에서 한 번만 컴파일한다.
         if AgentGraph._compiled_graph is None:
@@ -221,22 +208,19 @@ class AgentGraph:
         Returns:
             answer, intent, trace, retry_count가 채워진 AgentState
         """
-        self._data_session = data_session
-        self._ai_session = ai_session
-        self._start = time.monotonic()
-        self._node_path = []
+        self._nodes.prepare(data_session, ai_session)
 
         if "retry_count" not in state:
             state = {**state, "retry_count": 0}
 
-        token = _ACTIVE_GRAPH.set(self)
+        token = _ACTIVE_NODES.set(self._nodes)
         try:
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
                 config={"recursion_limit": 10},
             )  # type: ignore[arg-type]
         finally:
-            _ACTIVE_GRAPH.reset(token)
+            _ACTIVE_NODES.reset(token)
 
         return result
 
@@ -262,10 +246,7 @@ class AgentGraph:
                                    (FALLBACK/error 시 → answering 즉시)
             search node 완료 후  → answering "답변을 생성하고 있습니다..."
         """
-        self._data_session = data_session
-        self._ai_session = ai_session
-        self._start = time.monotonic()
-        self._node_path = []
+        self._nodes.prepare(data_session, ai_session)
 
         if "retry_count" not in state:
             state = {**state, "retry_count": 0}
@@ -281,7 +262,7 @@ class AgentGraph:
 
         _SEARCH_NODES = frozenset({"sql_node", "vector_node", "map_node"})
 
-        token = _ACTIVE_GRAPH.set(self)
+        token = _ACTIVE_NODES.set(self._nodes)
         try:
             async for chunk in AgentGraph._compiled_graph.astream(
                 state,
@@ -305,196 +286,6 @@ class AgentGraph:
                     _answer_progress_emitted = True
                     yield "progress", {"step": "answering", "message": "답변을 생성하고 있습니다..."}
         finally:
-            _ACTIVE_GRAPH.reset(token)
+            _ACTIVE_NODES.reset(token)
 
         yield "result", accumulated  # type: ignore[misc]
-
-    # ---------------------------------------------------------------------------
-    # 노드 구현 (인스턴스 메서드 — _ACTIVE_GRAPH를 통해 dispatch 함수에서 호출)
-    # ---------------------------------------------------------------------------
-
-    async def _router_node(self, state: AgentState) -> dict[str, Any]:
-        """RouterAgent.classify() 호출 — intent 설정.
-
-        재시도 여부는 state["retry_count"] > 0으로 판단한다.
-        이전 검색 결과 초기화와 retry_count 증가는 retry_prep_node에서 완료되므로
-        이 노드는 순수하게 의도 분류만 담당한다.
-        """
-        try:
-            new_state = await self._router.classify(state)
-            self._node_path.append("router")
-            return {"intent": new_state["intent"]}
-        except Exception as exc:
-            logger.exception("router_node 실행 오류")
-            self._node_path.append("router_error")
-            return {
-                "error": str(exc),
-                "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
-            }
-
-    async def _retry_prep_node(self, state: AgentState) -> dict[str, Any]:
-        """자기 교정 재시도 준비 노드.
-
-        _self_correction_edge에서 answer가 비어 재시도가 결정될 때만 실행된다.
-        retry_count를 1 증가시키고 이전 검색 결과를 초기화한다.
-        이 노드에서 초기화가 완료되므로 router_node는 분류에만 집중한다.
-        """
-        self._node_path.append("retry_prep")
-        return {
-            "retry_count": (state.get("retry_count") or 0) + 1,
-            "error": None,
-            "sql_results": None,
-            "vector_results": None,
-            "map_results": None,
-            "refined_query": None,
-        }
-
-    async def _sql_node(self, state: AgentState) -> dict[str, Any]:
-        """SqlAgent.search() 호출 — sql_results 설정."""
-        assert self._data_session is not None
-        try:
-            new_state = await self._sql.search(state, self._data_session)
-            self._node_path.append("sql_node")
-            return {"sql_results": new_state.get("sql_results")}
-        except Exception as exc:
-            logger.exception("sql_node 실행 오류")
-            self._node_path.append("sql_error")
-            return {"error": str(exc)}
-
-    async def _vector_node(self, state: AgentState) -> dict[str, Any]:
-        """VectorAgent.search() 호출 — vector_results, refined_query 설정."""
-        assert self._ai_session is not None
-        try:
-            new_state = await self._vector.search(state, self._ai_session)
-            self._node_path.append("vector_node")
-            return {
-                "vector_results": new_state.get("vector_results"),
-                "refined_query": new_state.get("refined_query"),
-            }
-        except Exception as exc:
-            logger.exception("vector_node 실행 오류")
-            self._node_path.append("vector_error")
-            return {"error": str(exc)}
-
-    async def _map_node(self, state: AgentState) -> dict[str, Any]:
-        """map_search 호출 — map_results 설정."""
-        assert self._data_session is not None
-        lat = state.get("lat")
-        lng = state.get("lng")
-        if lat is not None and lng is not None:
-            try:
-                geojson = await map_search(self._data_session, lat, lng)
-                self._node_path.append("map_node")
-                return {"map_results": geojson}
-            except Exception as exc:
-                logger.exception("map_node 실행 오류")
-                self._node_path.append("map_error")
-                return {"error": str(exc)}
-        else:
-            logger.warning("map_node — lat/lng 미제공, map_results=None 처리")
-            self._node_path.append("map_node")
-            return {"map_results": None}
-
-    async def _answer_node(self, state: AgentState) -> dict[str, Any]:
-        """AnswerAgent.answer() 호출 — answer, title 설정."""
-        if state.get("error") and state.get("answer"):
-            self._node_path.append("answer_node")
-            return {}
-
-        try:
-            new_state = await self._answer.answer(state)
-            self._node_path.append("answer_node")
-            return {
-                "answer": new_state.get("answer"),
-                "title": new_state.get("title"),
-            }
-        except Exception as exc:
-            logger.exception("answer_node 실행 오류")
-            self._node_path.append("answer_error")
-            return {
-                "error": str(exc),
-                "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
-            }
-
-    async def _trace_node(self, state: AgentState) -> dict[str, Any]:
-        """chat_agent_traces 저장 (best-effort 종단 노드)."""
-        assert self._ai_session is not None
-        elapsed_ms = int((time.monotonic() - self._start) * 1000)
-        trace_payload: dict[str, Any] = {
-            "intent": state.get("intent"),
-            "node_path": list(self._node_path),
-            "elapsed_ms": elapsed_ms,
-            "error": state.get("error"),
-        }
-        await _save_trace(self._ai_session, state["message_id"], trace_payload)
-        return {"trace": trace_payload}
-
-    # ---------------------------------------------------------------------------
-    # 조건부 엣지 함수
-    # ---------------------------------------------------------------------------
-
-    def _route_by_intent(self, state: AgentState) -> str:
-        """intent 값에 따라 다음 노드를 결정한다."""
-        error = state.get("error")
-        answer = state.get("answer") or ""
-
-        # router_node 예외 시 fallback_answer + error가 모두 설정됨.
-        # intent가 None이므로 아래 else 분기가 동일하게 처리하지만,
-        # 의도를 명시하기 위한 early-return.
-        if error and answer.strip():
-            return "answer_node"
-
-        intent = state.get("intent")
-        if intent == IntentType.SQL_SEARCH:
-            return "sql_node"
-        elif intent == IntentType.VECTOR_SEARCH:
-            return "vector_node"
-        elif intent == IntentType.MAP:
-            return "map_node"
-        else:
-            return "answer_node"
-
-    def _self_correction_edge(self, state: AgentState) -> str:
-        """answer_node 완료 후 자기 교정 여부를 결정한다.
-
-        answer가 비어 있고 retry_count == 0이면 retry_prep_node → router_node 경로를 탄다.
-        retry_prep_node가 retry_count를 1로 올리므로 다음 순회에서는 이 분기에 진입하지 않는다.
-        재시도 여부 판단은 state["retry_count"]만으로 자기 완결된다.
-        """
-        retry_count = state.get("retry_count", 0)
-        answer = state.get("answer") or ""
-
-        needs_retry = not answer.strip() and retry_count == 0
-
-        if needs_retry:
-            return "retry_prep_node"
-        return "trace_node"
-
-
-# ---------------------------------------------------------------------------
-# Trace 저장 헬퍼
-# ---------------------------------------------------------------------------
-
-
-async def _save_trace(
-    session: AsyncSession,
-    message_id: int,
-    trace: dict[str, Any],
-) -> None:
-    """chat_agent_traces 테이블에 실행 메타데이터를 저장한다."""
-    try:
-        trace_json = json.dumps(trace, ensure_ascii=False, default=str)
-        await session.execute(
-            text(
-                "INSERT INTO chat_agent_traces (message_id, trace) "
-                "VALUES (:message_id, CAST(:trace AS jsonb))"
-            ),
-            {"message_id": message_id, "trace": trace_json},
-        )
-        await session.commit()
-    except Exception as exc:
-        logger.warning("trace 저장 실패 (message_id=%s): %s", message_id, exc)
-        try:
-            await session.rollback()
-        except Exception:
-            pass

@@ -178,7 +178,7 @@ class TestConditionalEdgeRouting:
         geojson = {"type": "FeatureCollection", "features": []}
         _, data_session = _sql_agent([])
 
-        with patch("agents.graph.map_search", return_value=geojson) as mock_map:
+        with patch("agents.nodes.map_search", return_value=geojson) as mock_map:
             graph = AgentGraph(
                 router=_router(IntentType.MAP),
                 answer_agent=_answer_agent("주변 시설입니다."),
@@ -787,28 +787,24 @@ class TestSelfCorrectionInfiniteLoopRegression:
             answer_agent=_answer_agent("불릴 일 없는 답"),
         )
 
-        from agents.graph import _ACTIVE_GRAPH
+        from agents.graph import _ACTIVE_NODES
 
-        graph._data_session = data_session
-        graph._ai_session = _ai_session()
-        graph._start = time.monotonic()
-        graph._node_path = []
-        state = _state()
-        state = {**state, "retry_count": 0}
+        graph._nodes.prepare(data_session, _ai_session())
+        state = {**_state(), "retry_count": 0}
 
-        token = _ACTIVE_GRAPH.set(graph)
+        token = _ACTIVE_NODES.set(graph._nodes)
         try:
             result = await AgentGraph._compiled_graph.ainvoke(
                 state, config={"recursion_limit": 5}
             )
         finally:
-            _ACTIVE_GRAPH.reset(token)
+            _ACTIVE_NODES.reset(token)
 
         # fallback answer 가 설정되어 정상 종료된다.
         assert result["answer"], "fallback answer 가 비어있으면 안 된다"
         # router_error 는 1회만 기록된다 (무한 사이클 없음).
-        assert graph._node_path.count("router_error") == 1, (
-            f"router_error 가 1회 초과 기록됨: {graph._node_path}"
+        assert graph._nodes.node_path.count("router_error") == 1, (
+            f"router_error 가 1회 초과 기록됨: {graph._nodes.node_path}"
         )
 
     async def test_retry_prep_node_increments_retry_count_and_clears_results(self):
@@ -819,10 +815,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
         """
         _, data_session = _sql_agent([])
         graph = AgentGraph(answer_agent=_answer_agent())
-        graph._data_session = data_session
-        graph._ai_session = _ai_session()
-        graph._start = time.monotonic()
-        graph._node_path = []
+        graph._nodes.prepare(data_session, _ai_session())
 
         stale_state: AgentState = {
             **_state(),
@@ -834,7 +827,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
             "error": "이전 에러",
         }
 
-        result = await graph._retry_prep_node(stale_state)
+        result = await graph._nodes.retry_prep_node(stale_state)
 
         # retry_count 증가
         assert result["retry_count"] == 1
@@ -845,7 +838,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
         assert result["refined_query"] is None
         assert result["error"] is None
         # node_path 기록
-        assert "retry_prep" in graph._node_path
+        assert "retry_prep" in graph._nodes.node_path
 
     async def test_self_correction_edge_skips_retry_when_answer_present(self):
         """수정(Phase 17): answer가 있으면 error 유무와 무관하게 trace_node로 진행한다.
@@ -867,7 +860,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
         }
 
         # 수정 후: answer.strip() 이 truthy 이므로 needs_retry=False → trace_node
-        assert graph._self_correction_edge(state_with_error) == "trace_node"
+        assert graph._nodes.self_correction_edge(state_with_error) == "trace_node"
 
         # answer 없을 때만 retry 트리거
         state_empty_answer: AgentState = {
@@ -876,11 +869,11 @@ class TestSelfCorrectionInfiniteLoopRegression:
             "error": None,
             "retry_count": 0,
         }
-        assert graph._self_correction_edge(state_empty_answer) == "retry_prep_node"
+        assert graph._nodes.self_correction_edge(state_empty_answer) == "retry_prep_node"
 
         # retry_count >= 1 이면 항상 trace_node
         state_after_retry = {**state_empty_answer, "retry_count": 1}
-        assert graph._self_correction_edge(state_after_retry) == "trace_node"
+        assert graph._nodes.self_correction_edge(state_after_retry) == "trace_node"
 
     async def test_memory_does_not_grow_across_buggy_invocations(self):
         """회귀 가드: router 예외 시나리오 30회 반복해도 self-correction cycle 이 발생하지 않는다.
@@ -889,7 +882,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
         self-correction retry 가 발생하지 않고 매 호출이 1 cycle 에 종료된다.
         따라서 무한 루프 메모리 누수 없이 30MB 이하를 유지해야 한다.
         """
-        from agents.graph import _ACTIVE_GRAPH
+        from agents.graph import _ACTIVE_NODES
 
         async def _run_buggy_once() -> None:
             router_agent = RouterAgent.__new__(RouterAgent)
@@ -904,18 +897,15 @@ class TestSelfCorrectionInfiniteLoopRegression:
                 router=router_agent,
                 answer_agent=_answer_agent(),
             )
-            g._data_session = MagicMock()
-            g._ai_session = _ai_session()
-            g._start = time.monotonic()
-            g._node_path = []
+            g._nodes.prepare(MagicMock(), _ai_session())
             st = {**_state(), "retry_count": 0}
-            tok = _ACTIVE_GRAPH.set(g)
+            tok = _ACTIVE_NODES.set(g._nodes)
             try:
                 await AgentGraph._compiled_graph.ainvoke(
                     st, config={"recursion_limit": 5}
                 )
             finally:
-                _ACTIVE_GRAPH.reset(tok)
+                _ACTIVE_NODES.reset(tok)
 
         # 워밍업 — 컴파일된 그래프 / import 캐시가 안정화된 후 측정
         for _ in range(5):
