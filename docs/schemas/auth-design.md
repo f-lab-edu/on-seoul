@@ -22,10 +22,10 @@
 
 | 토큰 | 만료 | 저장 위치 | 비고 |
 |---|---|---|---|
-| Access Token | 15~30분 | 클라이언트 | 서버 상태 저장 없음 |
-| Refresh Token | 7일 | Redis | 서버 측 강제 만료 가능 |
+| Access Token | 15~30분 | httpOnly 쿠키 (브라우저) | 프론트 코드에서 접근 불가. 서버 상태 저장 없음 |
+| Refresh Token | 7일 | httpOnly 쿠키 (브라우저) + Redis | Redis로 서버 측 강제 만료 가능 |
 
-Refresh Token을 Redis에 저장하여 JWT의 구조적 단점인 서버 측 무효화 불가 문제를 보완한다. 토큰 탈취 시 Redis에서 Refresh Token을 삭제하여 즉시 세션을 종료할 수 있다.
+두 토큰 모두 `HttpOnly; Secure; SameSite=Strict` 쿠키로 발급되어 JavaScript에서 접근 불가하다. Refresh Token은 추가로 Redis에 저장하여 서버 측 강제 만료를 지원한다. 토큰 탈취 시 Redis에서 삭제하여 즉시 세션을 종료할 수 있다.
 
 ## 테이블 구성
 

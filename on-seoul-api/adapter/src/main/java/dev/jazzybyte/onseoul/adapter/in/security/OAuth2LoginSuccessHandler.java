@@ -40,6 +40,13 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
     private final SocialLoginUseCase socialLoginUseCase;
     private final String frontendBaseUrl;
     private final boolean cookieSecure;
+    /** 쿠키 SameSite 속성. 기본값 Strict. */
+    private final String cookieSameSite;
+    /**
+     * 쿠키 Domain 속성. 서브도메인 간 공유 시 ".jazzz.dev" 형식으로 설정.
+     * 빈 값이면 응답 호스트에만 스코프됨(로컬 개발 기본값).
+     */
+    private final String cookieDomain;
     /** Access Token 쿠키 maxAge. JWT TTL과 동기화 — TokenIssuerPort 단일 소스. */
     private final long accessTokenMinutes;
     /** Refresh Token 쿠키 maxAge. JWT TTL과 동기화 — TokenIssuerPort 단일 소스. */
@@ -49,10 +56,14 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
             final SocialLoginUseCase socialLoginUseCase,
             final TokenIssuerPort tokenIssuerPort,
             @Value("${app.frontend-base-url}") String frontendBaseUrl,
-            @Value("${app.cookie-secure:true}") boolean cookieSecure) {
+            @Value("${app.cookie-secure:true}") boolean cookieSecure,
+            @Value("${app.cookie-same-site:Strict}") String cookieSameSite,
+            @Value("${app.cookie-domain:}") String cookieDomain) {
         this.socialLoginUseCase = socialLoginUseCase;
         this.frontendBaseUrl = frontendBaseUrl;
         this.cookieSecure = cookieSecure;
+        this.cookieSameSite = cookieSameSite;
+        this.cookieDomain = cookieDomain;
         this.accessTokenMinutes  = tokenIssuerPort.getAccessTokenMinutes();
         this.refreshTokenMinutes = tokenIssuerPort.getRefreshTokenMinutes();
     }
@@ -111,12 +122,12 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
      * maxAge = accessTokenMinutes(분), path = "/".
      */
     public ResponseCookie buildAccessCookie(String token) {
-        return ResponseCookie.from(ACCESS_TOKEN_COOKIE, token)
+        return applyDomain(ResponseCookie.from(ACCESS_TOKEN_COOKIE, token)
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Lax")
+                .sameSite(cookieSameSite)
                 .path("/")
-                .maxAge(Duration.ofMinutes(accessTokenMinutes))
+                .maxAge(Duration.ofMinutes(accessTokenMinutes)))
                 .build();
     }
 
@@ -125,12 +136,12 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
      * maxAge = refreshTokenMinutes(분), path = "/auth".
      */
     public ResponseCookie buildRefreshCookie(String token) {
-        return ResponseCookie.from(REFRESH_TOKEN_COOKIE, token)
+        return applyDomain(ResponseCookie.from(REFRESH_TOKEN_COOKIE, token)
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Lax")
+                .sameSite(cookieSameSite)
                 .path("/auth")
-                .maxAge(Duration.ofMinutes(refreshTokenMinutes))
+                .maxAge(Duration.ofMinutes(refreshTokenMinutes)))
                 .build();
     }
 
@@ -139,12 +150,12 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
      * maxAge = 0, path = "/".
      */
     public ResponseCookie expireAccessCookie() {
-        return ResponseCookie.from(ACCESS_TOKEN_COOKIE, "")
+        return applyDomain(ResponseCookie.from(ACCESS_TOKEN_COOKIE, "")
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Lax")
+                .sameSite(cookieSameSite)
                 .path("/")
-                .maxAge(0)
+                .maxAge(0))
                 .build();
     }
 
@@ -153,12 +164,20 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
      * maxAge = 0, path = "/auth".
      */
     public ResponseCookie expireRefreshCookie() {
-        return ResponseCookie.from(REFRESH_TOKEN_COOKIE, "")
+        return applyDomain(ResponseCookie.from(REFRESH_TOKEN_COOKIE, "")
                 .httpOnly(true)
                 .secure(cookieSecure)
-                .sameSite("Lax")
+                .sameSite(cookieSameSite)
                 .path("/auth")
-                .maxAge(0)
+                .maxAge(0))
                 .build();
+    }
+
+    /** cookieDomain이 설정된 경우에만 domain 속성을 적용한다. */
+    private ResponseCookie.ResponseCookieBuilder applyDomain(ResponseCookie.ResponseCookieBuilder builder) {
+        if (cookieDomain != null && !cookieDomain.isBlank()) {
+            builder.domain(cookieDomain);
+        }
+        return builder;
     }
 }
