@@ -127,19 +127,50 @@ def tokenize_query(text: str) -> list[str]:
     return tokens
 ```
 
-토큰 목록을 `bm25_search` 도구에 전달하면 ParadeDB BM25 조건으로 변환한다.
+토큰 목록을 `bm25_search` 도구에 전달하면 ParadeDB BM25 조건으로 변환한다. 이때 Tantivy 파서가 특수하게 해석하는 문자와 논리 예약어는 사전에 제거하여 의도치 않은 쿼리 동작과 인젝션을 방지한다.
 
 ```python
 # tools/bm25_search.py — 토큰 배열 → BM25 검색 조건 변환
+_BM25_SPECIAL = re.compile(r'[+\-:?\\*~^(){}\[\]"]')          # 접두사·퍼지·필드한정·이스케이프 등
+_BM25_RESERVED = frozenset({"AND", "OR", "NOT", "TO", "IN"})   # Tantivy 논리 예약어
+
 def build_bm25_query(tokens: list[str]) -> str:
-    return " ".join(tokens)  # ParadeDB @@@: 공백 구분 토큰 OR 매칭
+    safe = []
+    for t in tokens:
+        t = _BM25_SPECIAL.sub("", t)            # 특수문자 제거
+        if t and t.upper() not in _BM25_RESERVED:  # 예약어 필터 (대소문자 무관)
+            safe.append(t)
+    return " ".join(safe)  # ParadeDB @@@: 공백 구분 토큰 OR 매칭
 
 # SQL 조건
 # WHERE service_name @@@ $1 OR metadata @@@ $1
 # $1 = "따릉이 대여소" → "따릉이", "대여소" 개별 매칭
 ```
 
+모든 토큰이 특수문자·예약어로 제거되어 쿼리 문자열이 비게 되면 `bm25_search`는 DB 호출 없이 빈 결과를 반환한다. 빈 쿼리를 ParadeDB에 보내면 에러 또는 전체 스캔 폴백이 발생할 수 있기 때문이다.
+
 이 방식의 장점: Rust 바이너리 빌드 없이 Python 코드 수정만으로 도메인 용어를 즉시 추가할 수 있다. 색인 측(`pg_search`)과 쿼리 측(Python) 토크나이저를 동일 KoDic 기반으로 맞춰 토큰 불일치를 최소화한다.
+
+### 도메인 공통어 stopword 필터 (BM25 전용)
+
+서비스 전반에 걸쳐 거의 모든 문서에 등장하는 어휘(`예약`, `서울`, `서울시`, `공공`, `서비스`, `공공서비스`, `접수`, `신청`, `이용`, `안내`, `시설`, `프로그램`)는 BM25의 IDF가 ≈ 0이 되어 점수 변별력에 기여하지 못한다. 오히려 RRF 결합 시 노이즈를 늘릴 수 있어, `VectorAgent.search`에서 BM25 호출 직전에 stopword 목록으로 필터링한다.
+
+```python
+# agents/vector_agent.py
+_BM25_STOPWORDS = frozenset({
+    "예약", "서울", "서울시", "공공", "서비스", "공공서비스",
+    "접수", "신청", "이용", "안내", "시설", "프로그램",
+})
+
+bm25_tokens = [t for t in tokens if t not in _BM25_STOPWORDS]
+if bm25_tokens:
+    bm25_rows = await bm25_search(bm25_tokens, ai_session)
+else:
+    # 유효 BM25 토큰이 없으면 BM25를 건너뛰고 벡터 단독 결과로 진행
+    bm25_rows = []
+```
+
+`bm25_search` 도구 자체는 순수 검색 함수로 유지하고, 도메인 공통어 필터링은 호출 측(애플리케이션 레이어)에서 책임진다. 색인 시점의 stopword 제거가 아니므로 BM25 인덱스는 그대로 두며, 쿼리 시점에만 변별력 없는 토큰을 차단한다.
 
 ---
 
