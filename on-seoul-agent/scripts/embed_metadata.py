@@ -20,6 +20,24 @@ uv run python scripts/embed_metadata.py --incremental
 
 # 전량 + 증분 조합 (전체 조회 후 기존 제외)
 uv run python scripts/embed_metadata.py --all --incremental
+
+임베딩 대상 vs 표시 컬럼 (Phase 18):
+    임베딩 입력에 포함되는 의미 컬럼이 변경된 경우에만 재임베딩한다.
+    표시 전용 컬럼은 매 답변마다 tools/hydrate_services가 원본에서 가져오므로
+    임베딩을 갱신할 필요가 없다.
+
+    의미 컬럼 (변경 시 재임베딩 — _build_document() 입력):
+        service_name, max_class_name, min_class_name, area_name,
+        place_name, target_info, detail_content (앞 300자)
+
+    표시 전용 컬럼 (변경해도 재임베딩 불필요 — hydration이 최신값 보장):
+        service_status, receipt_start_dt, receipt_end_dt,
+        service_open_start_dt, service_open_end_dt, service_url,
+        payment_type, coord_x, coord_y
+
+    주의: 현재 --incremental은 service_change_log를 참조하지 않고
+    service_embeddings에 없는 신규 service_id만 적재한다.
+    의미 컬럼 변경 시 자동 재임베딩은 Phase 19 향후 과제다.
 """
 
 import argparse
