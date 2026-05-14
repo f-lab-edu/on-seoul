@@ -118,28 +118,21 @@ class AnswerAgent:
 
     @staticmethod
     def _normalize(row: dict) -> dict:
-        """카드 렌더링에 필요한 필드만 추출하고 fallback URL을 보정한다."""
-        # vector_results의 metadata가 dict인 경우 언팩
-        metadata = row.get("metadata") or {}
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except Exception:
-                metadata = {}
+        """카드 렌더링에 필요한 필드만 추출하고 fallback URL을 보정한다.
 
-        service_url = (
-            row.get("service_url")
-            or metadata.get("service_url")
-            or _FALLBACK_URL
-        )
+        sql_results와 vector_results는 모두 public_service_reservations 원본 컬럼을
+        평탄 dict로 가지므로 metadata 언팩 분기는 더 이상 필요하지 않다.
+        map_results는 GeoJSON Feature의 properties dict를 그대로 받는다.
+        """
+        service_url = row.get("service_url") or _FALLBACK_URL
 
         return {
-            "service_id": row.get("service_id") or metadata.get("service_id"),
-            "service_name": row.get("service_name") or metadata.get("service_name"),
-            "area_name": row.get("area_name") or metadata.get("area_name"),
-            "place_name": row.get("place_name") or metadata.get("place_name"),
-            "service_status": row.get("service_status") or metadata.get("service_status"),
-            "receipt_start_dt": row.get("receipt_start_dt") or metadata.get("receipt_start_dt"),
-            "receipt_end_dt": row.get("receipt_end_dt") or metadata.get("receipt_end_dt"),
+            "service_id": row.get("service_id"),
+            "service_name": row.get("service_name"),
+            "area_name": row.get("area_name"),
+            "place_name": row.get("place_name"),
+            "service_status": row.get("service_status"),
+            "receipt_start_dt": row.get("receipt_start_dt"),
+            "receipt_end_dt": row.get("receipt_end_dt"),
             "service_url": service_url,
         }

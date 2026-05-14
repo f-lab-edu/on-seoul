@@ -147,28 +147,6 @@ class TestAnswerAgent:
         assert json.loads(call_kwargs["results_json"]) == []
         assert result["answer"] == "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다."
 
-    async def test_normalize_extracts_url_from_metadata_when_row_url_missing(self):
-        """row에 service_url이 없어도 metadata dict에 있으면 metadata URL을 사용한다."""
-        row = {
-            "service_id": "S001",
-            "service_name": "수영장",
-            "service_url": None,
-            "metadata": {"service_url": "https://yeyak.seoul.go.kr/meta/001"},
-        }
-        normalized = AnswerAgent._normalize(row)
-
-        assert normalized["service_url"] == "https://yeyak.seoul.go.kr/meta/001"
-
-    async def test_normalize_parses_metadata_string(self):
-        """metadata가 JSON 문자열이면 파싱 후 service_url을 추출한다."""
-        import json
-
-        meta = json.dumps({"service_url": "https://yeyak.seoul.go.kr/str/001"})
-        row = {"service_id": "S002", "service_name": "체험관", "service_url": None, "metadata": meta}
-        normalized = AnswerAgent._normalize(row)
-
-        assert normalized["service_url"] == "https://yeyak.seoul.go.kr/str/001"
-
     async def test_collect_results_map_features_unpacked(self):
         """map_results의 features[].properties가 결과 목록에 포함된다."""
         agent = _make_agent()
@@ -185,3 +163,36 @@ class TestAnswerAgent:
         results_json = agent._answer_chain.ainvoke.call_args[0][0]["results_json"]
         assert "체육관A" in results_json
         assert "체육관B" in results_json
+
+
+class TestAnswerAgentVectorResultsFlatSchema:
+    """vector_results가 sql_results와 동일한 평탄 스키마인 경우 _normalize 동작."""
+
+    def test_flat_vector_row_normalized_without_metadata_unpack(self):
+        """metadata 키가 없는 평탄 행에서도 모든 필드가 추출된다."""
+        from agents.answer_agent import AnswerAgent
+
+        flat_row = {
+            "service_id": "S001",
+            "service_name": "마포 수영장",
+            "area_name": "마포구",
+            "place_name": "마포 스포츠센터",
+            "service_status": "접수중",
+            "receipt_start_dt": "2026-05-01",
+            "receipt_end_dt": "2026-05-31",
+            "service_url": "https://example.com/s001",
+            "rrf_score": 0.123,
+        }
+        normalized = AnswerAgent._normalize(flat_row)
+        assert normalized["service_id"] == "S001"
+        assert normalized["service_name"] == "마포 수영장"
+        assert normalized["area_name"] == "마포구"
+        assert normalized["service_status"] == "접수중"
+        assert normalized["service_url"] == "https://example.com/s001"
+
+    def test_missing_service_url_uses_fallback(self):
+        """service_url이 없으면 yeyak fallback 링크가 사용된다."""
+        from agents.answer_agent import _FALLBACK_URL, AnswerAgent
+
+        normalized = AnswerAgent._normalize({"service_id": "S002"})
+        assert normalized["service_url"] == _FALLBACK_URL
