@@ -154,8 +154,12 @@ class TestConditionalEdgeRouting:
         """VECTOR_SEARCH intent → vector_node 실행, vector_results 채워짐."""
         rows = [{"service_id": "V001", "service_name": "체험관", "similarity": 0.9}]
         vector_agent, ai_session, mock_bm25 = _vector_agent(rows)
+        hydrated = [{"service_id": "V001", "service_name": "체험관", "service_status": "접수중"}]
 
-        with patch("agents.vector_agent.bm25_search", mock_bm25):
+        with (
+            patch("agents.vector_agent.bm25_search", mock_bm25),
+            patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)),
+        ):
             graph = AgentGraph(
                 router=_router(IntentType.VECTOR_SEARCH),
                 vector_agent=vector_agent,

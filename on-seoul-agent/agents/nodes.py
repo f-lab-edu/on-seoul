@@ -120,10 +120,17 @@ class GraphNodes:
             return {"error": str(exc)}
 
     async def vector_node(self, state: AgentState) -> dict[str, Any]:
-        """VectorAgent.search() 호출 — vector_results, refined_query 설정."""
+        """VectorAgent.search() 호출 — vector_results, refined_query 설정.
+
+        VectorAgent는 임베딩 검색(ai_session)과 원본 hydration(data_session)을
+        모두 수행하므로 두 세션을 모두 전달한다.
+        """
         assert self.ai_session is not None
+        assert self.data_session is not None
         try:
-            new_state = await self._vector.search(state, self.ai_session)
+            new_state = await self._vector.search(
+                state, self.ai_session, self.data_session
+            )
             self.node_path.append("vector_node")
             return {
                 "vector_results": new_state.get("vector_results"),
