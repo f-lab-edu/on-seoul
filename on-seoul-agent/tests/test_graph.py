@@ -933,3 +933,78 @@ class TestSelfCorrectionInfiniteLoopRegression:
             f"Memory grew by {total_diff} bytes over 30 invocations — "
             "unexpected memory accumulation detected."
         )
+
+
+# ---------------------------------------------------------------------------
+# 8. VECTOR_SEARCH 경로 — Hydration E2E 검증
+# ---------------------------------------------------------------------------
+
+
+class TestGraphVectorHydrationE2E:
+    """VECTOR_SEARCH 인텐트가 hydrated 원본 값을 answer 입력으로 사용함을 E2E 검증.
+
+    임베딩 metadata 의 stale service_status('예약마감') 가 답변 컨텍스트에
+    노출되지 않고, hydrate_services 가 반환한 최신 원본 값('접수중') 만이
+    AnswerAgent._collect_results 의 출력에 포함되어야 한다.
+    """
+
+    async def test_vector_intent_uses_hydrated_results(self):
+        """VECTOR_SEARCH: hydrated '접수중' 만 answer 입력에 들어가고 stale '예약마감' 은 없다."""
+        # vector_search 가 반환할 stale 임베딩 metadata
+        vector_rows = [{
+            "service_id": "S001",
+            "service_name": "마포 수영장",
+            "metadata": {"service_status": "예약마감"},
+            "similarity": 0.9,
+        }]
+        # hydrate_services 가 반환할 fresh 원본 행
+        hydrated_rows = [{
+            "service_id": "S001",
+            "service_name": "마포 수영장",
+            "area_name": "마포구",
+            "service_status": "접수중",
+            "service_url": "https://example.com/s001",
+        }]
+
+        vector_agent, ai_session, mock_bm25 = _vector_agent(vector_rows)
+
+        # AnswerAgent.answer 가 받은 state 의 _collect_results 결과를 캡처한다.
+        captured: dict = {}
+
+        async def _capture_answer(state):
+            helper = AnswerAgent.__new__(AnswerAgent)
+            captured["results"] = helper._collect_results(state)
+            return {**state, "answer": "마포 수영장 접수 중입니다."}
+
+        answer_agent = AnswerAgent.__new__(AnswerAgent)
+        answer_agent.answer = _capture_answer  # type: ignore[method-assign]
+
+        data_session = MagicMock()
+        data_session.execute = AsyncMock()
+
+        with (
+            patch("agents.vector_agent.vector_search", AsyncMock(return_value=vector_rows)),
+            patch("agents.vector_agent.bm25_search", mock_bm25),
+            patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated_rows)),
+        ):
+            graph = AgentGraph(
+                router=_router(IntentType.VECTOR_SEARCH),
+                vector_agent=vector_agent,
+                answer_agent=answer_agent,
+            )
+            result = await graph.run(
+                _state(message="마포 수영장"),
+                data_session=data_session,
+                ai_session=ai_session,
+            )
+
+        # answer 가 정상 생성되고 vector_results 가 hydrated 행으로 채워졌다
+        assert result["answer"] == "마포 수영장 접수 중입니다."
+        assert result["vector_results"] is not None
+        assert result["vector_results"][0]["service_status"] == "접수중"
+
+        # AnswerAgent 가 본 컨텍스트에는 hydrated '접수중' 만 들어가고 stale '예약마감' 은 없다.
+        assert "results" in captured, "_collect_results 가 호출되지 않았다"
+        statuses = [r["service_status"] for r in captured["results"]]
+        assert "접수중" in statuses
+        assert "예약마감" not in statuses
