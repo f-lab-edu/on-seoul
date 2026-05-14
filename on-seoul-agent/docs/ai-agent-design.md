@@ -24,8 +24,7 @@ flowchart TD
     ROUTER["router_node<br/>(Router Agent)"]
     SQL["sql_node<br/>(SQL Agent)"]
     VECTOR["vector_node<br/>(Vector Agent)<br/>BM25 + vector RRF"]
-    MAP["map_node<br/>(map_search)"]
-    FALLBACK["fallback_node"]
+    MAP["map_node<br/>(map_search)<br/>lat/lng 미제공 시<br/>map_results=None"]
     ANSWER["answer_node<br/>(Answer Agent)"]
     SELF_CORR{{"self_correction<br/>answer 비고 retry=0?"}}
     TRACE(["trace_node<br/>chat_agent_traces 적재"])
@@ -33,15 +32,13 @@ flowchart TD
     START --> ROUTER
     ROUTER -- "SQL_SEARCH" --> SQL
     ROUTER -- "VECTOR_SEARCH" --> VECTOR
-    ROUTER -- "MAP (lat/lng 있음)" --> MAP
-    ROUTER -- "MAP (lat/lng 없음)" --> FALLBACK
-    ROUTER -- "FALLBACK" --> FALLBACK
+    ROUTER -- "MAP" --> MAP
+    ROUTER -- "FALLBACK" --> ANSWER
     ROUTER -- "예외 (fallback_answer 주입)" --> ANSWER
 
     SQL --> ANSWER
     VECTOR --> ANSWER
     MAP --> ANSWER
-    FALLBACK --> ANSWER
 
     ANSWER --> SELF_CORR
     SELF_CORR -- "Yes (최대 1회)" --> ROUTER
@@ -239,7 +236,7 @@ result = await graph.run(
 
 | 엣지 | 분기 함수 | 동작 |
 |---|---|---|
-| `router_node → ?` | `_route_by_intent` | `intent` 와 `(lat, lng)` 조합으로 다음 노드 결정. router 예외 시 `error + answer` 가 채워져 있으면 `answer_node` 로 단락. |
+| `router_node → ?` | `_route_by_intent` | `intent` 값으로 다음 노드 결정 (`SQL_SEARCH`→sql, `VECTOR_SEARCH`→vector, `MAP`→map, `FALLBACK`/그 외→answer). router 예외 시 `error + answer` 가 채워져 있으면 `answer_node` 로 단락. `MAP` 의 lat/lng 미제공 처리는 `map_node` 내부에서 담당한다. |
 | `answer_node → ?` | `_self_correction_edge` | `not answer.strip() and retry_count == 0` 이면 `router_node` 재진입, 아니면 `trace_node` 로 진행. |
 
 ### 7-2. Self-Correction 사이클 (Phase 17)
@@ -288,7 +285,7 @@ needs_retry = not answer.strip() and retry_count == 0
 |---|---|
 | router_node 예외 발생 | `answer` 에 안내 메시지 주입, `error` 에 원인 기록, `node_path` 에 `"router_error"` append, self-correction 우회 |
 | sql/vector/map/answer 노드 예외 | `error` 필드 기록, `node_path` 에 `"*_error"` append, 가능하면 빈 결과로 다음 노드 진행 |
-| `MAP` intent 인데 `lat`/`lng` 미제공 | 검색 생략 후 `fallback_node` 로 분기. `node_path` 에 `"map_fallback"` append |
+| `MAP` intent 인데 `lat`/`lng` 미제공 | `map_node` 내부에서 검색을 생략하고 `map_results=None`을 반환한 뒤 `answer_node` 로 진행. `node_path` 에는 정상 경로와 동일하게 `"map_node"`가 append된다. |
 | Answer Agent 결과의 `service_url` 누락 | `https://yeyak.seoul.go.kr` 로 fallback |
 
 예외 발생 시 사용자에게 노출되는 메시지:
