@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from llm.client import get_chat_model, get_embeddings
 from schemas.state import AgentState
 from tools.bm25_search import bm25_search
+from tools.hydrate_services import hydrate_services
 from tools.tokenizer import tokenize_query
 from tools.vector_search import vector_search
 
@@ -144,11 +145,20 @@ class VectorAgent:
         ])
         self._refine_chain = prompt | llm.with_structured_output(_RefinedQuery)
 
-    async def search(self, state: AgentState, session: AsyncSession) -> AgentState:
-        """질의 정제 → 임베딩 → 하이브리드 검색 → RRF 결합.
+    async def search(
+        self,
+        state: AgentState,
+        ai_session: AsyncSession,
+        data_session: AsyncSession,
+    ) -> AgentState:
+        """질의 정제 → 임베딩 → 하이브리드 검색 → RRF 결합 → 원본 hydration.
 
-        vector_results에 RRF 결합 결과를, refined_query에 정제된 질의를 채운
-        AgentState를 반환한다.
+        ai_session   : service_embeddings(on_ai)에 대한 의미 검색·BM25 용도
+        data_session : public_service_reservations(on_data) hydration 용도
+
+        vector_results에는 hydration된 원본 행이 채워진다.
+        스키마는 sql_results와 동일하며 추가로 rrf_score를 포함한다.
+        임베딩 metadata는 stale일 수 있으므로 답변 컨텍스트로 사용하지 않는다.
         """
         refined: _RefinedQuery = await self._refine_chain.ainvoke(
             {"message": state["message"]}
@@ -157,13 +167,9 @@ class VectorAgent:
         query_vector = await self._embeddings.aembed_query(refined.refined_query)
         tokens = tokenize_query(refined.refined_query)
 
-        # asyncpg 단일 연결은 동시 쿼리를 허용하지 않으므로 순차 실행한다.
-        # TODO: 커넥션 풀에서 별도 세션을 할당하면 asyncio.gather로 병렬 실행 가능.
-        #       search() 시그니처 변경(세션 주입 방식)과 함께 latency 병목 시점에 도입 검토.
-        # 각 검색이 실패해도 나머지 결과로 RRF 결합이 가능하도록 독립 예외 처리한다.
         try:
             vector_rows: list[dict] = await vector_search(
-                session,
+                ai_session,
                 query_vector,
                 max_class_name=refined.max_class_name,
                 area_name=refined.area_name,
@@ -173,13 +179,11 @@ class VectorAgent:
             logger.warning("vector_search 실패, 빈 결과로 대체", exc_info=True)
             vector_rows = []
 
-        # 공통어(IDF ≈ 0) 필터링 후 유효 토큰이 있을 때만 BM25 실행.
-        # 전 문서 공통 어휘는 BM25 변별력에 기여하지 않으므로 제거한다.
         bm25_tokens = [t for t in tokens if t not in _BM25_STOPWORDS]
         bm25_rows: list[dict] = []
         if bm25_tokens:
             try:
-                bm25_rows = await bm25_search(bm25_tokens, session)
+                bm25_rows = await bm25_search(bm25_tokens, ai_session)
             except Exception:
                 logger.warning("bm25_search 실패, 빈 결과로 대체", exc_info=True)
         else:
@@ -187,8 +191,25 @@ class VectorAgent:
 
         merged = _rrf_merge(vector_rows, bm25_rows, top_k=_TOP_K)
 
+        # RRF 결과의 service_id로 원본 hydration.
+        # rrf_score를 보존하기 위해 service_id → rrf_score 매핑을 먼저 만든다.
+        rrf_score_by_id: dict[str, float] = {
+            r["service_id"]: r.get("rrf_score", 0.0) for r in merged
+        }
+        service_ids = list(rrf_score_by_id.keys())
+
+        try:
+            hydrated: list[dict] = await hydrate_services(data_session, service_ids)
+        except Exception:
+            logger.warning("hydrate_services 실패, 빈 결과로 대체", exc_info=True)
+            hydrated = []
+
+        # 원본 행에 rrf_score 병합. hydration 누락분은 자연스럽게 제외된다.
+        for row in hydrated:
+            row["rrf_score"] = rrf_score_by_id.get(row["service_id"], 0.0)
+
         return {
             **state,
             "refined_query": refined.refined_query,
-            "vector_results": merged,
+            "vector_results": hydrated,
         }

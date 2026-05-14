@@ -52,8 +52,21 @@ def _make_agent(
 
 
 def _patch_search(vector_rows: list[dict], bm25_rows: list[dict]):
-    """vector_search와 bm25_search를 동시에 patch하는 컨텍스트 매니저."""
+    """vector_search, bm25_search, hydrate_services를 동시에 patch하는 컨텍스트 매니저.
+
+    hydrate_services는 입력된 service_ids 순서대로 vector_rows/bm25_rows 메타데이터를
+    기반으로 hydrated 행을 반환한다 (원본 hydration을 흉내내는 fake).
+    """
     from contextlib import ExitStack
+
+    meta_by_id: dict[str, dict] = {}
+    for r in vector_rows:
+        meta_by_id[r["service_id"]] = dict(r)
+    for r in bm25_rows:
+        meta_by_id.setdefault(r["service_id"], dict(r))
+
+    async def _fake_hydrate(_session, service_ids: list[str]) -> list[dict]:
+        return [dict(meta_by_id[sid]) for sid in service_ids if sid in meta_by_id]
 
     class _Ctx:
         def __enter__(self):
@@ -63,6 +76,9 @@ def _patch_search(vector_rows: list[dict], bm25_rows: list[dict]):
             )
             self.mock_bm25 = self._stack.enter_context(
                 patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=bm25_rows))
+            )
+            self.mock_hydrate = self._stack.enter_context(
+                patch("agents.vector_agent.hydrate_services", new=AsyncMock(side_effect=_fake_hydrate))
             )
             return self
 
@@ -97,7 +113,7 @@ class TestVectorAgentPostFilter:
         mock_session = MagicMock()
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])) as mock_vs, \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state(), mock_session, MagicMock())
             kwargs = mock_vs.call_args[1]
             assert kwargs.get("max_class_name") == "체육"
             assert kwargs.get("area_name") == "강남구"
@@ -125,7 +141,7 @@ class TestVectorAgentPostFilter:
         mock_session = MagicMock()
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])) as mock_vs, \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state(), mock_session, MagicMock())
             kwargs = mock_vs.call_args[1]
             assert kwargs.get("max_class_name") is None
             assert kwargs.get("area_name") is None
@@ -153,7 +169,7 @@ class TestVectorAgentPostFilter:
         mock_session = MagicMock()
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])) as mock_vs, \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state(), mock_session, MagicMock())
             kwargs = mock_vs.call_args[1]
             assert kwargs.get("area_name") == "강남구"
             assert kwargs.get("max_class_name") is None
@@ -168,7 +184,7 @@ class TestVectorAgent:
         mock_session = MagicMock()
 
         with _patch_search(vector_rows, []):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         assert result["vector_results"] is not None
         assert len(result["vector_results"]) >= 1
@@ -180,7 +196,7 @@ class TestVectorAgent:
         mock_session = MagicMock()
 
         with _patch_search([], []):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         assert result["refined_query"] == "어린이 체험 시설"
 
@@ -191,7 +207,7 @@ class TestVectorAgent:
         mock_session = MagicMock()
 
         with _patch_search([], []):
-            await agent.search(state, mock_session)
+            await agent.search(state, mock_session, MagicMock())
 
         agent._refine_chain.ainvoke.assert_called_once_with({"message": "조용한 운동 시설"})
 
@@ -201,7 +217,7 @@ class TestVectorAgent:
         mock_session = MagicMock()
 
         with _patch_search([], []):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state(), mock_session, MagicMock())
 
         agent._embeddings.aembed_query.assert_called_once_with("아이 동반 체험 시설 서울")
 
@@ -213,7 +229,7 @@ class TestVectorAgent:
         mock_session = MagicMock()
 
         with _patch_search([], []):
-            result = await agent.search(state, mock_session)
+            result = await agent.search(state, mock_session, MagicMock())
 
         assert result["room_id"] == 99
         assert result["message"] == "아이랑 체험할 수 있는 시설"
@@ -226,7 +242,7 @@ class TestVectorAgent:
 
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])) as mock_vs, \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state(), mock_session, MagicMock())
             _, call_vector = mock_vs.call_args[0]
             assert call_vector == vector
 
@@ -236,7 +252,7 @@ class TestVectorAgent:
         mock_session = MagicMock()
 
         with _patch_search([], []):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         assert result["vector_results"] == []
         assert result["vector_results"] is not None
@@ -248,7 +264,7 @@ class TestVectorAgent:
 
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])) as mock_vs, \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state(), mock_session, MagicMock())
             call_session, _ = mock_vs.call_args[0]
             assert call_session is mock_session
 
@@ -261,7 +277,7 @@ class TestVectorAgent:
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])), \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])) as mock_bm25, \
              patch("agents.vector_agent.tokenize_query", return_value=["체험", "시설"]):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state(), mock_session, MagicMock())
             call_tokens, call_session = mock_bm25.call_args[0]
             assert call_tokens == ["체험"]
             assert call_session is mock_session
@@ -274,7 +290,7 @@ class TestVectorAgent:
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])), \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])) as mock_bm25, \
              patch("agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state(), mock_session, MagicMock())
             mock_bm25.assert_not_called()
 
 
@@ -287,7 +303,7 @@ class TestHybridSearchRrf:
         mock_session = MagicMock()
 
         with _patch_search(vector_rows, bm25_rows):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         assert "rrf_score" in result["vector_results"][0]
 
@@ -299,7 +315,7 @@ class TestHybridSearchRrf:
         mock_session = MagicMock()
 
         with _patch_search(vector_rows, bm25_rows):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         service_ids = {r["service_id"] for r in result["vector_results"]}
         assert "S001" in service_ids
@@ -313,7 +329,7 @@ class TestHybridSearchRrf:
         mock_session = MagicMock()
 
         with _patch_search(vector_rows, bm25_rows):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         bm25_only = next(r for r in result["vector_results"] if r["service_id"] == "S002")
         # BM25 전용 결과도 service_name이 누락되지 않아야 한다
@@ -334,7 +350,7 @@ class TestHybridSearchRrf:
         mock_session = MagicMock()
 
         with _patch_search(vector_rows, bm25_rows):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         scores = {r["service_id"]: r["rrf_score"] for r in result["vector_results"]}
         # S001은 두 결과에 모두 등장 → 가장 높은 점수
@@ -351,9 +367,11 @@ class TestVectorAgentSearchFailure:
         agent = _make_agent("정제된 쿼리", [0.1])
         mock_session = MagicMock()
 
+        hydrated = [{"service_id": "S010", "bm25_score": 3.0}]
         with patch("agents.vector_agent.vector_search", new=AsyncMock(side_effect=RuntimeError("DB 연결 오류"))), \
-             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=bm25_rows)):
-            result = await agent.search(_make_state(), mock_session)
+             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=bm25_rows)), \
+             patch("agents.vector_agent.hydrate_services", new=AsyncMock(return_value=hydrated)):
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         assert result["vector_results"] is not None
         service_ids = {r["service_id"] for r in result["vector_results"]}
@@ -365,9 +383,11 @@ class TestVectorAgentSearchFailure:
         agent = _make_agent("정제된 쿼리", [0.1])
         mock_session = MagicMock()
 
+        hydrated = [{"service_id": "S020", "service_name": "수영장"}]
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=vector_rows)), \
-             patch("agents.vector_agent.bm25_search", new=AsyncMock(side_effect=RuntimeError("ParadeDB 오류"))):
-            result = await agent.search(_make_state(), mock_session)
+             patch("agents.vector_agent.bm25_search", new=AsyncMock(side_effect=RuntimeError("ParadeDB 오류"))), \
+             patch("agents.vector_agent.hydrate_services", new=AsyncMock(return_value=hydrated)):
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         assert result["vector_results"] is not None
         service_ids = {r["service_id"] for r in result["vector_results"]}
@@ -380,7 +400,7 @@ class TestVectorAgentSearchFailure:
 
         with patch("agents.vector_agent.vector_search", new=AsyncMock(side_effect=Exception("unexpected"))), \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         assert "vector_results" in result
 
@@ -391,7 +411,7 @@ class TestVectorAgentSearchFailure:
 
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])), \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(side_effect=Exception("unexpected"))):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         assert "vector_results" in result
 
@@ -402,7 +422,7 @@ class TestVectorAgentSearchFailure:
 
         with patch("agents.vector_agent.vector_search", new=AsyncMock(side_effect=RuntimeError("DB 오류"))), \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(side_effect=RuntimeError("BM25 오류"))):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         assert result["vector_results"] == []
 
@@ -449,7 +469,7 @@ class TestRrfMergeTopKConstant:
         mock_session = MagicMock()
 
         with _patch_search(vector_rows, []):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state(), mock_session, MagicMock())
 
         assert len(result["vector_results"]) <= _TOP_K
 
@@ -519,3 +539,46 @@ class TestRrfMerge:
         bm25_rows = [{"service_id": "S999", "bm25_score": 5.0}]
         result = _rrf_merge([], bm25_rows)
         assert result[0]["service_id"] == "S999"
+
+
+class TestVectorAgentHydration:
+    """RRF 결과의 service_id로 public_service_reservations를 hydrate하는 흐름."""
+
+    async def test_hydrate_called_with_rrf_service_ids(self):
+        """RRF 결합 결과의 service_id 리스트가 hydrate_services에 전달된다."""
+        # 정제 LLM 모킹
+        agent = VectorAgent.__new__(VectorAgent)
+        agent._refine_chain = MagicMock()
+        refined = MagicMock()
+        refined.refined_query = "강남 수영장"
+        refined.max_class_name = None
+        refined.area_name = None
+        refined.service_status = None
+        agent._refine_chain.ainvoke = AsyncMock(return_value=refined)
+
+        # 임베딩 모킹
+        agent._embeddings = MagicMock()
+        agent._embeddings.aembed_query = AsyncMock(return_value=[0.1] * 768)
+
+        ai_session = MagicMock()
+        data_session = MagicMock()
+
+        # vector_search, bm25_search, hydrate_services 모킹
+        with (
+            patch("agents.vector_agent.vector_search",
+                  AsyncMock(return_value=[{"service_id": "S001", "service_name": "n", "metadata": {}, "similarity": 0.9}])),
+            patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
+            patch("agents.vector_agent.hydrate_services",
+                  AsyncMock(return_value=[{"service_id": "S001", "service_name": "수영장", "service_status": "접수중"}])) as mock_hydrate,
+        ):
+            state = _make_state("강남 수영장")
+            result = await agent.search(state, ai_session, data_session)
+
+            # hydrate_services가 data_session과 RRF 결과 service_id로 호출됨
+            mock_hydrate.assert_awaited_once()
+            call_args = mock_hydrate.await_args
+            assert call_args[0][0] is data_session
+            assert call_args[0][1] == ["S001"]
+
+            # vector_results는 hydrated 원본 행
+            assert result["vector_results"][0]["service_status"] == "접수중"
