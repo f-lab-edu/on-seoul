@@ -24,7 +24,7 @@ async def sql_search(
 | `session` | `AsyncSession` | `on_data_reader` 계정 세션 (SELECT 전용) |
 | `max_class_name` | `str \| None` | 대분류 카테고리 (체육시설·문화행사·시설대관·교육·진료) |
 | `area_name` | `str \| None` | 서울 자치구 (예: 강남구) |
-| `service_status` | `str \| None` | 예약 상태 (접수중·접수예정·마감·대기) |
+| `service_status` | `str \| None` | 예약 상태 (접수중·예약마감·접수종료·예약일시중지·안내중) |
 | `keyword` | `str \| None` | 시설명·장소명 키워드 (`%keyword%` ILIKE 검색) |
 | `top_k` | `int` | 최대 반환 건수. 기본값: 10 |
 

@@ -3,7 +3,7 @@
 흐름:
     ChatRequest 수신
     → AgentState 구성 (title_needed = message_id == 1)
-    → AgentWorkflow.stream() 단계별 실행
+    → AgentGraph.stream() 단계별 실행 (LangGraph StateGraph)
     → SSE StreamingResponse 반환
 
 SSE 이벤트:
@@ -21,7 +21,7 @@ from collections.abc import AsyncGenerator
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from agents.workflow import AgentWorkflow
+from agents.graph import AgentGraph
 from core.database import ai_session_ctx, data_session_ctx
 from schemas.chat import ChatRequest
 from schemas.state import AgentState
@@ -30,19 +30,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Lazy initialization — import 시점이 아닌 첫 요청 시 초기화한다.
-# import 시점에 환경변수(GOOGLE_API_KEY 등)가 없으면 ConfigurationException이 발생하므로,
-# AgentWorkflow() 생성을 첫 요청까지 미룬다.
-# 테스트에서는 patch("routers.chat._workflow")로 None이 아닌 mock을 주입하면
-# _get_workflow()가 mock을 반환하므로 기존 패치 방식이 그대로 동작한다.
-_workflow: AgentWorkflow | None = None
+# _graph는 테스트 전용 patch 인터셉터다.
+# - 프로덕션: None 유지 → _get_graph()가 요청마다 새 AgentGraph 인스턴스를 반환한다.
+#   AgentGraph._compiled_graph(ClassVar)는 최초 1회만 컴파일되어 재사용되므로 비용 없음.
+
+# - 테스트: patch("routers.chat._graph", mock)로 None이 아닌 값을 주입하면
+#   _get_graph()가 mock을 반환하므로 기존 패치 방식이 그대로 동작한다.
+_graph: AgentGraph | None = None
 
 
-def _get_workflow() -> AgentWorkflow:
-    global _workflow
-    if _workflow is None:
-        _workflow = AgentWorkflow()
-    return _workflow
+def _get_graph() -> AgentGraph:
+    if _graph is not None:
+        return _graph
+    return AgentGraph()
 
 
 # SSE 응답 헤더 — 프록시/CDN 버퍼링 방지
@@ -84,11 +84,12 @@ async def _stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
         title=None,
         trace=None,
         error=None,
+        retry_count=0,
     )
 
     try:
         async with data_session_ctx() as data_session, ai_session_ctx() as ai_session:
-            async for event_type, data in _get_workflow().stream(
+            async for event_type, data in _get_graph().stream(
                 state,
                 data_session=data_session,
                 ai_session=ai_session,
@@ -107,7 +108,8 @@ async def _stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
                         "title": result.get("title"),
                     }
                     if result.get("error"):
-                        payload["error"] = result["error"]
+                        logger.error("workflow error: %s", result["error"])
+                        payload["error"] = "서비스 처리 중 오류가 발생했습니다."
                         # 워크플로우가 완료됐지만 내부 오류로 fallback 답변을 반환한 경우
                         yield sse_frame("workflow_error", payload)
                     else:

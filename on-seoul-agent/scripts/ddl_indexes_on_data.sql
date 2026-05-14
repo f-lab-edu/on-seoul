@@ -55,7 +55,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_psr_active_area
     ON public_service_reservations (area_name)
     WHERE deleted_at IS NULL;
 
--- service_status 필터 (접수중·접수예정·마감·대기)
+-- service_status 필터 (접수중·예약마감·접수종료·예약일시중지·안내중)
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_psr_active_status
     ON public_service_reservations (service_status)
     WHERE deleted_at IS NULL;

@@ -3,11 +3,11 @@
 사용자 질문을 의도별로 분류하고 검색·답변 생성까지 처리하는 에이전트 모듈입니다.
 
 **책임 범위**:
+* LangGraph StateGraph 워크플로우 조립 및 실행 (`graph.py`)
 * 의도 분류 (`router_agent.py`)
 * 정형 데이터 조회 (`sql_agent.py`)
-* 의미 기반 검색 (`vector_agent.py`)
+* 의미 기반 검색 — BM25 + vector 하이브리드 (`vector_agent.py`)
 * 자연어 답변 + 시설 카드 생성 (`answer_agent.py`)
-* 워크플로우 조립 및 실행 (`workflow.py`)
 
 각 에이전트는 `AgentState`를 입력받아 필드를 채운 새 `AgentState`를 반환합니다. 상태 변이 없이 `{**state, key: value}` 스프레드 패턴을 사용합니다.
 
@@ -17,10 +17,11 @@
 
 ```
 agents/
-├── workflow.py       # Router → Branch → Answer 워크플로우 조립·실행
+├── graph.py          # LangGraph StateGraph 워크플로우 (Router → Search → Answer → Self-Correction)
+├── workflow.py       # LangChain(LCEL) 워크플로우 — graph.py 전환 전 레거시
 ├── router_agent.py   # 사용자 의도 분류 (IntentType 4종)
 ├── sql_agent.py      # LLM 파라미터 추출 + 파라미터화 SQL 조회
-├── vector_agent.py   # 질의 정제 + pgvector 유사도 검색
+├── vector_agent.py   # 질의 정제 + BM25/vector 하이브리드 검색 (RRF 결합)
 └── answer_agent.py   # 검색 결과 → 자연어 답변 + 시설 카드 + 대화 제목
 ```
 
@@ -32,11 +33,12 @@ agents/
 사용자 메시지
   └─ RouterAgent.classify()        # 의도 분류
        ├─ SQL_SEARCH  → SqlAgent.search()     → on_data DB
-       ├─ VECTOR_SEARCH → VectorAgent.search() → on_ai DB
-       ├─ MAP         → (Phase 11 구현 예정, 현재 FALLBACK 대체)
+       ├─ VECTOR_SEARCH → VectorAgent.search() → on_ai DB (BM25 + vector 하이브리드)
+       ├─ MAP         → map_search()          → on_data DB (earthdistance)
        └─ FALLBACK    → (검색 생략)
             └─ AnswerAgent.answer()            # 자연어 답변 생성
-                 └─ _save_trace()             # chat_agent_traces 적재 (best-effort)
+                 └─ Self-Correction 엣지       # answer가 비면 Router로 재진입 (최대 1회)
+                      └─ _save_trace()        # chat_agent_traces 적재 (best-effort)
 ```
 
 세션 라우팅:
@@ -66,26 +68,28 @@ agents/
 | `map_results` | `dict \| None` | (Phase 11) | 반경 검색 GeoJSON |
 | `answer` | `str \| None` | AnswerAgent | 최종 자연어 답변 |
 | `title` | `str \| None` | AnswerAgent | 대화 제목 (`title_needed=True`일 때) |
-| `trace` | `dict \| None` | AgentWorkflow | 실행 메타데이터 (intent, node_path, elapsed_ms) |
-| `error` | `str \| None` | AgentWorkflow | 오류 메시지 |
+| `trace` | `dict \| None` | AgentGraph | 실행 메타데이터 (intent, node_path, elapsed_ms) |
+| `error` | `str \| None` | AgentGraph | 오류 메시지 |
+| `retry_count` | `int` | AgentGraph | 자기 교정 재시도 횟수 (0 = 아직 재시도 없음, 최대 1) |
 
 ---
 
 ## 주요 컴포넌트
 
-### workflow.py — 워크플로우
+### graph.py — LangGraph 워크플로우
 
-`AgentWorkflow.run(state, *, data_session, ai_session)` 한 번 호출로 전체 파이프라인을 실행합니다.
+`AgentGraph.run(state, *, data_session, ai_session)` 한 번 호출로 전체 파이프라인을 실행합니다.
 
 ```python
-from agents.workflow import AgentWorkflow
+from agents.graph import AgentGraph
 
-workflow = AgentWorkflow()
-result = await workflow.run(
+graph = AgentGraph()
+result = await graph.run(
     state={
         "room_id": 1, "message_id": 42,
         "message": "마포구 접수 중인 수영장",
         "title_needed": True,
+        "retry_count": 0,
         # 나머지 필드는 None으로 초기화
     },
     data_session=data_session,
@@ -97,10 +101,12 @@ result = await workflow.run(
 각 에이전트는 생성자 주입으로 교체할 수 있어 테스트에서 Mock으로 대체합니다.
 
 ```python
-workflow = AgentWorkflow(router=mock_router, sql_agent=mock_sql)
+graph = AgentGraph(router=mock_router, sql_agent=mock_sql)
 ```
 
-**오류 처리**: 에이전트 실행 중 예외가 발생하면 `answer` 에 fallback 안내 메시지를 설정하고 `error` 필드에 원인을 기록합니다. trace 적재는 `finally`에서 best-effort로 실행되어 저장 실패가 워크플로우 결과에 영향을 주지 않습니다.
+**오류 처리**: `_router_node` 예외 시 fallback answer를 state에 주입하고 Self-Correction 없이 trace_node로 종료합니다. trace 적재는 best-effort로 실행되어 저장 실패가 워크플로우 결과에 영향을 주지 않습니다.
+
+**Self-Correction**: answer가 비어 있고 `retry_count == 0`이면 router_node로 재진입해 재검색을 시도합니다. 최대 1회로 제한됩니다 (`recursion_limit=10`).
 
 ---
 
@@ -156,15 +162,15 @@ LLM이 SQL을 직접 생성하지 않습니다. 사용자 메시지에서 필터
 
 ---
 
-## LangGraph 전환 계획
+## LangGraph 전환 (Phase 17 완료)
 
-현재는 LangChain LCEL 기반 순차 워크플로우입니다. 안정화 이후 LangGraph로 전환합니다.
+LangChain LCEL 기반 `workflow.py`에서 LangGraph `StateGraph` 기반 `graph.py`로 전환됐습니다.
 
-| 항목 | 현재 (LCEL) | 전환 후 (LangGraph) |
+| 항목 | 전환 전 (LCEL) | 전환 후 (LangGraph) |
 |---|---|---|
 | 진입 파일 | `workflow.py` | `graph.py` |
 | 분기 | `_dispatch()` if/elif | `StateGraph` 조건부 엣지 |
-| 에이전트 재사용 | — | 각 Agent 메서드를 노드로 그대로 등록 |
-| 상태 규약 | `AgentState` TypedDict | 동일 (`AgentState` 유지) |
+| Self-Correction | 미지원 | 빈 answer → router 재진입 (최대 1회) |
+| 상태 규약 | `AgentState` TypedDict | 동일 (`AgentState` 유지, `retry_count` 추가) |
 
-`AgentState` 기반 입출력 규약을 유지하므로 각 에이전트 파일은 수정 없이 재사용됩니다.
+`AgentState` 기반 입출력 규약을 유지하므로 각 에이전트 파일(`router_agent.py`, `sql_agent.py`, `vector_agent.py`, `answer_agent.py`)은 수정 없이 재사용됩니다. `workflow.py`는 레거시로 유지됩니다.

@@ -36,6 +36,7 @@ def _make_final_state(**kwargs) -> AgentState:
         title=None,
         trace={"node_path": ["router", "sql_agent", "answer"], "elapsed_ms": 100},
         error=None,
+        retry_count=0,
     )
     base.update(kwargs)
     return base
@@ -111,7 +112,7 @@ class TestChatStreamRouter:
         """정상 요청 → status 200, final 이벤트 포함."""
         final_state = _make_final_state()
 
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = _make_stream(final_state)
@@ -143,7 +144,7 @@ class TestChatStreamRouter:
             yield "progress", {"step": "routing", "message": "..."}
             yield "result", final_state
 
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = _capturing_stream
@@ -165,7 +166,7 @@ class TestChatStreamRouter:
             yield "progress", {"step": "routing", "message": "..."}
             yield "result", final_state
 
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = _capturing_stream
@@ -179,7 +180,7 @@ class TestChatStreamRouter:
 
     async def test_workflow_exception_returns_error_event(self, client: AsyncClient):
         """세션/DB 레벨 예외 → error 이벤트 반환."""
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             # stream() 호출 자체(제너레이터 생성 전)에서 예외 발생
@@ -213,7 +214,7 @@ class TestChatStreamRouter:
     async def test_response_headers_for_sse(self, client: AsyncClient):
         """SSE 응답에 Cache-Control, Connection, X-Accel-Buffering 헤더가 포함된다."""
         final_state = _make_final_state()
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = _make_stream(final_state)
@@ -248,7 +249,7 @@ class TestChatStreamRouter:
     async def test_boundary_lat_exactly_90_is_valid(self, client: AsyncClient):
         """lat=90.0 경계값은 유효하므로 422가 아니어야 한다."""
         final_state = _make_final_state()
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = _make_stream(final_state)
@@ -269,7 +270,7 @@ class TestChatStreamRouter:
     async def test_sse_stream_yields_progress_then_final(self, client: AsyncClient):
         """정상 요청 시 progress 이벤트 3개 후 final 이벤트가 발행된다."""
         final_state = _make_final_state()
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = _make_stream(final_state)
@@ -286,7 +287,7 @@ class TestChatStreamRouter:
 
     async def test_error_stream_yields_exactly_one_event(self, client: AsyncClient):
         """세션/DB 레벨 예외 시 SSE 이벤트가 정확히 1개(error)만 발행된다."""
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = MagicMock(side_effect=ValueError("DB 연결 실패"))
@@ -302,7 +303,7 @@ class TestChatStreamRouter:
 
     async def test_error_event_message_is_generic(self, client: AsyncClient):
         """error 이벤트의 message 필드는 예외 내용을 노출하지 않고 범용 문자열을 반환한다."""
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = MagicMock(side_effect=RuntimeError("LLM 타임아웃 발생"))
@@ -319,7 +320,7 @@ class TestChatStreamRouter:
     async def test_final_event_includes_title_when_title_needed(self, client: AsyncClient):
         """message_id=1 요청의 final 이벤트에 title 필드가 채워진다."""
         final_state = _make_final_state(message_id=1, title="수영장 문의", title_needed=True)
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = _make_stream(final_state)
@@ -336,7 +337,7 @@ class TestChatStreamRouter:
     async def test_final_event_title_is_none_for_non_first_message(self, client: AsyncClient):
         """message_id != 1 요청의 final 이벤트에서 title은 None이다."""
         final_state = _make_final_state(message_id=3, title=None, title_needed=False)
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = _make_stream(final_state)
@@ -382,7 +383,7 @@ class TestChatStreamRouter:
             yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
             yield "result", final_state
 
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = _error_stream
@@ -400,7 +401,7 @@ class TestChatStreamRouter:
         workflow_error_events = [e for e in events if e["event"] == "workflow_error"]
         assert len(workflow_error_events) == 1
         data = workflow_error_events[0]["data"]
-        assert data["error"] == "LLM 오류"
+        assert data["error"] == "서비스 처리 중 오류가 발생했습니다."
         assert data["answer"] == "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
         assert data["message_id"] == 2
 
@@ -415,7 +416,7 @@ class TestChatStreamRouter:
             yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
             yield "result", final_state
 
-        with patch("routers.chat._workflow") as mock_wf, patch(
+        with patch("routers.chat._graph") as mock_wf, patch(
             "routers.chat.ai_session_ctx", _make_session_ctx()
         ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
             mock_wf.stream = _error_stream

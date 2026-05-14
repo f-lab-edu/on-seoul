@@ -5,8 +5,8 @@ on_ai.chat_agent_traces 테이블에서 최근 N건을 조회하고,
 
 필수 키:
   - intent    : str, SQL_SEARCH / VECTOR_SEARCH / MAP / FALLBACK 중 하나
-  - node_path : list, 실행 노드 경로 (workflow.py 저장 키명)
-  - elapsed_ms: int, 소요 시간(ms) (workflow.py 저장 키명)
+  - node_path : list, 실행 노드 경로
+  - elapsed_ms: int, 소요 시간(ms)
 
 사용법:
   uv run python -m scripts.verify_traces [--limit N]
@@ -51,7 +51,7 @@ def verify_trace_row(row: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(node_path, list):
         missing.append("node_path")
 
-    # elapsed_ms 검증: 존재하며 int이어야 한다 (workflow.py: int((time.monotonic() - start) * 1000))
+    # elapsed_ms 검증: 존재하며 int이어야 한다 
     elapsed_ms = trace.get("elapsed_ms")
     if not isinstance(elapsed_ms, int):
         missing.append("elapsed_ms")

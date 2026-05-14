@@ -27,3 +27,6 @@ class AgentState(TypedDict):
     title: str | None  # Answer Agent가 생성한 대화 제목 (title_needed=True일 때)
     trace: dict[str, Any] | None  # LangGraph 실행 메타데이터
     error: str | None  # 오류 메시지 (있을 경우)
+    # LangGraph 자기 교정(Self-Correction) 루프 카운터.
+    # answer가 비어 있거나 error가 있을 때 최대 1회 재검색을 허용한다.
+    retry_count: int  # 재시도 횟수 (0 = 아직 재시도 없음)
