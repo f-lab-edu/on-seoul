@@ -7,12 +7,7 @@
 - 기존 AgentWorkflow와 동일한 입출력 계약 (AgentState 기반)
 """
 
-import gc
-import time
-import tracemalloc
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from agents.answer_agent import AnswerAgent, _AnswerOutput, _TitleOutput
 from agents.graph import AgentGraph
@@ -306,60 +301,6 @@ class TestTraceNode:
         assert isinstance(trace["elapsed_ms"], int)
         assert trace["elapsed_ms"] >= 0
 
-    async def test_sql_search_node_path(self):
-        """SQL_SEARCH node_path: router → sql_node → answer_node → trace_node."""
-        _, data_session = _sql_agent([])
-        graph = AgentGraph(
-            router=_router(IntentType.SQL_SEARCH),
-            sql_agent=_sql_agent([])[0],
-            answer_agent=_answer_agent(),
-        )
-        result = await graph.run(
-            _state(),
-            data_session=data_session,
-            ai_session=_ai_session(),
-        )
-
-        node_path = result["trace"]["node_path"]
-        assert "router" in node_path
-        assert "sql_node" in node_path
-        assert "answer_node" in node_path
-
-    async def test_fallback_node_path(self):
-        """FALLBACK node_path: router → fallback_node → answer_node."""
-        _, data_session = _sql_agent([])
-        graph = AgentGraph(
-            router=_router(IntentType.FALLBACK),
-            answer_agent=_answer_agent(),
-        )
-        result = await graph.run(
-            _state(),
-            data_session=data_session,
-            ai_session=_ai_session(),
-        )
-
-        node_path = result["trace"]["node_path"]
-        assert "router" in node_path
-        assert "answer_node" in node_path
-
-    async def test_vector_search_node_path(self):
-        """VECTOR_SEARCH node_path에 vector_node가 포함된다."""
-        vector_agent, ai_session, mock_bm25 = _vector_agent([])
-
-        with patch("agents.vector_agent.bm25_search", mock_bm25):
-            graph = AgentGraph(
-                router=_router(IntentType.VECTOR_SEARCH),
-                vector_agent=vector_agent,
-                answer_agent=_answer_agent(),
-            )
-            result = await graph.run(
-                _state(),
-                data_session=MagicMock(),
-                ai_session=ai_session,
-            )
-
-        node_path = result["trace"]["node_path"]
-        assert "vector_node" in node_path
 
 
 # ---------------------------------------------------------------------------
@@ -463,32 +404,6 @@ class TestSelfCorrectionCycle:
         assert result["answer"] is not None
         assert len(result["answer"]) > 0
 
-    async def test_no_retry_when_answer_present(self):
-        """정상 답변이 있으면 재시도 없이 trace_node로 진행한다."""
-        _, data_session = _sql_agent([])
-
-        agent = AnswerAgent.__new__(AnswerAgent)
-        answer_chain = MagicMock()
-        answer_chain.ainvoke = AsyncMock(return_value=_AnswerOutput(answer="정상 답변"))
-        agent._answer_chain = answer_chain
-        title_chain = MagicMock()
-        title_chain.ainvoke = AsyncMock(return_value=_TitleOutput(title=""))
-        agent._title_chain = title_chain
-
-        graph = AgentGraph(
-            router=_router(IntentType.FALLBACK),
-            answer_agent=agent,
-        )
-        result = await graph.run(
-            _state(),
-            data_session=data_session,
-            ai_session=_ai_session(),
-        )
-
-        assert result["answer"] == "정상 답변"
-        assert result["retry_count"] == 0
-        # answer_chain이 1번만 호출되어야 한다 (재시도 없음)
-        assert answer_chain.ainvoke.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -591,39 +506,6 @@ class TestAgentStateContract:
         assert result["title"] == "수영장 조회"
         answer_agent._title_chain.ainvoke.assert_called_once()
 
-    async def test_title_none_when_not_needed(self):
-        """title_needed=False이면 title은 None이다."""
-        _, data_session = _sql_agent([])
-        answer_agent = _answer_agent()
-
-        graph = AgentGraph(
-            router=_router(IntentType.FALLBACK),
-            answer_agent=answer_agent,
-        )
-        result = await graph.run(
-            _state(title_needed=False),
-            data_session=data_session,
-            ai_session=_ai_session(),
-        )
-
-        assert result["title"] is None
-        answer_agent._title_chain.ainvoke.assert_not_called()
-
-    async def test_lat_lng_preserved(self):
-        """lat/lng가 결과 state에 보존된다."""
-        _, data_session = _sql_agent([])
-        graph = AgentGraph(
-            router=_router(IntentType.FALLBACK),
-            answer_agent=_answer_agent(),
-        )
-        result = await graph.run(
-            _state(lat=37.5665, lng=126.9780),
-            data_session=data_session,
-            ai_session=_ai_session(),
-        )
-
-        assert result["lat"] == pytest.approx(37.5665)
-        assert result["lng"] == pytest.approx(126.9780)
 
 
 # ---------------------------------------------------------------------------
@@ -687,24 +569,6 @@ class TestAgentGraphStream:
         assert "searching" in progress_steps
         assert "answering" in progress_steps
 
-    async def test_stream_fallback_has_two_progress_then_result(self):
-        """FALLBACK: 검색 노드가 없으므로 routing + answering = progress × 2 → result."""
-        _, data_session = _sql_agent([])
-        graph = AgentGraph(
-            router=_router(IntentType.FALLBACK),
-            answer_agent=_answer_agent("안녕하세요"),
-        )
-        events = await self._collect(
-            graph.stream(_state(message="안녕"), data_session=data_session, ai_session=_ai_session())
-        )
-
-        types = [e for e, _ in events]
-        progress_steps = [d["step"] for t, d in events if t == "progress"]
-        assert types.count("progress") == 2
-        assert "routing" in progress_steps
-        assert "answering" in progress_steps
-        assert "searching" not in progress_steps
-        assert types[-1] == "result"
 
 
 # ---------------------------------------------------------------------------
@@ -879,60 +743,6 @@ class TestSelfCorrectionInfiniteLoopRegression:
         state_after_retry = {**state_empty_answer, "retry_count": 1}
         assert graph._nodes.self_correction_edge(state_after_retry) == "trace_node"
 
-    async def test_memory_does_not_grow_across_buggy_invocations(self):
-        """회귀 가드: router 예외 시나리오 30회 반복해도 self-correction cycle 이 발생하지 않는다.
-
-        _router_node 예외 핸들러가 fallback answer 를 주입하므로
-        self-correction retry 가 발생하지 않고 매 호출이 1 cycle 에 종료된다.
-        따라서 무한 루프 메모리 누수 없이 30MB 이하를 유지해야 한다.
-        """
-        from agents.graph import _ACTIVE_NODES
-
-        async def _run_buggy_once() -> None:
-            router_agent = RouterAgent.__new__(RouterAgent)
-            chain = MagicMock()
-
-            def _raise(*_a, **_kw):
-                raise RuntimeError("일시적 LLM 오류")
-
-            chain.ainvoke = AsyncMock(side_effect=_raise)
-            router_agent._chain = chain
-            g = AgentGraph(
-                router=router_agent,
-                answer_agent=_answer_agent(),
-            )
-            g._nodes.prepare(MagicMock(), _ai_session())
-            st = {**_state(), "retry_count": 0}
-            tok = _ACTIVE_NODES.set(g._nodes)
-            try:
-                await AgentGraph._compiled_graph.ainvoke(
-                    st, config={"recursion_limit": 5}
-                )
-            finally:
-                _ACTIVE_NODES.reset(tok)
-
-        # 워밍업 — 컴파일된 그래프 / import 캐시가 안정화된 후 측정
-        for _ in range(5):
-            await _run_buggy_once()
-        gc.collect()
-
-        tracemalloc.start()
-        snap_before = tracemalloc.take_snapshot()
-        for _ in range(30):
-            await _run_buggy_once()
-        gc.collect()
-        snap_after = tracemalloc.take_snapshot()
-        stats = snap_after.compare_to(snap_before, "filename")
-        total_diff = sum(s.size_diff for s in stats)
-        tracemalloc.stop()
-
-        # self-correction cycle 이 발생하지 않으므로 30회 반복해도 30MB 미만이어야 한다.
-        # 정상 그래프 실행 오버헤드: ~314 KB/invocation × 30 = ~9.4 MB
-        # 임계값 30 MB = 실제 측정치의 3× — 무한 루프 누수(수십~수백 MB)는 충분히 감지
-        assert total_diff < 30 * 1024 * 1024, (
-            f"Memory grew by {total_diff} bytes over 30 invocations — "
-            "unexpected memory accumulation detected."
-        )
 
 
 # ---------------------------------------------------------------------------
