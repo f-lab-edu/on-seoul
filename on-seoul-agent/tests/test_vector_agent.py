@@ -582,3 +582,60 @@ class TestVectorAgentHydration:
 
             # vector_results는 hydrated 원본 행
             assert result["vector_results"][0]["service_status"] == "접수중"
+
+
+class TestHydrationDataFreshness:
+    """임베딩 시점의 stale metadata 대신 원본 최신 값이 답변 컨텍스트로 들어가는지 검증."""
+
+    async def test_hydrated_status_overrides_stale_embedding_metadata(self):
+        """임베딩 metadata는 '접수마감', 원본은 '접수중'이면 hydrated 값('접수중')이 반환된다."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from agents.vector_agent import VectorAgent
+        from schemas.state import AgentState
+
+        agent = VectorAgent.__new__(VectorAgent)
+        refined = MagicMock()
+        refined.refined_query = "수영장"
+        refined.max_class_name = None
+        refined.area_name = None
+        refined.service_status = None
+        agent._refine_chain = MagicMock()
+        agent._refine_chain.ainvoke = AsyncMock(return_value=refined)
+        agent._embeddings = MagicMock()
+        agent._embeddings.aembed_query = AsyncMock(return_value=[0.1] * 768)
+
+        # 임베딩 metadata는 stale: '예약마감'
+        stale_vector_rows = [{
+            "service_id": "S001",
+            "service_name": "마포 수영장",
+            "metadata": {"service_status": "예약마감"},
+            "similarity": 0.9,
+        }]
+        # 원본은 최신: '접수중'
+        fresh_hydrated = [{
+            "service_id": "S001",
+            "service_name": "마포 수영장",
+            "service_status": "접수중",
+        }]
+
+        with (
+            patch("agents.vector_agent.vector_search", AsyncMock(return_value=stale_vector_rows)),
+            patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
+            patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=fresh_hydrated)),
+        ):
+            state: AgentState = {
+                "room_id": 1, "message_id": 1, "message": "수영장",
+                "title_needed": False, "intent": None, "lat": None, "lng": None,
+                "refined_query": None, "sql_results": None, "vector_results": None,
+                "map_results": None, "answer": None, "title": None, "trace": None,
+                "error": None, "retry_count": 0,
+            }
+            result = await agent.search(state, MagicMock(), MagicMock())
+
+            # 답변 컨텍스트에는 최신 '접수중'만 들어간다
+            assert result["vector_results"][0]["service_status"] == "접수중"
+            # stale metadata는 노출되지 않는다
+            assert "metadata" not in result["vector_results"][0] or \
+                   result["vector_results"][0].get("metadata") is None
+
