@@ -33,6 +33,7 @@ class UserPersistenceMapper {
     UserJpaEntity updateEntity(UserJpaEntity entity, User user) {
         entity.updateProfile(user.getEmail(), user.getNickname());
         entity.updateStatus(user.getStatus());
+        entity.updateFcmToken(user.getFcmToken());
         return entity;
     }
 }

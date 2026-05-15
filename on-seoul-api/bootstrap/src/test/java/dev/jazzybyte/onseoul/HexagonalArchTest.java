@@ -69,8 +69,7 @@ class HexagonalArchTest {
     static final ArchRule bc_notification_must_not_import_user_domain = noClasses()
             .that().resideInAPackage("..notification.domain..")
             .or().resideInAPackage("..notification.application..")
-            .should().dependOnClassesThat().resideInAPackage("..user.domain..")
-            .allowEmptyShould(true); // notification 모듈은 아직 스캐폴드만 존재
+            .should().dependOnClassesThat().resideInAPackage("..user.domain..");
 
     /**
      * ADR-0001: chat.adapter는 다른 BC의 port를 직접 구현하면 안 된다.

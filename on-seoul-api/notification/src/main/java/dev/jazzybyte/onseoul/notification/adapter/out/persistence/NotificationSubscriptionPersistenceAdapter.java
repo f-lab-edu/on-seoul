@@ -4,6 +4,7 @@ import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveSubscriptionPort;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -22,6 +23,7 @@ class NotificationSubscriptionPersistenceAdapter
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<NotificationSubscription> loadAll() {
         return repository.findAll().stream()
                 .map(mapper::toDomain)

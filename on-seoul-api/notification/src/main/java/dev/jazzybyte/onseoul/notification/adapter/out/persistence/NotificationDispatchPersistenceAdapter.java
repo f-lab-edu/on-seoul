@@ -5,6 +5,7 @@ import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveDispatchPort;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 
@@ -30,17 +31,11 @@ class NotificationDispatchPersistenceAdapter
      */
     @Override
     public Optional<NotificationDispatch> saveIfAbsent(NotificationDispatch dispatch) {
-        boolean exists = repository.findBySubscriptionIdAndChangeLogId(
-                dispatch.getSubscriptionId(), dispatch.getChangeLogId()).isPresent();
-        if (exists) {
-            return Optional.empty();
-        }
         try {
             NotificationDispatchJpaEntity entity = new NotificationDispatchJpaEntity(
                     dispatch.getSubscriptionId(), dispatch.getChangeLogId());
             return Optional.of(mapper.toDomain(repository.saveAndFlush(entity)));
         } catch (DataIntegrityViolationException e) {
-            // Race condition: another thread inserted the same row concurrently.
             return Optional.empty();
         }
     }
@@ -65,6 +60,7 @@ class NotificationDispatchPersistenceAdapter
     }
 
     @Override
+    @Transactional(readOnly = true)
     public Optional<NotificationDispatch> loadRetryable(Long subscriptionId, Long changeLogId,
                                                         int maxAttempts) {
         return repository.findRetryable(subscriptionId, changeLogId, maxAttempts)

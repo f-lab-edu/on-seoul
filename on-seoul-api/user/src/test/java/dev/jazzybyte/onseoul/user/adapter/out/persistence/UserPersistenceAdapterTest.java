@@ -5,9 +5,11 @@ import dev.jazzybyte.onseoul.user.domain.UserStatus;
 import dev.jazzybyte.onseoul.user.port.in.SocialLoginCommand;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import jakarta.persistence.EntityManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.Optional;
@@ -25,6 +27,12 @@ class UserPersistenceAdapterTest {
 
     @Autowired
     private UserPersistenceAdapter adapter;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private EntityManager entityManager;
 
     private User createAndSaveUser(String provider, String providerId, String email, String nickname) {
         User user = User.create(new SocialLoginCommand(provider, providerId, email, nickname));
@@ -83,6 +91,24 @@ class UserPersistenceAdapterTest {
         assertThat(saved.getProvider()).isEqualTo("naver");
         assertThat(saved.getProviderId()).isEqualTo("naver-uid-001");
         assertThat(saved.getStatus()).isEqualTo(UserStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("toDomain() — DB에 저장된 fcm_token이 도메인 객체로 매핑됨")
+    void toDomain_fcmTokenPersistedInDb_isMappedToDomain() {
+        // 신규 유저 저장 (fcmToken 없음)
+        User saved = createAndSaveUser("google", "google-uid-fcm", "fcm@example.com", "FCM유저");
+
+        jdbcTemplate.update("UPDATE users SET fcm_token = ? WHERE id = ?",
+                "test-fcm-token-12345", saved.getId());
+        entityManager.clear(); // JDBC 업데이트가 JPA 1차 캐시를 우회하므로 evict 필요
+
+        Optional<User> loaded = adapter.findById(saved.getId());
+
+        assertThat(loaded).isPresent();
+        assertThat(loaded.get().getFcmToken())
+                .as("toDomain()이 fcm_token 컬럼을 User.fcmToken 필드로 매핑해야 한다")
+                .isEqualTo("test-fcm-token-12345");
     }
 
     @Test

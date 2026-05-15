@@ -49,8 +49,9 @@ public class NotificationDispatch {
         d.changeLogId = changeLogId;
         d.status = DispatchStatus.PENDING;
         d.attemptCount = 0;
-        d.createdAt = Instant.now();
-        d.updatedAt = Instant.now();
+        Instant now = Instant.now();
+        d.createdAt = now;
+        d.updatedAt = now;
         return d;
     }
 
@@ -58,12 +59,13 @@ public class NotificationDispatch {
     public void markSuccess(String title, String body, TemplateSource source) {
         this.attemptCount++;
         this.status = DispatchStatus.SUCCESS;
-        this.sentAt = Instant.now();
+        Instant now = Instant.now();
+        this.sentAt = now;
         this.generatedTitle = title;
         this.generatedBody = body;
         this.templateSource = source;
         this.lastError = null;
-        this.updatedAt = Instant.now();
+        this.updatedAt = now;
     }
 
     /**

@@ -63,4 +63,8 @@ class UserJpaEntity {
     void updateStatus(UserStatus status) {
         this.status = status;
     }
+
+    void updateFcmToken(String fcmToken) {
+        this.fcmToken = fcmToken;
+    }
 }

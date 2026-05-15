@@ -31,5 +31,6 @@ CREATE TABLE IF NOT EXISTS notification_dispatches
 
     CONSTRAINT uq_nd_subscription_change UNIQUE (subscription_id, change_log_id),
     CONSTRAINT chk_nd_status CHECK (status IN ('PENDING', 'SUCCESS', 'FAILED', 'DEAD')),
-    CONSTRAINT chk_nd_template_source CHECK (template_source IN ('AI', 'FALLBACK') OR template_source IS NULL)
+    CONSTRAINT chk_nd_template_source CHECK (template_source IN ('AI', 'FALLBACK') OR template_source IS NULL),
+    CONSTRAINT chk_nd_attempt_count CHECK (attempt_count >= 0)
 );

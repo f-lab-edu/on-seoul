@@ -79,5 +79,6 @@ public class NotificationDispatchJpaEntity {
         this.generatedBody = generatedBody;
         this.templateSource = templateSource;
         this.lastError = lastError;
+        this.updatedAt = Instant.now();
     }
 }

@@ -3,6 +3,7 @@ package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 import dev.jazzybyte.onseoul.notification.domain.DispatchStatus;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -11,6 +12,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,6 +36,9 @@ class NotificationDispatchPersistenceAdapterTest {
 
     @Autowired
     private NotificationSubscriptionPersistenceAdapter subscriptionAdapter;
+
+    @Autowired
+    private EntityManager em;
 
     private Long subscriptionId;
 
@@ -120,6 +125,41 @@ class NotificationDispatchPersistenceAdapterTest {
 
         Optional<NotificationDispatch> result =
                 dispatchAdapter.loadRetryable(subscriptionId, 600L, 5);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("save() 후 재저장 시 @PreUpdate가 updated_at을 갱신")
+    void save_preUpdateRefreshesUpdatedAt() throws InterruptedException {
+        NotificationDispatch dispatch = NotificationDispatch.create(subscriptionId, 800L);
+        NotificationDispatch saved = dispatchAdapter.saveIfAbsent(dispatch).orElseThrow();
+        Instant updatedAtBefore = saved.getUpdatedAt();
+
+        // Ensure at least 1 ms elapses so the new timestamp is strictly later
+        Thread.sleep(2);
+
+        saved.markFailed("일시적 오류", 5);
+        NotificationDispatch updated = dispatchAdapter.save(saved);
+
+        assertThat(updated.getUpdatedAt())
+                .isNotNull()
+                .isAfterOrEqualTo(updatedAtBefore);
+    }
+
+    @Test
+    @DisplayName("saveIfAbsent() — EntityManager로 직접 insert 후 saveIfAbsent() 호출 → DataIntegrityViolationException 경로로 empty 반환")
+    void saveIfAbsent_directDuplicateInsert_returnsEmpty() {
+        // EntityManager로 (subscriptionId, 999L) 행을 직접 persist + flush하여 UNIQUE 제약을 선점한다.
+        NotificationDispatchJpaEntity duplicate =
+                new NotificationDispatchJpaEntity(subscriptionId, 999L);
+        em.persist(duplicate);
+        em.flush();
+
+        // 동일 (subscription_id, change_log_id) 쌍으로 saveIfAbsent() 호출 →
+        // pre-check 없이 saveAndFlush를 시도하므로 DataIntegrityViolationException이 발생하고 empty를 반환해야 한다.
+        Optional<NotificationDispatch> result = dispatchAdapter.saveIfAbsent(
+                NotificationDispatch.create(subscriptionId, 999L));
 
         assertThat(result).isEmpty();
     }
