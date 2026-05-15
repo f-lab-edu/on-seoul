@@ -22,6 +22,8 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6379"
+    redis_socket_connect_timeout: int = 2   # 연결 타임아웃(초) — fail-open 대기 상한
+    redis_socket_timeout: int = 2           # 명령 타임아웃(초)
 
     # Answer Cache
     answer_cache_enabled: bool = True
