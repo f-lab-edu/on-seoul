@@ -23,6 +23,20 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379"
 
+    # Answer Cache
+    answer_cache_enabled: bool = True
+    answer_cache_ttl: int = 900            # 15분 — 수집 스케줄러 주기보다 짧게
+    answer_cache_empty_ttl: int = 300      # 빈 결과 캐시 5분
+    answer_cache_eligible_intents: tuple[str, ...] = ("SQL_SEARCH", "VECTOR_SEARCH")
+
+    # Recent Queries (per-room)
+    recent_queries_enabled: bool = True
+    recent_queries_max: int = 5            # 보관 개수
+    recent_queries_ttl: int = 1800         # 30분 슬라이딩 — push 마다 갱신
+
+    # Admin
+    admin_internal_token: str = ""         # /admin/* 보호용 공유 토큰
+
     # LLM — Gemini 우선, GPT 폴백
     llm_provider: str = "gemini"  # gemini | openai
 

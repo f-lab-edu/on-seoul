@@ -19,7 +19,13 @@ class AgentState(TypedDict):
     # None이면 MAP intent를 FALLBACK으로 대체한다.
     lat: float | None  # 사용자 위치 위도 (latitude)
     lng: float | None  # 사용자 위치 경도 (longitude)
-    refined_query: str | None  # Vector Agent가 정제한 질의
+    refined_query: str | None  # Router(우선) 또는 Vector Agent(fallback)가 정제한 질의
+    # Router가 함께 산출하는 post-filter 메타데이터.
+    # SQL_SEARCH / VECTOR_SEARCH 경로의 검색 도구에 전달되어 결과를 좁힌다.
+    # 추출 불가 시 None. 허용 값은 router_agent._IntentOutput 검증을 따른다.
+    max_class_name: str | None  # 체육시설·문화행사·시설대관·교육·진료 중 하나
+    area_name: str | None  # 서울 자치구명 (예: 강남구)
+    service_status: str | None  # 접수중·예약마감·접수종료·예약일시중지·안내중 중 하나
     sql_results: list[dict[str, Any]] | None  # SQL Agent 결과
     vector_results: list[dict[str, Any]] | None  # Vector Agent 결과
     map_results: dict[str, Any] | None  # map_search GeoJSON FeatureCollection 결과
@@ -30,3 +36,6 @@ class AgentState(TypedDict):
     # LangGraph 자기 교정(Self-Correction) 루프 카운터.
     # answer가 비어 있거나 error가 있을 때 최대 1회 재검색을 허용한다.
     retry_count: int  # 재시도 횟수 (0 = 아직 재시도 없음)
+    # Router 컨텍스트 / Answer Cache 흐름
+    recent_queries: list[str]  # router에 주입할 follow-up 컨텍스트 (기본값 [])
+    cache_hit: bool  # cache_check_node 결과 (기본값 False)

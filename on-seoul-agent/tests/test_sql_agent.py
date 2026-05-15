@@ -20,6 +20,9 @@ def _make_state(message: str = "수영장 알려줘") -> AgentState:
         lat=None,
         lng=None,
         refined_query=None,
+        max_class_name=None,
+        area_name=None,
+        service_status=None,
         sql_results=None,
         vector_results=None,
         map_results=None,
@@ -27,6 +30,9 @@ def _make_state(message: str = "수영장 알려줘") -> AgentState:
         title=None,
         trace=None,
         error=None,
+        retry_count=0,
+        recent_queries=[],
+        cache_hit=False,
     )
 
 

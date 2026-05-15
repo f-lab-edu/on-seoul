@@ -1,21 +1,25 @@
-"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 (Phase 17).
+"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 (Phase 17 + Answer Cache).
 
 그래프 구조:
     START
       ↓
-    router_node          — RouterAgent.classify(), state.intent 설정
+    router_node          — RouterAgent.classify(), state.intent · refined_query 설정
       ↓
-    (conditional edge)   — intent에 따라 분기
-      ├─ SQL_SEARCH    → sql_node
-      ├─ VECTOR_SEARCH → vector_node
-      ├─ MAP           → map_node
-      └─ FALLBACK      → answer_node (검색 없이 바로 답변)
+    cache_check_node     — refined_query 기반 전역 Answer Cache lookup
+      ├─ hit  → trace_node (sql/vector/map/answer 전체 우회)
+      └─ miss → intent에 따라 분기
+            ├─ SQL_SEARCH    → sql_node
+            ├─ VECTOR_SEARCH → vector_node
+            ├─ MAP           → map_node
+            └─ FALLBACK      → answer_node (검색 없이 바로 답변)
       ↓
     answer_node          — AnswerAgent.answer()
       ↓
     (self_correction)    — 빈 답변일 때만 재시도 + retry_count==0 → retry_prep_node 경유
       ↓ (정상) 또는 사이클
     [retry_prep_node]    — retry_count 증가 + 이전 검색 결과 초기화 → router_node 재진입
+    cache_write_node     — 정상 결과만(SQL_SEARCH / VECTOR_SEARCH) 캐시 저장
+      ↓
     trace_node           — chat_agent_traces 저장 (best-effort, 종단 노드)
       ↓
     END
@@ -72,6 +76,14 @@ async def _dispatch_router_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().router_node(state)
 
 
+async def _dispatch_cache_check_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().cache_check_node(state)
+
+
+async def _dispatch_cache_write_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().cache_write_node(state)
+
+
 async def _dispatch_retry_prep_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().retry_prep_node(state)
 
@@ -100,6 +112,10 @@ def _dispatch_route_by_intent(state: AgentState) -> str:
     return _ACTIVE_NODES.get().route_by_intent(state)
 
 
+def _dispatch_post_cache_check(state: AgentState) -> str:
+    return _ACTIVE_NODES.get().post_cache_check(state)
+
+
 def _dispatch_self_correction_edge(state: AgentState) -> str:
     return _ACTIVE_NODES.get().self_correction_edge(state)
 
@@ -114,6 +130,8 @@ def _build_shared_graph() -> Any:
     builder: StateGraph = StateGraph(AgentState)
 
     builder.add_node("router_node", _dispatch_router_node)
+    builder.add_node("cache_check_node", _dispatch_cache_check_node)
+    builder.add_node("cache_write_node", _dispatch_cache_write_node)
     builder.add_node("retry_prep_node", _dispatch_retry_prep_node)
     builder.add_node("sql_node", _dispatch_sql_node)
     builder.add_node("vector_node", _dispatch_vector_node)
@@ -123,10 +141,20 @@ def _build_shared_graph() -> Any:
 
     builder.add_edge(START, "router_node")
 
+    # router → cache_check.
+    # refined_query와 post-filter(max_class_name/area_name/service_status)는
+    # 1차적으로 router_node가 산출하여 state에 채운다 (단일 LLM 호출).
+    # vector_node의 _refine_chain은 router 미산출 시(단독 단위 테스트 등)에만
+    # 동작하는 fallback이다.
+    # cache_check는 intent + refined_query가 둘 다 있을 때만 lookup하므로
+    # router가 refined_query=None을 반환한 경우에는 pass-through 효과를 가진다.
+    builder.add_edge("router_node", "cache_check_node")
+
     builder.add_conditional_edges(
-        "router_node",
-        _dispatch_route_by_intent,
+        "cache_check_node",
+        _dispatch_post_cache_check,
         {
+            "trace_node": "trace_node",
             "sql_node": "sql_node",
             "vector_node": "vector_node",
             "map_node": "map_node",
@@ -142,13 +170,14 @@ def _build_shared_graph() -> Any:
         "answer_node",
         _dispatch_self_correction_edge,
         {
-            "trace_node": "trace_node",
+            "trace_node": "cache_write_node",
             "retry_prep_node": "retry_prep_node",
         },
     )
 
     # 재시도 준비 완료 후 router_node로 재진입
     builder.add_edge("retry_prep_node", "router_node")
+    builder.add_edge("cache_write_node", "trace_node")
     builder.add_edge("trace_node", END)
 
     return builder.compile()
@@ -180,12 +209,14 @@ class AgentGraph:
         sql_agent: SqlAgent | None = None,
         vector_agent: VectorAgent | None = None,
         answer_agent: AnswerAgent | None = None,
+        redis: Any = None,
     ) -> None:
         self._nodes = GraphNodes(
             router=router or RouterAgent(),
             sql_agent=sql_agent or SqlAgent(),
             vector_agent=vector_agent or VectorAgent(),
             answer_agent=answer_agent or AnswerAgent(),
+            redis=redis,
         )
 
         # 그래프는 클래스 수준에서 한 번만 컴파일한다.
@@ -215,9 +246,13 @@ class AgentGraph:
 
         token = _ACTIVE_NODES.set(self._nodes)
         try:
+            # recursion_limit=15:
+            # 1회 정상 흐름은 router → cache_check → (search) → answer → cache_write → trace
+            # = 6 super-step. retry 1회 포함 시 router/retry_prep까지 추가되어 ~12.
+            # 여유 3을 더해 15로 설정한다.
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
-                config={"recursion_limit": 10},
+                config={"recursion_limit": 15},
             )  # type: ignore[arg-type]
         finally:
             _ACTIVE_NODES.reset(token)
@@ -266,11 +301,12 @@ class AgentGraph:
         try:
             async for chunk in AgentGraph._compiled_graph.astream(
                 state,
-                config={"recursion_limit": 10},
+                config={"recursion_limit": 15},
             ):
                 node_name: str = next(iter(chunk))
-                node_updates: dict[str, Any] = chunk[node_name]
-                accumulated.update(node_updates)
+                node_updates: dict[str, Any] | None = chunk[node_name]
+                if node_updates:
+                    accumulated.update(node_updates)
 
                 if node_name == "router_node" and not _search_progress_emitted:
                     _search_progress_emitted = True

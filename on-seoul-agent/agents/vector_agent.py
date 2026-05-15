@@ -159,10 +159,25 @@ class VectorAgent:
         vector_results에는 hydration된 원본 행이 채워진다.
         스키마는 sql_results와 동일하며 추가로 rrf_score를 포함한다.
         임베딩 metadata는 stale일 수 있으므로 답변 컨텍스트로 사용하지 않는다.
+
+        Router가 이미 refined_query와 post-filter를 산출한 경우
+        (state["refined_query"] 존재), 중복 LLM 호출을 피하기 위해 refine 체인을 skip하고
+        state["max_class_name"/"area_name"/"service_status"] 값을 그대로 사용한다.
+        Router 미산출 시(예: 단독 테스트 호환성)에는 기존 _refine_chain을 fallback으로 호출하여
+        refined_query와 post-filter를 동시에 추출한다.
         """
-        refined: _RefinedQuery = await self._refine_chain.ainvoke(
-            {"message": state["message"]}
-        )
+        router_refined = state.get("refined_query")
+        if router_refined:
+            refined = _RefinedQuery(
+                refined_query=router_refined,
+                max_class_name=state.get("max_class_name"),
+                area_name=state.get("area_name"),
+                service_status=state.get("service_status"),
+            )
+        else:
+            refined = await self._refine_chain.ainvoke(
+                {"message": state["message"]}
+            )
 
         query_vector = await self._embeddings.aembed_query(refined.refined_query)
         tokens = tokenize_query(refined.refined_query)

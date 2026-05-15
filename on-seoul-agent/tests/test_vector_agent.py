@@ -23,6 +23,9 @@ def _make_state(message: str = "아이랑 체험할 수 있는 시설") -> Agent
         lat=None,
         lng=None,
         refined_query=None,
+        max_class_name=None,
+        area_name=None,
+        service_status=None,
         sql_results=None,
         vector_results=None,
         map_results=None,
@@ -30,6 +33,9 @@ def _make_state(message: str = "아이랑 체험할 수 있는 시설") -> Agent
         title=None,
         trace=None,
         error=None,
+        retry_count=0,
+        recent_queries=[],
+        cache_hit=False,
     )
 
 
@@ -86,6 +92,57 @@ def _patch_search(vector_rows: list[dict], bm25_rows: list[dict]):
             self._stack.__exit__(*args)
 
     return _Ctx()
+
+
+class TestVectorAgentRouterPostFilter:
+    """Router가 state["refined_query"]와 post-filter를 채운 경우, _refine_chain을 skip하고
+    state 값을 그대로 vector_search에 전달한다.
+    """
+
+    async def test_router_postfilter_forwarded_and_refine_chain_skipped(self):
+        """state["refined_query"] 존재 시 state["area_name"] 등 post-filter가 vector_search로 전달된다."""
+        agent = VectorAgent.__new__(VectorAgent)
+        mock_chain = MagicMock()
+        mock_chain.ainvoke = AsyncMock()  # 호출되면 안 된다
+        agent._refine_chain = mock_chain
+        mock_embeddings = MagicMock()
+        mock_embeddings.aembed_query = AsyncMock(return_value=[0.1])
+        agent._embeddings = mock_embeddings
+
+        state = _make_state()
+        state["refined_query"] = "강남구 체육시설"
+        state["max_class_name"] = "체육시설"
+        state["area_name"] = "강남구"
+        state["service_status"] = "접수중"
+
+        with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])) as mock_vs, \
+             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
+            await agent.search(state, MagicMock(), MagicMock())
+            kwargs = mock_vs.call_args[1]
+            assert kwargs.get("max_class_name") == "체육시설"
+            assert kwargs.get("area_name") == "강남구"
+            assert kwargs.get("service_status") == "접수중"
+
+        # router가 산출하면 fallback _refine_chain은 호출되지 않는다.
+        mock_chain.ainvoke.assert_not_called()
+
+    async def test_refine_chain_used_when_router_did_not_refine(self):
+        """state["refined_query"]=None이면 _refine_chain이 fallback으로 호출된다."""
+        agent = VectorAgent.__new__(VectorAgent)
+        mock_chain = MagicMock()
+        mock_chain.ainvoke = AsyncMock(
+            return_value=_RefinedQuery(refined_query="자체정제")
+        )
+        agent._refine_chain = mock_chain
+        mock_embeddings = MagicMock()
+        mock_embeddings.aembed_query = AsyncMock(return_value=[0.1])
+        agent._embeddings = mock_embeddings
+
+        with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])), \
+             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
+            await agent.search(_make_state(), MagicMock(), MagicMock())
+
+        mock_chain.ainvoke.assert_called_once()
 
 
 class TestVectorAgentPostFilter:
@@ -541,6 +598,7 @@ class TestHydrationDataFreshness:
                 "refined_query": None, "sql_results": None, "vector_results": None,
                 "map_results": None, "answer": None, "title": None, "trace": None,
                 "error": None, "retry_count": 0,
+                "recent_queries": [], "cache_hit": False,
             }
             result = await agent.search(state, MagicMock(), MagicMock())
 
@@ -589,6 +647,7 @@ class TestHydrationDataFreshness:
                 "refined_query": None, "sql_results": None, "vector_results": None,
                 "map_results": None, "answer": None, "title": None, "trace": None,
                 "error": None, "retry_count": 0,
+                "recent_queries": [], "cache_hit": False,
             }
             result = await agent.search(state, MagicMock(), MagicMock())
 
@@ -632,6 +691,7 @@ class TestHydrationDataFreshness:
                 "refined_query": None, "sql_results": None, "vector_results": None,
                 "map_results": None, "answer": None, "title": None, "trace": None,
                 "error": None, "retry_count": 0,
+                "recent_queries": [], "cache_hit": False,
             }
             result = await agent.search(state, MagicMock(), MagicMock())
 

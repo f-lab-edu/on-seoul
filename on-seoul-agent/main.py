@@ -1,5 +1,7 @@
 import json
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -8,17 +10,40 @@ from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from core.logging import setup_logging
+from core.redis import get_redis
 from middleware.metrics import ProcessTimeMiddleware
+from routers import admin as admin_router
 from routers import chat
 
 setup_logging()
 
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """애플리케이션 lifespan — Redis 클라이언트를 process-singleton으로 보관.
+
+    Answer Cache(core/cache.py)와 recent_queries(core/recent_queries.py)는
+    동일 Redis 인스턴스를 공유해야 하므로 app.state.redis에 보관한다.
+    AgentGraph는 이 redis를 주입받아 process 내에서 1회만 컴파일된다.
+    """
+    redis = get_redis()
+    app.state.redis = redis
+    try:
+        yield
+    finally:
+        try:
+            await redis.aclose()
+        except Exception:
+            logger.warning("redis aclose 실패", exc_info=True)
+
+
 app = FastAPI(
     title="on-seoul-agent",
     description="서울 공공서비스 예약 AI Agent 서비스",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # ---------------------------------------------------------------------------
@@ -60,6 +85,7 @@ app.add_middleware(ProcessTimeMiddleware)
 # ---------------------------------------------------------------------------
 
 app.include_router(chat.router, prefix="/chat")
+app.include_router(admin_router.router)
 
 # ---------------------------------------------------------------------------
 # 전역 에러 핸들러

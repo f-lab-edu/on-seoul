@@ -32,6 +32,9 @@ def _state(**kwargs) -> AgentState:
         lat=None,
         lng=None,
         refined_query=None,
+        max_class_name=None,
+        area_name=None,
+        service_status=None,
         sql_results=None,
         vector_results=None,
         map_results=None,
@@ -40,6 +43,8 @@ def _state(**kwargs) -> AgentState:
         trace=None,
         error=None,
         retry_count=0,
+        recent_queries=[],
+        cache_hit=False,
     )
     base.update(kwargs)
     return base
@@ -47,9 +52,11 @@ def _state(**kwargs) -> AgentState:
 
 def _router(intent: IntentType) -> RouterAgent:
     agent = RouterAgent.__new__(RouterAgent)
-    chain = MagicMock()
-    chain.ainvoke = AsyncMock(return_value=_IntentOutput(intent=intent))
-    agent._chain = chain
+    structured = MagicMock()
+    structured.ainvoke = AsyncMock(return_value=_IntentOutput(intent=intent))
+    llm = MagicMock()
+    llm.with_structured_output = MagicMock(return_value=structured)
+    agent._llm = llm
     return agent
 
 
@@ -379,15 +386,17 @@ class TestSelfCorrectionCycle:
         _, data_session = _sql_agent([])
 
         router_agent = RouterAgent.__new__(RouterAgent)
-        chain = MagicMock()
+        structured = MagicMock()
         # router가 예외를 던지면 _router_node 핸들러가 fallback_answer를 주입한다.
-        chain.ainvoke = AsyncMock(
+        structured.ainvoke = AsyncMock(
             side_effect=[
                 RuntimeError("일시적 LLM 오류"),
                 _IntentOutput(intent=IntentType.FALLBACK),
             ]
         )
-        router_agent._chain = chain
+        llm = MagicMock()
+        llm.with_structured_output = MagicMock(return_value=structured)
+        router_agent._llm = llm
 
         graph = AgentGraph(
             router=router_agent,
@@ -465,13 +474,15 @@ class TestAgentStateContract:
     async def test_error_sets_fallback_answer(self):
         """Router 예외 시 error 필드와 fallback 답변이 채워진다."""
         router_agent = RouterAgent.__new__(RouterAgent)
-        chain = MagicMock()
+        structured = MagicMock()
 
         def _raise(*_a, **_kw):
             raise RuntimeError("일시적 LLM 오류")
 
-        chain.ainvoke = AsyncMock(side_effect=_raise)
-        router_agent._chain = chain
+        structured.ainvoke = AsyncMock(side_effect=_raise)
+        llm = MagicMock()
+        llm.with_structured_output = MagicMock(return_value=structured)
+        router_agent._llm = llm
 
         _, data_session = _sql_agent([])
         graph = AgentGraph(
@@ -642,13 +653,15 @@ class TestSelfCorrectionInfiniteLoopRegression:
         _, data_session = _sql_agent([])
 
         router_agent = RouterAgent.__new__(RouterAgent)
-        chain = MagicMock()
+        structured = MagicMock()
 
         def _raise(*_a, **_kw):
             raise RuntimeError("일시적 LLM 오류")
 
-        chain.ainvoke = AsyncMock(side_effect=_raise)
-        router_agent._chain = chain
+        structured.ainvoke = AsyncMock(side_effect=_raise)
+        llm = MagicMock()
+        llm.with_structured_output = MagicMock(return_value=structured)
+        router_agent._llm = llm
 
         graph = AgentGraph(
             router=router_agent,
@@ -663,7 +676,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
         token = _ACTIVE_NODES.set(graph._nodes)
         try:
             result = await AgentGraph._compiled_graph.ainvoke(
-                state, config={"recursion_limit": 5}
+                state, config={"recursion_limit": 8}
             )
         finally:
             _ACTIVE_NODES.reset(token)
@@ -743,6 +756,107 @@ class TestSelfCorrectionInfiniteLoopRegression:
         state_after_retry = {**state_empty_answer, "retry_count": 1}
         assert graph._nodes.self_correction_edge(state_after_retry) == "trace_node"
 
+
+
+# ---------------------------------------------------------------------------
+# 7b. Router refined_query 산출 → state 전파 회귀
+# ---------------------------------------------------------------------------
+
+
+class TestRouterRefinedQueryPropagation:
+    """Router가 산출한 refined_query가 state["refined_query"]로 전파되어
+    이후 cache_check_node가 정확한 키 lookup을 수행할 수 있어야 한다.
+    """
+
+    async def test_router_node_sets_refined_query_on_state(self):
+        """router_node 반환 update dict에 refined_query가 포함된다."""
+        router = RouterAgent.__new__(RouterAgent)
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(
+            return_value=_IntentOutput(
+                intent=IntentType.VECTOR_SEARCH,
+                refined_query="서울 테니스장",
+            )
+        )
+        llm = MagicMock()
+        llm.with_structured_output = MagicMock(return_value=structured)
+        router._llm = llm
+
+        graph = AgentGraph(router=router, answer_agent=_answer_agent())
+        update = await graph._nodes.router_node(_state(message="테니스장"))
+
+        assert update["intent"] == IntentType.VECTOR_SEARCH
+        assert update["refined_query"] == "서울 테니스장"
+
+    async def test_router_node_propagates_postfilter_metadata(self):
+        """router_node 반환 update에 max_class_name/area_name/service_status가 포함된다."""
+        router = RouterAgent.__new__(RouterAgent)
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(
+            return_value=_IntentOutput(
+                intent=IntentType.SQL_SEARCH,
+                refined_query="강남구 체육시설 접수중",
+                max_class_name="체육시설",
+                area_name="강남구",
+                service_status="접수중",
+            )
+        )
+        llm = MagicMock()
+        llm.with_structured_output = MagicMock(return_value=structured)
+        router._llm = llm
+
+        graph = AgentGraph(router=router, answer_agent=_answer_agent())
+        update = await graph._nodes.router_node(_state(message="강남구 체육시설"))
+
+        assert update["max_class_name"] == "체육시설"
+        assert update["area_name"] == "강남구"
+        assert update["service_status"] == "접수중"
+
+    async def test_router_node_omits_postfilter_when_none(self):
+        """Router가 메타데이터=None을 반환하면 update에 키를 포함하지 않는다."""
+        router = RouterAgent.__new__(RouterAgent)
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(
+            return_value=_IntentOutput(
+                intent=IntentType.VECTOR_SEARCH,
+                refined_query="체험 시설",
+                max_class_name=None,
+                area_name=None,
+                service_status=None,
+            )
+        )
+        llm = MagicMock()
+        llm.with_structured_output = MagicMock(return_value=structured)
+        router._llm = llm
+
+        graph = AgentGraph(router=router, answer_agent=_answer_agent())
+        update = await graph._nodes.router_node(_state())
+
+        assert "max_class_name" not in update
+        assert "area_name" not in update
+        assert "service_status" not in update
+
+    async def test_router_node_omits_refined_query_when_none(self):
+        """Router가 refined_query=None을 반환하면 update에 키가 포함되지 않아
+        state의 기존 refined_query(예: retry 경로의 초기화 값)를 덮어쓰지 않는다.
+        """
+        router = RouterAgent.__new__(RouterAgent)
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(
+            return_value=_IntentOutput(
+                intent=IntentType.FALLBACK,
+                refined_query=None,
+            )
+        )
+        llm = MagicMock()
+        llm.with_structured_output = MagicMock(return_value=structured)
+        router._llm = llm
+
+        graph = AgentGraph(router=router, answer_agent=_answer_agent())
+        update = await graph._nodes.router_node(_state())
+
+        assert update["intent"] == IntentType.FALLBACK
+        assert "refined_query" not in update
 
 
 # ---------------------------------------------------------------------------

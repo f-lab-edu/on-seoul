@@ -6,13 +6,26 @@ AgentWorkflow는 AsyncMock으로 패치하여 LLM/DB 호출 없이 단위 테스
 
 import json
 from contextlib import asynccontextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from schemas.state import AgentState, IntentType
+
+
+@pytest.fixture(autouse=True)
+def _mock_redis_io():
+    """모든 chat router 테스트에서 Redis I/O를 차단한다.
+
+    routers.chat 모듈이 호출하는 get_recent_queries / push_recent_query /
+    _resolve_redis를 mock으로 대체하여 실제 Redis 연결 시도 없이 동작하도록 한다.
+    """
+    with patch("routers.chat.get_recent_queries", new=AsyncMock(return_value=[])), \
+         patch("routers.chat.push_recent_query", new=AsyncMock(return_value=None)), \
+         patch("routers.chat._resolve_redis", return_value=MagicMock()):
+        yield
 
 # ---------------------------------------------------------------------------
 # 헬퍼
@@ -29,6 +42,9 @@ def _make_final_state(**kwargs) -> AgentState:
         lat=None,
         lng=None,
         refined_query=None,
+        max_class_name=None,
+        area_name=None,
+        service_status=None,
         sql_results=None,
         vector_results=None,
         map_results=None,
@@ -37,6 +53,8 @@ def _make_final_state(**kwargs) -> AgentState:
         trace={"node_path": ["router", "sql_agent", "answer"], "elapsed_ms": 100},
         error=None,
         retry_count=0,
+        recent_queries=[],
+        cache_hit=False,
     )
     base.update(kwargs)
     return base
@@ -432,6 +450,135 @@ class TestChatStreamRouter:
         assert event_types[-1] == "workflow_error"
         # final 이벤트는 발행되지 않는다
         assert "final" not in event_types
+
+
+class TestCacheAndContextIntegration:
+    """Answer Cache & Conversation Context 통합 동작 검증."""
+
+    async def test_cache_hit_sse_payload_marks_cache_hit(self, client: AsyncClient):
+        """result.cache_hit=True이면 final SSE payload에 cache_hit=True 포함."""
+        final_state = _make_final_state(cache_hit=True)
+
+        with patch("routers.chat._graph") as mock_wf, patch(
+            "routers.chat.ai_session_ctx", _make_session_ctx()
+        ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
+            mock_wf.stream = _make_stream(final_state)
+
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        events = _parse_sse_events(response.content)
+        final_events = [e for e in events if e["event"] == "final"]
+        assert final_events[0]["data"]["cache_hit"] is True
+
+    async def test_cache_miss_sse_payload_marks_cache_hit_false(self, client: AsyncClient):
+        """기본값(cache_hit=False)이면 final SSE payload에 cache_hit=False."""
+        final_state = _make_final_state()
+        with patch("routers.chat._graph") as mock_wf, patch(
+            "routers.chat.ai_session_ctx", _make_session_ctx()
+        ), patch("routers.chat.data_session_ctx", _make_session_ctx()):
+            mock_wf.stream = _make_stream(final_state)
+
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        events = _parse_sse_events(response.content)
+        final_events = [e for e in events if e["event"] == "final"]
+        assert final_events[0]["data"]["cache_hit"] is False
+
+    async def test_recent_queries_passed_into_state(self, client: AsyncClient):
+        """fetch한 recent_queries가 AgentState에 그대로 주입된다."""
+        final_state = _make_final_state()
+        captured: list[AgentState] = []
+
+        async def _capturing_stream(state, **kwargs):
+            captured.append(state)
+            yield "progress", {"step": "routing", "message": "..."}
+            yield "result", final_state
+
+        with patch("routers.chat._graph") as mock_wf, patch(
+            "routers.chat.ai_session_ctx", _make_session_ctx()
+        ), patch("routers.chat.data_session_ctx", _make_session_ctx()), patch(
+            "routers.chat.get_recent_queries", new=AsyncMock(return_value=["이전 질문1", "이전 질문2"])
+        ):
+            mock_wf.stream = _capturing_stream
+
+            await client.post(
+                "/chat/stream",
+                json={"room_id": 7, "message_id": 3, "message": "성동구는?"},
+            )
+
+        assert captured[0]["recent_queries"] == ["이전 질문1", "이전 질문2"]
+
+    async def test_recent_queries_pushed_after_success(self, client: AsyncClient):
+        """정상 final 응답 후 사용자 message가 recent_queries 큐에 push된다."""
+        final_state = _make_final_state()
+        push_mock = AsyncMock(return_value=None)
+
+        with patch("routers.chat._graph") as mock_wf, patch(
+            "routers.chat.ai_session_ctx", _make_session_ctx()
+        ), patch("routers.chat.data_session_ctx", _make_session_ctx()), patch(
+            "routers.chat.push_recent_query", new=push_mock
+        ):
+            mock_wf.stream = _make_stream(final_state)
+
+            await client.post(
+                "/chat/stream",
+                json={"room_id": 42, "message_id": 2, "message": "수영장 알려줘"},
+            )
+
+        assert push_mock.await_count == 1
+        args, _ = push_mock.call_args
+        # push_recent_query(room_id, message, redis)
+        assert args[0] == 42
+        assert args[1] == "수영장 알려줘"
+
+    async def test_recent_queries_not_pushed_on_workflow_error(self, client: AsyncClient):
+        """workflow_error 응답에서는 push_recent_query 미수행."""
+        final_state = _make_final_state(
+            error="LLM 오류",
+            answer="죄송합니다, 일시적인 오류가 발생했습니다.",
+        )
+
+        async def _error_stream(*args, **kwargs):
+            yield "progress", {"step": "routing", "message": "..."}
+            yield "result", final_state
+
+        push_mock = AsyncMock(return_value=None)
+        with patch("routers.chat._graph") as mock_wf, patch(
+            "routers.chat.ai_session_ctx", _make_session_ctx()
+        ), patch("routers.chat.data_session_ctx", _make_session_ctx()), patch(
+            "routers.chat.push_recent_query", new=push_mock
+        ):
+            mock_wf.stream = _error_stream
+
+            await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 2, "message": "테스트"},
+            )
+
+        push_mock.assert_not_awaited()
+
+    async def test_recent_queries_not_pushed_on_session_error(self, client: AsyncClient):
+        """세션/DB 레벨 예외(error 이벤트) 시 push_recent_query 미수행."""
+        push_mock = AsyncMock(return_value=None)
+        with patch("routers.chat._graph") as mock_wf, patch(
+            "routers.chat.ai_session_ctx", _make_session_ctx()
+        ), patch("routers.chat.data_session_ctx", _make_session_ctx()), patch(
+            "routers.chat.push_recent_query", new=push_mock
+        ):
+            mock_wf.stream = MagicMock(side_effect=RuntimeError("DB 다운"))
+
+            await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 2, "message": "테스트"},
+            )
+
+        push_mock.assert_not_awaited()
 
 
 class TestMainEndpoints:

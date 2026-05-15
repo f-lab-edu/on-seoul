@@ -5,14 +5,28 @@ LCEL 체인으로 사용자 메시지를 분석해 IntentType 4종 중 하나로
   - VECTOR_SEARCH: 의미 기반(유사도) 검색
   - MAP         : 지도·위치·반경 탐색
   - FALLBACK    : 위 세 가지에 해당하지 않는 일반 안내
+
+recent_queries(per-room 최근 발화)가 주어지면 system prompt에 컨텍스트 블록을
+append하여 follow-up 질의("성동구는?")가 직전 발화의 카테고리·지역을 이어받도록
+유도한다. 빈 리스트/None이면 토큰 절약을 위해 섹션 자체를 생략한다.
 """
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel
+from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, field_validator
 
+from core.config import settings
 from llm.client import get_chat_model
-from schemas.state import AgentState, IntentType
+from schemas.state import IntentType
+
+# Router가 산출하는 post-filter 허용 enum.
+# 자유 텍스트가 들어오면 None으로 강제 대체하여 검색 도구 호출 안정성을 보장한다.
+_ALLOWED_MAX_CLASS_NAMES: frozenset[str] = frozenset(
+    ["체육시설", "문화행사", "시설대관", "교육", "진료"]
+)
+_ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(
+    ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
+)
 
 _SYSTEM = """\
 당신은 서울시 공공서비스 예약 챗봇의 라우터입니다.
@@ -26,30 +40,96 @@ VECTOR_SEARCH - 키워드나 의미로 비슷한 시설을 찾는 경우
 MAP          - 지도, 위치, 반경, 근처 시설을 묻는 경우
                예) "내 주변 500m 이내 체육관", "지도로 보여줘"
 FALLBACK     - 위 세 가지에 해당하지 않는 경우 (인사, 기능 문의 등)
-"""
 
-_HUMAN = "사용자 메시지: {message}"
+intent 분류 외에, 검색에 사용할 'refined_query'를 함께 산출하라.
+- SQL_SEARCH / VECTOR_SEARCH: 사용자 발화를 검색 친화적 단문으로 정제 (카테고리·지역 키워드 포함, 군더더기 제거)
+- 직전 맥락이 주어지면 카테고리/지역을 이어받아 병합한다
+- MAP / FALLBACK: refined_query는 null로 두어도 좋다
+
+SQL_SEARCH / VECTOR_SEARCH일 때 가능하면 아래 post-filter 메타데이터도 함께 산출하라.
+명시되지 않으면 반드시 null로 반환한다 (자유 텍스트·추측 금지).
+- max_class_name: 체육시설·문화행사·시설대관·교육·진료 중 하나
+- area_name: 서울 자치구 이름 (예: 강남구, 마포구)
+- service_status: 접수중·예약마감·접수종료·예약일시중지·안내중 중 하나
+직전 맥락의 카테고리·지역은 후속 발화에 이어받아 채워도 좋다.
+"""
 
 
 class _IntentOutput(BaseModel):
     intent: IntentType
+    refined_query: str | None = None
+    # Post-filter — SQL_SEARCH / VECTOR_SEARCH 경로에서만 의미가 있다.
+    # LLM이 enum을 벗어난 값을 반환하면 검색 도구의 SQL 파라미터로 흘러갈 수 있으므로
+    # field_validator에서 None으로 정규화하여 도메인 안전성을 보장한다.
+    max_class_name: str | None = None
+    area_name: str | None = None
+    service_status: str | None = None
+
+    @field_validator("max_class_name", mode="before")
+    @classmethod
+    def _validate_max_class_name(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        if v in _ALLOWED_MAX_CLASS_NAMES:
+            return v  # type: ignore[return-value]
+        return None
+
+    @field_validator("service_status", mode="before")
+    @classmethod
+    def _validate_service_status(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        if v in _ALLOWED_SERVICE_STATUSES:
+            return v  # type: ignore[return-value]
+        return None
 
 
 class RouterAgent:
     """LCEL 기반 의도 분류 에이전트.
 
     LLM의 with_structured_output으로 IntentType을 직접 추출한다.
+    recent_queries는 호출마다 system prompt에 동적으로 합성된다.
     """
 
     def __init__(self, model: BaseChatModel | None = None) -> None:
-        llm = model or get_chat_model()
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", _SYSTEM),
-            ("human", _HUMAN),
-        ])
-        self._chain = prompt | llm.with_structured_output(_IntentOutput)
+        self._llm = model or get_chat_model()
 
-    async def classify(self, state: AgentState) -> AgentState:
-        """사용자 메시지를 분석해 intent를 채운 새 AgentState를 반환한다."""
-        result: _IntentOutput = await self._chain.ainvoke({"message": state["message"]})
-        return {**state, "intent": result.intent}
+    def _build_context_block(self, recent_queries: list[str] | None) -> str:
+        """recent_queries를 system prompt에 append할 블록으로 변환.
+
+        비어 있으면 빈 문자열을 반환하여 섹션 자체를 생략한다(토큰 절약).
+        보관/주입 개수는 settings.recent_queries_max로 통일한다.
+        """
+        if not recent_queries:
+            return ""
+        lines = "\n".join(
+            f"- {q}" for q in recent_queries[: settings.recent_queries_max]
+        )
+        return (
+            "이전 사용자 발화 (최신 순). 후속 질의는 직전 발화의 "
+            "카테고리·지역을 이어받을 가능성이 높다.\n"
+            "이전 맥락이 명확하면 refined_query에 카테고리·지역 키워드를 병합한다.\n"
+            f"{lines}"
+        )
+
+    async def classify(
+        self,
+        message: str,
+        recent_queries: list[str] | None = None,
+    ) -> _IntentOutput:
+        """사용자 메시지의 의도를 분류해 _IntentOutput을 반환한다.
+
+        Args:
+            message: 사용자 원본 발화.
+            recent_queries: per-room 최근 발화(최신 순). 기본값 None.
+                비어 있으면 system prompt에 컨텍스트 섹션을 추가하지 않는다.
+        """
+        context_block = self._build_context_block(recent_queries)
+        system_text = _SYSTEM + (f"\n\n{context_block}" if context_block else "")
+        messages = [
+            SystemMessage(content=system_text),
+            HumanMessage(content=f"사용자 메시지: {message}"),
+        ]
+        structured = self._llm.with_structured_output(_IntentOutput)
+        result: _IntentOutput = await structured.ainvoke(messages)
+        return result

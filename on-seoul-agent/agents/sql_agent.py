@@ -56,13 +56,31 @@ class SqlAgent:
         self._chain = prompt | llm.with_structured_output(_SqlParams)
 
     async def search(self, state: AgentState, session: AsyncSession) -> AgentState:
-        """메시지에서 파라미터 추출 후 DB 조회. sql_results를 채운 AgentState 반환."""
+        """메시지에서 파라미터 추출 후 DB 조회. sql_results를 채운 AgentState 반환.
+
+        Router가 이미 post-filter 메타데이터를 산출한 경우
+        (state["refined_query"] 존재)에는 keyword만 LLM으로 보강하고
+        max_class_name/area_name/service_status는 state 값을 사용하여
+        중복 LLM 호출의 일관성을 유지한다. Router 미산출 시(단독 테스트)에는
+        기존 LLM 체인이 4필드를 모두 추출한다.
+        """
         params: _SqlParams = await self._chain.ainvoke({"message": state["message"]})
+
+        router_refined = state.get("refined_query")
+        if router_refined:
+            max_class_name = state.get("max_class_name")
+            area_name = state.get("area_name")
+            service_status = state.get("service_status")
+        else:
+            max_class_name = params.max_class_name
+            area_name = params.area_name
+            service_status = params.service_status
+
         rows = await sql_search(
             session,
-            max_class_name=params.max_class_name,
-            area_name=params.area_name,
-            service_status=params.service_status,
+            max_class_name=max_class_name,
+            area_name=area_name,
+            service_status=service_status,
             keyword=params.keyword,
             top_k=_TOP_K,
         )

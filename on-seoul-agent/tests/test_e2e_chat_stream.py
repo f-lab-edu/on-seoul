@@ -15,13 +15,22 @@ LLM 및 DB 호출은 Mock으로 처리한다.
 
 import json
 from contextlib import asynccontextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from schemas.state import AgentState, IntentType
+
+
+@pytest.fixture(autouse=True)
+def _mock_redis_io():
+    """E2E 테스트에서 Redis I/O를 차단한다 (실제 Redis 연결 시도 방지)."""
+    with patch("routers.chat.get_recent_queries", new=AsyncMock(return_value=[])), \
+         patch("routers.chat.push_recent_query", new=AsyncMock(return_value=None)), \
+         patch("routers.chat._resolve_redis", return_value=MagicMock()):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +70,9 @@ def _make_state(**kwargs) -> AgentState:
         lat=None,
         lng=None,
         refined_query=None,
+        max_class_name=None,
+        area_name=None,
+        service_status=None,
         sql_results=None,
         vector_results=None,
         map_results=None,
@@ -68,6 +80,9 @@ def _make_state(**kwargs) -> AgentState:
         title=None,
         trace={"node_path": ["router", "sql_agent", "answer"], "elapsed_ms": 50},
         error=None,
+        retry_count=0,
+        recent_queries=[],
+        cache_hit=False,
     )
     base.update(kwargs)
     return base
