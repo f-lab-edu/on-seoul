@@ -119,22 +119,15 @@ async def client(app: FastAPI) -> AsyncClient:
 
 
 class TestFirstMessageTitle:
-    async def test_title_included_in_final_when_message_id_is_1(self, client: AsyncClient):
+    async def test_title_included_in_final_when_message_id_is_1(self, client: AsyncClient, mock_graph):
         """message_id=1 요청 시 final 이벤트에 title 필드가 채워진다."""
         final_state = _make_state(message_id=1, title="수영장 문의", title_needed=True)
+        mock_graph.stream = _stream_gen(final_state)
 
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _stream_gen(final_state)
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -146,7 +139,7 @@ class TestFirstMessageTitle:
         assert final_events[0]["data"]["title"] == "수영장 문의"
 
     async def test_title_needed_true_passed_to_workflow_for_first_message(
-        self, client: AsyncClient
+        self, client: AsyncClient, mock_graph
     ):
         """message_id=1이면 AgentState.title_needed=True로 워크플로우에 전달된다."""
         final_state = _make_state(message_id=1, title="첫 제목")
@@ -158,18 +151,12 @@ class TestFirstMessageTitle:
             yield "progress", {"step": "routing", "message": "..."}
             yield "result", final_state
 
+        mock_graph.stream = _capturing
+
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _capturing
             await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -184,22 +171,15 @@ class TestFirstMessageTitle:
 
 
 class TestSubsequentMessageNoTitle:
-    async def test_title_is_none_when_message_id_not_1(self, client: AsyncClient):
+    async def test_title_is_none_when_message_id_not_1(self, client: AsyncClient, mock_graph):
         """message_id != 1인 final 이벤트의 title은 None이다."""
         final_state = _make_state(message_id=5, title=None, title_needed=False)
+        mock_graph.stream = _stream_gen(final_state)
 
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _stream_gen(final_state)
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 5, "message": "몇 시까지야?"},
@@ -211,7 +191,7 @@ class TestSubsequentMessageNoTitle:
         assert final_events[0]["data"]["title"] is None
 
     async def test_title_needed_false_passed_to_workflow_for_non_first(
-        self, client: AsyncClient
+        self, client: AsyncClient, mock_graph
     ):
         """message_id != 1이면 AgentState.title_needed=False로 워크플로우에 전달된다."""
         final_state = _make_state(message_id=3, title=None)
@@ -223,18 +203,12 @@ class TestSubsequentMessageNoTitle:
             yield "progress", {"step": "routing", "message": "..."}
             yield "result", final_state
 
+        mock_graph.stream = _capturing
+
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _capturing
             await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 3, "message": "더 있어?"},
@@ -249,22 +223,15 @@ class TestSubsequentMessageNoTitle:
 
 
 class TestSqlSearchEventOrder:
-    async def test_sql_search_sse_event_sequence(self, client: AsyncClient):
+    async def test_sql_search_sse_event_sequence(self, client: AsyncClient, mock_graph):
         """SQL_SEARCH 의도 질의: progress × 3 → final 순서로 SSE 이벤트가 발행된다."""
         final_state = _make_state(intent=IntentType.SQL_SEARCH)
+        mock_graph.stream = _stream_gen(final_state)
 
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _stream_gen(final_state)
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "지금 접수 중인 수영장"},
@@ -275,22 +242,15 @@ class TestSqlSearchEventOrder:
         event_types = [e["event"] for e in events]
         assert event_types == ["progress", "progress", "progress", "final"]
 
-    async def test_sql_search_progress_steps_in_order(self, client: AsyncClient):
+    async def test_sql_search_progress_steps_in_order(self, client: AsyncClient, mock_graph):
         """SQL_SEARCH progress 이벤트의 step 값이 routing → searching → answering 순서다."""
         final_state = _make_state(intent=IntentType.SQL_SEARCH)
+        mock_graph.stream = _stream_gen(final_state)
 
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _stream_gen(final_state)
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "마포구 체육시설"},
@@ -300,25 +260,18 @@ class TestSqlSearchEventOrder:
         progress_steps = [e["data"]["step"] for e in events if e["event"] == "progress"]
         assert progress_steps == ["routing", "searching", "answering"]
 
-    async def test_final_event_contains_answer_and_intent(self, client: AsyncClient):
+    async def test_final_event_contains_answer_and_intent(self, client: AsyncClient, mock_graph):
         """SQL_SEARCH final 이벤트에 answer와 intent 필드가 채워진다."""
         final_state = _make_state(
             intent=IntentType.SQL_SEARCH,
             answer="강남구 수영장 목록입니다.",
         )
+        mock_graph.stream = _stream_gen(final_state)
 
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _stream_gen(final_state)
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "수영장"},
@@ -336,25 +289,18 @@ class TestSqlSearchEventOrder:
 
 
 class TestFallbackScenario:
-    async def test_fallback_final_event_contains_answer(self, client: AsyncClient):
+    async def test_fallback_final_event_contains_answer(self, client: AsyncClient, mock_graph):
         """FALLBACK 의도 질의 시 final 이벤트에 answer가 포함된다."""
         final_state = _make_state(
             intent=IntentType.FALLBACK,
             answer="서울시 공공서비스 예약 챗봇입니다.",
         )
+        mock_graph.stream = _stream_gen(final_state)
 
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _stream_gen(final_state)
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "안녕하세요"},
@@ -365,22 +311,15 @@ class TestFallbackScenario:
         assert "서울시 공공서비스 예약 챗봇입니다." in final["data"]["answer"]
         assert final["data"]["intent"] == "FALLBACK"
 
-    async def test_fallback_event_sequence(self, client: AsyncClient):
+    async def test_fallback_event_sequence(self, client: AsyncClient, mock_graph):
         """FALLBACK 의도: progress × 3 → final 이벤트 순서."""
         final_state = _make_state(intent=IntentType.FALLBACK, answer="안내 메시지")
+        mock_graph.stream = _stream_gen(final_state)
 
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _stream_gen(final_state)
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "반가워요"},
@@ -465,7 +404,7 @@ class TestInvalidRequests:
 
 class TestWorkflowInternalError:
     async def test_workflow_internal_error_yields_workflow_error_event(
-        self, client: AsyncClient
+        self, client: AsyncClient, mock_graph
     ):
         """워크플로우가 error 필드를 담아 result를 반환하면 workflow_error 이벤트가 발행된다."""
         final_state = _make_state(
@@ -478,18 +417,12 @@ class TestWorkflowInternalError:
             yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
             yield "result", final_state
 
+        mock_graph.stream = _error_stream
+
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _error_stream
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "테스트"},
@@ -505,7 +438,7 @@ class TestWorkflowInternalError:
         assert workflow_error["data"]["error"] == "서비스 처리 중 오류가 발생했습니다."
         assert workflow_error["data"]["message_id"] == 2
 
-    async def test_workflow_error_event_follows_progress(self, client: AsyncClient):
+    async def test_workflow_error_event_follows_progress(self, client: AsyncClient, mock_graph):
         """workflow_error 이벤트는 progress 이벤트 이후에 발행된다."""
         final_state = _make_state(error="검색 실패", answer="죄송합니다.")
 
@@ -513,18 +446,12 @@ class TestWorkflowInternalError:
             yield "progress", {"step": "routing", "message": "..."}
             yield "result", final_state
 
+        mock_graph.stream = _error_stream
+
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _error_stream
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -542,20 +469,14 @@ class TestWorkflowInternalError:
 
 
 class TestSessionLevelError:
-    async def test_session_exception_returns_generic_error_event(self, client: AsyncClient):
+    async def test_session_exception_returns_generic_error_event(self, client: AsyncClient, mock_graph):
         """세션/DB 레벨 예외 → error 이벤트가 1개 반환되고 오류 내용이 노출되지 않는다."""
+        mock_graph.stream = MagicMock(side_effect=RuntimeError("DB 연결 실패 내부 정보"))
+
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = MagicMock(side_effect=RuntimeError("DB 연결 실패 내부 정보"))
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -569,20 +490,14 @@ class TestSessionLevelError:
         assert "DB 연결 실패 내부 정보" not in events[0]["data"]["message"]
         assert events[0]["data"]["message"] == "서비스 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 
-    async def test_session_exception_only_one_error_event(self, client: AsyncClient):
+    async def test_session_exception_only_one_error_event(self, client: AsyncClient, mock_graph):
         """세션 레벨 예외 시 SSE 이벤트가 정확히 1개만 발행된다."""
+        mock_graph.stream = MagicMock(side_effect=ValueError("세션 오류"))
+
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = MagicMock(side_effect=ValueError("세션 오류"))
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "테스트"},
@@ -599,22 +514,15 @@ class TestSessionLevelError:
 
 
 class TestSseResponseHeaders:
-    async def test_content_type_is_event_stream(self, client: AsyncClient):
+    async def test_content_type_is_event_stream(self, client: AsyncClient, mock_graph):
         """SSE 응답의 Content-Type은 text/event-stream이다."""
         final_state = _make_state()
+        mock_graph.stream = _stream_gen(final_state)
 
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _stream_gen(final_state)
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -622,22 +530,15 @@ class TestSseResponseHeaders:
 
         assert "text/event-stream" in response.headers["content-type"]
 
-    async def test_sse_anti_buffering_headers_present(self, client: AsyncClient):
+    async def test_sse_anti_buffering_headers_present(self, client: AsyncClient, mock_graph):
         """Cache-Control, Connection, X-Accel-Buffering 헤더가 설정된다."""
         final_state = _make_state()
+        mock_graph.stream = _stream_gen(final_state)
 
         with (
-            patch(
-                "routers.chat._graph"
-            ) as mock_wf,
-            patch(
-                "routers.chat.ai_session_ctx", _session_ctx()
-            ),
-            patch(
-                "routers.chat.data_session_ctx", _session_ctx()
-            ),
+            patch("routers.chat.ai_session_ctx", _session_ctx()),
+            patch("routers.chat.data_session_ctx", _session_ctx()),
         ):
-            mock_wf.stream = _stream_gen(final_state)
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},

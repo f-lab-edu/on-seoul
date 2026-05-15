@@ -1,5 +1,6 @@
 import gc
 import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 from dotenv import load_dotenv
@@ -11,6 +12,18 @@ load_dotenv()
 # 단위 테스트 폴백 — 실제 DB 없이도 Settings() 초기화가 통과되도록
 os.environ.setdefault("ON_AI_DATABASE_URL", "postgresql+asyncpg://test:test@localhost/on_ai")
 os.environ.setdefault("ON_DATA_DATABASE_URL", "postgresql+asyncpg://test:test@localhost/on_data")
+
+
+@pytest.fixture()
+def mock_graph():
+    """routers.chat._resolve_graph를 MagicMock으로 대체한다.
+
+    테스트에서 `mock_graph` fixture를 인자로 선언하면 AgentGraph 없이
+    mock_graph.stream 에 원하는 generator를 할당해 사용할 수 있다.
+    """
+    graph = MagicMock()
+    with patch("routers.chat._resolve_graph", return_value=graph):
+        yield graph
 
 
 @pytest.fixture(autouse=True)

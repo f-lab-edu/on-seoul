@@ -35,23 +35,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# _graph는 테스트 전용 patch 인터셉터다.
-# - 프로덕션: None 유지 → _get_graph(redis)가 process-singleton AgentGraph를 반환한다.
-#   AgentGraph._compiled_graph(ClassVar)는 최초 1회만 컴파일되며,
-#   AgentGraph 인스턴스도 첫 호출 시점의 redis를 캐싱한다.
-#   redis는 main.py lifespan이 process-singleton으로 관리하므로 안전하다.
-# - 테스트: patch("routers.chat._graph", mock)로 None이 아닌 값을 주입하면
-#   _get_graph()가 mock을 반환한다.
-_graph: AgentGraph | None = None
-
-
-def _get_graph(redis: Any = None) -> AgentGraph:
-    global _graph
-    if _graph is not None:
-        return _graph
-    _graph = AgentGraph(redis=redis)
-    return _graph
-
 
 # SSE 응답 헤더 — 프록시/CDN 버퍼링 방지
 _SSE_HEADERS = {
@@ -82,7 +65,20 @@ def _resolve_redis(request: Request) -> Any:
     return redis
 
 
-async def _stream(request: ChatRequest, redis: Any) -> AsyncGenerator[bytes, None]:
+def _resolve_graph(request: Request) -> AgentGraph:
+    """request.app.state에서 AgentGraph를 조회. 없으면 새로 생성 (lifespan 미실행 환경 전용).
+
+    프로덕션에서는 lifespan이 항상 실행되므로 fallback 경로는 호출되어서는 안 된다.
+    테스트나 예외 상황에서 호출되면 경고 로그를 남긴다.
+    """
+    graph = getattr(request.app.state, "graph", None)
+    if graph is None:
+        logger.warning("app.state.graph 미설정 — fallback AgentGraph 생성. lifespan 실행 여부 확인 필요")
+        graph = AgentGraph(redis=_resolve_redis(request))
+    return graph
+
+
+async def _stream(request: ChatRequest, graph: AgentGraph, redis: Any) -> AsyncGenerator[bytes, None]:
     """워크플로우를 실행하고 SSE 프레임을 yield한다."""
     logger.info(
         "chat.request room=%s msg_id=%d msg=%r",
@@ -120,7 +116,7 @@ async def _stream(request: ChatRequest, redis: Any) -> AsyncGenerator[bytes, Non
     push_after_success = False
     try:
         async with data_session_ctx() as data_session, ai_session_ctx() as ai_session:
-            async for event_type, data in _get_graph(redis).stream(
+            async for event_type, data in graph.stream(
                 state,
                 data_session=data_session,
                 ai_session=ai_session,
@@ -171,8 +167,9 @@ async def _stream(request: ChatRequest, redis: Any) -> AsyncGenerator[bytes, Non
 async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingResponse:
     """사용자 메시지를 받아 에이전트 워크플로우를 실행하고 SSE로 응답한다."""
     redis = _resolve_redis(http_request)
+    graph = _resolve_graph(http_request)
     return StreamingResponse(
-        _stream(request, redis),
+        _stream(request, graph, redis),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )

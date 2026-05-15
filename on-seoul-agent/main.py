@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from agents.graph import AgentGraph
 from core.logging import setup_logging
 from core.redis import get_redis
 from middleware.metrics import ProcessTimeMiddleware
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     redis = get_redis()
     app.state.redis = redis
+    app.state.graph = AgentGraph(redis=redis)
     try:
         yield
     finally:
