@@ -1,9 +1,9 @@
 package dev.jazzybyte.onseoul.chat;
 
-import dev.jazzybyte.onseoul.adapter.in.web.ChatController;
-import dev.jazzybyte.onseoul.adapter.in.web.GlobalExceptionHandler;
-import dev.jazzybyte.onseoul.domain.port.in.QueryAndStreamUseCase;
-import dev.jazzybyte.onseoul.domain.port.in.SendQueryCommand;
+import dev.jazzybyte.onseoul.chat.adapter.in.web.ChatController;
+import dev.jazzybyte.onseoul.shared.adapter.in.web.GlobalExceptionHandler;
+import dev.jazzybyte.onseoul.chat.port.in.QueryAndStreamUseCase;
+import dev.jazzybyte.onseoul.chat.port.in.SendQueryCommand;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import org.junit.jupiter.api.DisplayName;
@@ -77,23 +77,29 @@ class ChatControllerTest {
     }
 
     @Test
-    @DisplayName("POST /query - question이 빈 문자열이면 400을 반환한다")
-    void query_emptyQuestion_returns400() throws Exception {
+    @DisplayName("POST /query - question이 빈 문자열이면 400과 GlobalExceptionHandler 형식의 JSON 바디를 반환한다")
+    void query_emptyQuestion_returns400WithErrorBody() throws Exception {
         mockMvc.perform(post("/query")
                         .requestAttr("userId", 1L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"question\":\"\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("잘못된 요청값"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("question")));
     }
 
     @Test
-    @DisplayName("POST /query - question 필드 자체가 없으면 400을 반환한다")
-    void query_nullQuestion_returns400() throws Exception {
+    @DisplayName("POST /query - question 필드 자체가 없으면 400과 GlobalExceptionHandler 형식의 JSON 바디를 반환한다")
+    void query_nullQuestion_returns400WithErrorBody() throws Exception {
         mockMvc.perform(post("/query")
                         .requestAttr("userId", 1L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("잘못된 요청값"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("question")));
     }
 
     @Test
