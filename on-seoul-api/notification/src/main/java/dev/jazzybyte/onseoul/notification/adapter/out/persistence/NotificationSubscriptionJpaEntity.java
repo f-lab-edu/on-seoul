@@ -31,6 +31,13 @@ public class NotificationSubscriptionJpaEntity {
     @Column(name = "filter", nullable = false, columnDefinition = "jsonb")
     private String filter;
 
+    /**
+     * 발송 채널 목록. JSONB in PostgreSQL; H2 test schema declares this as VARCHAR(500).
+     * Stored as a JSON array string, e.g. ["EMAIL"] or ["EMAIL","SMS"].
+     */
+    @Column(name = "channels", nullable = false, columnDefinition = "jsonb")
+    private String channels;
+
     @Column(name = "last_notified_at")
     private Instant lastNotifiedAt;
 
@@ -38,10 +45,11 @@ public class NotificationSubscriptionJpaEntity {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    NotificationSubscriptionJpaEntity(Long userId, String serviceId, String filter) {
+    NotificationSubscriptionJpaEntity(Long userId, String serviceId, String filter, String channels) {
         this.userId = userId;
         this.serviceId = serviceId;
         this.filter = filter;
+        this.channels = channels;
     }
 
     void updateLastNotifiedAt(Instant lastNotifiedAt) {

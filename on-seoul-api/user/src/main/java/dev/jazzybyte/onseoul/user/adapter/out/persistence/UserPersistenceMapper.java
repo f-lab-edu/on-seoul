@@ -13,6 +13,7 @@ class UserPersistenceMapper {
                 entity.getProviderId(),
                 entity.getEmail(),
                 entity.getNickname(),
+                entity.getPhoneNumber(),
                 entity.getStatus(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt()
@@ -31,6 +32,7 @@ class UserPersistenceMapper {
 
     UserJpaEntity updateEntity(UserJpaEntity entity, User user) {
         entity.updateProfile(user.getEmail(), user.getNickname());
+        entity.updatePhoneNumber(user.getPhoneNumber());
         entity.updateStatus(user.getStatus());
         return entity;
     }

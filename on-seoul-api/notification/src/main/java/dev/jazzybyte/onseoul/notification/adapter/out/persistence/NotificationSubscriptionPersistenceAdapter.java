@@ -43,11 +43,13 @@ class NotificationSubscriptionPersistenceAdapter
         // JdbcTemplate은 JPA 영속성 컨텍스트를 오염시키지 않으므로
         // DataIntegrityViolationException(uq_ns_user_service 중복)을 catch해도 TX가 rollback-only로 마킹되지 않음.
         try {
+            String channelsJson = mapper.serializeChannels(subscription.getChannels());
             jdbcTemplate.update(
-                    "INSERT INTO notification_subscriptions (user_id, service_id, filter, created_at) VALUES (?, ?, ?, NOW())",
+                    "INSERT INTO notification_subscriptions (user_id, service_id, filter, channels, created_at) VALUES (?, ?, ?, ?, NOW())",
                     subscription.getUserId(),
                     subscription.getServiceId(),
-                    subscription.getFilter());
+                    subscription.getFilter(),
+                    channelsJson);
         } catch (DataIntegrityViolationException e) {
             // uq_ns_user_service 중복 — 이미 존재하므로 무시
             log.debug("[Notification] 구독 이미 존재 — skip: userId={}, serviceId={}",
@@ -58,18 +60,21 @@ class NotificationSubscriptionPersistenceAdapter
     @Override
     public NotificationSubscription save(NotificationSubscription subscription) {
         NotificationSubscriptionJpaEntity entity;
+        String channelsJson = mapper.serializeChannels(subscription.getChannels());
         if (subscription.getId() != null) {
             entity = repository.findById(subscription.getId())
                     .orElseGet(() -> new NotificationSubscriptionJpaEntity(
                             subscription.getUserId(),
                             subscription.getServiceId(),
-                            subscription.getFilter()));
+                            subscription.getFilter(),
+                            channelsJson));
             entity.updateLastNotifiedAt(subscription.getLastNotifiedAt());
         } else {
             entity = new NotificationSubscriptionJpaEntity(
                     subscription.getUserId(),
                     subscription.getServiceId(),
-                    subscription.getFilter());
+                    subscription.getFilter(),
+                    channelsJson);
         }
         return mapper.toDomain(repository.save(entity));
     }

@@ -59,7 +59,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "ai.service.url=http://localhost:8000",
         "ai.service.stream-timeout-seconds=120",
         "app.cookie-signing-key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        "app.cors.allowed-origins=http://localhost:3000"
+        "app.cors.allowed-origins=http://localhost:3000",
+        "knock.api-key=test-knock-key"
 })
 class SecurityConfigTest {
 

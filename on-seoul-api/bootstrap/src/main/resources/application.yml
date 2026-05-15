@@ -103,6 +103,12 @@ management:
     health:
       show-details: never
 
+knock:
+  api-key: ${KNOCK_API_KEY:}  # Knock API 키. 필수
+  email-workflow-key: "service-change-email"
+  sms-workflow-key: "service-change-sms"
+  timeout-seconds: 10
+
 logging:
   level:
     dev.jazzybyte: debug

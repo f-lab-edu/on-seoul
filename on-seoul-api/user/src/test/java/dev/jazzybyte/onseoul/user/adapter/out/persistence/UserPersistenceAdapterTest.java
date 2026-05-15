@@ -98,4 +98,32 @@ class UserPersistenceAdapterTest {
         assertThat(updated.getNickname()).isEqualTo("변경후닉네임");
         assertThat(updated.getUpdatedAt()).isNotNull();
     }
+
+    @Test
+    @DisplayName("save() updateContact() 후 → phoneNumber가 DB에 저장되고 findById()로 복원된다")
+    void save_afterUpdateContact_persistsPhoneNumber() {
+        User saved = createAndSaveUser("google", "google-uid-003", "contact@example.com", "연락처유저");
+        assertThat(saved.getPhoneNumber()).isNull();
+
+        saved.updateContact("010-5555-6666");
+        adapter.save(saved);
+
+        User reloaded = adapter.findById(saved.getId()).orElseThrow();
+        assertThat(reloaded.getPhoneNumber()).isEqualTo("010-5555-6666");
+    }
+
+    @Test
+    @DisplayName("save() updateContact(null) 후 → phoneNumber가 null로 저장된다")
+    void save_afterUpdateContactWithNull_persistsNullPhoneNumber() {
+        User saved = createAndSaveUser("kakao", "kakao-uid-002", "clear@example.com", "지우기유저");
+
+        saved.updateContact("010-1111-2222");
+        adapter.save(saved);
+
+        saved.updateContact(null);
+        adapter.save(saved);
+
+        User reloaded = adapter.findById(saved.getId()).orElseThrow();
+        assertThat(reloaded.getPhoneNumber()).isNull();
+    }
 }

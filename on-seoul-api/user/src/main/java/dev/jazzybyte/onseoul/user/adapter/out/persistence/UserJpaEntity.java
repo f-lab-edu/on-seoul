@@ -31,6 +31,9 @@ class UserJpaEntity {
     @Column(name = "nickname", length = 100)
     private String nickname;
 
+    @Column(name = "phone_number", length = 20)
+    private String phoneNumber;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
     private UserStatus status;
@@ -55,6 +58,10 @@ class UserJpaEntity {
     void updateProfile(String email, String nickname) {
         this.email = email;
         this.nickname = nickname;
+    }
+
+    void updatePhoneNumber(String phoneNumber) {
+        this.phoneNumber = phoneNumber;
     }
 
     void updateStatus(UserStatus status) {

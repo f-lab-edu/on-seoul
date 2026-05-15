@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 
+import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -10,6 +11,7 @@ import org.springframework.test.context.TestPropertySource;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,7 +31,8 @@ class NotificationSubscriptionPersistenceAdapterTest {
     @Test
     @DisplayName("save() 신규 구독 → insert 후 id 채번")
     void save_newSubscription_insertsAndAssignsId() {
-        NotificationSubscription sub = NotificationSubscription.create(1L, "SVC-001");
+        NotificationSubscription sub = NotificationSubscription.create(1L, "SVC-001",
+                Set.of(NotificationChannel.EMAIL));
 
         NotificationSubscription saved = adapter.save(sub);
 
@@ -37,14 +40,27 @@ class NotificationSubscriptionPersistenceAdapterTest {
         assertThat(saved.getUserId()).isEqualTo(1L);
         assertThat(saved.getServiceId()).isEqualTo("SVC-001");
         assertThat(saved.getFilter()).isEqualTo("{}");
+        assertThat(saved.getChannels()).containsExactly(NotificationChannel.EMAIL);
         assertThat(saved.getLastNotifiedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("save() EMAIL+SMS 복수 채널 → 저장 후 복원")
+    void save_multipleChannels_persistsAndRestores() {
+        NotificationSubscription sub = NotificationSubscription.create(3L, "SVC-010",
+                Set.of(NotificationChannel.EMAIL, NotificationChannel.SMS));
+
+        NotificationSubscription saved = adapter.save(sub);
+
+        assertThat(saved.getChannels()).containsExactlyInAnyOrder(
+                NotificationChannel.EMAIL, NotificationChannel.SMS);
     }
 
     @Test
     @DisplayName("loadAll() — 저장된 구독 전체 반환")
     void loadAll_returnsAllSubscriptions() {
-        adapter.save(NotificationSubscription.create(1L, "SVC-001"));
-        adapter.save(NotificationSubscription.create(1L, "SVC-002"));
+        adapter.save(NotificationSubscription.create(1L, "SVC-001", Set.of(NotificationChannel.EMAIL)));
+        adapter.save(NotificationSubscription.create(1L, "SVC-002", Set.of(NotificationChannel.SMS)));
 
         List<NotificationSubscription> all = adapter.loadAll();
 
@@ -54,7 +70,8 @@ class NotificationSubscriptionPersistenceAdapterTest {
     @Test
     @DisplayName("save() 기존 구독 — lastNotifiedAt 갱신")
     void save_existingSubscription_updatesLastNotifiedAt() {
-        NotificationSubscription sub = NotificationSubscription.create(2L, "SVC-003");
+        NotificationSubscription sub = NotificationSubscription.create(2L, "SVC-003",
+                Set.of(NotificationChannel.EMAIL));
         NotificationSubscription saved = adapter.save(sub);
 
         Instant now = Instant.now();
@@ -67,7 +84,8 @@ class NotificationSubscriptionPersistenceAdapterTest {
     @Test
     @DisplayName("saveIfAbsent() — 동일 (userId, serviceId)로 두 번 호출해도 row가 1건이다")
     void saveIfAbsent_idempotent_doesNotInsertDuplicate() {
-        NotificationSubscription sub = NotificationSubscription.create(99L, "OA-2269");
+        NotificationSubscription sub = NotificationSubscription.create(99L, "OA-2269",
+                Set.of(NotificationChannel.EMAIL));
         adapter.saveIfAbsent(sub);
         adapter.saveIfAbsent(sub);  // ON CONFLICT DO NOTHING — should not throw
 

@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS notification_subscriptions
     user_id          BIGINT        NOT NULL,
     service_id       VARCHAR(30)   NOT NULL,
     filter           VARCHAR(2000) NOT NULL DEFAULT '{}',
+    channels         VARCHAR(500)  NOT NULL DEFAULT '["EMAIL"]', -- H2는 jsonb_array_length 미지원으로 CHECK(jsonb_array_length > 0) 생략
     last_notified_at TIMESTAMP,
     created_at       TIMESTAMP     NOT NULL DEFAULT NOW(),
 

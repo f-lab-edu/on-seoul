@@ -139,7 +139,7 @@ class AuthControllerTest {
     @Test
     @DisplayName("GET /auth/me - 유효한 토큰으로 사용자 정보를 반환한다")
     void me_validToken_returnsUserInfo() throws Exception {
-        when(getMeUseCase.getMe(1L)).thenReturn(new MeResult(1L, "홍길동", UserStatus.ACTIVE));
+        when(getMeUseCase.getMe(1L)).thenReturn(new MeResult(1L, "홍길동", null, UserStatus.ACTIVE));
 
         mockMvc.perform(get("/auth/me")
                         .requestAttr("userId", 1L))

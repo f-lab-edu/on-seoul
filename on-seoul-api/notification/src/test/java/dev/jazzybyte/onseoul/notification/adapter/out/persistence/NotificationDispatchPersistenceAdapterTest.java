@@ -1,6 +1,7 @@
 package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 
 import dev.jazzybyte.onseoul.notification.domain.DispatchStatus;
+import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
 import jakarta.persistence.EntityManager;
@@ -14,6 +15,7 @@ import org.springframework.test.context.TestPropertySource;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -45,7 +47,8 @@ class NotificationDispatchPersistenceAdapterTest {
     @BeforeEach
     void setUp() {
         dev.jazzybyte.onseoul.notification.domain.NotificationSubscription sub =
-                dev.jazzybyte.onseoul.notification.domain.NotificationSubscription.create(10L, "SVC-SETUP");
+                dev.jazzybyte.onseoul.notification.domain.NotificationSubscription.create(
+                        10L, "SVC-SETUP", Set.of(NotificationChannel.EMAIL));
         subscriptionId = subscriptionAdapter.save(sub).getId();
     }
 

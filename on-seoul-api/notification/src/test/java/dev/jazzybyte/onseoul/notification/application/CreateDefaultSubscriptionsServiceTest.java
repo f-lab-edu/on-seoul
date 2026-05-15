@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.notification.application;
 
+import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
 import dev.jazzybyte.onseoul.notification.port.out.SaveSubscriptionPort;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,5 +57,18 @@ class CreateDefaultSubscriptionsServiceTest {
 
         captor.getAllValues().forEach(sub ->
                 assertThat(sub.getUserId()).isEqualTo(7L));
+    }
+
+    @Test
+    @DisplayName("create() — 기본 구독의 채널은 EMAIL이다")
+    void create_defaultChannelIsEmail() {
+        service.create(10L);
+
+        ArgumentCaptor<NotificationSubscription> captor =
+                ArgumentCaptor.forClass(NotificationSubscription.class);
+        verify(saveSubscriptionPort, times(5)).saveIfAbsent(captor.capture());
+
+        captor.getAllValues().forEach(sub ->
+                assertThat(sub.getChannels()).containsExactly(NotificationChannel.EMAIL));
     }
 }
