@@ -14,18 +14,20 @@ public class User {
     private String email;
     private String nickname;
     private UserStatus status;
+    private String fcmToken;
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;
 
     /** Reconstitute from persistence. */
     public User(Long id, String provider, String providerId, String email, String nickname,
-                UserStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {
+                UserStatus status, String fcmToken, OffsetDateTime createdAt, OffsetDateTime updatedAt) {
         this.id = id;
         this.provider = provider;
         this.providerId = providerId;
         this.email = email;
         this.nickname = nickname;
         this.status = status;
+        this.fcmToken = fcmToken;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }

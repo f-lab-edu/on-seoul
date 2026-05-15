@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS users (
     email       VARCHAR(255),
     nickname    VARCHAR(100),
     status      VARCHAR(20) NOT NULL,
+    fcm_token   VARCHAR(300),
     created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );

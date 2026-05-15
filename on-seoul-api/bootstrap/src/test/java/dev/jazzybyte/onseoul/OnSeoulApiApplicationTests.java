@@ -4,13 +4,17 @@ import dev.jazzybyte.onseoul.collection.port.out.GeocodingPort;
 import dev.jazzybyte.onseoul.collection.port.out.LoadApiSourceCatalogPort;
 import dev.jazzybyte.onseoul.chat.port.out.LoadChatRoomPort;
 import dev.jazzybyte.onseoul.collection.port.out.LoadPublicServicePort;
+import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
+import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.user.port.out.LoadUserPort;
 import dev.jazzybyte.onseoul.user.port.out.RefreshTokenStorePort;
+import dev.jazzybyte.onseoul.notification.port.out.SaveDispatchPort;
 import dev.jazzybyte.onseoul.chat.port.out.SaveChatMessagePort;
 import dev.jazzybyte.onseoul.chat.port.out.SaveChatRoomPort;
 import dev.jazzybyte.onseoul.collection.port.out.SaveCollectionHistoryPort;
 import dev.jazzybyte.onseoul.collection.port.out.SavePublicServicePort;
 import dev.jazzybyte.onseoul.collection.port.out.SaveServiceChangeLogPort;
+import dev.jazzybyte.onseoul.notification.port.out.SaveSubscriptionPort;
 import dev.jazzybyte.onseoul.user.port.out.SaveUserPort;
 import dev.jazzybyte.onseoul.collection.port.out.SeoulDatasetFetchPort;
 import lombok.extern.slf4j.Slf4j;
@@ -55,6 +59,10 @@ class OnSeoulApiApplicationTests {
     @MockitoBean SaveChatRoomPort saveChatRoomPort;
     @MockitoBean LoadChatRoomPort loadChatRoomPort;
     @MockitoBean SaveChatMessagePort saveChatMessagePort;
+    @MockitoBean LoadSubscriptionPort loadSubscriptionPort;
+    @MockitoBean SaveSubscriptionPort saveSubscriptionPort;
+    @MockitoBean SaveDispatchPort saveDispatchPort;
+    @MockitoBean LoadDispatchPort loadDispatchPort;
 
     @Test
     void contextLoads(ApplicationContext applicationContext) {

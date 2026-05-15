@@ -14,6 +14,7 @@ class UserPersistenceMapper {
                 entity.getEmail(),
                 entity.getNickname(),
                 entity.getStatus(),
+                entity.getFcmToken(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt()
         );
