@@ -45,6 +45,8 @@ class SeoulOpenApiAdapterIntegrationTest {
 
         WebClient webClient = WebClient.builder()
                 .baseUrl(properties.getBaseUrl())
+                .codecs(configurer ->
+                        configurer.defaultCodecs().maxInMemorySize(20 * 1024 * 1024))
                 .build();
 
         adapter = new SeoulOpenApiAdapter(
