@@ -84,6 +84,12 @@ def _resolve_redis(request: Request) -> Any:
 
 async def _stream(request: ChatRequest, redis: Any) -> AsyncGenerator[bytes, None]:
     """워크플로우를 실행하고 SSE 프레임을 yield한다."""
+    logger.info(
+        "chat.request room=%s msg_id=%d msg=%r",
+        request.room_id,
+        request.message_id,
+        request.message[:60],
+    )
     # 1) 최근 질의 컨텍스트 — Router Agent follow-up 분류용. 장애 시 빈 리스트.
     recent_queries = await get_recent_queries(request.room_id, redis)
 
@@ -133,10 +139,20 @@ async def _stream(request: ChatRequest, redis: Any) -> AsyncGenerator[bytes, Non
                         "cache_hit": bool(result.get("cache_hit")),
                     }
                     if result.get("error"):
-                        logger.error("workflow error: %s", result["error"])
+                        logger.error(
+                            "chat.workflow_error room=%s intent=%s error=%s",
+                            result.get("room_id"), intent, result["error"],
+                        )
                         payload["error"] = "서비스 처리 중 오류가 발생했습니다."
                         yield sse_frame("workflow_error", payload)
                     else:
+                        logger.info(
+                            "chat.final room=%s intent=%s cache_hit=%s answer_len=%d",
+                            result.get("room_id"),
+                            intent.value if intent is not None else None,
+                            payload["cache_hit"],
+                            len(payload["answer"]),
+                        )
                         push_after_success = True
                         yield sse_frame("final", payload)
 

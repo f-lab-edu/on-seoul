@@ -111,6 +111,16 @@ class GraphNodes:
                 update["area_name"] = result.area_name
             if result.service_status is not None:
                 update["service_status"] = result.service_status
+            logger.info(
+                "router.classify room=%s intent=%s refined=%r "
+                "max_class=%s area=%s status=%s",
+                state.get("room_id"),
+                result.intent.value,
+                (result.refined_query or "")[:40],
+                result.max_class_name,
+                result.area_name,
+                result.service_status,
+            )
             return update
         except Exception as exc:
             logger.exception("router_node 실행 오류")
@@ -127,9 +137,11 @@ class GraphNodes:
         retry_count를 1 증가시키고 이전 검색 결과를 초기화한다.
         이 노드에서 초기화가 완료되므로 router_node는 분류에만 집중한다.
         """
+        new_retry_count = (state.get("retry_count") or 0) + 1
+        logger.info("retry.triggered room=%s retry_count=%d", state.get("room_id"), new_retry_count)
         self.node_path.append("retry_prep")
         return {
-            "retry_count": (state.get("retry_count") or 0) + 1,
+            "retry_count": new_retry_count,
             "error": None,
             "sql_results": None,
             "vector_results": None,
@@ -146,6 +158,8 @@ class GraphNodes:
         try:
             new_state = await self._sql.search(state, self.data_session)
             self.node_path.append("sql_node")
+            results = new_state.get("sql_results") or []
+            logger.info("sql.results room=%s count=%d", state.get("room_id"), len(results))
             return {"sql_results": new_state.get("sql_results")}
         except Exception as exc:
             logger.exception("sql_node 실행 오류")
@@ -165,6 +179,13 @@ class GraphNodes:
                 state, self.ai_session, self.data_session
             )
             self.node_path.append("vector_node")
+            results = new_state.get("vector_results") or []
+            logger.info(
+                "vector.results room=%s count=%d refined=%r",
+                state.get("room_id"),
+                len(results),
+                (new_state.get("refined_query") or "")[:40],
+            )
             return {
                 "vector_results": new_state.get("vector_results"),
                 "refined_query": new_state.get("refined_query"),
@@ -206,6 +227,8 @@ class GraphNodes:
         try:
             new_state = await self._answer.answer(state)
             self.node_path.append("answer_node")
+            answer = new_state.get("answer") or ""
+            logger.info("answer.generated room=%s len=%d", state.get("room_id"), len(answer))
             return {
                 "answer": new_state.get("answer"),
                 "title": new_state.get("title"),
@@ -358,13 +381,17 @@ class CacheCheckNode:
         )
         if envelope is None:
             logger.info(
-                "cache.miss intent=%s len=%d", intent.value, len(refined)
+                "cache.miss room=%s intent=%s refined=%r",
+                state.get("room_id"), intent.value, refined[:40],
             )
             return {"cache_hit": False}
 
         payload = envelope.get("payload", {}) or {}
         snap = envelope.get("state", {}) or {}
-        logger.info("cache.hit intent=%s len=%d", intent.value, len(refined))
+        logger.info(
+            "cache.hit room=%s intent=%s refined=%r",
+            state.get("room_id"), intent.value, refined[:40],
+        )
         return {
             "answer": payload.get("answer"),
             "title": payload.get("title"),
