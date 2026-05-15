@@ -82,7 +82,7 @@ async def test_gpt_generate_fallback() -> None:
 
 @pytest.mark.asyncio
 async def test_gemini_embed() -> None:
-    """Gemini gemini-embedding-2-preview가 1536차원 벡터를 반환하는지 확인 (output_dimensionality=1536)."""
+    """Gemini gemini-embedding-2-preview가 768차원 벡터를 반환하는지 확인 (output_dimensionality=768)."""
     _require_google_key()
     embedder = Embedder(embeddings=get_embeddings())
     try:
@@ -91,7 +91,7 @@ async def test_gemini_embed() -> None:
         _skip_on_api_error(e)
         raise
     assert isinstance(result, list)
-    assert len(result) == 1536  # gemini-embedding-2-preview 차원
+    assert len(result) == 768  # gemini-embedding-2-preview 차원
     assert all(isinstance(v, float) for v in result)
 
 
@@ -107,4 +107,4 @@ async def test_gemini_embed_many() -> None:
         _skip_on_api_error(e)
         raise
     assert len(results) == len(texts)
-    assert all(len(v) == 1536 for v in results)
+    assert all(len(v) == 768 for v in results)

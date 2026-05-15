@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     gpt_model: str = "gpt-4o-mini"
 
-    # 임베딩 — Gemini, output_dimensionality=1536 (DDL vector(1536) 기준)
+    # 임베딩 — Gemini, output_dimensionality=768 (DDL vector(768) 기준)
     embedding_model: str = "models/gemini-embedding-2-preview"
     # Gemini Embedding API rate limit (요청/분). 유료: 최대 1500, 무료: 100.
     # 버스트 제거 후 실효 간격 = 60/rpm 초. 무료 티어 안전값: 60 이하 권장.

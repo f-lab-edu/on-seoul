@@ -66,9 +66,9 @@ pytest 실행 시 numpy까지 함께 로드(~250 MB)됐다.
 
 ## 원인 4 — 테스트 내 대용량 mock 벡터
 
-`test_graph.py`, `test_integration_workflow.py`에서 `[0.1] * 1536`을 mock 반환값
+`test_graph.py`, `test_integration_workflow.py`에서 `[0.1] * 768`을 mock 반환값
 으로 사용했다. `AsyncMock`은 콜 히스토리에 인수·반환값을 모두 보존하므로,
-테스트가 반복 호출될수록 1536-element 리스트가 누적됐다.
+테스트가 반복 호출될수록 768-element 리스트가 누적됐다.
 
 ### 조치
 
@@ -173,7 +173,7 @@ QA 완료 후 코드리뷰를 순차 실행하는 것으로 운영 방침을 변
 | 파일 | 변경 내용 |
 |---|---|
 | `pyproject.toml` | `asyncio_default_test_loop_scope = "session"` 추가, `pandas` 의존성 완전 제거, `pytest-timeout` 추가 및 `timeout = 30` 설정 |
-| `tests/test_graph.py` | `[0.1] * 1536` → `[0.1] * 3` |
-| `tests/test_integration_workflow.py` | `[0.1] * 1536` → `[0.1] * 3` |
+| `tests/test_graph.py` | `[0.1] * 768` → `[0.1] * 3` |
+| `tests/test_integration_workflow.py` | `[0.1] * 768` → `[0.1] * 3` |
 | `tests/conftest.py` | `_reset_agent_graph_cache` autouse fixture 추가 (`AgentGraph._compiled_graph` 매 테스트 후 초기화) |
 | `agents/graph.py` | `ainvoke` 호출에 `config={"recursion_limit": 10}` 명시 (Self-Correction 무한 루프 방어) |

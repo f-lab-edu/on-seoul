@@ -161,13 +161,13 @@ def get_chat_model(
 def get_embeddings(model: str | None = None) -> Embeddings:
     """Return a configured embeddings instance.
 
-    Gemini gemini-embedding-2-preview, output_dimensionality=1536 (DDL vector(1536) 기준).
+    Gemini gemini-embedding-2-preview, output_dimensionality=768 (DDL vector(768) 기준).
     """
     if not settings.google_api_key:
         raise ConfigurationException("GOOGLE_API_KEY is required for Gemini embeddings")
     base = GoogleGenerativeAIEmbeddings(
         google_api_key=settings.google_api_key,
         model=model or settings.embedding_model,
-        output_dimensionality=1536,
+        output_dimensionality=768,
     )
     return _GeminiEmbeddings(base)  # 프로덕션: 모듈 수준 _gemini_embed_limiter 사용
