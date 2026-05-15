@@ -1,0 +1,6 @@
+
+dependencies {
+    api project(':common')
+    implementation project(':user')
+    implementation project(':collection')
+}

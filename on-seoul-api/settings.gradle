@@ -1,8 +1,8 @@
 rootProject.name = 'on-seoul-api'
 
 include 'common'
-include 'domain'
-include 'application'
-include 'adapter'
+include 'user'
+include 'chat'
+include 'collection'
+include 'notification'
 include 'bootstrap'
-include 'collector'
