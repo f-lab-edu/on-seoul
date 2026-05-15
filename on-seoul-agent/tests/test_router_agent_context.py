@@ -3,9 +3,10 @@
 LLM 호출은 mock하고, 프롬프트에 컨텍스트가 들어갔는지 검증한다.
 """
 
+import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from agents.router_agent import RouterAgent, _IntentOutput
+from agents.router_agent import SEOUL_DISTRICTS, RouterAgent, _IntentOutput
 from core.config import settings
 from schemas.state import IntentType
 
@@ -197,6 +198,37 @@ class TestRouterContextInjection:
         """허용된 max_class_name 값은 그대로 유지된다."""
         rq = _IntentOutput(intent=IntentType.SQL_SEARCH, max_class_name="진료")
         assert rq.max_class_name == "진료"
+
+    async def test_invalid_area_name_with_space_normalized_to_none(self):
+        """공백이 포함된 자치구명("강 남구")은 None으로 정규화된다."""
+        rq = _IntentOutput(intent=IntentType.SQL_SEARCH, area_name="강 남구")
+        assert rq.area_name is None
+
+    async def test_invalid_area_name_english_normalized_to_none(self):
+        """영문 자치구명("Gangnam")은 None으로 정규화된다."""
+        rq = _IntentOutput(intent=IntentType.SQL_SEARCH, area_name="Gangnam")
+        assert rq.area_name is None
+
+    async def test_invalid_area_name_without_gu_normalized_to_none(self):
+        """"구" 접미사 없는 축약형("강남")은 None으로 정규화된다."""
+        rq = _IntentOutput(intent=IntentType.SQL_SEARCH, area_name="강남")
+        assert rq.area_name is None
+
+    async def test_valid_area_name_preserved(self):
+        """허용된 자치구명("강남구")은 그대로 유지된다."""
+        rq = _IntentOutput(intent=IntentType.SQL_SEARCH, area_name="강남구")
+        assert rq.area_name == "강남구"
+
+    async def test_none_area_name_preserved(self):
+        """area_name=None은 None으로 유지된다."""
+        rq = _IntentOutput(intent=IntentType.SQL_SEARCH, area_name=None)
+        assert rq.area_name is None
+
+    @pytest.mark.parametrize("district", sorted(SEOUL_DISTRICTS))
+    async def test_all_25_districts_pass_validator(self, district: str):
+        """서울 25개 자치구 전체가 field_validator를 통과한다."""
+        rq = _IntentOutput(intent=IntentType.SQL_SEARCH, area_name=district)
+        assert rq.area_name == district
 
     async def test_long_queries_compose_without_error(self, monkeypatch):
         """매우 긴 query 5개가 들어가도 prompt 합성에 실패하지 않는다.

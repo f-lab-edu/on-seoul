@@ -28,6 +28,17 @@ _ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(
     ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
 )
 
+# 서울특별시 25개 자치구 공식 명칭 화이트리스트.
+# LLM이 "강남" / "강 남구" / "Gangnam" 등 비표준 형식을 반환하면
+# cache key 오염·SQL 빈 결과를 방지하기 위해 None으로 정규화한다.
+SEOUL_DISTRICTS: frozenset[str] = frozenset([
+    "강남구", "강동구", "강북구", "강서구", "관악구",
+    "광진구", "구로구", "금천구", "노원구", "도봉구",
+    "동대문구", "동작구", "마포구", "서대문구", "서초구",
+    "성동구", "성북구", "송파구", "양천구", "영등포구",
+    "용산구", "은평구", "종로구", "중구", "중랑구",
+])
+
 _SYSTEM = """\
 당신은 서울시 공공서비스 예약 챗봇의 라우터입니다.
 사용자 메시지를 읽고 아래 네 가지 의도 중 하나를 반환하세요.
@@ -71,6 +82,15 @@ class _IntentOutput(BaseModel):
         if v is None:
             return None
         if v in _ALLOWED_MAX_CLASS_NAMES:
+            return v  # type: ignore[return-value]
+        return None
+
+    @field_validator("area_name", mode="before")
+    @classmethod
+    def _validate_area_name(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        if v in SEOUL_DISTRICTS:
             return v  # type: ignore[return-value]
         return None
 
