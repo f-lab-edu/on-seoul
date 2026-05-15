@@ -88,13 +88,13 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 > 배치 잡 방식. 상태 머신 아님.
 > 상세 결정은 `adr/0004-notification-orchestration.md` 전체, `adr/0003-consistency-and-transaction.md` 참조.
 
-- [ ] `NotificationScheduler` — `@Scheduled(fixedDelay)` 기반
-- [ ] 가상 스레드 풀 + `Semaphore` 동시성 제어 — `adr/0004` 파라미터 참조
-- [ ] TX A — `ServiceChangeLog` 매칭 + `NotificationDispatch` INSERT (`ON CONFLICT DO NOTHING`)
-- [ ] TX B — 푸시 성공 시 `status=SUCCESS` + `last_notified_at` 갱신 / 실패 시 `status=FAILED`, `attempt_count++`
-- [ ] `DEAD` 처리 — `attempt_count >= MAX_ATTEMPTS` 도달 시
-- [ ] Fallback 템플릿 (`NotificationTemplate.render`) — AI 호출 실패 시 사용
-- [ ] Micrometer 운영 metrics 3종 등록 — `adr/0004` 운영 metrics 참조
+- [x] `NotificationScheduler` — `@Scheduled(fixedDelayString)` 기반, `NotificationTxHelper` TX 헬퍼 분리 (가상 스레드 프록시 호환)
+- [x] 가상 스레드 풀 + `Semaphore(4)` 동시성 제어 — `adr/0004` 파라미터 참조
+- [x] TX A — `ServiceChangeLog` 매칭(`LoadServiceChangePort`) + `NotificationDispatch` INSERT (`saveIfAbsent`, `REQUIRES_NEW`)
+- [x] TX B — 푸시 성공 시 `status=SUCCESS` + `last_notified_at` 갱신 / 실패 시 `status=FAILED`, `attempt_count++` (`REQUIRES_NEW`)
+- [x] `DEAD` 처리 — `attempt_count >= MAX_ATTEMPTS` 도달 시
+- [x] Fallback 템플릿 (`NotificationTemplate.render`) — `TemplateAgentClient`가 non-2xx/타임아웃/빈 응답 시 자동 사용
+- [x] Micrometer 운영 metrics 3종 등록 — `notification.template.source`, `notification.dispatch.dead`, `notification.dispatch.attempts`
 
 ---
 
