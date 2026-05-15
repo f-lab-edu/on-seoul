@@ -109,6 +109,10 @@ knock:
   sms-workflow-key: "service-change-sms"
   timeout-seconds: 10
 
+notification:
+  scheduler:
+    fixed-delay-ms: 300000   # 5분
+
 logging:
   level:
     dev.jazzybyte: debug

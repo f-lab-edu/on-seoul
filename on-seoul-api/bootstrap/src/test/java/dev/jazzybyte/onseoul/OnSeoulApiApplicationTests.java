@@ -5,6 +5,7 @@ import dev.jazzybyte.onseoul.collection.port.out.LoadApiSourceCatalogPort;
 import dev.jazzybyte.onseoul.chat.port.out.LoadChatRoomPort;
 import dev.jazzybyte.onseoul.collection.port.out.LoadPublicServicePort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
+import dev.jazzybyte.onseoul.notification.port.out.LoadServiceChangePort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.user.port.out.LoadUserPort;
 import dev.jazzybyte.onseoul.user.port.out.RefreshTokenStorePort;
@@ -64,6 +65,7 @@ class OnSeoulApiApplicationTests {
     @MockitoBean SaveSubscriptionPort saveSubscriptionPort;
     @MockitoBean SaveDispatchPort saveDispatchPort;
     @MockitoBean LoadDispatchPort loadDispatchPort;
+    @MockitoBean LoadServiceChangePort loadServiceChangePort;
 
     @Test
     void contextLoads(ApplicationContext applicationContext) {
