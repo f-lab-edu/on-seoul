@@ -42,6 +42,8 @@ def _cache_key(
         f"status={service_status or ''}",
     ]
     composite = "|".join(parts)
+    # 64-bit(16 hex) 잘라내기 — 동시 키 규모 O(1000)에서 충돌 확률 무시 가능.
+    # 규모 확장 시 32자(128-bit)로 늘릴 것.
     digest = hashlib.sha256(composite.encode("utf-8")).hexdigest()[:16]
     return f"{_KEY_PREFIX}{digest}"
 
@@ -122,7 +124,7 @@ async def flush_answer_cache(redis: aioredis.Redis) -> int:
         if batch:
             await redis.delete(*batch)
             deleted += len(batch)
+        logger.info("cache.flush deleted=%d", deleted)
     except Exception:
-        logger.warning("answer cache flush 오류", exc_info=True)
-    logger.info("cache.flush deleted=%d", deleted)
+        logger.warning("answer cache flush 오류 (deleted=%d 반영 안 됨)", deleted, exc_info=True)
     return deleted

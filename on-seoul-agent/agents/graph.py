@@ -170,7 +170,9 @@ def _build_shared_graph() -> Any:
         "answer_node",
         _dispatch_self_correction_edge,
         {
-            "trace_node": "cache_write_node",
+            # "end_normal": self_correction_edge의 반환값.
+            # 정상 완료 시 cache_write_node → trace_node 순으로 이어진다.
+            "end_normal": "cache_write_node",
             "retry_prep_node": "retry_prep_node",
         },
     )

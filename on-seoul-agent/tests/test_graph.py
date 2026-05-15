@@ -740,8 +740,8 @@ class TestSelfCorrectionInfiniteLoopRegression:
             "retry_count": 0,
         }
 
-        # 수정 후: answer.strip() 이 truthy 이므로 needs_retry=False → trace_node
-        assert graph._nodes.self_correction_edge(state_with_error) == "trace_node"
+        # 수정 후: answer.strip() 이 truthy 이므로 needs_retry=False → end_normal
+        assert graph._nodes.self_correction_edge(state_with_error) == "end_normal"
 
         # answer 없을 때만 retry 트리거
         state_empty_answer: AgentState = {
@@ -752,9 +752,9 @@ class TestSelfCorrectionInfiniteLoopRegression:
         }
         assert graph._nodes.self_correction_edge(state_empty_answer) == "retry_prep_node"
 
-        # retry_count >= 1 이면 항상 trace_node
+        # retry_count >= 1 이면 항상 end_normal
         state_after_retry = {**state_empty_answer, "retry_count": 1}
-        assert graph._nodes.self_correction_edge(state_after_retry) == "trace_node"
+        assert graph._nodes.self_correction_edge(state_after_retry) == "end_normal"
 
 
 

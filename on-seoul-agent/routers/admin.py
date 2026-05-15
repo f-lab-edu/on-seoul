@@ -30,7 +30,7 @@ def _verify_token(x_internal_token: str | None = Header(default=None)) -> None:
     if not expected:
         logger.warning("admin 엔드포인트 호출 거부 — admin_internal_token 미설정")
         raise HTTPException(status_code=401, detail="admin disabled")
-    if not x_internal_token or not secrets.compare_digest(
+    if x_internal_token is None or not secrets.compare_digest(
         x_internal_token, expected
     ):
         logger.warning("admin 엔드포인트 호출 거부 — invalid token")

@@ -290,7 +290,7 @@ class GraphNodes:
 
         if needs_retry:
             return "retry_prep_node"
-        return "trace_node"
+        return "end_normal"
 
 
 # ---------------------------------------------------------------------------

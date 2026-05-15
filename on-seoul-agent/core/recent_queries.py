@@ -23,7 +23,9 @@ async def get_recent_queries(room_id: int, redis: aioredis.Redis) -> list[str]:
         return []
     try:
         items = await redis.lrange(_key(room_id), 0, settings.recent_queries_max - 1)
-        return [item.decode("utf-8") if isinstance(item, bytes) else item for item in items]
+        # get_redis()가 decode_responses=True로 생성하므로 항목은 항상 str이다.
+        # bytes 분기는 클라이언트 설정 변경에 대한 방어 코드.
+        return [item.decode("utf-8") if isinstance(item, bytes) else str(item) for item in items]
     except Exception:
         logger.warning("recent_queries GET 오류 — 빈 컨텍스트", exc_info=True)
         return []
