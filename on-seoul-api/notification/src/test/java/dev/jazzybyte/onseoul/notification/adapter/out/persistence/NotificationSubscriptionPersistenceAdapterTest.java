@@ -63,4 +63,18 @@ class NotificationSubscriptionPersistenceAdapterTest {
 
         assertThat(updated.getLastNotifiedAt()).isEqualTo(now);
     }
+
+    @Test
+    @DisplayName("saveIfAbsent() — 동일 (userId, serviceId)로 두 번 호출해도 row가 1건이다")
+    void saveIfAbsent_idempotent_doesNotInsertDuplicate() {
+        NotificationSubscription sub = NotificationSubscription.create(99L, "OA-2269");
+        adapter.saveIfAbsent(sub);
+        adapter.saveIfAbsent(sub);  // ON CONFLICT DO NOTHING — should not throw
+
+        List<NotificationSubscription> all = adapter.loadAll();
+        long count = all.stream()
+                .filter(s -> s.getUserId().equals(99L) && s.getServiceId().equals("OA-2269"))
+                .count();
+        assertThat(count).isEqualTo(1);
+    }
 }

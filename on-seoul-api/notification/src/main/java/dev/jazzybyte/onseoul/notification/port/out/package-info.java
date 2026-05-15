@@ -1,2 +1,2 @@
-/** notification BC — outbound ports (Phase 2 이후 구현 예정). */
+/** notification BC — outbound ports. LoadSubscriptionPort, SaveSubscriptionPort 구현 완료. */
 package dev.jazzybyte.onseoul.notification.port.out;

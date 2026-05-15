@@ -70,6 +70,7 @@ class SocialLoginServiceTest {
 
         TokenResponse result = service.socialLogin(cmd);
 
+        assertThat(result.userId()).isEqualTo(10L);
         assertThat(result.accessToken()).isEqualTo("access-token");
         assertThat(result.refreshToken()).isEqualTo("refresh-token");
 

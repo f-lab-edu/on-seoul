@@ -1,2 +1,2 @@
-/** notification BC — inbound adapters (Phase 2 이후 구현 예정). */
+/** notification BC — inbound adapters. OAuth2 로그인 성공 시 구독 초기화 흐름 구현 완료. */
 package dev.jazzybyte.onseoul.notification.adapter.in;

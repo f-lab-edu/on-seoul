@@ -45,6 +45,6 @@ public class RefreshTokenService implements RefreshTokenUseCase {
         String newRefreshToken = tokenIssuerPort.generateRefreshToken(userId);
         refreshTokenStorePort.save(userId, newRefreshToken, tokenIssuerPort.getRefreshTokenMinutes());
 
-        return new TokenResponse(newAccessToken, newRefreshToken);
+        return new TokenResponse(userId, newAccessToken, newRefreshToken);
     }
 }

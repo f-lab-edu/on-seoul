@@ -5,4 +5,6 @@ import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
 public interface SaveSubscriptionPort {
 
     NotificationSubscription save(NotificationSubscription subscription);
+
+    void saveIfAbsent(NotificationSubscription subscription);
 }

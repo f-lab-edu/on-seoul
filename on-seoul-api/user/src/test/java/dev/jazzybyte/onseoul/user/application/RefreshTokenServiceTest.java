@@ -56,6 +56,7 @@ class RefreshTokenServiceTest {
 
         TokenResponse result = service.refresh(refreshToken);
 
+        assertThat(result.userId()).isEqualTo(userId);
         assertThat(result.accessToken()).isEqualTo("new-access-token");
         assertThat(result.refreshToken()).isEqualTo("new-refresh-token");
         verify(refreshTokenStorePort, never()).delete(userId);

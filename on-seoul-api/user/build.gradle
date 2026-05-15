@@ -1,6 +1,7 @@
 
 dependencies {
     api project(':common')
+    implementation project(':notification')
 
     implementation 'io.projectreactor:reactor-core'
 

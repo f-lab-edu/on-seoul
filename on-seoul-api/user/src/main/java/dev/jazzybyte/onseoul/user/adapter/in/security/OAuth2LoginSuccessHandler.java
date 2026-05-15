@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.user.adapter.in.security;
 
+import dev.jazzybyte.onseoul.notification.port.in.CreateDefaultSubscriptionsUseCase;
 import dev.jazzybyte.onseoul.user.port.in.SocialLoginCommand;
 import dev.jazzybyte.onseoul.user.port.in.SocialLoginUseCase;
 import dev.jazzybyte.onseoul.user.port.in.TokenResponse;
@@ -38,6 +39,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
     public static final String REFRESH_TOKEN_COOKIE = "refresh_token";
 
     private final SocialLoginUseCase socialLoginUseCase;
+    private final CreateDefaultSubscriptionsUseCase createDefaultSubscriptionsUseCase;
     private final String frontendBaseUrl;
     private final boolean cookieSecure;
     /** 쿠키 SameSite 속성. 기본값 Strict. */
@@ -54,12 +56,14 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
 
     public OAuth2LoginSuccessHandler(
             final SocialLoginUseCase socialLoginUseCase,
+            final CreateDefaultSubscriptionsUseCase createDefaultSubscriptionsUseCase,
             final TokenIssuerPort tokenIssuerPort,
             @Value("${app.frontend-base-url}") String frontendBaseUrl,
             @Value("${app.cookie-secure:true}") boolean cookieSecure,
             @Value("${app.cookie-same-site:Strict}") String cookieSameSite,
             @Value("${app.cookie-domain:}") String cookieDomain) {
         this.socialLoginUseCase = socialLoginUseCase;
+        this.createDefaultSubscriptionsUseCase = createDefaultSubscriptionsUseCase;
         this.frontendBaseUrl = frontendBaseUrl;
         this.cookieSecure = cookieSecure;
         this.cookieSameSite = cookieSameSite;
@@ -103,16 +107,22 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
             SocialLoginCommand command = new SocialLoginCommand(provider, providerId, email, nickname);
             TokenResponse tokenResponse = socialLoginUseCase.socialLogin(command);
 
+            try {
+                createDefaultSubscriptionsUseCase.create(tokenResponse.userId());
+            } catch (Exception e) {
+                log.warn("[Notification] 기본 구독 생성 실패: userId={}, error={}", tokenResponse.userId(), e.getMessage());
+            }
+
             response.addHeader("Set-Cookie", buildAccessCookie(tokenResponse.accessToken()).toString());
             response.addHeader("Set-Cookie", buildRefreshCookie(tokenResponse.refreshToken()).toString());
-            log.info("[Security] OAuth2 로그인 성공: provider={}, providerId={}, email={}", provider, providerId, email);
+            log.info("[Security] OAuth2 로그인 성공: provider={}, providerId={}", provider, providerId);
             response.sendRedirect(frontendBaseUrl + "/oauth/callback?status=success");
 
         } catch (OnSeoulApiException ex) {
             // FORBIDDEN = SUSPENDED/DELETED 계정. 그 외 OnSeoulApiException은 서버 내부 오류.
             String errorParam = ex.getErrorCode() == ErrorCode.FORBIDDEN ? "forbidden" : "server_error";
-            log.warn("[Security] OAuth2 로그인 실패: provider={}, providerId={}, email={}, error={}",
-                    provider, providerId, email, ex.getMessage());
+            log.warn("[Security] OAuth2 로그인 실패: provider={}, providerId={}, error={}",
+                    provider, providerId, ex.getMessage());
             response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=" + errorParam);
         }
     }

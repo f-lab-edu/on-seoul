@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.security;
 
+import dev.jazzybyte.onseoul.notification.port.in.CreateDefaultSubscriptionsUseCase;
 import dev.jazzybyte.onseoul.user.adapter.out.jwt.JwtTokenIssuer;
 import dev.jazzybyte.onseoul.user.adapter.in.security.OAuth2LoginSuccessHandler;
 import dev.jazzybyte.onseoul.user.port.in.SocialLoginCommand;
@@ -41,6 +42,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
     private static final String FRONTEND_BASE_URL = "http://localhost:3000";
 
     @Mock private SocialLoginUseCase socialLoginUseCase;
+    @Mock private CreateDefaultSubscriptionsUseCase createDefaultSubscriptionsUseCase;
 
     private OAuth2LoginSuccessHandler handler;
     private JwtTokenIssuer tokenIssuer;
@@ -48,7 +50,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
     @BeforeEach
     void setUp() {
         tokenIssuer = new JwtTokenIssuer(TEST_SECRET, 15L, 10080L);
-        handler = new OAuth2LoginSuccessHandler(socialLoginUseCase, tokenIssuer, FRONTEND_BASE_URL, false, "Strict", "");
+        handler = new OAuth2LoginSuccessHandler(socialLoginUseCase, createDefaultSubscriptionsUseCase, tokenIssuer, FRONTEND_BASE_URL, false, "Strict", "");
     }
 
     private OAuth2AuthenticationToken googleToken(Map<String, Object> attrs) {
@@ -81,7 +83,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         String accessToken = tokenIssuer.generateAccessToken(1L);
         String refreshToken = tokenIssuer.generateRefreshToken(1L);
         when(socialLoginUseCase.socialLogin(any(SocialLoginCommand.class)))
-                .thenReturn(new TokenResponse(accessToken, refreshToken));
+                .thenReturn(new TokenResponse(1L, accessToken, refreshToken));
 
         MockHttpServletResponse res = invoke(googleToken(attrs));
 
@@ -123,7 +125,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         String accessToken = tokenIssuer.generateAccessToken(3L);
         String refreshToken = tokenIssuer.generateRefreshToken(3L);
         when(socialLoginUseCase.socialLogin(any()))
-                .thenReturn(new TokenResponse(accessToken, refreshToken));
+                .thenReturn(new TokenResponse(3L, accessToken, refreshToken));
 
         MockHttpServletResponse res = invoke(kakaoToken(attrs));
 
@@ -144,7 +146,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         String accessToken = tokenIssuer.generateAccessToken(4L);
         String refreshToken = tokenIssuer.generateRefreshToken(4L);
         when(socialLoginUseCase.socialLogin(any()))
-                .thenReturn(new TokenResponse(accessToken, refreshToken));
+                .thenReturn(new TokenResponse(4L, accessToken, refreshToken));
 
         MockHttpServletResponse res = invoke(kakaoToken(attrs));
 
@@ -161,7 +163,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         String accessToken = tokenIssuer.generateAccessToken(5L);
         String refreshToken = tokenIssuer.generateRefreshToken(5L);
         when(socialLoginUseCase.socialLogin(any()))
-                .thenReturn(new TokenResponse(accessToken, refreshToken));
+                .thenReturn(new TokenResponse(5L, accessToken, refreshToken));
 
         MockHttpServletResponse res = invoke(googleToken(attrs));
 
@@ -184,7 +186,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         String accessToken = tokenIssuer.generateAccessToken(6L);
         String refreshToken = tokenIssuer.generateRefreshToken(6L);
         when(socialLoginUseCase.socialLogin(any()))
-                .thenReturn(new TokenResponse(accessToken, refreshToken));
+                .thenReturn(new TokenResponse(6L, accessToken, refreshToken));
 
         MockHttpServletResponse res = invoke(googleToken(attrs));
 
@@ -239,5 +241,37 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         assertThat(cookie).contains("refresh_token=");
         assertThat(cookie).containsIgnoringCase("Max-Age=0");
         assertThat(cookie).containsIgnoringCase("Path=/auth");
+    }
+
+    @Test
+    @DisplayName("로그인 성공 시 createDefaultSubscriptionsUseCase.create()가 올바른 userId로 호출된다")
+    void onAuthenticationSuccess_success_callsCreateDefaultSubscriptions() throws Exception {
+        long userId = 77L;
+        Map<String, Object> attrs = Map.of("id", "g-077", "email", "sub@test.com", "name", "구독테스트");
+        String accessToken = tokenIssuer.generateAccessToken(userId);
+        String refreshToken = tokenIssuer.generateRefreshToken(userId);
+        when(socialLoginUseCase.socialLogin(any(SocialLoginCommand.class)))
+                .thenReturn(new TokenResponse(userId, accessToken, refreshToken));
+
+        invoke(googleToken(attrs));
+
+        verify(createDefaultSubscriptionsUseCase).create(userId);
+    }
+
+    @Test
+    @DisplayName("createDefaultSubscriptionsUseCase가 예외를 던져도 리다이렉트 URL이 ?status=success 이다")
+    void onAuthenticationSuccess_subscriptionFails_stillRedirectsSuccess() throws Exception {
+        long userId = 88L;
+        Map<String, Object> attrs = Map.of("id", "g-088", "email", "sub2@test.com", "name", "구독실패테스트");
+        String accessToken = tokenIssuer.generateAccessToken(userId);
+        String refreshToken = tokenIssuer.generateRefreshToken(userId);
+        when(socialLoginUseCase.socialLogin(any(SocialLoginCommand.class)))
+                .thenReturn(new TokenResponse(userId, accessToken, refreshToken));
+        doThrow(new RuntimeException("구독 생성 오류")).when(createDefaultSubscriptionsUseCase).create(any());
+
+        MockHttpServletResponse res = invoke(googleToken(attrs));
+
+        assertThat(res.getStatus()).isEqualTo(302);
+        assertThat(res.getRedirectedUrl()).isEqualTo(FRONTEND_BASE_URL + "/oauth/callback?status=success");
     }
 }

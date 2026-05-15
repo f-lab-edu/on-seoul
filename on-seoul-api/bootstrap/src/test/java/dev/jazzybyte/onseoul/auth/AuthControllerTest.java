@@ -60,7 +60,7 @@ class AuthControllerTest {
     @DisplayName("POST /auth/token/refresh - 유효한 refresh_token 쿠키로 새 토큰을 Set-Cookie로 반환한다")
     void refresh_validCookie_returnsNewTokensAsSetCookie() throws Exception {
         when(refreshTokenUseCase.refresh("valid-refresh-token"))
-                .thenReturn(new TokenResponse("new-access", "new-refresh"));
+                .thenReturn(new TokenResponse(42L, "new-access", "new-refresh"));
         when(cookieHelper.buildAccessCookie("new-access"))
                 .thenReturn(org.springframework.http.ResponseCookie
                         .from("access_token", "new-access").path("/").maxAge(900).build());

@@ -1,2 +1,2 @@
-/** notification BC — application layer (Phase 2 이후 구현 예정). */
+/** notification BC — application layer. 기본 구독 생성(CreateDefaultSubscriptionsService) 구현 완료. */
 package dev.jazzybyte.onseoul.notification.application;
