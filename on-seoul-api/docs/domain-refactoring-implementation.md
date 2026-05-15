@@ -40,7 +40,6 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 - [ ] `notification_dispatches` 테이블 — `subscription_id`, `change_log_id`, `status`(`PENDING`/`SUCCESS`/`FAILED`/`DEAD`), `attempt_count`, `sent_at`, `generated_title`, `generated_body`, `template_source`, `last_error`
 - [ ] UNIQUE 제약 — `(subscription_id, change_log_id)` (`adr/0004` 멱등성 보장 참조)
 - [ ] `notification_dispatch_templates` 테이블 — fallback 정형 템플릿 (선택)
-- [ ] `users` 테이블에 FCM 토큰 컬럼 추가 — `fcm_token`
 - [ ] 마이그레이션 스크립트 작성 (`schema/migration-scripts/`)
 - [ ] H2 테스트 스키마(`jpa-test-schema.sql`) 동기화
 
@@ -53,7 +52,7 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 - [ ] `NotificationSubscription` 애그리거트 — `filter` VO 포함
 - [ ] `NotificationDispatch` 애그리거트 — `generated_title/body`, `template_source` 컬럼 직접 보유
 - [ ] Inbound Port — `CreateDefaultSubscriptionsUseCase` (ADR-0001 BC 간 동기 호출 인터페이스)
-- [ ] Outbound Port — `LoadSubscriptionPort`, `SaveSubscriptionPort`, `SaveDispatchPort`, `PushNotificationPort`, `TemplateAgentPort`
+- [ ] Outbound Port — `LoadSubscriptionPort`, `SaveSubscriptionPort`, `SaveDispatchPort`, `PushNotificationPort` (SMS/이메일 발송), `TemplateAgentPort`
 - [ ] JPA 엔티티 및 Repository
 
 ---
@@ -77,7 +76,7 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 - [ ] `TemplateAgentClient` (WebClient 기반) — `adapter/out/agent/`
 - [ ] `TemplateAgentDtoMapper` — ACL (FastAPI DTO ↔ 도메인)
 - [ ] AI 호출 실패 판정 및 fallback 처리 — `adr/0004` 파라미터 참조
-- [ ] FCM 푸시 어댑터 — `PushNotificationPort` 구현
+- [ ] 발송 채널 어댑터 — `PushNotificationPort` 구현 (SMS/이메일)
 
 ---
 

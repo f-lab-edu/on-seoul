@@ -40,11 +40,11 @@ class NotificationDispatchTest {
     void markFailed_belowMaxAttempts_transitionsToFailed() {
         NotificationDispatch dispatch = NotificationDispatch.create(10L, 20L);
 
-        dispatch.markFailed("FCM 오류", 5);
+        dispatch.markFailed("발송 오류", 5);
 
         assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.FAILED);
         assertThat(dispatch.getAttemptCount()).isEqualTo((short) 1);
-        assertThat(dispatch.getLastError()).isEqualTo("FCM 오류");
+        assertThat(dispatch.getLastError()).isEqualTo("발송 오류");
     }
 
     @Test

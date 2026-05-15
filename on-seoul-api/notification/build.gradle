@@ -6,8 +6,6 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
     implementation 'org.springframework:spring-tx'
     implementation 'org.springframework:spring-context'
-    implementation 'com.google.firebase:firebase-admin:9.4.2'
-
     runtimeOnly 'org.postgresql:postgresql'
 
     testRuntimeOnly 'com.h2database:h2'

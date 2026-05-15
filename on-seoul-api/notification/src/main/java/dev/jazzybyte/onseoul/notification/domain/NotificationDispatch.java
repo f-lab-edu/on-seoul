@@ -55,7 +55,7 @@ public class NotificationDispatch {
         return d;
     }
 
-    /** Records a successful FCM send. */
+    /** Records a successful notification send. */
     public void markSuccess(String title, String body, TemplateSource source) {
         this.attemptCount++;
         this.status = DispatchStatus.SUCCESS;

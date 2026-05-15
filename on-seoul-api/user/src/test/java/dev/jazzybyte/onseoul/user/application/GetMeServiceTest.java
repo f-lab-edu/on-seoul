@@ -35,7 +35,7 @@ class GetMeServiceTest {
 
     private User user(long id, UserStatus status) {
         return new User(id, "kakao", "kakao-" + id, "user@example.com", "테스트유저",
-                status, null, OffsetDateTime.now(), OffsetDateTime.now());
+                status, OffsetDateTime.now(), OffsetDateTime.now());
     }
 
     @Test

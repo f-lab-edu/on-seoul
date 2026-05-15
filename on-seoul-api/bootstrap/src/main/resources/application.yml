@@ -70,9 +70,6 @@ app:
     # 쉼표로 구분된 허용 Origin 목록. 와일드카드 패턴 지원 (예: https://*.example.com).
     # 로컬 개발 기본값: localhost 3000/5173 포트. 운영에서는 CORS_ALLOWED_ORIGINS 환경변수로 재정의.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
-  fcm:
-    service-account-path: ""  # FCM 서비스 계정 JSON 경로. 미설정 시 FCM 비활성화
-
 jwt:
   secret: ${JWT_SECRET}
   access-token-minutes: 15

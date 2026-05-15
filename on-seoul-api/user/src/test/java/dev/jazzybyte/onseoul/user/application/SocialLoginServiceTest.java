@@ -47,12 +47,12 @@ class SocialLoginServiceTest {
 
     private User activeUser(long id, String provider, String providerId) {
         return new User(id, provider, providerId, "old@example.com", "구닉네임",
-                UserStatus.ACTIVE, null, OffsetDateTime.now(), OffsetDateTime.now());
+                UserStatus.ACTIVE, OffsetDateTime.now(), OffsetDateTime.now());
     }
 
     private User userWithStatus(long id, UserStatus status) {
         return new User(id, "google", "provider-123", "user@example.com", "홍길동",
-                status, null, OffsetDateTime.now(), OffsetDateTime.now());
+                status, OffsetDateTime.now(), OffsetDateTime.now());
     }
 
     @Test
