@@ -21,6 +21,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from tests.helpers import make_agent_state
 from schemas.state import AgentState, IntentType
 
 
@@ -60,32 +61,17 @@ def _parse_sse(content: bytes) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+_E2E_TRACE = {"node_path": ["router", "sql_agent", "answer"], "elapsed_ms": 50}
+
+
 def _make_state(**kwargs) -> AgentState:
-    base = AgentState(
-        room_id=1,
-        message_id=1,
-        message="수영장 알려줘",
-        title_needed=True,
-        intent=IntentType.SQL_SEARCH,
-        lat=None,
-        lng=None,
-        refined_query=None,
-        max_class_name=None,
-        area_name=None,
-        service_status=None,
-        sql_results=None,
-        vector_results=None,
-        map_results=None,
-        answer="강남구 수영장 목록입니다.",
-        title=None,
-        trace={"node_path": ["router", "sql_agent", "answer"], "elapsed_ms": 50},
-        error=None,
-        retry_count=0,
-        recent_queries=[],
-        cache_hit=False,
-    )
-    base.update(kwargs)
-    return base
+    return make_agent_state(**{
+        "intent": IntentType.SQL_SEARCH,
+        "title_needed": True,
+        "answer": "강남구 수영장 목록입니다.",
+        "trace": _E2E_TRACE,
+        **kwargs,
+    })
 
 
 def _session_ctx():

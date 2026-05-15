@@ -12,6 +12,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from tests.helpers import make_agent_state
 from schemas.state import AgentState, IntentType
 
 
@@ -32,32 +33,16 @@ def _mock_redis_io():
 # ---------------------------------------------------------------------------
 
 
+_CHAT_TRACE = {"node_path": ["router", "sql_agent", "answer"], "elapsed_ms": 100}
+
+
 def _make_final_state(**kwargs) -> AgentState:
-    base = AgentState(
-        room_id=1,
-        message_id=1,
-        message="수영장 알려줘",
-        title_needed=False,
-        intent=IntentType.SQL_SEARCH,
-        lat=None,
-        lng=None,
-        refined_query=None,
-        max_class_name=None,
-        area_name=None,
-        service_status=None,
-        sql_results=None,
-        vector_results=None,
-        map_results=None,
-        answer="강남구 수영장 목록입니다.",
-        title=None,
-        trace={"node_path": ["router", "sql_agent", "answer"], "elapsed_ms": 100},
-        error=None,
-        retry_count=0,
-        recent_queries=[],
-        cache_hit=False,
-    )
-    base.update(kwargs)
-    return base
+    return make_agent_state(**{
+        "intent": IntentType.SQL_SEARCH,
+        "answer": "강남구 수영장 목록입니다.",
+        "trace": _CHAT_TRACE,
+        **kwargs,
+    })
 
 
 def _parse_sse_events(content: bytes) -> list[dict]:

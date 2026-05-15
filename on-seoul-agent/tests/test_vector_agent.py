@@ -8,35 +8,13 @@ vector_search와 bm25_search를 모두 patch하여 외부 의존성 없이 동�
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
+from tests.helpers import make_agent_state
 from agents.vector_agent import VectorAgent, _RefinedQuery, _rrf_merge
 from schemas.state import AgentState, IntentType
 
 
 def _make_state(message: str = "아이랑 체험할 수 있는 시설") -> AgentState:
-    return AgentState(
-        room_id=1,
-        message_id=1,
-        message=message,
-        title_needed=False,
-        intent=IntentType.VECTOR_SEARCH,
-        lat=None,
-        lng=None,
-        refined_query=None,
-        max_class_name=None,
-        area_name=None,
-        service_status=None,
-        sql_results=None,
-        vector_results=None,
-        map_results=None,
-        answer=None,
-        title=None,
-        trace=None,
-        error=None,
-        retry_count=0,
-        recent_queries=[],
-        cache_hit=False,
-    )
+    return make_agent_state(message=message, intent=IntentType.VECTOR_SEARCH)
 
 
 def _make_agent(

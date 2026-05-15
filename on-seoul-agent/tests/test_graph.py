@@ -9,6 +9,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.helpers import make_agent_state
 from agents.answer_agent import AnswerAgent, _AnswerOutput, _TitleOutput
 from agents.graph import AgentGraph
 from agents.router_agent import RouterAgent, _IntentOutput
@@ -23,31 +24,7 @@ from schemas.state import AgentState, IntentType
 
 
 def _state(**kwargs) -> AgentState:
-    base = AgentState(
-        room_id=1,
-        message_id=10,
-        message="수영장 알려줘",
-        title_needed=False,
-        intent=None,
-        lat=None,
-        lng=None,
-        refined_query=None,
-        max_class_name=None,
-        area_name=None,
-        service_status=None,
-        sql_results=None,
-        vector_results=None,
-        map_results=None,
-        answer=None,
-        title=None,
-        trace=None,
-        error=None,
-        retry_count=0,
-        recent_queries=[],
-        cache_hit=False,
-    )
-    base.update(kwargs)
-    return base
+    return make_agent_state(**kwargs)
 
 
 def _router(intent: IntentType) -> RouterAgent:
