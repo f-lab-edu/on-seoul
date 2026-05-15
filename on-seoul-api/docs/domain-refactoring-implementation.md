@@ -12,7 +12,7 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 > 현재 구조(수평 레이어 최상위)를 BC 최상위 구조로 재편한다.
 > 상세 결정은 `adr/README.md` (BC 4개 + 애그리거트 9개 전제) 참조.
 
-- [ ] 목표 패키지 레이아웃 확정
+- [x] 목표 패키지 레이아웃 확정
   ```
   dev.jazzybyte.onseoul.
     user/        (domain/, application/, port/, adapter/)
@@ -20,12 +20,12 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
     collection/  (domain/, application/, port/, adapter/)
     notification/(domain/, application/, port/, adapter/)
   ```
-- [ ] `user` BC 이동 — `User`, `SocialLoginService`, `OAuth2LoginSuccessHandler`, 관련 Port
-- [ ] `chat` BC 이동 — `ChatRoom`, `ChatMessage`, `ChatStreamService`, `SendQueryService`, 관련 Port
-- [ ] `collection` BC 이동 — `PublicServiceReservation`, `ServiceChangeLog`, `CollectionHistory`, `ApiSourceCatalog`, 수집 서비스 전체, 관련 Port
-- [ ] `common/`, `bootstrap/` 은 BC 불포함 — 현 위치 유지
-- [ ] ArchUnit 헥사고날 의존성 규칙 갱신 (`HexagonalArchTest`)
-- [ ] BC 간 참조는 ID 전달로만 — 교차 BC 엔티티 직접 참조 제거 (`adr/README.md` 컨텍스트 간 참조 정책 참조)
+- [x] `user` BC 이동 — `User`, `SocialLoginService`, `OAuth2LoginSuccessHandler`, 관련 Port
+- [x] `chat` BC 이동 — `ChatRoom`, `ChatMessage`, `ChatStreamService`, `SendQueryService`, 관련 Port
+- [x] `collection` BC 이동 — `PublicServiceReservation`, `ServiceChangeLog`, `CollectionHistory`, `ApiSourceCatalog`, 수집 서비스 전체, 관련 Port
+- [x] `common/`, `bootstrap/` 은 BC 불포함 — 현 위치 유지
+- [x] ArchUnit 헥사고날 의존성 규칙 갱신 (`HexagonalArchTest`)
+- [x] BC 간 참조는 ID 전달로만 — 교차 BC 엔티티 직접 참조 제거 (`adr/README.md` 컨텍스트 간 참조 정책 참조)
 
 검증: `./gradlew test` 전 구간 통과
 
@@ -36,12 +36,12 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 > 알림 구독 및 발송 테이블 신규 생성.
 > 상세 결정은 `adr/0004-notification-orchestration.md` 참조.
 
-- [ ] `notification_subscriptions` 테이블 — `user_id`, `service_id`, `filter`(JSONB), `last_notified_at`
-- [ ] `notification_dispatches` 테이블 — `subscription_id`, `change_log_id`, `status`(`PENDING`/`SUCCESS`/`FAILED`/`DEAD`), `attempt_count`, `sent_at`, `generated_title`, `generated_body`, `template_source`, `last_error`
-- [ ] UNIQUE 제약 — `(subscription_id, change_log_id)` (`adr/0004` 멱등성 보장 참조)
-- [ ] `notification_dispatch_templates` 테이블 — fallback 정형 템플릿 (선택)
-- [ ] 마이그레이션 스크립트 작성 (`schema/migration-scripts/`)
-- [ ] H2 테스트 스키마(`jpa-test-schema.sql`) 동기화
+- [x] `notification_subscriptions` 테이블 — `user_id`, `service_id`, `filter`(JSONB), `last_notified_at`, `channels`(JSONB — EMAIL/SMS 복수 선택)
+- [x] `notification_dispatches` 테이블 — `subscription_id`, `change_log_id`, `status`(`PENDING`/`SUCCESS`/`FAILED`/`DEAD`), `attempt_count`, `sent_at`, `generated_title`, `generated_body`, `template_source`, `last_error`
+- [x] UNIQUE 제약 — `(subscription_id, change_log_id)` (`adr/0004` 멱등성 보장 참조)
+- [x] 마이그레이션 스크립트 작성 (`schema/migration-scripts/04-create-tables-for-notification.sql`)
+- [x] H2 테스트 스키마(`jpa-test-schema.sql`) 동기화
+- [x] `users.phone_number VARCHAR(20)` — SMS 수신용 전화번호 (사용자 직접 등록)
 
 ---
 
@@ -49,11 +49,12 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 
 > 상세 결정은 `adr/0001-context-communication.md`, `adr/0004-notification-orchestration.md` 참조.
 
-- [ ] `NotificationSubscription` 애그리거트 — `filter` VO 포함
-- [ ] `NotificationDispatch` 애그리거트 — `generated_title/body`, `template_source` 컬럼 직접 보유
-- [ ] Inbound Port — `CreateDefaultSubscriptionsUseCase` (ADR-0001 BC 간 동기 호출 인터페이스)
-- [ ] Outbound Port — `LoadSubscriptionPort`, `SaveSubscriptionPort`, `SaveDispatchPort`, `PushNotificationPort` (SMS/이메일 발송), `TemplateAgentPort`
-- [ ] JPA 엔티티 및 Repository
+- [x] `NotificationSubscription` 애그리거트 — `channels`(Set\<NotificationChannel\>), `filter`, `lastNotifiedAt`
+- [x] `NotificationDispatch` 애그리거트 — `generated_title/body`, `template_source`, `markSuccess()`, `markFailed()`
+- [x] `NotificationChannel` enum — EMAIL, SMS
+- [x] Inbound Port — `CreateDefaultSubscriptionsUseCase` (ADR-0001 BC 간 동기 호출 인터페이스)
+- [x] Outbound Port — `LoadSubscriptionPort`, `SaveSubscriptionPort`, `SaveDispatchPort`, `LoadDispatchPort`, `PushNotificationPort`, `TemplateGenerationPort`
+- [x] JPA 엔티티 및 Repository
 
 ---
 
@@ -62,21 +63,23 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 > OAuth 로그인 성공 시 기본 구독을 동기 직접 호출로 생성한다.
 > 상세 결정은 `adr/0001-context-communication.md`, `adr/0002-domain-event-catalog.md` 참조.
 
-- [ ] `OAuth2LoginSuccessHandler` → `CreateDefaultSubscriptionsUseCase.create(userId)` 직접 호출
-- [ ] 호출은 JWT 발급 TX 밖(별도 TX 또는 TX 없음) — `adr/0003-consistency-and-transaction.md` 참조
-- [ ] `CreateDefaultSubscriptionsUseCase` 구현체 — 5개 데이터셋에 대한 기본 구독 INSERT
+- [x] `OAuth2LoginSuccessHandler` → `CreateDefaultSubscriptionsUseCase.create(userId)` 직접 호출
+- [x] 호출은 JWT 발급 TX 밖(별도 TX 또는 TX 없음) — `adr/0003-consistency-and-transaction.md` 참조
+- [x] `CreateDefaultSubscriptionsUseCase` 구현체 — 5개 데이터셋(OA-2266~2270) 기본 구독 INSERT (채널 기본값: EMAIL)
+- [x] `TokenResponse`에 `userId` 추가 — 핸들러→구독 생성 연결 목적
 
 ---
 
-## Phase 5. notification BC — 템플릿 어댑터 구현
+## Phase 5. notification BC — 템플릿 어댑터 + 발송 어댑터 구현
 
-> AI 서비스 `POST /notification/template` 호출 어댑터.
-> 상세 결정은 `adr/0001-context-communication.md` (ACL 적용 대상) 참조.
+> AI 서비스 `POST /notification/template` 호출 어댑터 및 Knock 발송 어댑터.
+> 상세 결정은 `adr/0001-context-communication.md` (ACL 적용 대상), `adr/0004` 참조.
 
-- [ ] `TemplateAgentClient` (WebClient 기반) — `adapter/out/agent/`
-- [ ] `TemplateAgentDtoMapper` — ACL (FastAPI DTO ↔ 도메인)
-- [ ] AI 호출 실패 판정 및 fallback 처리 — `adr/0004` 파라미터 참조
-- [ ] 발송 채널 어댑터 — `PushNotificationPort` 구현 (SMS/이메일)
+- [x] `TemplateAgentClient` (WebClient 기반, 10초 타임아웃) — `adapter/out/agent/`
+- [x] `TemplateAgentDtoMapper` — ACL (FastAPI DTO ↔ 도메인)
+- [x] AI 호출 실패 판정 및 fallback 처리 — non-2xx / 타임아웃 / 빈 title·body → `NotificationTemplate.render()`
+- [x] `KnockNotificationAdapter` — `PushNotificationPort` 구현 (Knock REST API, SMS/이메일 채널별 워크플로우)
+- [x] `user` BC: `PATCH /api/users/me/contact` — 전화번호 등록/수정 엔드포인트
 
 ---
 
