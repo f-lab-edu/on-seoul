@@ -269,7 +269,9 @@ classDiagram
 
 ## 5. 알림 도메인 (Notification)
 
-서비스 상태 변경(개시·마감 임박 등)을 감지하여 사용자에게 푸시 알림을 발송한다. 메시지 *생성*은 AI Service(`POST /notification/template`)가 담당하고, *발송*은 API Service(FCM)가 담당한다. 네 개의 애그리거트로 구성되며 각각 독립 생명주기를 가진다.
+서비스 상태 변경을 감지하여 사용자에게 SMS 또는 이메일 알림을 발송한다.
+메시지 *생성*은 AI Service(`POST /notification/template`)가 담당하고, *발송*은 API Service가 Knock을 통해 담당한다.
+두 개의 애그리거트로 구성되며 각각 독립 생명주기를 가진다.
 
 ```mermaid
 classDiagram
@@ -279,91 +281,88 @@ classDiagram
         <<AggregateRoot>>
         +Long id
         +Long userId
-        +String category
-        +String areaName
-        +String keyword
-        +Set~NotificationTemplateType~ enabledTypes
-        +boolean active
+        +String serviceId
+        +String filter
+        +Set~NotificationChannel~ channels
+        +Instant lastNotifiedAt
+        +Instant createdAt
         --
-        +create(userId, filter, types) NotificationSubscription
-        +updateFilter(category, area, keyword)
-        +deactivate()
-    }
-
-    class NotificationTemplate {
-        <<AggregateRoot>>
-        +Long id
-        +NotificationTemplateType type
-        +String titleTemplate
-        +String bodyTemplate
-        +boolean active
-        --
-        +render(context) RenderedMessage
+        +create(userId, serviceId, channels) NotificationSubscription
+        +markNotified(notifiedAt)
     }
 
     class NotificationDispatch {
         <<AggregateRoot>>
         +Long id
-        +Long userId
         +Long subscriptionId
-        +Long templateId
-        +String serviceId
-        +NotificationTemplateType type
-        +NotificationDispatchStatus status
-        +String errorMessage
+        +Long changeLogId
+        +DispatchStatus status
+        +short attemptCount
+        +Instant sentAt
+        +String generatedTitle
+        +String generatedBody
+        +TemplateSource templateSource
+        +String lastError
         --
-        +create(...) NotificationDispatch
-        +markSent(fcmMessageId)
-        +markFailed(errorMessage)
+        +create(subscriptionId, changeLogId) NotificationDispatch
+        +markSuccess(title, body, source)
+        +markFailed(error, maxAttempts)
+        +isRetryable(maxAttempts)
     }
 
-    class NotificationTemplateType {
+    class NotificationChannel {
         <<Enumeration>>
-        SERVICE_OPENED
-        DEADLINE_D_MINUS_1
-        DEADLINE_IMMINENT
+        EMAIL
+        SMS
     }
 
-    class NotificationDispatchStatus {
+    class DispatchStatus {
         <<Enumeration>>
         PENDING
-        SENT
+        SUCCESS
         FAILED
+        DEAD
     }
 
-    NotificationSubscription --> NotificationTemplateType
-    NotificationDispatch --> NotificationTemplateType
-    NotificationDispatch --> NotificationDispatchStatus
-    NotificationTemplate --> NotificationTemplateType
+    class TemplateSource {
+        <<Enumeration>>
+        AI
+        FALLBACK
+    }
+
+    NotificationSubscription --> NotificationChannel
+    NotificationDispatch --> DispatchStatus
+    NotificationDispatch --> TemplateSource
     NotificationDispatch ..> NotificationSubscription : subscriptionId (ID 참조)
-    NotificationDispatch ..> NotificationTemplate : templateId (ID 참조)
-    NotificationDispatch ..> User : userId (ID 참조, 인증)
-    NotificationDispatch ..> PublicServiceReservation : serviceId (자연키, 수집)
     NotificationSubscription ..> User : userId (ID 참조, 인증)
+    NotificationDispatch ..> ServiceChangeLog : changeLogId (ID 참조, 수집)
 ```
 
 **애그리거트별 역할:**
 
 | 애그리거트 | 생명주기 | 불변 조건 |
 |---|---|---|
-| `NotificationSubscription` | 사용자가 구독 등록 시 생성, 비활성화 가능 | (userId, category, areaName, keyword) 조합 유일 |
-| `NotificationTemplate` | 운영자 정의. `type`별 1건 활성 | `type` 당 `active=true` 한 건만 유효 |
-| `NotificationDispatch` | 발송 시도마다 1개 생성 (audit log) | 생성 후 `status` 외 변경 불가. SENT/FAILED는 종착 상태 |
+| `NotificationSubscription` | OAuth2 로그인 시 5개 기본 구독 자동 생성. 채널 선택(SMS/이메일) 가능 | `(user_id, service_id)` 조합 유일 |
+| `NotificationDispatch` | 구독 × 변경 이벤트 단위로 생성 (audit log). DEAD(5회 실패) 도달 시 재시도 중단 | `(subscription_id, change_log_id)` 조합 유일. 멱등 INSERT |
 
-**메시지 생성 흐름:**
+**메시지 생성 및 발송 흐름:**
 
 ```
-(알림 스케줄러 실행)
-→ NotificationSubscription 전체 순회
-→ 각 구독 조건(카테고리·자치구·키워드)으로 service_change_log 조회 (changed_after = last_notified_at)
-→ 매칭된 변경 이력이 있으면 AI Service (POST /notification/template) — 알림 템플릿 생성 에이전트가 자연어 메시지(서비스 개시 / D-1 / 마감 임박) 생성
-→ NotificationTemplate.render() — 정형 변수 치환 (fallback)
-→ 브라우저 웹 푸시 발송 (단일 클라이언트)
-→ NotificationDispatch 기록
-→ NotificationSubscription.last_notified_at 갱신
+(알림 스케줄러 tick — 5분 주기, 가상 스레드 동시 4건)
+
+TX A: ServiceChangeLog WHERE changed_at > sub.last_notified_at
+      → Dispatch INSERT (PENDING) ON CONFLICT DO NOTHING
+
+TX 밖: AI Service (POST /notification/template, 10초 타임아웃)
+       → 실패 시 NotificationTemplate.render() fallback
+       → Knock.send(userId, title, body, dispatchId, channels)  ← SMS/이메일
+
+TX B: 성공: Dispatch → SUCCESS, last_notified_at 갱신
+      실패: Dispatch → FAILED (attempt_count++ → 5회 시 DEAD)
 ```
 
-> **AI Service의 역할:** 단순 템플릿 치환을 넘어 시설 정보·예약 URL 등을 조합한 자연어 메시지를 생성한다. AI 호출 실패 시 `NotificationTemplate.render()` 결과로 폴백한다.
+> **핵심 보장:** `last_notified_at`은 발송 성공 시에만 전진. JVM 크래시 후에도 다음 tick에서 동일 변경 이벤트를 재매칭하지만, UNIQUE 제약이 중복 Dispatch INSERT를 차단해 기존 row로 재시도.
+> 상세: [ADR-0004](../on-seoul-api/docs/adr/0004-notification-orchestration.md)
 
 ---
 
