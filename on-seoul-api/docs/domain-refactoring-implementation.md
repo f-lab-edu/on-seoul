@@ -100,12 +100,12 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 
 ## Phase 7. Embeddings 갱신 워커
 
-> ChangeLog 커밋 후 Qdrant 재생성을 비동기로 처리한다.
+> ChangeLog 커밋 후 pgvector 임베딩을 비동기로 갱신한다. 메시지 브로커 없음 — REST API 직접 호출.
 > 상세 결정은 `adr/0003-consistency-and-transaction.md` (≤5분 SLA) 참조.
 
 - [ ] `EmbeddingSyncQueue` — in-memory 큐 또는 `ScheduledExecutor`
 - [ ] 수집 TX 커밋 직후 `service_id` enqueue
-- [ ] 워커 — Qdrant upsert 호출 (`on-seoul-agent` FastAPI 엔드포인트 또는 직접 Qdrant 클라이언트)
+- [ ] 워커 — `on-seoul-agent` FastAPI REST API 호출로 임베딩 벡터 생성 후 `service_embeddings` 테이블(pgvector) upsert
 - [ ] Micrometer 게이지 `embeddings.sync.lag.seconds` 등록 — `adr/0003` 감시 요건 참조
 
 ---
@@ -125,6 +125,6 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 
 - 모든 결정 근거는 `on-seoul-api/docs/adr/` 에 있다. ADR을 벗어나는 구현이 필요하면 구현 전에 확인한다.
 - BC 간 참조는 ID 전달만 허용 (`adr/README.md` 컨텍스트 간 참조 정책).
-- 도메인 이벤트 및 메시지 브로커는 MVP 범위 밖 (`adr/0002-domain-event-catalog.md`).
+- 도메인 이벤트 및 메시지 브로커는 도입하지 않는다. 외부 시스템 통신은 REST API(WebClient) 직접 호출 (`adr/0002-domain-event-catalog.md`).
 - 알림 스케줄러 파라미터(동시성, 타임아웃, MAX_ATTEMPTS, 백오프)는 `adr/0004` 파라미터 표 준수.
 - 테스트 케이스는 최대한 유지하며, BC 이동 및 리팩토링으로 인한 변경 사항을 함께 반영한다. 신규 기능은 충분한 단위 테스트와 통합 테스트를 작성한다.
