@@ -103,9 +103,25 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 > ChangeLog 커밋 후 AI 서비스에 임베딩 갱신을 위임한다. 임베딩 생성과 pgvector 적재는 AI 서비스(`on-seoul-agent`) 책임 — API 서비스는 REST API 호출만 한다.
 > 상세 결정은 `adr/0003-consistency-and-transaction.md` (≤5분 SLA) 참조.
 
+**AI 서비스 호출 스펙: `POST /embeddings/services/sync`**
+
+```json
+// Request
+{ "upsert": ["S240101A001"], "delete": ["S230501Z099"] }
+
+// Response 202
+{ "accepted": { "upsert": 1, "delete": 1 } }
+```
+
+- `upsert`: 신규/변경 service_id 목록. `delete`: 삭제된 service_id 목록.
+- `len(upsert) + len(delete) ≤ 500` — 초과 시 청크 분할 전송.
+- 둘 다 빈 배열이면 422 → 호출 전 가드 필요.
+
+---
+
 - [ ] `EmbeddingSyncQueue` — in-memory 큐 또는 `ScheduledExecutor`
-- [ ] 수집 TX 커밋 직후 `service_id` enqueue
-- [ ] 워커 — `on-seoul-agent` FastAPI REST API(`POST /embeddings/sync` 등) 호출. 임베딩 생성·pgvector 적재는 AI 서비스가 처리
+- [ ] 수집 TX 커밋 직후 변경 유형별로 enqueue — 신규/변경 `service_id`는 `upsert`, 삭제된 `service_id`는 `delete`로 분류
+- [ ] 워커 — `on-seoul-agent` `POST /embeddings/services/sync` 호출 (WebClient, 빈 배열 가드 + 500건 초과 시 청크 분할). 실패 시 로그 + 다음 tick 재시도
 - [ ] Micrometer 게이지 `embeddings.sync.lag.seconds` 등록 — `adr/0003` 감시 요건 참조
 
 ---
