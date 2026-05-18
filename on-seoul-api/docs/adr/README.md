@@ -8,7 +8,7 @@
 |---|---|---|---|
 | [0001](./0001-context-communication.md) | 컨텍스트 간 통신 방식 | Accepted | BC 간 동기 Port 직접 호출. ACL은 외부 시스템(서울 Open API, FastAPI)에만 적용 |
 | [0002](./0002-domain-event-catalog.md) | 도메인 이벤트 카탈로그 | Accepted | MVP에서 도메인 이벤트 발행 0개. 메시지 브로커·Outbox 미도입 |
-| [0003](./0003-consistency-and-transaction.md) | 일관성 경계와 트랜잭션 정책 | Accepted | PG 내부는 강한 일관성. PG↔Qdrant·외부 호출은 최종 일관성 + 5분 SLA |
+| [0003](./0003-consistency-and-transaction.md) | 일관성 경계와 트랜잭션 정책 | Accepted | PG 내부는 강한 일관성. 임베딩 갱신(pgvector)·외부 호출은 최종 일관성 + 5분 SLA |
 | [0004](./0004-notification-orchestration.md) | 알림 발송 흐름 오케스트레이션 | Accepted | 배치 잡(상태 머신 아님). 푸시 성공 시 last_notified_at 갱신. UNIQUE 제약 단독 멱등 |
 
 ## 전제 (라운드 1 확정 사항)
@@ -26,7 +26,7 @@
 | ChatMessage | chat | `trace` JSONB 컬럼으로 trace 흡수 |
 | PublicServiceReservation | collection | |
 | ServiceChangeLog | collection | 별도 애그리거트 |
-| ServiceEmbeddings | collection | Qdrant 저장 |
+| ServiceEmbeddings | collection | pgvector(`service_embeddings` 테이블, PostgreSQL 내) |
 | CollectionHistory | collection | |
 | NotificationSubscription | notification | 매칭 규칙은 `filter` VO로 흡수 |
 | NotificationDispatch | notification | `generated_title/body` 직접 보유, `template_source` 컬럼 포함 |
