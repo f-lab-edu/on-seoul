@@ -25,10 +25,9 @@
 
 ### 인프라 결정
 
-- **메시지 브로커 (Kafka/RabbitMQ):** 도입하지 않음.
-- **Spring `ApplicationEventPublisher`:** 도입하지 않음.
-- **Outbox 패턴:** 도입하지 않음. (발행할 이벤트가 없으므로 자명)
-- 셋 모두 **Phase 2로 연기.**
+- **메시지 브로커 (Kafka/RabbitMQ):** **도입하지 않음.** BC 간 통신은 동기 inbound Port 직접 호출, 외부 시스템 통신은 REST API 호출로 처리한다.
+- **Spring `ApplicationEventPublisher`:** **도입하지 않음.**
+- **Outbox 패턴:** **도입하지 않음.** (발행할 이벤트가 없으므로 자명)
 
 ## Consequences
 
@@ -37,7 +36,6 @@
 - 멘탈 모델 단순: "다른 BC에 영향 주려면 inbound port 호출".
 
 **부정**
-- 이후 분리 시 위 후보 일부를 진짜 이벤트로 승격하는 리팩터 필요. 가장 가능성 큰 것: `ServiceChanged`(다중 소비자가 생기는 시점) 및 `NotificationDispatched`(외부 분석 시스템 연동 시).
 - BC 간 동기 호출이 누적되면 호출 그래프가 dense해질 수 있음 — 통합 테스트로 의존 방향만 단방향 유지(상위→하위).
 
 ## Alternatives Considered

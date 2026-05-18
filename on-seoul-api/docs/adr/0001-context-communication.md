@@ -57,8 +57,7 @@ user.application.OAuth2SuccessHandler
 - 메시지 인프라 0: 운영 비용·실패 모드 추가 없음.
 
 **부정**
-- BC 간 결합도가 인터페이스 수준에 머무름. Phase 2에서 서비스를 물리 분리할 때 동기 호출 일부를 비동기 이벤트로 전환해야 함.
-- 한쪽 BC의 장애가 호출자 BC의 응답 지연으로 직접 전파됨(예: `notification` use case 호출이 지연되면 OAuth 핸들러 응답이 지연).
+- 한쪽 BC의 장애가 호출자 BC의 응답 지연으로 직접 전파됨(예: `notification` use case 호출이 지연되면 OAuth 핸들러 응답이 지연). try-catch로 격리 처리.
 
 ## Alternatives Considered
 
@@ -67,5 +66,5 @@ user.application.OAuth2SuccessHandler
 - **기각.**
 
 **모든 외부/BC 통신을 비동기 이벤트로 통일 (Kafka/RabbitMQ)**
-- MVP 운영 부담 과대. 1인 개발에서 인프라 1개당 회복 비용이 큼.
+- 메시지 브로커 도입하지 않음. 외부 시스템 통신은 REST API(WebClient) 직접 호출로 처리한다.
 - **기각.**
