@@ -100,12 +100,12 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 
 ## Phase 7. Embeddings 갱신 워커
 
-> ChangeLog 커밋 후 pgvector 임베딩을 비동기로 갱신한다. 메시지 브로커 없음 — REST API 직접 호출.
+> ChangeLog 커밋 후 AI 서비스에 임베딩 갱신을 위임한다. 임베딩 생성과 pgvector 적재는 AI 서비스(`on-seoul-agent`) 책임 — API 서비스는 REST API 호출만 한다.
 > 상세 결정은 `adr/0003-consistency-and-transaction.md` (≤5분 SLA) 참조.
 
 - [ ] `EmbeddingSyncQueue` — in-memory 큐 또는 `ScheduledExecutor`
 - [ ] 수집 TX 커밋 직후 `service_id` enqueue
-- [ ] 워커 — `on-seoul-agent` FastAPI REST API 호출로 임베딩 벡터 생성 후 `service_embeddings` 테이블(pgvector) upsert
+- [ ] 워커 — `on-seoul-agent` FastAPI REST API(`POST /embeddings/sync` 등) 호출. 임베딩 생성·pgvector 적재는 AI 서비스가 처리
 - [ ] Micrometer 게이지 `embeddings.sync.lag.seconds` 등록 — `adr/0003` 감시 요건 참조
 
 ---
