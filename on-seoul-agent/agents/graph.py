@@ -1,4 +1,4 @@
-"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 (Phase 17 + Answer Cache).
+"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 (Phase 17 + Answer Cache + SearchPersist).
 
 그래프 구조:
     START
@@ -20,7 +20,9 @@
     [retry_prep_node]    — retry_count 증가 + 이전 검색 결과 초기화 → router_node 재진입
     cache_write_node     — 정상 결과만(SQL_SEARCH / VECTOR_SEARCH) 캐시 저장
       ↓
-    trace_node           — chat_agent_traces 저장 (best-effort, 종단 노드)
+    search_persist_node  — chat_search_queries + chat_search_results 적재 (best-effort)
+      ↓
+    trace_node           — chat_agent_traces 저장 (best-effort, 최종 종단 노드)
       ↓
     END
 
@@ -104,6 +106,10 @@ async def _dispatch_answer_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().answer_node(state)
 
 
+async def _dispatch_search_persist_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().search_persist_node(state)
+
+
 async def _dispatch_trace_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().trace_node(state)
 
@@ -137,6 +143,7 @@ def _build_shared_graph() -> Any:
     builder.add_node("vector_node", _dispatch_vector_node)
     builder.add_node("map_node", _dispatch_map_node)
     builder.add_node("answer_node", _dispatch_answer_node)
+    builder.add_node("search_persist_node", _dispatch_search_persist_node)
     builder.add_node("trace_node", _dispatch_trace_node)
 
     builder.add_edge(START, "router_node")
@@ -154,7 +161,8 @@ def _build_shared_graph() -> Any:
         "cache_check_node",
         _dispatch_post_cache_check,
         {
-            "trace_node": "trace_node",
+            # cache hit: 검색 없이 search_persist_node(skip) → trace 로 종단 체인 유지
+            "search_persist_node": "search_persist_node",
             "sql_node": "sql_node",
             "vector_node": "vector_node",
             "map_node": "map_node",
@@ -179,7 +187,8 @@ def _build_shared_graph() -> Any:
 
     # 재시도 준비 완료 후 router_node로 재진입
     builder.add_edge("retry_prep_node", "router_node")
-    builder.add_edge("cache_write_node", "trace_node")
+    builder.add_edge("cache_write_node", "search_persist_node")
+    builder.add_edge("search_persist_node", "trace_node")
     builder.add_edge("trace_node", END)
 
     return builder.compile()

@@ -445,6 +445,7 @@ class TestAgentStateContract:
             "trace",
             "error",
             "retry_count",
+            "sql_keyword",
         }
         assert expected_keys <= set(result.keys())
 
@@ -581,10 +582,11 @@ class TestSessionRouting:
             ai_session=ai_session,
         )
 
-        # ai_session.execute는 trace INSERT에만 1회 호출된다
-        assert ai_session.execute.call_count == 1
-        trace_sql = str(ai_session.execute.call_args[0][0])
-        assert "chat_agent_traces" in trace_sql
+        # ai_session.execute 는 search_persist + trace 에만 사용된다 (SQL 조회에는 미사용).
+        # 각 호출의 SQL 내용으로 data_session이 아닌 ai_session에 올바른 쿼리가 갔는지 확인.
+        all_sqls = [str(c[0][0]) for c in ai_session.execute.call_args_list]
+        assert any("chat_agent_traces" in sql for sql in all_sqls)
+        assert not any("public_service_reservations" in sql for sql in all_sqls)
 
     async def test_vector_uses_ai_session_not_data_session(self):
         """VECTOR_SEARCH에서 data_session.execute가 벡터 조회에 사용되지 않는다."""

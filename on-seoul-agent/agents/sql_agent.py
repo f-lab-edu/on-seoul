@@ -84,4 +84,5 @@ class SqlAgent:
             keyword=params.keyword,
             top_k=_TOP_K,
         )
-        return {**state, "sql_results": rows}
+        # sql_keyword: nodes.py::sql_node 에서 ChannelData.query_text 로 사용.
+        return {**state, "sql_results": rows, "sql_keyword": params.keyword}

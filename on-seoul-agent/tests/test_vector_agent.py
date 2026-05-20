@@ -277,6 +277,22 @@ class TestVectorAgent:
             await agent.search(_make_state(), mock_session, MagicMock())
             mock_bm25.assert_not_called()
 
+    async def test_bm25_channel_query_text_is_none_when_tokens_empty(self):
+        """bm25_tokens 가 빈 리스트일 때 BM25 채널의 query_text 가 None 이다."""
+        from schemas.search import SearchChannel
+
+        agent = _make_agent("예약 서비스", [0.1])
+        mock_session = MagicMock()
+
+        with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])), \
+             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])), \
+             patch("agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]), \
+             patch("agents.vector_agent.hydrate_services", new=AsyncMock(return_value=[])):
+            result = await agent.search(_make_state(), mock_session, MagicMock())
+
+        bm25_channel = result["search_channels"][SearchChannel.BM25]
+        assert bm25_channel["query"]["query_text"] is None
+
 
 class TestHybridSearchRrf:
     async def test_hybrid_result_contains_rrf_score(self):

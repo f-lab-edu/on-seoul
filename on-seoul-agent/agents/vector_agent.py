@@ -15,11 +15,14 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agents._search_channel_utils import _to_hits
 from llm.client import get_chat_model, get_embeddings
+from schemas.search import ChannelData, ChannelQuery, SearchChannel, SearchKind
 from schemas.state import AgentState
 from tools.bm25_search import bm25_search
 from tools.hydrate_services import hydrate_services
 from tools.tokenizer import tokenize_query
+from tools.vector_search import MIN_SIMILARITY, TOP_K as _VECTOR_TOP_K
 from tools.vector_search import vector_search
 
 logger = logging.getLogger(__name__)
@@ -223,8 +226,47 @@ class VectorAgent:
         for row in hydrated:
             row["rrf_score"] = rrf_score_by_id.get(row["service_id"], 0.0)
 
+        # --- search_channels 구성 (Phase 1: vector / bm25 / final) ---
+        search_channels: dict[str, ChannelData] = {
+            SearchChannel.VECTOR: ChannelData(
+                kind=SearchKind.VECTOR,
+                query=ChannelQuery(
+                    query_text=refined.refined_query,
+                    parameters={
+                        "top_k": _VECTOR_TOP_K,
+                        "min_similarity": MIN_SIMILARITY,
+                        "max_class_name": refined.max_class_name,
+                        "area_name": refined.area_name,
+                        "service_status": refined.service_status,
+                    },
+                ),
+                hits=_to_hits(vector_rows, score_field="similarity"),
+            ),
+            SearchChannel.BM25: ChannelData(
+                kind=SearchKind.BM25,
+                query=ChannelQuery(
+                    query_text=" ".join(bm25_tokens) if bm25_tokens else None,
+                    parameters={"tokens": bm25_tokens, "top_k": _VECTOR_TOP_K},
+                ),
+                hits=_to_hits(bm25_rows, score_field="bm25_score"),
+            ),
+            SearchChannel.FINAL: ChannelData(
+                kind=SearchKind.FINAL,
+                query=ChannelQuery(
+                    query_text=None,
+                    parameters={
+                        "source_channels": [SearchChannel.VECTOR, SearchChannel.BM25],
+                        "hydration_applied": True,
+                    },
+                ),
+                # hydrated 결과에 rrf_score 가 있으면 score_field 로 사용
+                hits=_to_hits(hydrated, score_field="rrf_score"),
+            ),
+        }
+
         return {
             **state,
             "refined_query": refined.refined_query,
             "vector_results": hydrated,
+            "search_channels": search_channels,
         }

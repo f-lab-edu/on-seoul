@@ -51,3 +51,9 @@ CREATE TABLE IF NOT EXISTS chat_agent_traces (
 
 CREATE INDEX IF NOT EXISTS idx_chat_agent_traces_message_id
     ON chat_agent_traces (message_id);
+
+-- ============================================================
+-- 신규 DDL include (psql \i 메타 커맨드)
+-- ============================================================
+
+\i scripts/ddl/chat_search.sql

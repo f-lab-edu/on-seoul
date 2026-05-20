@@ -1,5 +1,7 @@
 from enum import Enum
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
+
+from schemas.search import ChannelData, search_channels_reducer
 
 
 class IntentType(str, Enum):
@@ -27,6 +29,7 @@ class AgentState(TypedDict):
     area_name: str | None  # 서울 자치구명 (예: 강남구)
     service_status: str | None  # 접수중·예약마감·접수종료·예약일시중지·안내중 중 하나
     sql_results: list[dict[str, Any]] | None  # SQL Agent 결과
+    sql_keyword: str | None  # SqlAgent가 LLM으로 추출한 키워드 (search_channels 적재용)
     vector_results: list[dict[str, Any]] | None  # Vector Agent 결과
     map_results: dict[str, Any] | None  # map_search GeoJSON FeatureCollection 결과
     answer: str | None  # Answer Agent가 생성한 최종 답변
@@ -39,3 +42,8 @@ class AgentState(TypedDict):
     # Router 컨텍스트 / Answer Cache 흐름
     recent_queries: list[str]  # router에 주입할 follow-up 컨텍스트 (기본값 [])
     cache_hit: bool  # cache_check_node 결과 (기본값 False)
+    # 검색 채널 관측 (chat_search_queries / chat_search_results 적재용).
+    # 각 노드가 자기 채널 키 하나를 ChannelData(kind, query, hits) 로 채운다.
+    # operator.or_ reducer: 부분 dict 반환 시 LangGraph가 누적 병합한다.
+    # self-correction 재시도 시 retry_prep_node 가 {} 로 명시 리셋 (UNIQUE 위반 방지).
+    search_channels: Annotated[dict[str, ChannelData], search_channels_reducer]

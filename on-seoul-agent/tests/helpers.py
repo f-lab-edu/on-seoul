@@ -29,6 +29,7 @@ def make_agent_state(**overrides: Any) -> AgentState:
         area_name=None,
         service_status=None,
         sql_results=None,
+        sql_keyword=None,
         vector_results=None,
         map_results=None,
         answer=None,
@@ -38,6 +39,7 @@ def make_agent_state(**overrides: Any) -> AgentState:
         retry_count=0,
         recent_queries=[],
         cache_hit=False,
+        search_channels={},
     )
     base.update(overrides)
     return base
