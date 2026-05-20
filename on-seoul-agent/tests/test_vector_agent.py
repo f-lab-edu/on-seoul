@@ -36,7 +36,7 @@ def _make_agent(
 
 
 def _patch_search(vector_rows: list[dict], bm25_rows: list[dict]):
-    """vector_search, bm25_search, hydrate_services를 동시에 patch하는 컨텍스트 매니저.
+    """vector_search, question_search, bm25_search, hydrate_services를 동시에 patch하는 컨텍스트 매니저.
 
     hydrate_services는 입력된 service_ids 순서대로 vector_rows/bm25_rows 메타데이터를
     기반으로 hydrated 행을 반환한다 (원본 hydration을 흉내내는 fake).
@@ -57,6 +57,9 @@ def _patch_search(vector_rows: list[dict], bm25_rows: list[dict]):
             self._stack = ExitStack()
             self.mock_vs = self._stack.enter_context(
                 patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=vector_rows))
+            )
+            self.mock_qs = self._stack.enter_context(
+                patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[]))
             )
             self.mock_bm25 = self._stack.enter_context(
                 patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=bm25_rows))
@@ -94,9 +97,17 @@ class TestVectorAgentRouterPostFilter:
         state["service_status"] = "접수중"
 
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])) as mock_vs, \
-             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
+             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])), \
+             patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[])):
             await agent.search(state, MagicMock(), MagicMock())
-            kwargs = mock_vs.call_args[1]
+            # vector_search는 identity(Track A)와 summary(Track B) 두 번 호출된다.
+            # identity 호출(row_kind='identity')에서 post-filter가 전달되어야 한다.
+            identity_call = next(
+                (c for c in mock_vs.call_args_list if c[1].get("row_kind") == "identity"),
+                None,
+            )
+            assert identity_call is not None, "identity row_kind 호출이 없음"
+            kwargs = identity_call[1]
             assert kwargs.get("max_class_name") == "체육시설"
             assert kwargs.get("area_name") == "강남구"
             assert kwargs.get("service_status") == "접수중"
@@ -117,7 +128,8 @@ class TestVectorAgentRouterPostFilter:
         agent._embeddings = mock_embeddings
 
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])), \
-             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
+             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])), \
+             patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[])):
             await agent.search(_make_state(), MagicMock(), MagicMock())
 
         mock_chain.ainvoke.assert_called_once()
@@ -147,9 +159,16 @@ class TestVectorAgentPostFilter:
 
         mock_session = MagicMock()
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])) as mock_vs, \
-             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
+             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])), \
+             patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[])):
             await agent.search(_make_state(), mock_session, MagicMock())
-            kwargs = mock_vs.call_args[1]
+            # identity 호출의 kwargs에서 post-filter 확인
+            identity_call = next(
+                (c for c in mock_vs.call_args_list if c[1].get("row_kind") == "identity"),
+                None,
+            )
+            assert identity_call is not None
+            kwargs = identity_call[1]
             assert kwargs.get("max_class_name") == "체육"
             assert kwargs.get("area_name") == "강남구"
             assert kwargs.get("service_status") == "접수중"
@@ -175,9 +194,16 @@ class TestVectorAgentPostFilter:
 
         mock_session = MagicMock()
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])) as mock_vs, \
-             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
+             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])), \
+             patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[])):
             await agent.search(_make_state(), mock_session, MagicMock())
-            kwargs = mock_vs.call_args[1]
+            # identity 호출의 kwargs에서 post-filter None 확인
+            identity_call = next(
+                (c for c in mock_vs.call_args_list if c[1].get("row_kind") == "identity"),
+                None,
+            )
+            assert identity_call is not None
+            kwargs = identity_call[1]
             assert kwargs.get("max_class_name") is None
             assert kwargs.get("area_name") is None
             assert kwargs.get("service_status") is None
@@ -215,9 +241,11 @@ class TestVectorAgent:
         mock_session = MagicMock()
 
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])) as mock_vs, \
-             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])):
+             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])), \
+             patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[])):
             await agent.search(_make_state(), mock_session, MagicMock())
-            _, call_vector = mock_vs.call_args[0]
+            # 첫 번째 호출(identity)의 positional arg에서 query_vector 확인
+            _, call_vector = mock_vs.call_args_list[0][0]
             assert call_vector == vector
 
     async def test_search_returns_empty_vector_results_when_no_rows(self):
@@ -237,6 +265,7 @@ class TestVectorAgent:
         mock_session = MagicMock()
 
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])), \
+             patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[])), \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])) as mock_bm25, \
              patch("agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]):
             await agent.search(_make_state(), mock_session, MagicMock())
@@ -250,6 +279,7 @@ class TestVectorAgent:
         mock_session = MagicMock()
 
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])), \
+             patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[])), \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])), \
              patch("agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]), \
              patch("agents.vector_agent.hydrate_services", new=AsyncMock(return_value=[])):
@@ -334,6 +364,7 @@ class TestVectorAgentSearchFailure:
 
         hydrated = [{"service_id": "S010", "bm25_score": 3.0}]
         with patch("agents.vector_agent.vector_search", new=AsyncMock(side_effect=RuntimeError("DB 연결 오류"))), \
+             patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[])), \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=bm25_rows)), \
              patch("agents.vector_agent.hydrate_services", new=AsyncMock(return_value=hydrated)):
             result = await agent.search(_make_state(), mock_session, MagicMock())
@@ -350,6 +381,7 @@ class TestVectorAgentSearchFailure:
 
         hydrated = [{"service_id": "S020", "service_name": "수영장"}]
         with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=vector_rows)), \
+             patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[])), \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(side_effect=RuntimeError("ParadeDB 오류"))), \
              patch("agents.vector_agent.hydrate_services", new=AsyncMock(return_value=hydrated)):
             result = await agent.search(_make_state(), mock_session, MagicMock())
@@ -364,6 +396,7 @@ class TestVectorAgentSearchFailure:
         mock_session = MagicMock()
 
         with patch("agents.vector_agent.vector_search", new=AsyncMock(side_effect=RuntimeError("DB 오류"))), \
+             patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[])), \
              patch("agents.vector_agent.bm25_search", new=AsyncMock(side_effect=RuntimeError("BM25 오류"))):
             result = await agent.search(_make_state(), mock_session, MagicMock())
 
@@ -490,10 +523,11 @@ class TestVectorAgentHydration:
         ai_session = MagicMock()
         data_session = MagicMock()
 
-        # vector_search, bm25_search, hydrate_services 모킹
+        # vector_search, question_search, bm25_search, hydrate_services 모킹
         with (
             patch("agents.vector_agent.vector_search",
                   AsyncMock(return_value=[{"service_id": "S001", "service_name": "n", "metadata": {}, "similarity": 0.9}])),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.hydrate_services",
                   AsyncMock(return_value=[{"service_id": "S001", "service_name": "수영장", "service_status": "접수중"}])) as mock_hydrate,
@@ -543,6 +577,7 @@ class TestHydrationDataFreshness:
 
         with (
             patch("agents.vector_agent.vector_search", AsyncMock(return_value=stale_vector_rows)),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=fresh_hydrated)),
         ):
@@ -580,6 +615,7 @@ class TestHydrationDataFreshness:
 
         with (
             patch("agents.vector_agent.vector_search", AsyncMock(return_value=vector_rows)),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)),
         ):
@@ -601,6 +637,7 @@ class TestHydrationDataFreshness:
 
         with (
             patch("agents.vector_agent.vector_search", AsyncMock(return_value=vector_rows)),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.hydrate_services",
                   AsyncMock(side_effect=RuntimeError("DB down"))),

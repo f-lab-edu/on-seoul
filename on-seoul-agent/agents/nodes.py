@@ -135,6 +135,8 @@ class GraphNodes:
                 update["area_name"] = result.area_name
             if result.service_status is not None:
                 update["service_status"] = result.service_status
+            if result.vector_sub_intent is not None:
+                update["vector_sub_intent"] = result.vector_sub_intent
             logger.info(
                 "router.classify room=%s intent=%s refined=%r "
                 "max_class=%s area=%s status=%s",

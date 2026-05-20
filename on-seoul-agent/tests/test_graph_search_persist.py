@@ -141,14 +141,15 @@ class TestZeroHitQueryRecorded:
 
 class TestVectorIntentPersist:
     async def test_vector_phase1_persists_three_channels(self):
-        """VECTOR_SEARCH → queries: vector / bm25 / final 3행 INSERT."""
-        vector_rows = [{"service_id": "V001", "similarity": 0.92}]
+        """VECTOR_SEARCH → queries: vector_a / vector_b / vector_c / bm25 / rrf / final 6행 INSERT."""
+        vector_rows = [{"service_id": "V001", "embedding_text": "t", "metadata": {}, "similarity": 0.92}]
         bm25_rows = [{"service_id": "V001", "bm25_score": 1.5}]
         hydrated = [{"service_id": "V001", "service_name": "체험관", "rrf_score": 0.05}]
         ai_session = make_ai_session()
 
         with (
             patch("agents.vector_agent.vector_search", AsyncMock(return_value=vector_rows)),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=bm25_rows)),
             patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)),
         ):
@@ -166,7 +167,16 @@ class TestVectorIntentPersist:
         query_rows = _get_queries_rows(ai_session)
         assert query_rows is not None, "chat_search_queries INSERT 없음"
         channels = {r["channel"] for r in query_rows}
-        assert {SearchChannel.VECTOR, SearchChannel.BM25, SearchChannel.FINAL} == channels
+        # Phase RRF: 6채널 (vector_a, vector_b, vector_c, bm25, rrf, final)
+        expected = {
+            SearchChannel.VECTOR_A,
+            SearchChannel.VECTOR_B,
+            SearchChannel.VECTOR_C,
+            SearchChannel.BM25,
+            SearchChannel.RRF,
+            SearchChannel.FINAL,
+        }
+        assert expected == channels
 
 
 # ---------------------------------------------------------------------------

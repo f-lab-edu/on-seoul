@@ -57,5 +57,27 @@ class Settings(BaseSettings):
     # 임베딩 동기화 API — /embeddings/services/sync 백그라운드 동시 처리 수
     embedding_sync_concurrency: int = 4
 
+    # Triple-track + RRF 결합
+    rrf_k_constant: int = 60
+    rrf_scan_k_per_track: int = 50
+    rrf_top_k_final: int = 10
+
+    # Track C 전용
+    question_scan_multiplier: int = 3
+
+    # VectorSubIntent 활성화 단계
+    vector_sub_intent_enabled: bool = False
+    vector_default_sub_intent: str = "semantic"
+
+    # 가중치 프로파일 — sub_intent → {track_a, track_b, track_c, bm25}
+    rrf_weight_profiles: dict[str, dict[str, float]] = {
+        "identification": {"track_a": 0.5,  "track_b": 0.25, "track_c": 0.25, "bm25": 0.5},
+        "detail":         {"track_a": 0.2,  "track_b": 0.5,  "track_c": 0.3,  "bm25": 0.4},
+        "semantic":       {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5,  "bm25": 0.3},
+    }
+
+    # 비가중치 baseline 모드
+    rrf_unweighted_baseline: bool = True
+
 
 settings = Settings()
