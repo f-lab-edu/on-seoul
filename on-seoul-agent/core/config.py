@@ -54,5 +54,8 @@ class Settings(BaseSettings):
     # 버스트 제거 후 실효 간격 = 60/rpm 초. 무료 티어 안전값: 60 이하 권장.
     gemini_embed_rpm: int = 60
 
+    # 임베딩 동기화 API — /embeddings/services/sync 백그라운드 동시 처리 수
+    embedding_sync_concurrency: int = 4
+
 
 settings = Settings()

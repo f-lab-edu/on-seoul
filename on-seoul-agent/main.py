@@ -15,6 +15,7 @@ from core.redis import get_redis
 from middleware.metrics import ProcessTimeMiddleware
 from routers import admin as admin_router
 from routers import chat
+from routers import embeddings as embeddings_router
 
 setup_logging()
 
@@ -88,6 +89,7 @@ app.add_middleware(ProcessTimeMiddleware)
 
 app.include_router(chat.router, prefix="/chat")
 app.include_router(admin_router.router)
+app.include_router(embeddings_router.router)
 
 # ---------------------------------------------------------------------------
 # 전역 에러 핸들러
@@ -112,9 +114,18 @@ async def validation_exception_handler(
         body_text,
         exc.errors(),
     )
+    # Pydantic v2 errors의 ctx["error"]는 ValueError 등 예외 인스턴스를 담을 수 있다.
+    # Python 표준 json.dumps는 예외 인스턴스를 직렬화하지 못하므로 문자열로 변환한다.
+    errors = exc.errors()
+    for err in errors:
+        ctx = err.get("ctx")
+        if ctx and "error" in ctx and isinstance(ctx["error"], Exception):
+            ctx["error"] = str(ctx["error"])
+        # input 필드가 너무 크면 직렬화 오류 가능성이 있으므로 제거한다.
+        err.pop("url", None)
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()},
+        content={"detail": errors},
     )
 
 

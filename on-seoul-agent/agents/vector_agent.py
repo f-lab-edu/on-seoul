@@ -214,14 +214,30 @@ class VectorAgent:
         else:
             logger.debug("유효 BM25 토큰 없음 — 벡터 단독 검색으로 진행")
 
+        # 임시 결합 (RRF 도입 전):
+        # 1. vector_search 결과 service_id 목록
+        # 2. bm25_search 결과 service_id 목록
+        # 3. vector 우선, bm25-only 추가 (중복 제거)
+        # 4. hydrate_services
+        # _rrf_merge는 그대로 유지 (phase-rrf에서 재활성화 예정)
         merged = _rrf_merge(vector_rows, bm25_rows, top_k=_TOP_K)
 
-        # RRF 결과의 service_id로 원본 hydration.
-        # rrf_score를 보존하기 위해 service_id → rrf_score 매핑을 먼저 만든다.
+        # union 기준 service_id 목록: vector 우선, bm25-only 추가
+        vector_ids_ordered = [r["service_id"] for r in vector_rows]
+        bm25_ids_ordered = [r["service_id"] for r in bm25_rows]
+        seen: set[str] = set(vector_ids_ordered)
+        union_ids: list[str] = list(vector_ids_ordered)
+        for sid in bm25_ids_ordered:
+            if sid not in seen:
+                union_ids.append(sid)
+                seen.add(sid)
+        union_ids = union_ids[:_TOP_K]
+
+        # rrf_score를 보존하기 위해 service_id → rrf_score 매핑을 유지한다.
         rrf_score_by_id: dict[str, float] = {
             r["service_id"]: r.get("rrf_score", 0.0) for r in merged
         }
-        service_ids = list(rrf_score_by_id.keys())
+        service_ids = union_ids
 
         try:
             hydrated: list[dict] = await hydrate_services(data_session, service_ids)
