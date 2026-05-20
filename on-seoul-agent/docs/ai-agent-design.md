@@ -22,30 +22,40 @@
 flowchart TD
     START(["사용자 메시지"])
     ROUTER["router_node<br/>(Router Agent)"]
+    CACHE_CHECK["cache_check_node<br/>(Answer Cache lookup)"]
     SQL["sql_node<br/>(SQL Agent)"]
     VECTOR["vector_node<br/>(Vector Agent)<br/>BM25 + vector RRF"]
     MAP["map_node<br/>(map_search)<br/>lat/lng 미제공 시<br/>map_results=None"]
     ANSWER["answer_node<br/>(Answer Agent)"]
     SELF_CORR{{"self_correction<br/>answer 비고 retry=0?"}}
+    RETRY_PREP["retry_prep_node<br/>(search_channels 리셋)"]
+    CACHE_WRITE["cache_write_node<br/>(Answer Cache 저장)"]
+    SEARCH_PERSIST(["search_persist_node<br/>chat_search_queries +<br/>chat_search_results 적재"])
     TRACE(["trace_node<br/>chat_agent_traces 적재"])
 
     START --> ROUTER
-    ROUTER -- "SQL_SEARCH" --> SQL
-    ROUTER -- "VECTOR_SEARCH" --> VECTOR
-    ROUTER -- "MAP" --> MAP
-    ROUTER -- "FALLBACK" --> ANSWER
-    ROUTER -- "예외 (fallback_answer 주입)" --> ANSWER
+    ROUTER --> CACHE_CHECK
+    CACHE_CHECK -- "hit" --> SEARCH_PERSIST
+    CACHE_CHECK -- "miss · SQL_SEARCH" --> SQL
+    CACHE_CHECK -- "miss · VECTOR_SEARCH" --> VECTOR
+    CACHE_CHECK -- "miss · MAP" --> MAP
+    CACHE_CHECK -- "miss · FALLBACK 또는 router 예외" --> ANSWER
 
     SQL --> ANSWER
     VECTOR --> ANSWER
     MAP --> ANSWER
 
     ANSWER --> SELF_CORR
-    SELF_CORR -- "Yes (최대 1회)" --> ROUTER
-    SELF_CORR -- "No" --> TRACE
+    SELF_CORR -- "Yes (최대 1회)" --> RETRY_PREP
+    RETRY_PREP --> ROUTER
+    SELF_CORR -- "No" --> CACHE_WRITE
+    CACHE_WRITE --> SEARCH_PERSIST
+    SEARCH_PERSIST --> TRACE
 ```
 
-각 노드는 공유 상태인 **`AgentState`** (TypedDict) 를 입력받아 부분 업데이트 dict를 반환한다. LangGraph가 상태 병합을 담당하므로 노드 내부에서 직접 변이하지 않는다. 그래프 전체에는 `recursion_limit=10`이 적용되어 무한 사이클을 방지한다.
+각 노드는 공유 상태인 **`AgentState`** (TypedDict) 를 입력받아 부분 업데이트 dict를 반환한다. LangGraph가 상태 병합을 담당하므로 노드 내부에서 직접 변이하지 않는다. 그래프 전체에는 `recursion_limit=15`이 적용되어 무한 사이클을 방지한다.
+
+> **종단 체인 일관성**: cache hit 경로도 `search_persist_node` 를 경유한다. 빈 `search_channels` 에서는 즉시 skip 되므로 오버헤드는 없으나, 명시적으로 통과시켜 "cache_write → search_persist → trace" 의 종단 체인 형태를 항상 동일하게 유지한다.
 
 ---
 
@@ -201,14 +211,18 @@ PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도
 | `room_id`, `message_id`, `message`, `title_needed` | 호출자 | 입력 |
 | `lat`, `lng` | 호출자 | MAP intent 용 위치 |
 | `intent` | router_node | 분류된 의도 |
-| `refined_query` | vector_node | 벡터 검색용 정제 질의 |
+| `refined_query` | router_node / vector_node | 벡터 검색용 정제 질의 (router 1차 산출, 미산출 시 vector_node fallback) |
+| `max_class_name`, `area_name`, `service_status` | router_node | post-filter 메타데이터 |
 | `sql_results` | sql_node | SQL 조회 결과 |
+| `sql_keyword` | sql_node | SqlAgent 가 LLM 으로 추출한 keyword (search_persist 의 sql 채널 query_text 로 사용) |
 | `vector_results` | vector_node | BM25 + vector RRF 결합 결과 |
 | `map_results` | map_node | 반경 검색 GeoJSON |
+| `search_channels` | sql/vector/map_node + retry_prep_node | `dict[str, ChannelData]` — 채널별 입력(query) + 출력(hits). reducer `search_channels_reducer` 로 누적, `{}` 시그널로 리셋 |
 | `answer`, `title` | answer_node | 최종 답변 / 대화 제목 |
+| `cache_hit` | cache_check_node | Answer Cache hit 여부 |
 | `trace` | trace_node | `intent`, `node_path`, `elapsed_ms` |
 | `error` | 각 노드 | 오류 메시지 |
-| `retry_count` | router_node | 자기 교정 재시도 횟수 (0=초기, 최대 1) |
+| `retry_count` | retry_prep_node | 자기 교정 재시도 횟수 (0=초기, 최대 1) |
 
 ---
 
@@ -220,7 +234,10 @@ PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도
 | vector_node → `vector_search` / `bm25_search` | `ai_session` | `on_ai` | `service_embeddings` |
 | vector_node → `hydrate_services` | `data_session` | `on_data` | `public_service_reservations` |
 | map_node → `map_search` | `data_session` | `on_data` | `public_service_reservations` (earthdistance) |
+| search_persist_node | `ai_session` | `on_ai` | `chat_search_queries`, `chat_search_results` |
 | trace_node | `ai_session` | `on_ai` | `chat_agent_traces` |
+
+`search_persist_node` 와 `trace_node` 는 동일 `ai_session` 을 사용한다. `search_persist_node` 가 항상 commit() 또는 rollback() 으로 트랜잭션을 닫으므로 trace_node 진입 시 세션은 clean 상태가 보장된다.
 
 ---
 
@@ -315,6 +332,19 @@ needs_retry = not answer.strip() and retry_count == 0
 - 저장 실패 시 `logger.warning` 으로만 기록하고 세션을 rollback한다.
 - 본문 노드에서 예외가 발생하더라도 `trace_node` 가 종단 노드로 항상 도달하므로, 실패한 실행도 분석 가능하다.
 
+### 8-4. Search Persist best-effort 정책
+
+`chat_search_queries` + `chat_search_results` 적재는 `search_persist_node` 에서 실행되며, trace 와 동일한 best-effort 원칙을 따른다.
+
+- **두 테이블은 단일 트랜잭션** 으로 묶여 함께 commit / rollback 된다 — 한쪽만 적재되는 일관성 깨짐을 방지한다.
+- 0건 결과여도 `chat_search_queries` 의 query 행은 기록한다 ("검색했는데 결과 없음" 도 recall / stopword 진단의 신호).
+- INSERT 실패 시 `logger.warning` + rollback + `node_path += "search_persist_error"` 만 남기고 `trace_node` 로 진행한다.
+- 빈 `search_channels` 에서는 INSERT 없이 즉시 skip — cache hit 경로와 FALLBACK intent 가 여기에 해당한다.
+- self-correction 재시도 시 `retry_prep_node` 가 `search_channels = {}` 를 반환하면 `search_channels_reducer` 가 누적 dict 를 리셋한다. 마지막 시도의 채널만 적재된다 — UNIQUE `(message_id, channel)` 위반 방지.
+- 방어적 안전망으로 두 INSERT 모두 `ON CONFLICT DO NOTHING` 으로 묶인다.
+
+운영 가이드와 분석 쿼리 예시는 [`docs/chat-search-persistence.md`](chat-search-persistence.md) 를 참조한다.
+
 ---
 
 ## 9. 변경 이력
@@ -326,5 +356,6 @@ needs_retry = not answer.strip() and retry_count == 0
 | Phase 16 | 통합 테스트 | `test_integration_workflow.py`, `test_chat_router.py` E2E 시나리오 |
 | Phase 17 | LangGraph 전환 | `agents/graph.py` 신설(`AgentGraph`), Self-Correction 사이클, `AgentState.retry_count` 추가, `_router_node` 예외 시 fallback_answer fast-path, `recursion_limit=10` |
 | Phase 18 | 원본 hydration 도입 | `tools/hydrate_services` 신설, VectorAgent에서 RRF 후 `public_service_reservations` 조회. 답변 컨텍스트가 항상 최신 원본 값을 사용하도록 변경. `AnswerAgent._normalize`의 metadata 언팩 분기 제거. |
+| Phase 19 | 검색 채널 적재 (chat-search-persistence) | `chat_search_queries` + `chat_search_results` 두 테이블 도입. `AgentState.search_channels: dict[str, ChannelData]` 필드(reducer 적용) + 종단 `search_persist_node` 신설. sql/vector/map 노드가 채널별 `ChannelData(kind, query, hits)` 를 채우고, `retry_prep_node` 가 재시도 시 `search_channels = {}` 리셋. cache hit 경로도 `search_persist_node` 경유로 종단 체인 일관성 유지. `recursion_limit` 10 → 15 상향. |
 
 `AgentState` 입출력 규약을 유지하므로 각 Agent 클래스(`router_agent.py`, `sql_agent.py`, `vector_agent.py`, `answer_agent.py`)는 수정 없이 재사용된다. `agents/workflow.py` (LCEL)는 레거시로 유지된다.
