@@ -202,7 +202,7 @@ class TestMapIntentPersist:
                 answer_agent=make_answer_agent("주변 시설입니다."),
             )
             await graph.run(
-                _state(lat=37.5665, lng=126.9780, message_id=40),
+                _state(user_lat=37.5665, user_lng=126.9780, message_id=40),
                 data_session=MagicMock(),
                 ai_session=ai_session,
             )

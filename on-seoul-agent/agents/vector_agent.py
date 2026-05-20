@@ -11,7 +11,6 @@
 5. 최종 service_id 목록으로 public_service_reservations를 hydration한다.
 """
 
-import asyncio
 import logging
 
 from langchain_core.embeddings import Embeddings
@@ -155,10 +154,11 @@ def _resolve_weights(sub_intent: str | None) -> dict[str, float] | None:
     else:
         label = sub_intent or settings.vector_default_sub_intent
 
-    return settings.rrf_weight_profiles.get(
-        label,
-        settings.rrf_weight_profiles[settings.vector_default_sub_intent],
+    _fallback = settings.rrf_weight_profiles.get(
+        settings.vector_default_sub_intent,
+        {"track_a": 1.0, "track_b": 1.0, "track_c": 1.0, "bm25": 1.0},
     )
+    return settings.rrf_weight_profiles.get(label, _fallback)
 
 
 async def _safe_vector_search(session: AsyncSession, query_vector: list[float], **kwargs) -> list[dict]:
@@ -213,7 +213,7 @@ class VectorAgent:
         state: AgentState,
         ai_session: AsyncSession,
         data_session: AsyncSession,
-    ) -> AgentState:
+    ) -> dict:
         """질의 정제 → 임베딩 → 4채널 병렬 검색 → 가중 RRF → hydration.
 
         ai_session   : service_embeddings(on_ai)에 대한 의미 검색·BM25 용도
@@ -244,29 +244,22 @@ class VectorAgent:
         tokens = tokenize_query(refined.refined_query)
         bm25_tokens = [t for t in tokens if t not in _BM25_STOPWORDS]
 
-        # 4채널 병렬 실행.
-        # asyncio.gather로 각 채널을 동시에 실행한다.
+        # 4채널 순차 실행.
+        # asyncpg 단일 세션은 동시 쿼리를 허용하지 않으므로 순차 실행한다.
         # 각 _safe_* 래퍼가 예외를 개별 격리하므로 한 채널 실패가 전체에 영향을 주지 않는다.
-        # 주의: asyncpg 단일 세션에서 gather 병렬 실행 시 충돌 가능.
-        # 실제 DB 연결에서는 각 트랙이 독립 세션을 사용해야 하나,
-        # 현재는 mock 테스트 환경에서 단위 테스트 통과를 우선한다.
-        async def _noop() -> list[dict]:
-            return []
-
-        a_rows, b_rows, c_rows, d_rows = await asyncio.gather(
-            _safe_vector_search(
-                ai_session, query_vector,
-                row_kind="identity",
-                max_class_name=refined.max_class_name,
-                area_name=refined.area_name,
-                service_status=refined.service_status,
-            ),
-            _safe_vector_search(ai_session, query_vector, row_kind="summary"),
-            _safe_question_search(ai_session, query_vector),
-            _safe_bm25_search(ai_session, bm25_tokens) if bm25_tokens else _noop(),
+        a_rows = await _safe_vector_search(
+            ai_session, query_vector,
+            row_kind="identity",
+            max_class_name=refined.max_class_name,
+            area_name=refined.area_name,
+            service_status=refined.service_status,
         )
-
-        if not bm25_tokens:
+        b_rows = await _safe_vector_search(ai_session, query_vector, row_kind="summary")
+        c_rows = await _safe_question_search(ai_session, query_vector)
+        if bm25_tokens:
+            d_rows = await _safe_bm25_search(ai_session, bm25_tokens)
+        else:
+            d_rows = []
             logger.debug("유효 BM25 토큰 없음 — 벡터 단독 검색으로 진행")
 
         # 가중치 결정
@@ -380,7 +373,6 @@ class VectorAgent:
         }
 
         return {
-            **state,
             "refined_query": refined.refined_query,
             "vector_results": hydrated,
             "search_channels": search_channels,

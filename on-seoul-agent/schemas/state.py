@@ -19,8 +19,8 @@ class AgentState(TypedDict):
     intent: IntentType | None  # SQL_SEARCH / VECTOR_SEARCH / MAP / FALLBACK
     # MAP intent 반경 검색용 좌표 (ChatRequest.lat/lng 로부터 주입).
     # None이면 MAP intent를 FALLBACK으로 대체한다.
-    lat: float | None  # 사용자 위치 위도 (latitude)
-    lng: float | None  # 사용자 위치 경도 (longitude)
+    user_lat: float | None  # 클라이언트 위도 (latitude)
+    user_lng: float | None  # 클라이언트 경도 (longitude)
     refined_query: str | None  # Router(우선) 또는 Vector Agent(fallback)가 정제한 질의
     # Router가 함께 산출하는 post-filter 메타데이터.
     # SQL_SEARCH / VECTOR_SEARCH 경로의 검색 도구에 전달되어 결과를 좁힌다.
@@ -30,7 +30,7 @@ class AgentState(TypedDict):
     service_status: str | None  # 접수중·예약마감·접수종료·예약일시중지·안내중 중 하나
     sql_results: list[dict[str, Any]] | None  # SQL Agent 결과
     sql_keyword: str | None  # SqlAgent가 LLM으로 추출한 키워드 (search_channels 적재용)
-    vector_sub_intent: str | None  # "identification" | "detail" | "semantic" | None
+    vector_sub_intent: str | None  # Router가 분류한 벡터 검색 세부 의도 (VECTOR_SEARCH 전용)
     vector_results: list[dict[str, Any]] | None  # Vector Agent 결과
     map_results: dict[str, Any] | None  # map_search GeoJSON FeatureCollection 결과
     answer: str | None  # Answer Agent가 생성한 최종 답변

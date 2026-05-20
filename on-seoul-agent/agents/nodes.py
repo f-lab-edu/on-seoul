@@ -256,8 +256,8 @@ class GraphNodes:
         라우팅은 항상 이 노드를 거치므로 map 분기 처리는 내부에서 담당한다.
         """
         assert self.data_session is not None
-        lat = state.get("lat")
-        lng = state.get("lng")
+        lat = state.get("user_lat")
+        lng = state.get("user_lng")
         if lat is not None and lng is not None:
             try:
                 geojson = await map_search(self.data_session, lat, lng)

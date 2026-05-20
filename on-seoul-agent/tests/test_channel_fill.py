@@ -391,7 +391,7 @@ class TestMapNodeChannelData:
         nodes.data_session = _mock_session()
 
         with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
-            state = make_agent_state(lat=37.56, lng=126.97)
+            state = make_agent_state(user_lat=37.56, user_lng=126.97)
             result = await nodes.map_node(state)
 
         assert SearchChannel.MAP in result["search_channels"]
@@ -402,7 +402,7 @@ class TestMapNodeChannelData:
         nodes.data_session = _mock_session()
 
         with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
-            state = make_agent_state(lat=37.56, lng=126.97)
+            state = make_agent_state(user_lat=37.56, user_lng=126.97)
             result = await nodes.map_node(state)
 
         channel = result["search_channels"][SearchChannel.MAP]
@@ -414,7 +414,7 @@ class TestMapNodeChannelData:
         nodes.data_session = _mock_session()
 
         with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
-            state = make_agent_state(lat=37.5665, lng=126.9780)
+            state = make_agent_state(user_lat=37.5665, user_lng=126.9780)
             result = await nodes.map_node(state)
 
         query_text = result["search_channels"][SearchChannel.MAP]["query"]["query_text"]
@@ -432,7 +432,7 @@ class TestMapNodeChannelData:
         nodes.data_session = _mock_session()
 
         with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
-            state = make_agent_state(lat=37.56, lng=126.97)
+            state = make_agent_state(user_lat=37.56, user_lng=126.97)
             result = await nodes.map_node(state)
 
         hits = result["search_channels"][SearchChannel.MAP]["hits"]
@@ -446,7 +446,7 @@ class TestMapNodeChannelData:
         """lat/lng 없으면 map_results=None + search_channels 미포함."""
         nodes = _make_nodes()
         nodes.data_session = _mock_session()
-        state = make_agent_state(lat=None, lng=None)
+        state = make_agent_state(user_lat=None, user_lng=None)
 
         result = await nodes.map_node(state)
 
@@ -458,7 +458,7 @@ class TestMapNodeChannelData:
         nodes.data_session = _mock_session()
 
         with patch("agents.nodes.map_search", AsyncMock(side_effect=RuntimeError("DB 오류"))):
-            state = make_agent_state(lat=37.56, lng=126.97)
+            state = make_agent_state(user_lat=37.56, user_lng=126.97)
             result = await nodes.map_node(state)
 
         assert "error" in result

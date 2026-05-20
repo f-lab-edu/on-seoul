@@ -128,7 +128,7 @@ class TestConditionalEdgeRouting:
                 answer_agent=_answer_agent("주변 시설입니다."),
             )
             result = await graph.run(
-                _state(lat=37.5665, lng=126.9780),
+                _state(user_lat=37.5665, user_lng=126.9780),
                 data_session=data_session,
                 ai_session=_ai_session(),
             )
@@ -145,7 +145,7 @@ class TestConditionalEdgeRouting:
             answer_agent=_answer_agent("위치 정보가 없습니다."),
         )
         result = await graph.run(
-            _state(lat=None, lng=None),
+            _state(user_lat=None, user_lng=None),
             data_session=data_session,
             ai_session=_ai_session(),
         )
@@ -395,8 +395,8 @@ class TestAgentStateContract:
             "message",
             "title_needed",
             "intent",
-            "lat",
-            "lng",
+            "user_lat",
+            "user_lng",
             "refined_query",
             "sql_results",
             "vector_results",
