@@ -185,14 +185,20 @@ class VectorAgent:
         query_vector = await self._embeddings.aembed_query(refined.refined_query)
         tokens = tokenize_query(refined.refined_query)
 
+        # 각 검색을 독립 savepoint로 실행한다.
+        # vector_search 또는 bm25_search가 실패해도 savepoint만 롤백되고
+        # ai_session의 외부 트랜잭션은 정상 상태를 유지한다.
+        # 이렇게 하면 검색 실패가 이후 search_persist_node의 INSERT를
+        # InFailedSQLTransactionError로 차단하지 않는다.
         try:
-            vector_rows: list[dict] = await vector_search(
-                ai_session,
-                query_vector,
-                max_class_name=refined.max_class_name,
-                area_name=refined.area_name,
-                service_status=refined.service_status,
-            )
+            async with ai_session.begin_nested():
+                vector_rows: list[dict] = await vector_search(
+                    ai_session,
+                    query_vector,
+                    max_class_name=refined.max_class_name,
+                    area_name=refined.area_name,
+                    service_status=refined.service_status,
+                )
         except Exception:
             logger.warning("vector_search 실패, 빈 결과로 대체", exc_info=True)
             vector_rows = []
@@ -201,7 +207,8 @@ class VectorAgent:
         bm25_rows: list[dict] = []
         if bm25_tokens:
             try:
-                bm25_rows = await bm25_search(bm25_tokens, ai_session)
+                async with ai_session.begin_nested():
+                    bm25_rows = await bm25_search(bm25_tokens, ai_session)
             except Exception:
                 logger.warning("bm25_search 실패, 빈 결과로 대체", exc_info=True)
         else:
