@@ -197,8 +197,18 @@ class TestFlush:
                 yield k
         mock_redis.scan_iter = _scan_iter
         from core.cache import flush_answer_cache
-        with caplog.at_level(logging.INFO, logger="core.cache"):
-            await flush_answer_cache(mock_redis)
+        # setup_logging()이 core.* propagate=False를 설정할 수 있으므로
+        # caplog.handler를 직접 core.cache 로거에 연결한다.
+        cache_logger = logging.getLogger("core.cache")
+        prev_propagate = cache_logger.propagate
+        cache_logger.addHandler(caplog.handler)
+        cache_logger.propagate = True
+        try:
+            with caplog.at_level(logging.INFO, logger="core.cache"):
+                await flush_answer_cache(mock_redis)
+        finally:
+            cache_logger.removeHandler(caplog.handler)
+            cache_logger.propagate = prev_propagate
         flush_logs = [r for r in caplog.records if "cache.flush" in r.getMessage()]
         assert len(flush_logs) == 1
         assert "deleted=2" in flush_logs[0].getMessage()
