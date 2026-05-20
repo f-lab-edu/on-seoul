@@ -15,6 +15,7 @@ from typing import Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate, FewShotChatMessagePromptTemplate
 from pydantic import BaseModel, field_validator
 
 from core.config import settings
@@ -74,6 +75,53 @@ intent가 VECTOR_SEARCH인 경우 vector_sub_intent를 다음 3종 중 하나로
 
 intent가 VECTOR_SEARCH가 아니면 vector_sub_intent는 null로 두세요.
 """
+
+
+# ---------------------------------------------------------------------------
+# Few-shot 예시 — 의도 분류 정확도 향상
+#
+# 3개 예시가 커버하는 경계:
+#   1. SQL_SEARCH  — 접수상태·지역 같은 명시적 조건이 있으면 SQL (VECTOR와 경계)
+#   2. VECTOR/identification — 시설명·지역 조합으로 특정 시설을 찾을 때
+#   3. VECTOR/semantic       — 활동·경험·맥락 기반 탐색 (vector_sub_intent 가중치 최대)
+# ---------------------------------------------------------------------------
+_FEW_SHOT_EXAMPLES = [
+    {
+        "message": "마포구 문화행사 이번 주 접수 중인 거 보여줘",
+        "output": (
+            '{"intent": "SQL_SEARCH",'
+            ' "refined_query": "마포구 접수중 문화행사",'
+            ' "max_class_name": "문화행사", "area_name": "마포구",'
+            ' "service_status": "접수중", "vector_sub_intent": null}'
+        ),
+    },
+    {
+        "message": "응봉공원 테니스장 예약하고 싶어",
+        "output": (
+            '{"intent": "VECTOR_SEARCH",'
+            ' "refined_query": "응봉공원 테니스장",'
+            ' "max_class_name": null, "area_name": null,'
+            ' "service_status": null, "vector_sub_intent": "identification"}'
+        ),
+    },
+    {
+        "message": "주말에 아이랑 같이 즐길 수 있는 무료 체험 프로그램",
+        "output": (
+            '{"intent": "VECTOR_SEARCH",'
+            ' "refined_query": "아동 참여 무료 주말 체험 프로그램",'
+            ' "max_class_name": null, "area_name": null,'
+            ' "service_status": null, "vector_sub_intent": "semantic"}'
+        ),
+    },
+]
+
+_FEW_SHOT: FewShotChatMessagePromptTemplate = FewShotChatMessagePromptTemplate(
+    example_prompt=ChatPromptTemplate.from_messages([
+        ("human", "사용자 메시지: {message}"),
+        ("ai", "{output}"),
+    ]),
+    examples=_FEW_SHOT_EXAMPLES,
+)
 
 
 class _IntentOutput(BaseModel):
@@ -170,6 +218,7 @@ class RouterAgent:
         system_text = _SYSTEM + (f"\n\n{context_block}" if context_block else "")
         messages = [
             SystemMessage(content=system_text),
+            *_FEW_SHOT.format_messages(),
             HumanMessage(content=f"사용자 메시지: {message}"),
         ]
         structured = self._llm.with_structured_output(_IntentOutput)
