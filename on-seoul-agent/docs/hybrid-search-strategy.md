@@ -333,7 +333,11 @@ VectorAgent.search()
      - 입력 순서(RRF 순위) 유지
      - 원본 누락분 자동 제외
   6. rrf_score 병합 후 vector_results에 할당
+  7. search_channels 에 vector / bm25 / final 채널 ChannelData 노출
+     → 종단 search_persist_node 가 chat_search_queries + chat_search_results 일괄 적재
 ```
+
+> **검색 결과 적재 (Phase 19)**: 각 검색 노드가 채운 `state.search_channels` 는 그래프 종단부에서 `search_persist_node` 가 `chat_search_queries` (입력 — 무엇으로 검색했는가) + `chat_search_results` (출력 — 무엇이 반환됐는가) 두 테이블에 단일 트랜잭션으로 적재한다. RRF 채널은 `query_text=NULL` + `parameters` 에 source_channels/weights 기록, `final` 채널은 hydration 직후의 실제 사용자 노출 목록을 담는다. 자세한 스키마·분석 쿼리·운영 정책은 [`docs/chat-search-persistence.md`](chat-search-persistence.md) 참조.
 
 ### 임베딩 ↔ 원본 동기화 정책
 
