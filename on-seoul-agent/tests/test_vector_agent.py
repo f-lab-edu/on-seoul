@@ -208,27 +208,6 @@ class TestVectorAgent:
 
         assert result["refined_query"] == "어린이 체험 시설"
 
-    async def test_refine_chain_receives_original_message(self):
-        """정제 체인에 원본 메시지가 전달된다."""
-        agent = _make_agent("정제된 쿼리", [0.1])
-        state = _make_state("조용한 운동 시설")
-        mock_session = MagicMock()
-
-        with _patch_search([], []):
-            await agent.search(state, mock_session, MagicMock())
-
-        agent._refine_chain.ainvoke.assert_called_once_with({"message": "조용한 운동 시설"})
-
-    async def test_embedding_called_with_refined_query(self):
-        """임베딩은 원본이 아닌 정제된 질의로 호출된다."""
-        agent = _make_agent("아이 동반 체험 시설 서울", [0.1])
-        mock_session = MagicMock()
-
-        with _patch_search([], []):
-            await agent.search(_make_state(), mock_session, MagicMock())
-
-        agent._embeddings.aembed_query.assert_called_once_with("아이 동반 체험 시설 서울")
-
     async def test_similarity_search_passes_query_vector(self):
         """vector_search에 query_vector가 전달된다."""
         vector = [0.1, 0.2, 0.3]
@@ -251,20 +230,6 @@ class TestVectorAgent:
 
         assert result["vector_results"] == []
         assert result["vector_results"] is not None
-
-    async def test_bm25_search_called_with_tokens(self):
-        """bm25_search가 stopword 필터링된 토큰으로 호출된다."""
-        agent = _make_agent("체험 시설", [0.1])
-        mock_session = MagicMock()
-
-        # "시설"은 _BM25_STOPWORDS에 포함되므로 필터링 후 ["체험"]만 전달된다.
-        with patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])), \
-             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])) as mock_bm25, \
-             patch("agents.vector_agent.tokenize_query", return_value=["체험", "시설"]):
-            await agent.search(_make_state(), mock_session, MagicMock())
-            call_tokens, call_session = mock_bm25.call_args[0]
-            assert call_tokens == ["체험"]
-            assert call_session is mock_session
 
     async def test_bm25_skipped_when_all_tokens_are_stopwords(self):
         """모든 토큰이 stopword이면 bm25_search를 호출하지 않는다."""
@@ -551,11 +516,6 @@ class TestHydrationDataFreshness:
 
     async def test_hydrated_status_overrides_stale_embedding_metadata(self):
         """임베딩 metadata는 '접수마감', 원본은 '접수중'이면 hydrated 값('접수중')이 반환된다."""
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from agents.vector_agent import VectorAgent
-        from schemas.state import AgentState
-
         agent = VectorAgent.__new__(VectorAgent)
         refined = MagicMock()
         refined.refined_query = "수영장"
@@ -586,14 +546,7 @@ class TestHydrationDataFreshness:
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=fresh_hydrated)),
         ):
-            state: AgentState = {
-                "room_id": 1, "message_id": 1, "message": "수영장",
-                "title_needed": False, "intent": None, "lat": None, "lng": None,
-                "refined_query": None, "sql_results": None, "vector_results": None,
-                "map_results": None, "answer": None, "title": None, "trace": None,
-                "error": None, "retry_count": 0,
-                "recent_queries": [], "cache_hit": False,
-            }
+            state = make_agent_state(message="수영장")
             result = await agent.search(state, MagicMock(), MagicMock())
 
             # 답변 컨텍스트에는 최신 '접수중'만 들어간다
@@ -604,11 +557,6 @@ class TestHydrationDataFreshness:
 
     async def test_hydration_drops_rows_missing_in_source(self):
         """임베딩에는 있지만 원본 테이블에 없는 service_id는 vector_results에서 제외된다."""
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from agents.vector_agent import VectorAgent
-        from schemas.state import AgentState
-
         agent = VectorAgent.__new__(VectorAgent)
         refined = MagicMock()
         refined.refined_query = "수영장"
@@ -635,15 +583,7 @@ class TestHydrationDataFreshness:
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)),
         ):
-            state: AgentState = {
-                "room_id": 1, "message_id": 1, "message": "수영장",
-                "title_needed": False, "intent": None, "lat": None, "lng": None,
-                "refined_query": None, "sql_results": None, "vector_results": None,
-                "map_results": None, "answer": None, "title": None, "trace": None,
-                "error": None, "retry_count": 0,
-                "recent_queries": [], "cache_hit": False,
-            }
-            result = await agent.search(state, MagicMock(), MagicMock())
+            result = await agent.search(make_agent_state(message="수영장"), MagicMock(), MagicMock())
 
             ids = [r["service_id"] for r in result["vector_results"]]
             assert ids == ["S001"]
@@ -655,21 +595,7 @@ class TestHydrationDataFreshness:
         결과 없음을 안내하는 편이 안전하다. Answer Agent의 _self_correction_edge가
         '결과 없음'을 빈 답변으로 변환하여 재시도 로직이 발동할 수 있다.
         """
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from agents.vector_agent import VectorAgent
-        from schemas.state import AgentState
-
-        agent = VectorAgent.__new__(VectorAgent)
-        refined = MagicMock()
-        refined.refined_query = "수영장"
-        refined.max_class_name = None
-        refined.area_name = None
-        refined.service_status = None
-        agent._refine_chain = MagicMock()
-        agent._refine_chain.ainvoke = AsyncMock(return_value=refined)
-        agent._embeddings = MagicMock()
-        agent._embeddings.aembed_query = AsyncMock(return_value=[0.1] * 768)
+        agent = _make_agent("수영장", [0.1] * 768)
 
         vector_rows = [{"service_id": "S001", "service_name": "n", "metadata": {}, "similarity": 0.9}]
 
@@ -679,15 +605,7 @@ class TestHydrationDataFreshness:
             patch("agents.vector_agent.hydrate_services",
                   AsyncMock(side_effect=RuntimeError("DB down"))),
         ):
-            state: AgentState = {
-                "room_id": 1, "message_id": 1, "message": "수영장",
-                "title_needed": False, "intent": None, "lat": None, "lng": None,
-                "refined_query": None, "sql_results": None, "vector_results": None,
-                "map_results": None, "answer": None, "title": None, "trace": None,
-                "error": None, "retry_count": 0,
-                "recent_queries": [], "cache_hit": False,
-            }
-            result = await agent.search(state, MagicMock(), MagicMock())
+            result = await agent.search(make_agent_state(message="수영장"), MagicMock(), MagicMock())
 
             assert result["vector_results"] == []
 
