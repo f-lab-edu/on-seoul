@@ -1,8 +1,12 @@
 """구조화 추출 프롬프트 상수."""
 
-import json
-
 from langchain_core.prompts import ChatPromptTemplate
+
+
+def _json_literal(obj: dict) -> str:
+    """dict → JSON 문자열. LangChain 템플릿 파싱 방지를 위해 중괄호를 이스케이프한다."""
+    import json
+    return json.dumps(obj, ensure_ascii=False).replace("{", "{{").replace("}", "}}")
 
 _FIELD_GUIDE = """\
 다음 필드를 추출하세요. 상세 내용에 명시되지 않은 정보는 추측하지 말고 반드시 null로 반환하세요.
@@ -46,7 +50,7 @@ _FS1_INPUT = """\
 ○ 유의사항: 음주 후 이용 금지. 예약자 본인 직접 참석 필수. 용도 외 사용 금지.
 ○ 주차: 난지천공원 주차장 이용 가능 (유료).
 """
-_FS1_OUTPUT = json.dumps({
+_FS1_OUTPUT = _json_literal({
     "fee": "6,000원/2시간 (야간 조명 포함)",
     "operating_hours": "평일 20:00-22:00",
     "cancellation": "이용 2일 전까지 취소 가능, 이후 취소 불이익 발생",
@@ -62,7 +66,7 @@ _FS1_OUTPUT = json.dumps({
         "야간 조명 포함 6,000원/2시간. "
         "5명 이상 팀 단위 온라인 예약 필수, 취소는 이용 2일 전까지 가능."
     ),
-}, ensure_ascii=False)
+})
 
 _FS2_INPUT = """\
 시설명: 2026 봄 어르신 스마트폰 활용 교육
@@ -80,7 +84,7 @@ _FS2_INPUT = """\
 ○ 접수: 노원구 거주자만 신청 가능. 선착순 20명.
 ○ 취소: 교육 시작 3일 전까지 취소 가능.
 """
-_FS2_OUTPUT = json.dumps({
+_FS2_OUTPUT = _json_literal({
     "fee": "무료",
     "operating_hours": "화·목 10:00-12:00 (2026.04.07-04.25, 총 6회)",
     "cancellation": "교육 시작 3일 전까지 취소 가능",
@@ -92,7 +96,7 @@ _FS2_OUTPUT = json.dumps({
         "만 60세 이상 노원구 거주자 대상, 선착순 20명. "
         "카카오톡·유튜브·키오스크 사용법 등 화·목 총 6회 과정."
     ),
-}, ensure_ascii=False)
+})
 
 # ---------------------------------------------------------------------------
 # Few-shot 예시 — EXTRACTION_PROMPT_METADATA_ONLY 전용
@@ -110,7 +114,7 @@ _FS_META_INPUT = """\
 
 상세 내용: (없음)
 """
-_FS_META_OUTPUT = json.dumps({
+_FS_META_OUTPUT = _json_literal({
     "fee": None,
     "operating_hours": None,
     "cancellation": None,
@@ -121,7 +125,7 @@ _FS_META_OUTPUT = json.dumps({
         "송파구 잠실종합운동장 내 실내 농구장. "
         "일반 시민 대상 유료 체육시설."
     ),
-}, ensure_ascii=False)
+})
 
 
 EXTRACTION_PROMPT_FULL = ChatPromptTemplate.from_messages([
