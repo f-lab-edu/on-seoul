@@ -80,10 +80,11 @@ intent가 VECTOR_SEARCH가 아니면 vector_sub_intent는 null로 두세요.
 # ---------------------------------------------------------------------------
 # Few-shot 예시 — 의도 분류 정확도 향상
 #
-# 3개 예시가 커버하는 경계:
-#   1. SQL_SEARCH  — 접수상태·지역 같은 명시적 조건이 있으면 SQL (VECTOR와 경계)
+# 4개 예시가 커버하는 경계:
+#   1. SQL_SEARCH       — 접수상태·지역 같은 명시적 조건이 있으면 SQL (VECTOR와 경계)
 #   2. VECTOR/identification — 시설명·지역 조합으로 특정 시설을 찾을 때
 #   3. VECTOR/semantic       — 활동·경험·맥락 기반 탐색 (vector_sub_intent 가중치 최대)
+#   4. VECTOR/detail         — 요금·취소·운영시간 등 세부정보 문의 (Track B 가중치 최대)
 # ---------------------------------------------------------------------------
 _FEW_SHOT_EXAMPLES = [
     {

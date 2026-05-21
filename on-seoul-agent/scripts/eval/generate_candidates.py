@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """평가셋 후보 생성기.
 
 실제 DB에 연결하여 질의별로 모든 검색 채널을 실행하고,
@@ -40,8 +41,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+# on-seoul-agent 루트 (scripts/eval/../../..)
+_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_ROOT))
 
+from langchain_core.embeddings import Embeddings
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from agents.router_agent import RouterAgent, _IntentOutput
@@ -94,7 +98,7 @@ async def _run_vector(
     *,
     ai_session: AsyncSession,
     data_session: AsyncSession,
-    embedder,
+    embedder: Embeddings,
 ) -> list[Candidate]:
     """4채널 검색 + RRF + Hydration."""
     refined = intent_output.refined_query or query
@@ -217,7 +221,7 @@ async def run_query(
     *,
     ai_session: AsyncSession,
     data_session: AsyncSession,
-    embedder,
+    embedder: Embeddings,
 ) -> QueryResult:
     intent = intent_output.intent
 
@@ -282,7 +286,7 @@ async def interactive_loop(
     *,
     ai_session: AsyncSession,
     data_session: AsyncSession,
-    embedder,
+    embedder: Embeddings,
     router: RouterAgent | None,
     output_path: Path,
 ) -> None:
@@ -311,7 +315,6 @@ async def interactive_loop(
             # 라우터 없이 직접 지정
             intent_str = input("  intent (V=vector, S=sql, skip=fallback) [V]: ").strip().upper() or "V"
             intent_map = {"V": IntentType.VECTOR_SEARCH, "S": IntentType.SQL_SEARCH}
-            from agents.router_agent import _IntentOutput
             intent_output = _IntentOutput(intent=intent_map.get(intent_str, IntentType.VECTOR_SEARCH))
 
         print(f"  검색 중... (intent={intent_output.intent.value})", end="\r")
@@ -362,6 +365,9 @@ def _write_holdout(records: list[dict], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = ["query", "intent", "sub_intent", "correct_service_ids"]
     mode = "a" if path.exists() else "w"
+    if mode == "a":
+        import sys as _sys
+        print(f"  [경고] {path} 에 추가 기록합니다 (기존 내용 유지).", file=_sys.stderr)
     with path.open(mode, newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
         if mode == "w":
@@ -378,7 +384,7 @@ async def batch_run(
     *,
     ai_session: AsyncSession,
     data_session: AsyncSession,
-    embedder,
+    embedder: Embeddings,
     router: RouterAgent | None,
     output_path: Path,
 ) -> None:
@@ -391,9 +397,12 @@ async def batch_run(
     for i, (query, intent_hint, sub_intent_hint, _) in enumerate(queries, 1):
         print(f"  [{i:>3}/{len(queries)}] {query[:40]}")
 
-        # 인텐트: 파일에 힌트가 있으면 우선 사용, 없으면 라우터 분류
+        # 인텐트: 파일에 힌트가 있으면 우선 사용, 없으면 라우터 분류.
+        # TSV 힌트로 _IntentOutput을 수동 구성할 때 refined_query/area_name 등 필터는
+        # None으로 남는다 — SQL_SEARCH 힌트여도 keyword 없이 전체 조회가 실행된다.
+        # 필터가 필요한 질의는 --skip-router 없이 라우터 분류를 사용하거나
+        # queries_draft.tsv에 hints 대신 라우터 의존 질의로 남겨두면 된다.
         if intent_hint and intent_hint in (t.value for t in IntentType):
-            from agents.router_agent import _IntentOutput
             intent_output = _IntentOutput(
                 intent=IntentType(intent_hint),
                 vector_sub_intent=sub_intent_hint or None,
@@ -401,7 +410,6 @@ async def batch_run(
         elif router is not None:
             intent_output = await router.classify(query)
         else:
-            from agents.router_agent import _IntentOutput
             intent_output = _IntentOutput(intent=IntentType.VECTOR_SEARCH)
 
         try:
@@ -498,9 +506,10 @@ async def main(args: argparse.Namespace) -> None:
 
         timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
 
+        _eval_dir = Path(__file__).resolve().parent  # scripts/eval/
         async with OnData() as data_session, OnAi() as ai_session:
             if args.mode == "interactive":
-                output = args.output or Path(f"scripts/eval/holdout_draft_{timestamp}.tsv")
+                output = args.output or _eval_dir / f"holdout_draft_{timestamp}.tsv"
                 await interactive_loop(
                     ai_session=ai_session,
                     data_session=data_session,
@@ -510,9 +519,7 @@ async def main(args: argparse.Namespace) -> None:
                 )
             else:
                 queries_file = Path(args.batch)
-                output = args.output or Path(
-                    f"scripts/eval/candidates_review_{timestamp}.tsv"
-                )
+                output = args.output or _eval_dir / f"candidates_review_{timestamp}.tsv"
                 await batch_run(
                     queries_file,
                     ai_session=ai_session,

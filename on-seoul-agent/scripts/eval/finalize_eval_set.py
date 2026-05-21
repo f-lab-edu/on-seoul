@@ -28,7 +28,7 @@ generate_candidates.py --batch 로 생성한 candidates_review.tsv 의 is_correc
 import argparse
 import csv
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 
@@ -80,7 +80,6 @@ def write_holdout(records: list[dict], path: Path, append: bool = False) -> None
 
 
 def print_summary(records: list[dict]) -> None:
-    from collections import Counter
     intent_counts = Counter(r["intent"] for r in records)
     sub_intent_counts = Counter(
         r["sub_intent"] for r in records if r["sub_intent"]
