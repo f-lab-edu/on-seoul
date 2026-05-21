@@ -21,30 +21,30 @@ _DIST_TARGET: dict[str, float] = {
     "detail": 0.3,
     "keyword": 0.2,
 }
-_DIST_TOLERANCE: float = 0.1  # ±10%
+_DIST_TOLERANCE: float = 0.15  # ±15% (소수 개수에서 유연성 확보)
 
-# 템플릿 질문 (분포 부족 시 채우기용)
+# 템플릿 질문 (분포 부족 시 채우기용 — LLM 실패/재시도 후 최후 수단)
 _TEMPLATE_QUESTIONS: dict[str, list[str]] = {
     "semantic": [
-        "{service_name}에서 어떤 활동을 할 수 있나요?",
-        "{service_name}은 어떤 시설인가요?",
-        "{area_name} {max_class_name} 시설을 추천해 주세요.",
-        "{service_name}은 가족이 함께 이용할 수 있나요?",
-        "{service_name}의 특징이 무엇인가요?",
+        "{service_name}은 어떤 분들이 주로 이용하나요?",
+        "{area_name}에서 {min_class_name}을 즐길 수 있는 공공시설 알려주세요.",
+        "{service_name} 이용 전 알아두면 좋은 점이 있나요?",
+        "{service_name}과 비슷한 {area_name} 시설을 찾고 있어요.",
+        "{service_name}은 초보자도 이용하기 좋은 시설인가요?",
     ],
     "detail": [
         "{service_name} 이용 요금은 얼마인가요?",
-        "{service_name} 운영 시간을 알려주세요.",
-        "{service_name} 예약 방법을 알려주세요.",
-        "{service_name} 취소 정책은 어떻게 되나요?",
-        "{service_name} 이용 대상은 누구인가요?",
+        "{service_name} 운영 시간은 어떻게 되나요?",
+        "{service_name} 예약 접수 방법을 알려주세요.",
+        "{service_name} 예약 취소 및 환불 규정을 알고 싶어요.",
+        "{service_name} 이용 시 준비물이나 주의사항이 있나요?",
     ],
     "keyword": [
-        "{area_name} {max_class_name}",
-        "{service_name} 예약",
-        "{area_name} {min_class_name} 시설",
-        "{service_name} 위치",
-        "{max_class_name} 공공서비스",
+        "{area_name} {min_class_name} 예약",
+        "{service_name}",
+        "{area_name} {max_class_name} 이용 안내",
+        "{min_class_name} 공공시설 {area_name}",
+        "{service_name} 이용 정보",
     ],
 }
 
@@ -127,7 +127,7 @@ async def generate_questions(
     min_class_name: str | None,
     cleaned_detail: str,
     extracted_summary: str,
-    n: int = 10,
+    n: int = 6,
     llm_client,
 ) -> list[HyQEQuestion]:
     """예상질문 N개 생성.

@@ -54,21 +54,21 @@ _COMMON_KWARGS = dict(
     min_class_name="헬스장",
     cleaned_detail="운동 시설입니다.",
     extracted_summary="강남구 헬스장",
-    n=10,
+    n=6,
 )
 
 
 class TestGenerateQuestions:
     async def test_returns_n_questions(self):
-        """분포가 맞는 10개 질문을 반환하면 10개를 반환한다."""
-        # semantic 5, detail 3, keyword 2 → 정확히 50/30/20
-        qs = _make_questions(5, 3, 2)
+        """분포가 맞는 6개 질문을 반환하면 6개를 반환한다."""
+        # semantic 3, detail 2, keyword 1 → 50/33/17 (tolerance 0.15 내)
+        qs = _make_questions(3, 2, 1)
         llm = _make_llm_returning(qs)
 
         with _PATCH_PROMPT:
             result = await generate_questions(**_COMMON_KWARGS, llm_client=llm)
 
-        assert len(result) == 10
+        assert len(result) == 6
 
     async def test_llm_failure_returns_empty_list(self):
         """LLM 실패 시 빈 리스트를 반환한다 (예외 전파 없음)."""
@@ -83,22 +83,22 @@ class TestGenerateQuestions:
 class TestEnforceDistribution:
     def test_trims_excess_semantic(self):
         """semantic이 목표보다 많으면 초과분을 제거하고 n개를 반환한다."""
-        # n=10, target: semantic=5, detail=3, keyword=2
-        # 입력: semantic=8, detail=1, keyword=1 → semantic 초과
+        # n=6, target: semantic=3, detail=2, keyword=1
+        # 입력: semantic=8, detail=1, keyword=1 → semantic 초과, detail 부족
         questions = _make_questions(8, 1, 1)
-        result = _enforce_distribution(questions, n=10)
+        result = _enforce_distribution(questions, n=6)
 
-        assert len(result) == 10
+        assert len(result) == 6
         semantic_count = sum(1 for q in result if q.intent_label == "semantic")
-        assert semantic_count == 5
+        assert semantic_count == 3
 
     def test_pads_missing_keyword_with_template(self):
         """keyword가 부족하면 템플릿 질문으로 채워 n개를 반환한다."""
-        # n=10, target: semantic=5, detail=3, keyword=2
-        # 입력: semantic=5, detail=3, keyword=0 → keyword 부족
-        questions = _make_questions(5, 3, 0)
-        result = _enforce_distribution(questions, n=10)
+        # n=6, target: semantic=3, detail=2, keyword=1
+        # 입력: semantic=3, detail=2, keyword=0 → keyword 부족
+        questions = _make_questions(3, 2, 0)
+        result = _enforce_distribution(questions, n=6)
 
-        assert len(result) == 10
+        assert len(result) == 6
         keyword_count = sum(1 for q in result if q.intent_label == "keyword")
-        assert keyword_count == 2
+        assert keyword_count == 1
