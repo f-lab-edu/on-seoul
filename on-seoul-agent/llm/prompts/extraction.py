@@ -1,5 +1,7 @@
 """구조화 추출 프롬프트 상수."""
 
+import json
+
 from langchain_core.prompts import ChatPromptTemplate
 
 _FIELD_GUIDE = """\
@@ -22,6 +24,106 @@ _FIELD_GUIDE = """\
   사전 온라인 예약 필수, 당일 취소 불가."
 """
 
+# ---------------------------------------------------------------------------
+# Few-shot 예시 — EXTRACTION_PROMPT_FULL 전용
+#
+# 예시 1: 체육시설·야간 풋살장 — 복잡한 요금 구조, restrictions/cancellation 구분
+# 예시 2: 교육 프로그램·무료 — 대상 제한, 기간제, facilities 빈 배열
+# ---------------------------------------------------------------------------
+_FS1_INPUT = """\
+시설명: 마포 난지천 풋살장-평일(야간)
+지역: 마포구
+대분류: 체육시설
+소분류: 풋살장
+장소: 난지천공원
+대상: 일반 시민
+결제 유형: 유료
+
+상세 내용:
+○ 이용요금: 야간(20:00~22:00) 6,000원/2시간 (조명료 포함)
+○ 예약: 서울시공공서비스예약 온라인 선착순. 5명 이상 팀 단위만 신청 가능.
+○ 취소: 이용 2일 전까지 취소 가능, 이후 불이익 발생.
+○ 유의사항: 음주 후 이용 금지. 예약자 본인 직접 참석 필수. 용도 외 사용 금지.
+○ 주차: 난지천공원 주차장 이용 가능 (유료).
+"""
+_FS1_OUTPUT = json.dumps({
+    "fee": "6,000원/2시간 (야간 조명 포함)",
+    "operating_hours": "평일 20:00-22:00",
+    "cancellation": "이용 2일 전까지 취소 가능, 이후 취소 불이익 발생",
+    "facilities": ["야간 조명", "주차장(유료)"],
+    "capacity": None,
+    "restrictions": [
+        "5명 이상 팀 단위 예약만 가능",
+        "음주 후 이용 금지",
+        "예약자 본인 직접 참석 필수",
+    ],
+    "summary": (
+        "마포구 난지천공원 인조잔디 풋살장 (평일 야간). "
+        "야간 조명 포함 6,000원/2시간. "
+        "5명 이상 팀 단위 온라인 예약 필수, 취소는 이용 2일 전까지 가능."
+    ),
+}, ensure_ascii=False)
+
+_FS2_INPUT = """\
+시설명: 2026 봄 어르신 스마트폰 활용 교육
+지역: 노원구
+대분류: 교육
+소분류: 디지털 교육
+장소: 노원구청 강당
+대상: 만 60세 이상 노원구 거주 어르신
+결제 유형: 무료
+
+상세 내용:
+○ 교육 기간: 2026.04.07~04.25 (매주 화·목, 총 6회)
+○ 교육 시간: 오전 10:00~12:00
+○ 교육 내용: 카카오톡 사용법, 유튜브 시청, 키오스크 이용 방법 등
+○ 접수: 노원구 거주자만 신청 가능. 선착순 20명.
+○ 취소: 교육 시작 3일 전까지 취소 가능.
+"""
+_FS2_OUTPUT = json.dumps({
+    "fee": "무료",
+    "operating_hours": "화·목 10:00-12:00 (2026.04.07-04.25, 총 6회)",
+    "cancellation": "교육 시작 3일 전까지 취소 가능",
+    "facilities": [],
+    "capacity": "20명",
+    "restrictions": ["만 60세 이상 노원구 거주자만 신청 가능"],
+    "summary": (
+        "노원구청 강당에서 진행하는 어르신 스마트폰 활용 교육 (무료). "
+        "만 60세 이상 노원구 거주자 대상, 선착순 20명. "
+        "카카오톡·유튜브·키오스크 사용법 등 화·목 총 6회 과정."
+    ),
+}, ensure_ascii=False)
+
+# ---------------------------------------------------------------------------
+# Few-shot 예시 — EXTRACTION_PROMPT_METADATA_ONLY 전용
+#
+# 상세 내용 없을 때: 추측 금지, 확실한 필드만 채우고 나머지 null 반환
+# ---------------------------------------------------------------------------
+_FS_META_INPUT = """\
+시설명: 잠실실내보조체육관(농구장)
+지역: 송파구
+대분류: 체육시설
+소분류: 농구장
+장소: 잠실종합운동장
+대상: 일반 시민
+결제 유형: 유료
+
+상세 내용: (없음)
+"""
+_FS_META_OUTPUT = json.dumps({
+    "fee": None,
+    "operating_hours": None,
+    "cancellation": None,
+    "facilities": [],
+    "capacity": None,
+    "restrictions": [],
+    "summary": (
+        "송파구 잠실종합운동장 내 실내 농구장. "
+        "일반 시민 대상 유료 체육시설."
+    ),
+}, ensure_ascii=False)
+
+
 EXTRACTION_PROMPT_FULL = ChatPromptTemplate.from_messages([
     (
         "system",
@@ -31,6 +133,10 @@ EXTRACTION_PROMPT_FULL = ChatPromptTemplate.from_messages([
 
 {_FIELD_GUIDE}""",
     ),
+    ("human", _FS1_INPUT),
+    ("ai", _FS1_OUTPUT),
+    ("human", _FS2_INPUT),
+    ("ai", _FS2_OUTPUT),
     (
         "human",
         """\
@@ -58,6 +164,8 @@ EXTRACTION_PROMPT_METADATA_ONLY = ChatPromptTemplate.from_messages([
 
 {_FIELD_GUIDE}""",
     ),
+    ("human", _FS_META_INPUT),
+    ("ai", _FS_META_OUTPUT),
     (
         "human",
         """\
