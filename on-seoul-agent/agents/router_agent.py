@@ -113,6 +113,15 @@ _FEW_SHOT_EXAMPLES = [
             ' "service_status": null, "vector_sub_intent": "semantic"}'
         ),
     },
+    {
+        "message": "수영장 평일 오전 이용 요금이랑 취소 규정 알려줘",
+        "output": (
+            '{"intent": "VECTOR_SEARCH",'
+            ' "refined_query": "수영장 평일 이용 요금 취소 규정",'
+            ' "max_class_name": null, "area_name": null,'
+            ' "service_status": null, "vector_sub_intent": "detail"}'
+        ),
+    },
 ]
 
 _FEW_SHOT: FewShotChatMessagePromptTemplate = FewShotChatMessagePromptTemplate(

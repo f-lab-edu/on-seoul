@@ -55,7 +55,7 @@ flowchart TD
     ROUTER["Router Agent\nLLM 의도 분류"]
     CACHE_CHECK["Answer Cache\nlookup"]
     SQL["SQL Agent"]
-    VECTOR["Vector Agent"]
+    VECTOR["Vector Agent\nTrack A(identity)+B(summary)+C(question)+BM25\nRRF 결합 → Hydration"]
     MAP["map_search\n도구"]
     FALLBACK["Fallback"]
     ANSWER["Answer Agent\n자연어 답변 + 시설 카드 생성"]
@@ -99,6 +99,7 @@ flowchart TD
 |---|---|
 | sql_search | PostgreSQL 정형 조회 (카테고리, 상태, 지역, 날짜 필터) |
 | vector_search | pgvector 임베딩 유사도 검색 |
+| question_search | `on_ai.service_embeddings WHERE row_kind='question'` — 예상 질문 임베딩 검색, service_id별 dedup |
 | map_search | earthdistance + cube 반경 검색, GeoJSON 반환 |
 
 ---
@@ -121,6 +122,7 @@ on-seoul-agent/
 ├── tools/
 │   ├── sql_search.py        # PostgreSQL 정형 조회
 │   ├── vector_search.py     # pgvector 유사도 검색 (post-filter)
+│   ├── question_search.py   # 예상 질문 임베딩 검색, service_id별 dedup (Track C)
 │   ├── bm25_search.py       # ParadeDB BM25 전문 검색
 │   └── map_search.py        # 반경 검색 + GeoJSON 반환
 ├── llm/
@@ -134,7 +136,8 @@ on-seoul-agent/
 │   └── chat.py              # ChatRequest / ChatResponse
 ├── core/
 │   ├── config.py            # pydantic-settings 환경변수 관리
-│   └── database.py          # async SQLAlchemy 세션
+│   ├── database.py          # async SQLAlchemy 세션
+│   └── rrf.py               # 가중 RRF (reciprocal_rank_fusion)
 ├── scripts/
 │   ├── embed_metadata.py    # 시설 메타데이터 임베딩 배치 적재
 │   ├── ddl/                 # 테이블 DDL — service_embeddings, chat_search 등

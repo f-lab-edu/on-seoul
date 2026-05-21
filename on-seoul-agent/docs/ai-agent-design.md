@@ -81,21 +81,23 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 필터 파라미터
 | **in** | `message` |
 | **out** | `sql_results` |
 
-### 3-3. Vector Agent — 의미 기반 검색 (BM25 + vector 하이브리드)
+### 3-3. Vector Agent — 의미 기반 검색 (4채널 RRF 하이브리드)
 
-> Phase 14에서 BM25 경로가 신설되어 **하이브리드 검색**으로 동작한다.
+> Task 1~6에서 4채널 순차 실행 + RRF 결합으로 확장되었다.
 
-1. **질의 정제** — LLM으로 사용자 질의를 벡터 검색용 문장으로 정제하고, post-filter용 파라미터(`max_class_name`, `area_name`, `service_status`)를 함께 추출한다.
-2. **이중 경로 실행 (ai_session)**
-   - **BM25 경로**: `llm/tokenizer.py` (Lindera KoDic + `DOMAIN_TOKENS`)로 토큰화 → `tools/bm25_search` 호출 → `(service_id, bm25_score)` 목록
-   - **Vector 경로**: Gemini 임베딩 → `tools/vector_search` 호출 (post-filter 적용)
-3. **RRF 결합** — 두 결과의 순위를 Reciprocal Rank Fusion으로 결합한다.
+1. **질의 정제** — LLM으로 사용자 질의를 벡터 검색용 문장으로 정제하고, post-filter용 파라미터(`max_class_name`, `area_name`, `service_status`)와 `vector_sub_intent`를 함께 추출한다.
+2. **4채널 순차 실행 (ai_session)** — asyncpg 단일 세션 제약으로 `gather` 대신 순차 실행한다.
+   - **Track A**: `vector_search(row_kind="identity")` — 시설 신원 임베딩, post-filter 적용
+   - **Track B**: `vector_search(row_kind="summary")` — 자연어 요약 임베딩, post-filter 미적용
+   - **Track C**: `question_search()` — 예상 질문 임베딩, `service_id`별 dedup
+   - **BM25**: `bm25_search()` — `llm/tokenizer.py` (Lindera KoDic + `DOMAIN_TOKENS`)로 토큰화 후 호출
+3. **RRF 결합** — `core/rrf.py`의 `reciprocal_rank_fusion`으로 4채널 결과를 통합한다. Phase 1은 `rrf_unweighted_baseline=True` (모든 채널 가중치 1.0).
 4. **원본 Hydration (data_session)** — RRF 결과의 `service_id`로 `tools/hydrate_services`를 호출하여 `public_service_reservations` 최신 원본 행을 가져온다. 임베딩 metadata의 stale 필드(`service_status`·`receipt_*_dt` 등) 우회 목적. 개별 service_id 가 원본 테이블에 없거나 soft-delete 된 경우 해당 행만 결과에서 제외된다. `hydrate_services` 도구 호출 자체가 예외를 던지면 `vector_results = []` 로 폴백하여 stale metadata 가 답변에 노출되지 않도록 한다.
 5. `vector_results`에 hydrated 결과 + `rrf_score`를 저장한다. 스키마는 `sql_results`와 동일.
 
 | 입출력 | 필드 |
 |---|---|
-| **in** | `message` |
+| **in** | `message`, `vector_sub_intent` |
 | **out** | `refined_query`, `vector_results` |
 
 > Phase 18부터 VectorAgent.search()는 `ai_session`(검색) + `data_session`(hydration) 두 세션을 모두 받는다.
@@ -120,12 +122,12 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 필터 파라미터
 
 ### 3-5. IntentType 분류 기준
 
-| IntentType | 분류 기준 | 예시 |
-|---|---|---|
-| `SQL_SEARCH` | 카테고리·자치구·접수 상태·날짜 등 정형 조건 | "지금 접수 중인 수영장" |
-| `VECTOR_SEARCH` | 키워드·의미 기반 유사 시설 탐색 | "아이랑 체험할 수 있는 곳" |
-| `MAP` | 지도·위치·반경 탐색 | "내 주변 500m 이내 체육관" |
-| `FALLBACK` | 인사·기능 문의 등 그 외 | "어떤 서비스를 제공하나요?" |
+| IntentType | 분류 기준 | 예시 | `vector_sub_intent` |
+|---|---|---|---|
+| `SQL_SEARCH` | 카테고리·자치구·접수 상태·날짜 등 정형 조건 | "지금 접수 중인 수영장" | — |
+| `VECTOR_SEARCH` | 키워드·의미 기반 유사 시설 탐색 | "아이랑 체험할 수 있는 곳" | `identification` / `detail` / `semantic` |
+| `MAP` | 지도·위치·반경 탐색 | "내 주변 500m 이내 체육관" | — |
+| `FALLBACK` | 인사·기능 문의 등 그 외 | "어떤 서비스를 제공하나요?" | — |
 
 ---
 
@@ -186,7 +188,7 @@ PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도
 
 | 파라미터 | 설명 |
 |---|---|
-| `lat`, `lng` | 기준점 위도·경도 |
+| `user_lat`, `user_lng` | 기준점 위도·경도 |
 | `radius_m` | 검색 반경 (미터, 기본값: 1000) |
 | `top_k` | 최대 반환 건수 (기본값: 20) |
 
@@ -209,8 +211,9 @@ PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도
 | 필드 | 작성 주체 | 설명 |
 |---|---|---|
 | `room_id`, `message_id`, `message`, `title_needed` | 호출자 | 입력 |
-| `lat`, `lng` | 호출자 | MAP intent 용 위치 |
+| `user_lat`, `user_lng` | 호출자 | MAP intent 용 위치 |
 | `intent` | router_node | 분류된 의도 |
+| `vector_sub_intent` | router_node | Router가 분류한 벡터 검색 세부 의도 (`identification`/`detail`/`semantic`). VECTOR_SEARCH 전용 |
 | `refined_query` | router_node / vector_node | 벡터 검색용 정제 질의 (router 1차 산출, 미산출 시 vector_node fallback) |
 | `max_class_name`, `area_name`, `service_status` | router_node | post-filter 메타데이터 |
 | `sql_results` | sql_node | SQL 조회 결과 |

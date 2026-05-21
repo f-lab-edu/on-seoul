@@ -90,13 +90,13 @@ rrf_unweighted_baseline: bool = True          # True면 모든 가중치 1.0 —
 **Files:**
 - Modify: `core/config.py`
 
-- [ ] **Step 1: 설정 추가 + 환경변수 로딩 확인**
+- [x] **Step 1: 설정 추가 + 환경변수 로딩 확인**
 
 ```bash
 uv run python -c "from core.config import settings; print(settings.rrf_weight_profiles['semantic'])"
 ```
 
-- [ ] **Step 2: 린트 + 타입 체크**
+- [x] **Step 2: 린트 + 타입 체크**
 
 ```bash
 uv run ruff check core/config.py
@@ -134,7 +134,7 @@ rrf_score(service_id) = Σ over channels: weight[c] / (k_constant + rank[c, serv
 - Create: `core/rrf.py`
 - Create: `tests/test_rrf.py`
 
-- [ ] **Step 1: 테스트 작성 + 구현 + 통과**
+- [x] **Step 1: 테스트 작성 + 구현 + 통과**
 
 ```python
 class TestReciprocalRankFusion:
@@ -223,7 +223,7 @@ LIMIT :top_k;
 - Modify: `tools/vector_search.py`
 - Modify: `tests/test_vector_search.py`
 
-- [ ] **Step 1: row_kind별 단위 테스트 + 통과**
+- [x] **Step 1: row_kind별 단위 테스트 + 통과**
 
 ```python
 class TestVectorSearchRowKind:
@@ -234,7 +234,7 @@ class TestVectorSearchRowKind:
     async def test_summary_ignores_post_filter(self): ...    # metadata NULL이므로 효과 없음
 ```
 
-- [ ] **Step 2: 기존 `@pytest.mark.skip(reason="phase-rrf")` 처리되어 있던 post-filter 테스트 활성화**
+- [x] **Step 2: 기존 `@pytest.mark.skip(reason="phase-rrf")` 처리되어 있던 post-filter 테스트 활성화**
 
 선행 계획에서 보류했던 post-filter 테스트를 본 단계에서 다시 살린다.
 
@@ -294,7 +294,7 @@ LIMIT :top_k;
 - Create: `tools/question_search.py`
 - Create: `tests/test_question_search.py`
 
-- [ ] **Step 1: 테스트 + 구현 + 통과**
+- [x] **Step 1: 테스트 + 구현 + 통과**
 
 ```python
 class TestQuestionSearch:
@@ -354,9 +354,9 @@ intent가 VECTOR_SEARCH가 아니면 vector_sub_intent는 null로 두세요.
 - Modify: `agents/router_agent.py`
 - Create: `tests/test_router_subintent.py`
 
-- [ ] **Step 1: AgentState 갱신 + 초기화 회귀 (test_chat_router, fixtures 등)**
+- [x] **Step 1: AgentState 갱신 + 초기화 회귀 (test_chat_router, fixtures 등)**
 
-- [ ] **Step 2: Router 분류 테스트** — LLM mock으로 3 카테고리 예시별 라벨 검증
+- [x] **Step 2: Router 분류 테스트** — LLM mock으로 3 카테고리 예시별 라벨 검증
 
 ```python
 class TestRouterSubIntent:
@@ -366,7 +366,7 @@ class TestRouterSubIntent:
     async def test_non_vector_intent_returns_none(self): ...   # SQL_SEARCH 등
 ```
 
-- [ ] **Step 3: 잘못된 라벨에 대한 fallback** — `vector_sub_intent_enabled=False` 이거나 분류 실패면 `settings.vector_default_sub_intent`("semantic") 사용
+- [x] **Step 3: 잘못된 라벨에 대한 fallback** — `vector_sub_intent_enabled=False` 이거나 분류 실패면 `settings.vector_default_sub_intent`("semantic") 사용
 
 ---
 
@@ -430,7 +430,7 @@ def _resolve_weights(sub_intent: str | None) -> dict[str, float]:
 - Modify: `agents/vector_agent.py`
 - Create: `tests/test_vector_agent_hybrid.py`
 
-- [ ] **Step 1: 통합 테스트 작성**
+- [x] **Step 1: 통합 테스트 작성**
 
 ```python
 class TestVectorAgentHybrid:
@@ -442,7 +442,7 @@ class TestVectorAgentHybrid:
     async def test_hydration_failure_returns_empty_results(self, mocks): ...
 ```
 
-- [ ] **Step 2: 구현 + 회귀**
+- [x] **Step 2: 구현 + 회귀**
 
 기존 단일 트랙 호출 + RRF가 BM25 + 단일 vector였던 코드를 위 흐름으로 교체. `_RefinedQuery`는 그대로 활용.
 
@@ -508,48 +508,48 @@ grep -rn "eval_set_fewshot" scripts/eval/run_recall.py   # 빈 결과여야 함
 
 ### Step 1: `docs/agent-design.md`
 
-- [ ] **1-1.** Vector Agent 섹션을 "4 채널 병렬 호출 + RRF 결합"으로 갱신
-- [ ] **1-2.** AgentState 표에 `vector_sub_intent` 행 추가
-- [ ] **1-3.** Router 분류 표에 `vector_sub_intent` 컬럼 추가 (`identification` / `detail` / `semantic`)
+- [x] **1-1.** Vector Agent 섹션을 "4 채널 병렬 호출 + RRF 결합"으로 갱신
+- [x] **1-2.** AgentState 표에 `vector_sub_intent` 행 추가
+- [x] **1-3.** Router 분류 표에 `vector_sub_intent` 컬럼 추가 (`identification` / `detail` / `semantic`)
 
 ### Step 2: `docs/architecture.md`
 
-- [ ] **2-1.** AI Service 섹션 "주요 설계 사항"에 트리플 트랙 + RRF 항목 추가
-- [ ] **2-2.** 디렉토리 구조에 `tools/question_search.py`, `core/rrf.py` 추가
+- [x] **2-1.** AI Service 섹션 "주요 설계 사항"에 트리플 트랙 + RRF 항목 추가
+- [x] **2-2.** 디렉토리 구조에 `tools/question_search.py`, `core/rrf.py` 추가
 
 ### Step 3: `on-seoul-agent/README.md`
 
-- [ ] **3-1.** mermaid 워크플로우 VECTOR 노드를 "Track A + B + C + BM25 RRF" 로 갱신
-- [ ] **3-2.** 도구 표에 `question_search` 추가
-- [ ] **3-3.** 디렉토리 구조에 `core/rrf.py`, `tools/question_search.py` 추가
+- [x] **3-1.** mermaid 워크플로우 VECTOR 노드를 "Track A + B + C + BM25 RRF" 로 갱신
+- [x] **3-2.** 도구 표에 `question_search` 추가
+- [x] **3-3.** 디렉토리 구조에 `core/rrf.py`, `tools/question_search.py` 추가
 
 ### Step 4: `on-seoul-agent/docs/hybrid-search-strategy.md`
 
-- [ ] **4-1.** "결론" 표를 4채널 구성으로 갱신
-- [ ] **4-2.** "RRF 결합" SQL 예시를 채널 4개(Track A/B/C/BM25) 기준으로 재작성
-- [ ] **4-3.** sub_intent 가중치 프로파일 표 추가 (RRF-Strategy.md 인용)
-- [ ] **4-4.** "조회 전략" 표에 의미/맥락형 → Track C 강조, 세부정보형 → Track B 강조 메모
+- [x] **4-1.** "결론" 표를 4채널 구성으로 갱신
+- [x] **4-2.** "RRF 결합" SQL 예시를 채널 4개(Track A/B/C/BM25) 기준으로 재작성
+- [x] **4-3.** sub_intent 가중치 프로파일 표 추가 (RRF-Strategy.md 인용)
+- [x] **4-4.** "조회 전략" 표에 의미/맥락형 → Track C 강조, 세부정보형 → Track B 강조 메모
 
 ### Step 5: `on-seoul-agent/docs/tools/vector_search.md`
 
-- [ ] **5-1.** `track` 파라미터 설명 추가 (A / B)
-- [ ] **5-2.** "호출 경로" 섹션 추가 — VectorAgent가 트랙별로 2회 호출함을 명시
+- [x] **5-1.** `track` 파라미터 설명 추가 (A / B)
+- [x] **5-2.** "호출 경로" 섹션 추가 — VectorAgent가 트랙별로 2회 호출함을 명시
 
 ### Step 6: `on-seoul-agent/docs/tools/question_search.md` (신규)
 
-- [ ] **6-1.** 새 도구 문서 작성: 시그니처, 파라미터 표, dedup 동작 SQL, 사용 예
-- [ ] **6-2.** `on-seoul-agent/tools/README.md` 도구 표에 `question_search` 행 추가
+- [x] **6-1.** 새 도구 문서 작성: 시그니처, 파라미터 표, dedup 동작 SQL, 사용 예
+- [x] **6-2.** `on-seoul-agent/tools/README.md` 도구 표에 `question_search` 행 추가
 
 ### Step 7: 정합성 검증
 
-- [ ] **7-1.** 모든 문서에서 다음 용어가 일관되게 사용되는지 grep:
+- [x] **7-1.** 모든 문서에서 다음 용어가 일관되게 사용되는지 grep:
 
 ```bash
 grep -rn "VectorSubIntent\|vector_sub_intent" docs/ on-seoul-agent/docs/ on-seoul-agent/README.md
 grep -rn "Track A\|Track B\|Track C" docs/ on-seoul-agent/docs/
 ```
 
-- [ ] **7-2.** `git diff` 일괄 확인
+- [x] **7-2.** `git diff` 일괄 확인
 
 ---
 
@@ -586,16 +586,16 @@ uv run python scripts/eval/run_recall.py --output eval_results/baseline.json
 
 ## 완료 기준 체크리스트
 
-- [ ] `core/rrf.py`가 dedup·가중·빈 채널 처리를 모두 통과
-- [ ] `tools/vector_search.py` 가 `track="A"` / `"B"` 로 분기 (화이트리스트 외 값 거부)
-- [ ] `tools/question_search.py` 가 service_id별 최고 rank dedup 동작
-- [ ] Router의 `_IntentOutput` 에 `vector_sub_intent` 포함 (VECTOR_SEARCH 외에는 None)
-- [ ] `VectorAgent.search` 가 4 채널 병렬 호출 + RRF 결합 + hydration 수행
-- [ ] `vector_sub_intent_enabled=False` 일 때는 항상 `semantic` 프로파일 사용
-- [ ] `rrf_unweighted_baseline=True` 일 때는 모든 채널 가중치 1.0
-- [ ] 봉인 평가셋 80개로 baseline recall@10 측정 결과 저장됨
-- [ ] 6개 문서 일괄 갱신 (agent-design / architecture / README × 2 / hybrid-search-strategy / vector_search.md + 신규 question_search.md)
-- [ ] `tools/README.md` 표에 `question_search` 행 추가
+- [x] `core/rrf.py`가 dedup·가중·빈 채널 처리를 모두 통과
+- [x] `tools/vector_search.py` 가 `track="A"` / `"B"` 로 분기 (화이트리스트 외 값 거부)
+- [x] `tools/question_search.py` 가 service_id별 최고 rank dedup 동작
+- [x] Router의 `_IntentOutput` 에 `vector_sub_intent` 포함 (VECTOR_SEARCH 외에는 None)
+- [x] `VectorAgent.search` 가 4 채널 병렬 호출 + RRF 결합 + hydration 수행
+- [x] `vector_sub_intent_enabled=False` 일 때는 항상 `semantic` 프로파일 사용
+- [x] `rrf_unweighted_baseline=True` 일 때는 모든 채널 가중치 1.0
+- [ ] 봉인 평가셋 80개로 baseline recall@10 측정 결과 저장됨 (Task 7 — 실 DB 필요)
+- [x] 6개 문서 일괄 갱신 (agent-design / architecture / README × 2 / hybrid-search-strategy / vector_search.md + 신규 question_search.md)
+- [x] `tools/README.md` 표에 `question_search` 행 추가
 
 ---
 
