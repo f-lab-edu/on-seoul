@@ -137,25 +137,33 @@ knock:
 ## 7. 로컬 연동 테스트
 
 `KnockNotificationAdapterIntegrationTest`를 사용한다.
+환경변수가 설정된 경우에만 실행되며, 미설정 시 자동으로 스킵된다(`@Disabled` 없이 `assumeTrue` 기반).
 
-1. 테스트 파일 상단 상수 교체:
+### 환경변수 목록
 
-   ```java
-   private static final String KNOCK_API_KEY        = "sk_test_YOUR_SECRET_KEY";
-   private static final String KNOCK_EMAIL_WORKFLOW = "service-change-email";
-   private static final String KNOCK_SMS_WORKFLOW   = "service-change-sms";
-   private static final long   KNOCK_TEST_USER_ID   = 1L;  // Knock에 등록된 수신자 ID
-   ```
+| 환경변수 | 필수 | 설명 |
+|---|---|---|
+| `KNOCK_API_KEY` | ✓ | Knock Secret key (`sk_test_...`) |
+| `KNOCK_TEST_USER_ID` | ✓ | Knock 수신자 ID (on-seoul userId) |
+| `KNOCK_TEST_EMAIL` | 이메일 테스트 시 | 수신 이메일 주소 |
+| `KNOCK_TEST_PHONE` | SMS 테스트 시 | 수신 전화번호 (E.164, 예: `+821012345678`) |
+| `KNOCK_EMAIL_WORKFLOW_KEY` | — | 이메일 워크플로우 키 (기본값: `service-change-email`) |
+| `KNOCK_SMS_WORKFLOW_KEY` | — | SMS 워크플로우 키 (기본값: `service-change-sms`) |
 
-2. `@Disabled` 제거
-3. 테스트 실행:
+### 실행
 
-   ```bash
-   ./gradlew :notification:test \
-     --tests "*.KnockNotificationAdapterIntegrationTest"
-   ```
+```bash
+KNOCK_API_KEY=sk_test_xxx \
+KNOCK_TEST_USER_ID=1 \
+KNOCK_TEST_EMAIL=your@email.com \
+KNOCK_TEST_PHONE=+821012345678 \
+./gradlew :notification:test \
+  --tests "*.KnockNotificationAdapterIntegrationTest"
+```
 
-4. **Knock 대시보드 → Logs** 에서 트리거 수신 및 발송 결과 확인
+### 결과 확인
+
+**Knock 대시보드 → Logs** 에서 트리거 수신 및 발송 결과 확인
 
 ---
 
