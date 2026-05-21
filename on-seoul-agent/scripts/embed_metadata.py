@@ -22,10 +22,10 @@ uv run python scripts/embed_metadata.py --limit 500
 # 증분 적재 (service_embeddings에 없는 service_id만)
 uv run python scripts/embed_metadata.py --incremental
 
-# 특정 트랙만 적재
+# 특정 트랙만 적재 (복수 지정 가능)
 uv run python scripts/embed_metadata.py --track A
 uv run python scripts/embed_metadata.py --track B
-uv run python scripts/embed_metadata.py --track C
+uv run python scripts/embed_metadata.py --track A B  # A + B 동시
 
 # extraction_failed.tsv 재처리
 uv run python scripts/embed_metadata.py --retry-failed
@@ -288,9 +288,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--incremental", action="store_true", help="신규 service_id만 임베딩")
     parser.add_argument(
         "--track",
-        choices=["A", "B", "C", "all"],
-        default="all",
-        help="적재할 트랙 (기본값: all)",
+        nargs="+",
+        choices=["A", "B", "C"],
+        default=["A", "B", "C"],
+        metavar="TRACK",
+        help="적재할 트랙 (A B C 중 하나 이상, 기본값: A B C). 예: --track A B",
     )
     parser.add_argument("--retry-failed", action="store_true", help="extraction_failed.tsv 재처리")
     parser.add_argument("--dry-run", action="store_true", help="실제 적재 없이 대상 건수만 확인")
@@ -307,7 +309,7 @@ if __name__ == "__main__":
     else:
         limit = 100
 
-    tracks: set[str] = {"A", "B", "C"} if args.track == "all" else {args.track}
+    tracks: set[str] = set(args.track)
 
     try:
         asyncio.run(

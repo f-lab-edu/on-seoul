@@ -101,6 +101,7 @@ CREATE INDEX idx_service_embeddings_hnsw
 COMMENT ON INDEX idx_service_embeddings_hnsw IS
 '전체 row_kind 대상 단일 HNSW 인덱스. row-per-vector 구조에서 모든 트랙이 같은 벡터 공간에서 경쟁한다.';
 
+DROP INDEX idx_service_embeddings_service_id;
 -- service_id 역참조: hydration, 재적재 시 DELETE.
 CREATE INDEX idx_service_embeddings_service_id
     ON service_embeddings (service_id);
@@ -109,10 +110,10 @@ COMMENT ON INDEX idx_service_embeddings_service_id IS
 'service_id 역참조 인덱스. hydration 및 재적재 시 DELETE WHERE service_id=X 에 사용.';
 
 -- BM25 partial: identity row만 색인. summary/question 텍스트의 IDF 오염을 방지.
+DROP INDEX idx_service_embeddings_bm25;
 CREATE INDEX idx_service_embeddings_bm25
     ON service_embeddings
     USING bm25 (id, service_name, metadata)
-    WHERE row_kind = 'identity'
     WITH (
       key_field = 'id',
       text_fields = '{
@@ -121,7 +122,8 @@ CREATE INDEX idx_service_embeddings_bm25
       json_fields = '{
         "metadata": {"tokenizer": {"type": "korean_lindera"}}
       }'
-    );
+    )
+    WHERE row_kind = 'identity';
 
 COMMENT ON INDEX idx_service_embeddings_bm25 IS
 'BM25 partial index — identity row만 색인. summary/question 텍스트를 색인하면 도메인 공통어의 IDF가 오염되므로 의도적으로 제외. 의미·세부 검색은 벡터 채널이 담당한다.';
