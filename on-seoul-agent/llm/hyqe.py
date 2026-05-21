@@ -69,16 +69,32 @@ def _check_distribution(questions: list[HyQEQuestion], n: int) -> bool:
     return True
 
 
-def _enforce_distribution(questions: list[HyQEQuestion], n: int) -> list[HyQEQuestion]:
+def _enforce_distribution(
+    questions: list[HyQEQuestion],
+    n: int,
+    *,
+    service_name: str = "",
+    area_name: str = "",
+    max_class_name: str = "",
+    min_class_name: str = "",
+) -> list[HyQEQuestion]:
     """분포 강제 후 n개 반환.
 
     각 레이블의 목표 개수보다 많으면 초과분을 제거하고,
     부족하면 템플릿 질문으로 채운다.
+    템플릿의 {service_name} 등 플레이스홀더는 실제 값으로 치환된다.
     """
     target_counts = {
         "semantic": round(n * _DIST_TARGET["semantic"]),
         "detail": round(n * _DIST_TARGET["detail"]),
         "keyword": n - round(n * _DIST_TARGET["semantic"]) - round(n * _DIST_TARGET["detail"]),
+    }
+
+    fmt = {
+        "service_name": service_name or "해당 시설",
+        "area_name":    area_name    or "서울",
+        "max_class_name": max_class_name or "공공시설",
+        "min_class_name": min_class_name or "시설",
     }
 
     # 레이블별 그룹화
@@ -96,7 +112,7 @@ def _enforce_distribution(questions: list[HyQEQuestion], n: int) -> list[HyQEQue
             for i in range(shortage):
                 tmpl = templates[i % len(templates)]
                 result.append(HyQEQuestion(
-                    question_text=tmpl,
+                    question_text=tmpl.format(**fmt),
                     intent_label=label,  # type: ignore[arg-type]
                 ))
 
@@ -118,6 +134,7 @@ async def generate_questions(
 
     LLM 실패 시 빈 리스트 반환.
     분포 불충족 시 1회 재시도 후 _enforce_distribution으로 강제 조정.
+    템플릿 폴백 질문의 플레이스홀더({service_name} 등)는 실제 값으로 치환된다.
     """
     from pydantic import TypeAdapter
 
@@ -133,6 +150,13 @@ async def generate_questions(
         "cleaned_detail": cleaned_detail,
         "n": n,
     }
+
+    _fmt_kwargs = dict(
+        service_name=service_name,
+        area_name=area_name or "",
+        max_class_name=max_class_name or "",
+        min_class_name=min_class_name or "",
+    )
 
     questions: list[HyQEQuestion] | None = None
 
@@ -151,7 +175,7 @@ async def generate_questions(
             return []
 
         if _check_distribution(questions, n):
-            return _enforce_distribution(questions, n)
+            return _enforce_distribution(questions, n, **_fmt_kwargs)
 
         logger.debug(
             "generate_questions 분포 불충족 (시도 %d/2), 재시도 또는 강제 조정",
@@ -159,4 +183,4 @@ async def generate_questions(
         )
 
     # 2회 모두 분포 불충족 → 강제 조정
-    return _enforce_distribution(questions or [], n)
+    return _enforce_distribution(questions or [], n, **_fmt_kwargs)
