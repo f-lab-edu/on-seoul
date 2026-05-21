@@ -1,6 +1,7 @@
 package dev.jazzybyte.onseoul.notification.adapter.out.knock;
 
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
+import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -87,9 +88,11 @@ class KnockNotificationAdapterIntegrationTest {
         assumeTrue(email != null && !email.isBlank(),
                 ENV_TEST_EMAIL + " 환경변수 미설정 — 이메일 연동 테스트 스킵");
 
+        UserContact recipient = new UserContact(testUserId, email, null);
+
         // 예외 없이 완료되면 성공. Knock 대시보드 > Logs 에서 수신 확인.
         adapter.send(
-                testUserId,
+                recipient,
                 "[on-seoul] 서비스 변경 알림 (이메일 연동 테스트)",
                 "OA-2266 체육시설 예약 서비스의 상태가 변경되었습니다.",
                 99901L,
@@ -104,9 +107,11 @@ class KnockNotificationAdapterIntegrationTest {
         assumeTrue(phone != null && !phone.isBlank(),
                 ENV_TEST_PHONE + " 환경변수 미설정 — SMS 연동 테스트 스킵");
 
+        UserContact recipient = new UserContact(testUserId, null, phone);
+
         // 예외 없이 완료되면 성공. Knock 대시보드 > Logs 에서 수신 확인.
         adapter.send(
-                testUserId,
+                recipient,
                 "[on-seoul] 서비스 변경 알림 (SMS 연동 테스트)",
                 "OA-2269 문화행사 예약 서비스의 상태가 변경되었습니다.",
                 99902L,

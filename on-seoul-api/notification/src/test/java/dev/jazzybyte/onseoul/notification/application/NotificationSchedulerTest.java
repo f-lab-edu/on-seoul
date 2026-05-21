@@ -8,8 +8,10 @@ import dev.jazzybyte.onseoul.notification.domain.NotificationTemplateRequest;
 import dev.jazzybyte.onseoul.notification.domain.ServiceChange;
 import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
+import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
+import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
 import dev.jazzybyte.onseoul.notification.port.out.TemplateGenerationPort;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -43,6 +45,9 @@ class NotificationSchedulerTest {
     private LoadDispatchPort loadDispatchPort;
 
     @Mock
+    private LoadUserContactPort loadUserContactPort;
+
+    @Mock
     private TemplateGenerationPort templateGenerationPort;
 
     @Mock
@@ -52,6 +57,8 @@ class NotificationSchedulerTest {
     private NotificationTxHelper txHelper;
 
     private SimpleMeterRegistry meterRegistry;
+    private static final UserContact TEST_CONTACT =
+            new UserContact(1L, "user@example.com", "+821012345678");
 
     private NotificationScheduler scheduler;
 
@@ -59,9 +66,12 @@ class NotificationSchedulerTest {
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
         scheduler = new NotificationScheduler(
-                loadSubscriptionPort, loadDispatchPort,
+                loadSubscriptionPort, loadDispatchPort, loadUserContactPort,
                 templateGenerationPort, pushNotificationPort,
                 txHelper, meterRegistry);
+        // 기본적으로 연락처 조회 성공
+        lenient().when(loadUserContactPort.loadContact(anyLong()))
+                .thenReturn(Optional.of(TEST_CONTACT));
     }
 
     private NotificationSubscription stubSubscription(Long id, String serviceId) {
@@ -135,7 +145,7 @@ class NotificationSchedulerTest {
         scheduler.processAllSubscriptions();
         Thread.sleep(300);
 
-        verify(pushNotificationPort).send(anyLong(), anyString(), anyString(), any(), any());
+        verify(pushNotificationPort).send(any(UserContact.class), anyString(), anyString(), any(), any());
         verify(txHelper).txBSuccess(eq(dispatch), eq(sub), eq(change),
                 eq("제목"), eq("본문"), eq(TemplateSource.AI));
     }
@@ -154,7 +164,7 @@ class NotificationSchedulerTest {
                 .thenReturn(Optional.of(dispatch));
         when(templateGenerationPort.generate(any())).thenReturn(template);
         doThrow(new RuntimeException("Knock 오류")).when(pushNotificationPort)
-                .send(anyLong(), anyString(), anyString(), any(), any());
+                .send(any(UserContact.class), anyString(), anyString(), any(), any());
 
         scheduler.processAllSubscriptions();
         Thread.sleep(300);
@@ -182,7 +192,7 @@ class NotificationSchedulerTest {
         Thread.sleep(400);
 
         // sub2는 정상 처리됨
-        verify(pushNotificationPort).send(anyLong(), anyString(), anyString(), any(), any());
+        verify(pushNotificationPort).send(any(UserContact.class), anyString(), anyString(), any(), any());
     }
 
     @Test

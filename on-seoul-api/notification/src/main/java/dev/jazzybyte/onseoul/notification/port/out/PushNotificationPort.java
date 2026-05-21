@@ -1,6 +1,7 @@
 package dev.jazzybyte.onseoul.notification.port.out;
 
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
+import dev.jazzybyte.onseoul.notification.domain.UserContact;
 
 import java.util.Set;
 
@@ -14,11 +15,11 @@ public interface PushNotificationPort {
     /**
      * 사용자에게 알림을 발송한다.
      *
-     * @param userId     수신자 userId
+     * @param recipient  수신자 연락처 (userId + email + phoneNumber). 발송 제공자에 인라인 등록됨
      * @param title      알림 제목
      * @param body       알림 본문
      * @param dispatchId idempotency key
      * @param channels   발송할 채널 목록 (EMAIL, SMS)
      */
-    void send(Long userId, String title, String body, Long dispatchId, Set<NotificationChannel> channels);
+    void send(UserContact recipient, String title, String body, Long dispatchId, Set<NotificationChannel> channels);
 }

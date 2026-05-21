@@ -6,8 +6,10 @@ import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
 import dev.jazzybyte.onseoul.notification.domain.NotificationTemplateRequest;
 import dev.jazzybyte.onseoul.notification.domain.ServiceChange;
 import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
+import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
+import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
 import dev.jazzybyte.onseoul.notification.port.out.TemplateGenerationPort;
 import io.micrometer.core.instrument.Counter;
@@ -37,6 +39,7 @@ public class NotificationScheduler {
 
     private final LoadSubscriptionPort loadSubscriptionPort;
     private final LoadDispatchPort loadDispatchPort;
+    private final LoadUserContactPort loadUserContactPort;
     private final TemplateGenerationPort templateGenerationPort;
     private final PushNotificationPort pushNotificationPort;
     private final NotificationTxHelper txHelper;
@@ -49,12 +52,14 @@ public class NotificationScheduler {
     public NotificationScheduler(
             final LoadSubscriptionPort loadSubscriptionPort,
             final LoadDispatchPort loadDispatchPort,
+            final LoadUserContactPort loadUserContactPort,
             final TemplateGenerationPort templateGenerationPort,
             final PushNotificationPort pushNotificationPort,
             final NotificationTxHelper txHelper,
             final MeterRegistry meterRegistry) {
         this.loadSubscriptionPort = loadSubscriptionPort;
         this.loadDispatchPort = loadDispatchPort;
+        this.loadUserContactPort = loadUserContactPort;
         this.templateGenerationPort = templateGenerationPort;
         this.pushNotificationPort = pushNotificationPort;
         this.txHelper = txHelper;
@@ -127,10 +132,18 @@ public class NotificationScheduler {
                 .register(meterRegistry)
                 .increment();
 
+        // TX 밖: 연락처 조회 (미등록 시 userId만으로 fallback)
+        UserContact recipient = loadUserContactPort.loadContact(sub.getUserId())
+                .orElseGet(() -> {
+                    log.warn("[NotificationScheduler] 연락처 미등록 — userId만으로 발송 시도: userId={}",
+                            sub.getUserId());
+                    return new UserContact(sub.getUserId(), null, null);
+                });
+
         // TX 밖: 푸시 발송
         try {
             pushNotificationPort.send(
-                    sub.getUserId(),
+                    recipient,
                     template.title(),
                     template.body(),
                     dispatch.getId(),
