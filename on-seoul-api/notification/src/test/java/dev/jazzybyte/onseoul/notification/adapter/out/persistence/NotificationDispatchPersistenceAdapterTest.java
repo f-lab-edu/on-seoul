@@ -1,6 +1,8 @@
 package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 
+import dev.jazzybyte.onseoul.notification.domain.BatchStatus;
 import dev.jazzybyte.onseoul.notification.domain.DispatchStatus;
+import dev.jazzybyte.onseoul.notification.domain.NotificationBatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
@@ -29,20 +31,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Import({
         NotificationDispatchPersistenceAdapter.class,
         NotificationSubscriptionPersistenceAdapter.class,
+        NotificationBatchPersistenceAdapter.class,
         NotificationPersistenceMapper.class
 })
 class NotificationDispatchPersistenceAdapterTest {
 
-    @Autowired
-    private NotificationDispatchPersistenceAdapter dispatchAdapter;
-
-    @Autowired
-    private NotificationSubscriptionPersistenceAdapter subscriptionAdapter;
-
-    @Autowired
-    private EntityManager em;
+    @Autowired private NotificationDispatchPersistenceAdapter dispatchAdapter;
+    @Autowired private NotificationSubscriptionPersistenceAdapter subscriptionAdapter;
+    @Autowired private NotificationBatchPersistenceAdapter batchAdapter;
+    @Autowired private EntityManager em;
 
     private Long subscriptionId;
+    private Long batchId;
 
     @BeforeEach
     void setUp() {
@@ -50,37 +50,54 @@ class NotificationDispatchPersistenceAdapterTest {
                 dev.jazzybyte.onseoul.notification.domain.NotificationSubscription.create(
                         10L, "SVC-SETUP", Set.of(NotificationChannel.EMAIL));
         subscriptionId = subscriptionAdapter.save(sub).getId();
+
+        NotificationBatch batch = batchAdapter.insertRunning(NotificationBatch.start());
+        batchId = batch.getId();
     }
 
     @Test
-    @DisplayName("saveIfAbsent() 최초 insert → 저장된 dispatch 반환")
+    @DisplayName("saveIfAbsent() 최초 insert → 저장된 PENDING dispatch 반환")
     void saveIfAbsent_newDispatch_returnsPresent() {
-        NotificationDispatch dispatch = NotificationDispatch.create(subscriptionId, 100L);
+        NotificationDispatch dispatch = NotificationDispatch.create(batchId, subscriptionId);
 
         Optional<NotificationDispatch> result = dispatchAdapter.saveIfAbsent(dispatch);
 
         assertThat(result).isPresent();
         assertThat(result.get().getId()).isNotNull().isPositive();
         assertThat(result.get().getStatus()).isEqualTo(DispatchStatus.PENDING);
+        assertThat(result.get().getBatchId()).isEqualTo(batchId);
+        assertThat(result.get().getSubscriptionId()).isEqualTo(subscriptionId);
     }
 
     @Test
-    @DisplayName("saveIfAbsent() 중복 insert → empty 반환 (멱등성)")
+    @DisplayName("saveIfAbsent() 동일 (batch_id, subscription_id) 중복 → empty 반환 (멱등성)")
     void saveIfAbsent_duplicateDispatch_returnsEmpty() {
-        NotificationDispatch dispatch = NotificationDispatch.create(subscriptionId, 200L);
-        dispatchAdapter.saveIfAbsent(dispatch);
+        dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId));
 
         Optional<NotificationDispatch> second = dispatchAdapter.saveIfAbsent(
-                NotificationDispatch.create(subscriptionId, 200L));
+                NotificationDispatch.create(batchId, subscriptionId));
 
         assertThat(second).isEmpty();
     }
 
     @Test
+    @DisplayName("다른 batch_id로는 같은 subscription_id에 INSERT 가능하다")
+    void saveIfAbsent_differentBatchId_inserts() {
+        dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId));
+
+        NotificationBatch batch2 = batchAdapter.insertRunning(NotificationBatch.start());
+        Optional<NotificationDispatch> second = dispatchAdapter.saveIfAbsent(
+                NotificationDispatch.create(batch2.getId(), subscriptionId));
+
+        assertThat(second).isPresent();
+    }
+
+    @Test
     @DisplayName("save() markSuccess 후 저장 — SUCCESS 상태 유지")
     void save_afterMarkSuccess_persistsSuccess() {
-        NotificationDispatch dispatch = NotificationDispatch.create(subscriptionId, 300L);
-        NotificationDispatch saved = dispatchAdapter.saveIfAbsent(dispatch).orElseThrow();
+        NotificationDispatch saved = dispatchAdapter
+                .saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId))
+                .orElseThrow();
 
         saved.markSuccess("제목", "본문", TemplateSource.AI);
         NotificationDispatch updated = dispatchAdapter.save(saved);
@@ -92,42 +109,36 @@ class NotificationDispatchPersistenceAdapterTest {
     }
 
     @Test
-    @DisplayName("save() markFailed 후 저장 — FAILED 상태 유지")
+    @DisplayName("save() markFailed 후 저장 — FAILED 상태 + last_error 유지")
     void save_afterMarkFailed_persistsFailed() {
-        NotificationDispatch dispatch = NotificationDispatch.create(subscriptionId, 400L);
-        NotificationDispatch saved = dispatchAdapter.saveIfAbsent(dispatch).orElseThrow();
+        NotificationDispatch saved = dispatchAdapter
+                .saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId))
+                .orElseThrow();
 
-        saved.markFailed("네트워크 오류", 5);
+        saved.markFailed("네트워크 오류");
         NotificationDispatch updated = dispatchAdapter.save(saved);
 
         assertThat(updated.getStatus()).isEqualTo(DispatchStatus.FAILED);
-        assertThat(updated.getAttemptCount()).isEqualTo((short) 1);
         assertThat(updated.getLastError()).isEqualTo("네트워크 오류");
     }
 
     @Test
-    @DisplayName("loadRetryable() — PENDING dispatch 반환")
-    void loadRetryable_pendingDispatch_returnsPresent() {
-        NotificationDispatch dispatch = NotificationDispatch.create(subscriptionId, 500L);
-        dispatchAdapter.saveIfAbsent(dispatch);
+    @DisplayName("loadByBatchAndSubscription() — 저장된 dispatch 반환")
+    void loadByBatchAndSubscription_returnsPresent() {
+        dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId));
 
         Optional<NotificationDispatch> result =
-                dispatchAdapter.loadRetryable(subscriptionId, 500L, 5);
+                dispatchAdapter.loadByBatchAndSubscription(batchId, subscriptionId);
 
         assertThat(result).isPresent();
         assertThat(result.get().getStatus()).isEqualTo(DispatchStatus.PENDING);
     }
 
     @Test
-    @DisplayName("loadRetryable() — SUCCESS dispatch → empty 반환")
-    void loadRetryable_successDispatch_returnsEmpty() {
-        NotificationDispatch dispatch = NotificationDispatch.create(subscriptionId, 600L);
-        NotificationDispatch saved = dispatchAdapter.saveIfAbsent(dispatch).orElseThrow();
-        saved.markSuccess("제목", "본문", TemplateSource.FALLBACK);
-        dispatchAdapter.save(saved);
-
+    @DisplayName("loadByBatchAndSubscription() — 없으면 empty 반환")
+    void loadByBatchAndSubscription_missing_returnsEmpty() {
         Optional<NotificationDispatch> result =
-                dispatchAdapter.loadRetryable(subscriptionId, 600L, 5);
+                dispatchAdapter.loadByBatchAndSubscription(batchId, 99999L);
 
         assertThat(result).isEmpty();
     }
@@ -135,14 +146,14 @@ class NotificationDispatchPersistenceAdapterTest {
     @Test
     @DisplayName("save() 후 재저장 시 @PreUpdate가 updated_at을 갱신")
     void save_preUpdateRefreshesUpdatedAt() throws InterruptedException {
-        NotificationDispatch dispatch = NotificationDispatch.create(subscriptionId, 800L);
-        NotificationDispatch saved = dispatchAdapter.saveIfAbsent(dispatch).orElseThrow();
+        NotificationDispatch saved = dispatchAdapter
+                .saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId))
+                .orElseThrow();
         Instant updatedAtBefore = saved.getUpdatedAt();
 
-        // Ensure at least 1 ms elapses so the new timestamp is strictly later
         Thread.sleep(2);
 
-        saved.markFailed("일시적 오류", 5);
+        saved.markFailed("일시적 오류");
         NotificationDispatch updated = dispatchAdapter.save(saved);
 
         assertThat(updated.getUpdatedAt())
@@ -151,41 +162,16 @@ class NotificationDispatchPersistenceAdapterTest {
     }
 
     @Test
-    @DisplayName("saveIfAbsent() — EntityManager로 직접 insert 후 saveIfAbsent() 호출 → DataIntegrityViolationException 경로로 empty 반환")
+    @DisplayName("saveIfAbsent() — EntityManager 직접 insert 후 saveIfAbsent → DataIntegrityViolationException 경로로 empty")
     void saveIfAbsent_directDuplicateInsert_returnsEmpty() {
-        // EntityManager로 (subscriptionId, 999L) 행을 직접 persist + flush하여 UNIQUE 제약을 선점한다.
         NotificationDispatchJpaEntity duplicate =
-                new NotificationDispatchJpaEntity(subscriptionId, 999L);
+                new NotificationDispatchJpaEntity(batchId, subscriptionId);
         em.persist(duplicate);
         em.flush();
 
-        // 동일 (subscription_id, change_log_id) 쌍으로 saveIfAbsent() 호출 →
-        // pre-check 없이 saveAndFlush를 시도하므로 DataIntegrityViolationException이 발생하고 empty를 반환해야 한다.
         Optional<NotificationDispatch> result = dispatchAdapter.saveIfAbsent(
-                NotificationDispatch.create(subscriptionId, 999L));
+                NotificationDispatch.create(batchId, subscriptionId));
 
-        assertThat(result).isEmpty();
-    }
-
-    @Test
-    @DisplayName("loadRetryable() — attemptCount >= maxAttempts → empty 반환")
-    void loadRetryable_attemptCountAtMax_returnsEmpty() {
-        NotificationDispatch dispatch = NotificationDispatch.create(subscriptionId, 700L);
-        NotificationDispatch saved = dispatchAdapter.saveIfAbsent(dispatch).orElseThrow();
-        // 4번 실패 후 저장 (maxAttempts=5인 상황에서 attempt=4이면 아직 retryable)
-        for (int i = 0; i < 4; i++) {
-            saved.markFailed("오류", 5);
-        }
-        dispatchAdapter.save(saved);
-        // attempt=4 → retryable
-        assertThat(dispatchAdapter.loadRetryable(subscriptionId, 700L, 5)).isPresent();
-
-        // 한번 더 실패 → attempt=5, DEAD
-        saved.markFailed("마지막 오류", 5);
-        dispatchAdapter.save(saved);
-
-        Optional<NotificationDispatch> result =
-                dispatchAdapter.loadRetryable(subscriptionId, 700L, 5);
         assertThat(result).isEmpty();
     }
 }

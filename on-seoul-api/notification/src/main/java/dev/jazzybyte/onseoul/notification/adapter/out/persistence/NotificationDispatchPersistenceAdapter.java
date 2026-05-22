@@ -24,16 +24,14 @@ class NotificationDispatchPersistenceAdapter
     }
 
     /**
-     * Inserts a new dispatch row only if the (subscription_id, change_log_id) pair does not yet
-     * exist. Returns the saved dispatch, or empty when a duplicate is detected.
-     * Uses try-catch on DataIntegrityViolationException as a portable ON-CONFLICT-DO-NOTHING
-     * equivalent that works in both PostgreSQL and the H2 test environment.
+     * (batch_id, subscription_id) UNIQUE 제약을 멱등 INSERT로 활용한다.
+     * 중복일 경우 DataIntegrityViolationException을 catch하여 empty 반환 — H2/PG 공통 동작.
      */
     @Override
     public Optional<NotificationDispatch> saveIfAbsent(NotificationDispatch dispatch) {
         try {
             NotificationDispatchJpaEntity entity = new NotificationDispatchJpaEntity(
-                    dispatch.getSubscriptionId(), dispatch.getChangeLogId());
+                    dispatch.getBatchId(), dispatch.getSubscriptionId());
             return Optional.of(mapper.toDomain(repository.saveAndFlush(entity)));
         } catch (DataIntegrityViolationException e) {
             return Optional.empty();
@@ -46,13 +44,13 @@ class NotificationDispatchPersistenceAdapter
         if (dispatch.getId() != null) {
             entity = repository.findById(dispatch.getId())
                     .orElseGet(() -> new NotificationDispatchJpaEntity(
-                            dispatch.getSubscriptionId(), dispatch.getChangeLogId()));
+                            dispatch.getBatchId(), dispatch.getSubscriptionId()));
         } else {
             entity = new NotificationDispatchJpaEntity(
-                    dispatch.getSubscriptionId(), dispatch.getChangeLogId());
+                    dispatch.getBatchId(), dispatch.getSubscriptionId());
         }
         entity.applyDomain(
-                dispatch.getStatus(), dispatch.getAttemptCount(),
+                dispatch.getStatus(),
                 dispatch.getSentAt(), dispatch.getGeneratedTitle(),
                 dispatch.getGeneratedBody(), dispatch.getTemplateSource(),
                 dispatch.getLastError());
@@ -61,9 +59,8 @@ class NotificationDispatchPersistenceAdapter
 
     @Override
     @Transactional(readOnly = true)
-    public Optional<NotificationDispatch> loadRetryable(Long subscriptionId, Long changeLogId,
-                                                        int maxAttempts) {
-        return repository.findRetryable(subscriptionId, changeLogId, maxAttempts)
+    public Optional<NotificationDispatch> loadByBatchAndSubscription(Long batchId, Long subscriptionId) {
+        return repository.findByBatchIdAndSubscriptionId(batchId, subscriptionId)
                 .map(mapper::toDomain);
     }
 }

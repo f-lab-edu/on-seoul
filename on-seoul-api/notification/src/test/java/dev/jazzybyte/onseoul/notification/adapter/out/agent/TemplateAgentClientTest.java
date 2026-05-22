@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,6 +40,12 @@ class TemplateAgentClientTest {
         mockWebServer.shutdown();
     }
 
+    private NotificationTemplateRequest singleChangeRequest(String serviceId, String field,
+                                                            String oldVal, String newVal) {
+        return new NotificationTemplateRequest(serviceId, List.of(
+                new NotificationTemplateRequest.ChangeItem("UPDATED", field, oldVal, newVal)));
+    }
+
     @Test
     @DisplayName("generate() - AI 응답이 유효하면 TemplateSource.AI로 반환된다")
     void generate_validAiResponse_returnsAiSource() throws InterruptedException {
@@ -47,10 +54,7 @@ class TemplateAgentClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"title\":\"제목\",\"body\":\"본문\"}"));
 
-        NotificationTemplateRequest request = new NotificationTemplateRequest(
-                "SVC-001", "CHANGED", "status", "예약가능", "마감");
-
-        TemplateResult result = client.generate(request);
+        TemplateResult result = client.generate(singleChangeRequest("SVC-001", "status", "예약가능", "마감"));
 
         assertThat(result.title()).isEqualTo("제목");
         assertThat(result.body()).isEqualTo("본문");
@@ -67,10 +71,7 @@ class TemplateAgentClientTest {
     void generate_aiReturns500_returnsFallback() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(500));
 
-        NotificationTemplateRequest request = new NotificationTemplateRequest(
-                "SVC-001", "CHANGED", "status", "예약가능", "마감");
-
-        TemplateResult result = client.generate(request);
+        TemplateResult result = client.generate(singleChangeRequest("SVC-001", "status", "예약가능", "마감"));
 
         assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
         assertThat(result.title()).contains("SVC-001");
@@ -85,10 +86,7 @@ class TemplateAgentClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"title\":\"\",\"body\":\"본문\"}"));
 
-        NotificationTemplateRequest request = new NotificationTemplateRequest(
-                "SVC-002", "CHANGED", "name", "구장", "체육관");
-
-        TemplateResult result = client.generate(request);
+        TemplateResult result = client.generate(singleChangeRequest("SVC-002", "name", "구장", "체육관"));
 
         assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
     }
@@ -101,10 +99,7 @@ class TemplateAgentClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"title\":\"제목\",\"body\":null}"));
 
-        NotificationTemplateRequest request = new NotificationTemplateRequest(
-                "SVC-003", "CHANGED", "date", "1월", "2월");
-
-        TemplateResult result = client.generate(request);
+        TemplateResult result = client.generate(singleChangeRequest("SVC-003", "date", "1월", "2월"));
 
         assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
     }
@@ -114,18 +109,14 @@ class TemplateAgentClientTest {
     void generate_connectionRefused_returnsFallback() throws IOException {
         mockWebServer.shutdown();
 
-        NotificationTemplateRequest request = new NotificationTemplateRequest(
-                "SVC-004", "CHANGED", "status", "열림", "닫힘");
-
-        TemplateResult result = client.generate(request);
+        TemplateResult result = client.generate(singleChangeRequest("SVC-004", "status", "열림", "닫힘"));
 
         assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
     }
 
     @Test
-    @DisplayName("generate() - 응답이 10초 초과 지연되면 fallback을 반환한다")
+    @DisplayName("generate() - 응답이 1초 초과 지연되면 fallback을 반환한다 (timeout=1s)")
     void generate_responseDelayExceedsTimeout_returnsFallback() {
-        // templateTimeoutSeconds=1 로 단축한 별도 client를 구성하여 테스트 시간을 최소화한다
         TemplateAgentProperties fastTimeoutProperties = new TemplateAgentProperties(
                 mockWebServer.url("/").toString(), 1);
         WebClient webClient = WebClient.builder()
@@ -138,12 +129,10 @@ class TemplateAgentClientTest {
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"title\":\"제목\",\"body\":\"본문\"}")
-                .setBodyDelay(3, TimeUnit.SECONDS));  // 1초 타임아웃보다 긴 3초 지연
+                .setBodyDelay(3, TimeUnit.SECONDS));
 
-        NotificationTemplateRequest request = new NotificationTemplateRequest(
-                "SVC-TIMEOUT", "CHANGED", "status", "열림", "닫힘");
-
-        TemplateResult result = fastClient.generate(request);
+        TemplateResult result = fastClient.generate(
+                singleChangeRequest("SVC-TIMEOUT", "status", "열림", "닫힘"));
 
         assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
     }
@@ -156,33 +145,36 @@ class TemplateAgentClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"title\":\"제목\",\"body\":\"   \"}"));
 
-        NotificationTemplateRequest request = new NotificationTemplateRequest(
-                "SVC-005", "CHANGED", "location", "서울", "부산");
-
-        TemplateResult result = client.generate(request);
+        TemplateResult result = client.generate(singleChangeRequest("SVC-005", "location", "서울", "부산"));
 
         assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
     }
 
     @Test
-    @DisplayName("generate() - 요청 JSON이 snake_case 필드로 직렬화된다")
-    void generate_requestBody_serializedAsSnakeCase() throws Exception {
+    @DisplayName("generate() - 요청 JSON이 snake_case 필드 + changes 배열로 직렬화된다 (배치 모델)")
+    void generate_requestBody_serializedAsSnakeCaseBatch() throws Exception {
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"title\":\"t\",\"body\":\"b\"}"));
 
-        NotificationTemplateRequest request = new NotificationTemplateRequest(
-                "SVC-001", "CHANGED", "status", "old", "new");
+        NotificationTemplateRequest request = new NotificationTemplateRequest("SVC-001", List.of(
+                new NotificationTemplateRequest.ChangeItem("UPDATED", "service_status", "RECEIVING", "CLOSED"),
+                new NotificationTemplateRequest.ChangeItem("UPDATED", "service_name", "구", "신")
+        ));
         client.generate(request);
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         String body = recorded.getBody().readUtf8();
 
         assertThat(body).contains("\"service_id\"");
+        assertThat(body).contains("\"changes\"");
         assertThat(body).contains("\"change_type\"");
         assertThat(body).contains("\"field_name\"");
         assertThat(body).contains("\"old_value\"");
         assertThat(body).contains("\"new_value\"");
+        // 두 개의 change 항목
+        assertThat(body).contains("\"service_status\"");
+        assertThat(body).contains("\"service_name\"");
     }
 }

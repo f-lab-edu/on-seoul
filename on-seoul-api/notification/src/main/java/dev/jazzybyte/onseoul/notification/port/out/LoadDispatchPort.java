@@ -6,9 +6,6 @@ import java.util.Optional;
 
 public interface LoadDispatchPort {
 
-    /**
-     * Loads a retryable dispatch for the given subscription and change-log pair,
-     * i.e. one whose status is PENDING or FAILED and whose attempt count is below maxAttempts.
-     */
-    Optional<NotificationDispatch> loadRetryable(Long subscriptionId, Long changeLogId, int maxAttempts);
+    /** (batch_id, subscription_id) 키로 dispatch를 조회한다. */
+    Optional<NotificationDispatch> loadByBatchAndSubscription(Long batchId, Long subscriptionId);
 }

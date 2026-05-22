@@ -4,14 +4,19 @@ import lombok.Getter;
 
 import java.time.Instant;
 
+/**
+ * 배치 × 구독 단위 알림 발송 이력 (ADR-0004).
+ *
+ * <p>per-change 모델에서 제거된 필드: {@code changeLogId}, {@code attemptCount}.
+ * 추가된 필드: {@code batchId}.
+ */
 @Getter
 public class NotificationDispatch {
 
     private Long id;
+    private Long batchId;
     private Long subscriptionId;
-    private Long changeLogId;
     private DispatchStatus status;
-    private short attemptCount;
     private Instant sentAt;
     private String generatedTitle;
     private String generatedBody;
@@ -21,16 +26,15 @@ public class NotificationDispatch {
     private Instant updatedAt;
 
     /** Reconstitute from persistence. */
-    public NotificationDispatch(Long id, Long subscriptionId, Long changeLogId,
-                                DispatchStatus status, short attemptCount,
+    public NotificationDispatch(Long id, Long batchId, Long subscriptionId,
+                                DispatchStatus status,
                                 Instant sentAt, String generatedTitle, String generatedBody,
                                 TemplateSource templateSource, String lastError,
                                 Instant createdAt, Instant updatedAt) {
         this.id = id;
+        this.batchId = batchId;
         this.subscriptionId = subscriptionId;
-        this.changeLogId = changeLogId;
         this.status = status;
-        this.attemptCount = attemptCount;
         this.sentAt = sentAt;
         this.generatedTitle = generatedTitle;
         this.generatedBody = generatedBody;
@@ -42,22 +46,20 @@ public class NotificationDispatch {
 
     private NotificationDispatch() {}
 
-    /** Factory method — creates a new PENDING dispatch. */
-    public static NotificationDispatch create(Long subscriptionId, Long changeLogId) {
+    /** Factory: 신규 PENDING dispatch 생성. */
+    public static NotificationDispatch create(Long batchId, Long subscriptionId) {
         NotificationDispatch d = new NotificationDispatch();
+        d.batchId = batchId;
         d.subscriptionId = subscriptionId;
-        d.changeLogId = changeLogId;
         d.status = DispatchStatus.PENDING;
-        d.attemptCount = 0;
         Instant now = Instant.now();
         d.createdAt = now;
         d.updatedAt = now;
         return d;
     }
 
-    /** Records a successful notification send. */
+    /** 성공 기록. */
     public void markSuccess(String title, String body, TemplateSource source) {
-        this.attemptCount++;
         this.status = DispatchStatus.SUCCESS;
         Instant now = Instant.now();
         this.sentAt = now;
@@ -69,21 +71,16 @@ public class NotificationDispatch {
     }
 
     /**
-     * Records a failed attempt. Transitions to DEAD when attemptCount reaches maxAttempts.
+     * 실패 기록. last_notified_at은 갱신되지 않으므로 다음 배치가 자동 재시도한다.
+     * DEAD 상태로 전환하지 않는다(ADR-0004).
      */
-    public void markFailed(String error, int maxAttempts) {
-        this.attemptCount++;
+    public void markFailed(String error) {
+        this.status = DispatchStatus.FAILED;
         this.lastError = error;
-        this.status = this.attemptCount >= maxAttempts ? DispatchStatus.DEAD : DispatchStatus.FAILED;
         this.updatedAt = Instant.now();
     }
 
     public boolean isPending() {
         return this.status == DispatchStatus.PENDING;
-    }
-
-    public boolean isRetryable(int maxAttempts) {
-        return (this.status == DispatchStatus.PENDING || this.status == DispatchStatus.FAILED)
-                && this.attemptCount < maxAttempts;
     }
 }

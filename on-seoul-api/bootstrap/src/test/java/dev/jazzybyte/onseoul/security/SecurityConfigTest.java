@@ -14,7 +14,10 @@ import dev.jazzybyte.onseoul.notification.port.out.LoadServiceChangePort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.user.port.out.LoadUserPort;
 import dev.jazzybyte.onseoul.user.port.out.RefreshTokenStorePort;
+import dev.jazzybyte.onseoul.notification.port.out.LoadBatchPort;
+import dev.jazzybyte.onseoul.notification.port.out.SaveBatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveDispatchPort;
+import dev.jazzybyte.onseoul.notification.port.out.SubscriptionFilterParserPort;
 import dev.jazzybyte.onseoul.chat.port.out.SaveChatMessagePort;
 import dev.jazzybyte.onseoul.chat.port.out.SaveChatRoomPort;
 import dev.jazzybyte.onseoul.collection.port.out.SaveCollectionHistoryPort;
@@ -92,6 +95,9 @@ class SecurityConfigTest {
     @MockitoBean SaveDispatchPort saveDispatchPort;
     @MockitoBean LoadDispatchPort loadDispatchPort;
     @MockitoBean LoadServiceChangePort loadServiceChangePort;
+    @MockitoBean SaveBatchPort saveBatchPort;
+    @MockitoBean LoadBatchPort loadBatchPort;
+    @MockitoBean SubscriptionFilterParserPort subscriptionFilterParserPort;
 
     @Test
     @DisplayName("GET /actuator/health — 인증 없이 200을 반환한다")

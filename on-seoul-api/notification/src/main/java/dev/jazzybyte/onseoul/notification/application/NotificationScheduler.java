@@ -1,16 +1,16 @@
 package dev.jazzybyte.onseoul.notification.application;
 
-import dev.jazzybyte.onseoul.notification.domain.DispatchStatus;
+import dev.jazzybyte.onseoul.notification.domain.NotificationBatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
 import dev.jazzybyte.onseoul.notification.domain.NotificationTemplateRequest;
 import dev.jazzybyte.onseoul.notification.domain.ServiceChange;
 import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
-import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
+import dev.jazzybyte.onseoul.notification.port.out.SaveBatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.TemplateGenerationPort;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -19,49 +19,54 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * ADR-0004 기반 알림 배치 스케줄러.
+ * ADR-0004 per-batch 알림 스케줄러.
  *
- * <p>5분 fixedDelay로 실행되며, 가상 스레드 풀 + Semaphore(4)로 동시 처리를 제한한다.
- * 트랜잭션 경계는 {@link NotificationTxHelper}에 위임한다.
+ * <p>흐름:
+ * <ol>
+ *   <li>NotificationBatch INSERT (status=RUNNING)</li>
+ *   <li>구독별 처리 (가상 스레드 풀 + Semaphore(4))
+ *     <ul>
+ *       <li>TX A — 변경 조회 + dispatch saveIfAbsent</li>
+ *       <li>TX 밖 — 템플릿 생성 + 푸시 발송</li>
+ *       <li>TX B — 결과 갱신 (성공 시 last_notified_at = batch.startedAt 전진)</li>
+ *     </ul>
+ *   </li>
+ *   <li>모든 구독 완료 대기 → NotificationBatch UPDATE (status, finished_at, sent_count, failed_count)</li>
+ * </ol>
  */
 @Slf4j
 @Component
 public class NotificationScheduler {
 
-    static final int MAX_ATTEMPTS = 5;
     private static final int CONCURRENCY = 4;
 
     private final LoadSubscriptionPort loadSubscriptionPort;
-    private final LoadDispatchPort loadDispatchPort;
     private final LoadUserContactPort loadUserContactPort;
     private final TemplateGenerationPort templateGenerationPort;
     private final PushNotificationPort pushNotificationPort;
+    private final SaveBatchPort saveBatchPort;
     private final NotificationTxHelper txHelper;
     private final MeterRegistry meterRegistry;
 
-    private final ExecutorService executor =
-            Executors.newVirtualThreadPerTaskExecutor();
-    private final Semaphore semaphore = new Semaphore(CONCURRENCY);
-
     public NotificationScheduler(
             final LoadSubscriptionPort loadSubscriptionPort,
-            final LoadDispatchPort loadDispatchPort,
             final LoadUserContactPort loadUserContactPort,
             final TemplateGenerationPort templateGenerationPort,
             final PushNotificationPort pushNotificationPort,
+            final SaveBatchPort saveBatchPort,
             final NotificationTxHelper txHelper,
             final MeterRegistry meterRegistry) {
         this.loadSubscriptionPort = loadSubscriptionPort;
-        this.loadDispatchPort = loadDispatchPort;
         this.loadUserContactPort = loadUserContactPort;
         this.templateGenerationPort = templateGenerationPort;
         this.pushNotificationPort = pushNotificationPort;
+        this.saveBatchPort = saveBatchPort;
         this.txHelper = txHelper;
         this.meterRegistry = meterRegistry;
     }
@@ -69,14 +74,54 @@ public class NotificationScheduler {
     @Scheduled(fixedDelayString = "${notification.scheduler.fixed-delay-ms:300000}")
     public void processAllSubscriptions() {
         log.debug("[NotificationScheduler] 스케줄 실행 시작");
-        List<NotificationSubscription> subscriptions = loadSubscriptionPort.loadAll();
 
-        for (NotificationSubscription sub : subscriptions) {
-            executor.submit(() -> processSubscription(sub));
+        // 1. 배치 INSERT (RUNNING). 이 실패는 배치 전체 중단 — Batch row 자체가 없으므로 다음 tick에서 재시작.
+        NotificationBatch batch;
+        try {
+            batch = saveBatchPort.insertRunning(NotificationBatch.start());
+        } catch (Exception e) {
+            log.error("[NotificationScheduler] Batch INSERT 실패 — 이번 tick 중단: {}", e.getMessage(), e);
+            return;
         }
+
+        List<NotificationSubscription> subscriptions;
+        try {
+            subscriptions = loadSubscriptionPort.loadAll();
+        } catch (Exception e) {
+            log.error("[NotificationScheduler] 구독 조회 실패 — 배치 FAILED 처리: batchId={}, error={}",
+                    batch.getId(), e.getMessage(), e);
+            batch.fail(0, 0);
+            safeUpdateBatch(batch);
+            return;
+        }
+
+        AtomicInteger sentCount = new AtomicInteger(0);
+        AtomicInteger failedCount = new AtomicInteger(0);
+        Semaphore semaphore = new Semaphore(CONCURRENCY);
+
+        // 가상 스레드 ExecutorService는 try-with-resources로 닫으면 모든 작업 완료를 대기한다 (JEP 453 close()).
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (NotificationSubscription sub : subscriptions) {
+                executor.submit(() -> processSubscription(batch, sub, semaphore, sentCount, failedCount));
+            }
+            // try-with-resources 종료 시 ExecutorService.close()가 awaitTermination 한다.
+        } catch (Exception e) {
+            log.error("[NotificationScheduler] 배치 실행 중 예외 — FAILED 처리: batchId={}, error={}",
+                    batch.getId(), e.getMessage(), e);
+            batch.fail(sentCount.get(), failedCount.get());
+            safeUpdateBatch(batch);
+            return;
+        }
+
+        batch.complete(sentCount.get(), failedCount.get());
+        safeUpdateBatch(batch);
+        log.info("[NotificationScheduler] 배치 완료: batchId={}, sent={}, failed={}",
+                batch.getId(), sentCount.get(), failedCount.get());
     }
 
-    private void processSubscription(NotificationSubscription sub) {
+    private void processSubscription(NotificationBatch batch, NotificationSubscription sub,
+                                     Semaphore semaphore,
+                                     AtomicInteger sentCount, AtomicInteger failedCount) {
         try {
             semaphore.acquire();
         } catch (InterruptedException e) {
@@ -84,48 +129,33 @@ public class NotificationScheduler {
             return;
         }
         try {
-            List<ServiceChange> newChanges;
+            NotificationTxHelper.TxAResult txA;
             try {
-                newChanges = txHelper.txA(sub, MAX_ATTEMPTS);
+                txA = txHelper.txA(batch.getId(), sub);
             } catch (Exception e) {
                 log.warn("[NotificationScheduler] TX A 실패: subscriptionId={}, error={}",
                         sub.getId(), e.getMessage());
+                failedCount.incrementAndGet();
                 return;
             }
 
-            if (newChanges.isEmpty()) {
+            if (txA.changes().isEmpty() || txA.dispatch().isEmpty()) {
+                // 변경 없음 또는 (batch_id, subscription_id) 중복 — 발송 skip
                 return;
             }
 
-            for (ServiceChange change : newChanges) {
-                processChange(sub, change);
-            }
+            dispatchOne(batch, sub, txA.changes(), txA.dispatch().get(), sentCount, failedCount);
         } finally {
             semaphore.release();
         }
     }
 
-    private void processChange(NotificationSubscription sub, ServiceChange change) {
-        Optional<NotificationDispatch> dispatchOpt =
-                loadDispatchPort.loadRetryable(sub.getId(), change.id(), MAX_ATTEMPTS);
-
-        if (dispatchOpt.isEmpty()) {
-            log.debug("[NotificationScheduler] retryable dispatch 없음: subscriptionId={}, changeId={}",
-                    sub.getId(), change.id());
-            return;
-        }
-
-        NotificationDispatch dispatch = dispatchOpt.get();
-
-        // TX 밖: 템플릿 생성 (fallback 포함)
+    private void dispatchOne(NotificationBatch batch, NotificationSubscription sub,
+                             List<ServiceChange> changes, NotificationDispatch dispatch,
+                             AtomicInteger sentCount, AtomicInteger failedCount) {
+        // TX 밖: 배치 템플릿 생성 (구독 1건 = AI 호출 1회)
         TemplateResult template = templateGenerationPort.generate(
-                new NotificationTemplateRequest(
-                        change.serviceId(),
-                        change.changeType(),
-                        change.fieldName(),
-                        change.oldValue(),
-                        change.newValue()
-                ));
+                new NotificationTemplateRequest(sub.getServiceId(), toChangeItems(changes)));
 
         Counter.builder("notification.template.source")
                 .tag("source", template.source().name())
@@ -150,13 +180,14 @@ public class NotificationScheduler {
                     sub.getChannels());
 
             try {
-                txHelper.txBSuccess(dispatch, sub, change,
+                txHelper.txBSuccess(dispatch, sub, batch,
                         template.title(), template.body(), template.source());
             } catch (Exception e) {
                 log.error("[NotificationScheduler] TX B(성공) 실패: dispatchId={}, error={}",
                         dispatch.getId(), e.getMessage());
             }
 
+            sentCount.incrementAndGet();
             Counter.builder("notification.dispatch.attempts")
                     .tag("result", "success")
                     .register(meterRegistry)
@@ -164,23 +195,36 @@ public class NotificationScheduler {
 
         } catch (RuntimeException pushEx) {
             try {
-                txHelper.txBFailure(dispatch, pushEx.getMessage(), MAX_ATTEMPTS);
-
-                // DEAD 전환 여부 확인 (markFailed 후 상태 반영)
-                if (dispatch.getStatus() == DispatchStatus.DEAD) {
-                    Counter.builder("notification.dispatch.dead")
-                            .register(meterRegistry)
-                            .increment();
-                }
+                txHelper.txBFailure(dispatch, pushEx.getMessage());
             } catch (Exception e) {
                 log.error("[NotificationScheduler] TX B(실패) 실패: dispatchId={}, error={}",
                         dispatch.getId(), e.getMessage());
             }
 
+            failedCount.incrementAndGet();
             Counter.builder("notification.dispatch.attempts")
                     .tag("result", "failed")
                     .register(meterRegistry)
                     .increment();
+            Counter.builder("notification.dispatch.failed.total")
+                    .register(meterRegistry)
+                    .increment();
+        }
+    }
+
+    private List<NotificationTemplateRequest.ChangeItem> toChangeItems(List<ServiceChange> changes) {
+        return changes.stream()
+                .map(c -> new NotificationTemplateRequest.ChangeItem(
+                        c.changeType(), c.fieldName(), c.oldValue(), c.newValue()))
+                .toList();
+    }
+
+    private void safeUpdateBatch(NotificationBatch batch) {
+        try {
+            saveBatchPort.update(batch);
+        } catch (Exception e) {
+            log.error("[NotificationScheduler] Batch UPDATE 실패: batchId={}, error={}",
+                    batch.getId(), e.getMessage(), e);
         }
     }
 }

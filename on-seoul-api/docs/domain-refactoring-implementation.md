@@ -98,6 +98,55 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 
 ---
 
+## Phase 6-1. notification BC — 필터 기반 배치 발송 리팩터링
+
+> Phase 6에서 구현한 **per-change Dispatch 모델**을 **`notification_batch` 기반 배치 모델**로 전환한다.
+> 멱등성 1차 키는 `UNIQUE(batch_id, subscription_id)`, 2차 방어선은 `last_notified_at` 미갱신 정책.
+> `collection_history`와 동일한 배치 추적 패턴을 알림 도메인에도 적용한다.
+> 상세 결정은 `adr/0004-notification-orchestration.md` 참조.
+
+**DB 스키마**
+
+- [x] `notification_batch` 테이블 신규 생성
+  ```sql
+  CREATE TABLE notification_batch (
+      id            BIGSERIAL PRIMARY KEY,
+      started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      finished_at   TIMESTAMPTZ,
+      status        VARCHAR(20) NOT NULL DEFAULT 'RUNNING',  -- RUNNING / SUCCESS / FAILED
+      sent_count    INT,
+      failed_count  INT
+  );
+  ```
+- [x] `notification_dispatch` 테이블 변경 — `change_log_id` 제거, `batch_id BIGINT NOT NULL REFERENCES notification_batch(id)` 추가, `attempt_count`/DEAD 관련 컬럼 정리, UNIQUE `(batch_id, subscription_id)` 재생성
+
+**도메인 / 포트**
+
+- [x] `NotificationBatch` 도메인 객체 — `id`, `startedAt`, `finishedAt`, `status`, `sentCount`, `failedCount`
+- [x] `SaveBatchPort` / `LoadBatchPort` 인터페이스 추가
+- [x] `SubscriptionFilter` 도메인 객체 — `filter` JSONB 역직렬화 → SQL WHERE 조건 생성 (카테고리·지역·상태)
+- [x] `LoadServiceChangePort` 인터페이스 변경 — `loadSince(serviceId, Instant)` → `loadFiltered(SubscriptionFilter, Instant lastNotifiedAt)` (`service_change_log JOIN public_service_reservations`)
+- [x] `NotificationTemplateRequest` 변경 — 단건 → `List<ChangeItem>` 배치 요청 (AI 서비스 `POST /notification/template` 스펙 반영)
+- [x] `NotificationDispatch` 도메인 객체 변경 — `changeLogId` 필드 제거, `batchId` 추가
+
+**어댑터 / 애플리케이션**
+
+- [x] `NotificationBatchPersistenceAdapter` — `SaveBatchPort` / `LoadBatchPort` 구현 (JdbcTemplate)
+- [x] `NotificationDispatchPersistenceAdapter` 변경 — `UNIQUE(batch_id, subscription_id)` 기반 `saveIfAbsent()`
+- [x] `NotificationTxHelper` TX A — `batch_id` 파라미터 추가, `loadFiltered()` 호출, Dispatch INSERT ON CONFLICT DO NOTHING
+- [x] `NotificationTxHelper` TX B — 발송 성공 시 `last_notified_at = batch.startedAt` 전진; 실패 시 `status=FAILED` + `last_error` 기록 (`last_notified_at` 미갱신)
+- [x] `NotificationScheduler` 변경
+  - 배치 시작 시 `notification_batch` INSERT (status=RUNNING)
+  - per-change 루프 제거 → 구독별 배치 1회 처리
+  - 배치 완료 시 `notification_batch` UPDATE (status, finished_at, sent_count, failed_count)
+
+**테스트**
+
+- [x] `NotificationTxHelperTest` — batch_id 파라미터, `batch.startedAt` 커서 전진 시나리오 반영
+- [x] `NotificationSchedulerTest` — Batch INSERT/UPDATE 검증, sent_count/failed_count 집계 시나리오 추가
+
+---
+
 ## Phase 7. Embeddings 갱신 워커
 
 > ChangeLog 커밋 후 AI 서비스에 임베딩 갱신을 위임한다. 임베딩 생성과 pgvector 적재는 AI 서비스(`on-seoul-agent`) 책임 — API 서비스는 REST API 호출만 한다.

@@ -1,6 +1,7 @@
 package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 
 import dev.jazzybyte.onseoul.notification.domain.ServiceChange;
+import dev.jazzybyte.onseoul.notification.domain.SubscriptionFilter;
 import dev.jazzybyte.onseoul.notification.port.out.LoadServiceChangePort;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -11,24 +12,36 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.time.ZoneId;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
- * service_change_log 테이블을 JdbcTemplate으로 직접 조회한다.
- * collection BC의 JPA 엔티티를 import하지 않는다.
+ * service_change_log JOIN public_service_reservations 결과를 SubscriptionFilter 조건으로 필터링한다.
+ *
+ * <p>도메인은 SQL을 알지 못한다 — 이 어댑터가 SubscriptionFilter의 필드를 읽어 WHERE 절을 동적 구성한다.
+ * 도메인은 카테고리/지역/상태 같은 구조화된 필드만 노출.
  */
 @Component
 class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
 
-    private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
-
-    private static final String LOAD_SINCE_SQL = """
-            SELECT id, service_id, change_type, field_name, old_value, new_value, changed_at
-            FROM service_change_log
-            WHERE service_id = :serviceId
-              AND (:since IS NULL OR changed_at > :since)
-            ORDER BY changed_at ASC
+    /**
+     * service_change_log L JOIN public_service_reservations P ON L.service_id = P.service_id.
+     *
+     * 동적 WHERE:
+     *   - L.service_id = :serviceId
+     *   - :since IS NULL OR L.changed_at > :since
+     *   - filter.statuses     비었으면 무시, 아니면 P.service_status   IN (:statuses)
+     *   - filter.areaNames    비었으면 무시, 아니면 P.area_name        IN (:areaNames)
+     *   - filter.maxClassNames 비었으면 무시, 아니면 P.max_class_name IN (:maxClassNames)
+     *   - P.deleted_at IS NULL  (소프트 삭제 제외)
+     */
+    private static final String BASE_SQL = """
+            SELECT L.id, L.service_id, L.change_type, L.field_name, L.old_value, L.new_value, L.changed_at
+            FROM service_change_log L
+            JOIN public_service_reservations P ON P.service_id = L.service_id
+            WHERE L.service_id = :serviceId
+              AND P.deleted_at IS NULL
+              AND (:since IS NULL OR L.changed_at > :since)
             """;
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -38,23 +51,40 @@ class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
     }
 
     @Override
-    public List<ServiceChange> loadSince(String serviceId, Instant since) {
-        Timestamp sinceTs = since == null ? null
-                : Timestamp.from(since);
+    public List<ServiceChange> loadFiltered(String serviceId, SubscriptionFilter filter,
+                                            Instant lastNotifiedAt) {
+        SubscriptionFilter f = filter == null ? SubscriptionFilter.empty() : filter;
+        Timestamp sinceTs = lastNotifiedAt == null ? null : Timestamp.from(lastNotifiedAt);
 
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("serviceId", serviceId)
                 .addValue("since", sinceTs);
 
-        return jdbc.query(LOAD_SINCE_SQL, params, new ServiceChangeRowMapper());
+        StringBuilder sql = new StringBuilder(BASE_SQL);
+
+        if (!f.statuses().isEmpty()) {
+            sql.append(" AND P.service_status IN (:statuses)");
+            params.addValue("statuses", f.statuses());
+        }
+        if (!f.areaNames().isEmpty()) {
+            sql.append(" AND P.area_name IN (:areaNames)");
+            params.addValue("areaNames", f.areaNames());
+        }
+        if (!f.maxClassNames().isEmpty()) {
+            sql.append(" AND P.max_class_name IN (:maxClassNames)");
+            params.addValue("maxClassNames", f.maxClassNames());
+        }
+
+        sql.append(" ORDER BY L.changed_at ASC");
+
+        return jdbc.query(sql.toString(), params, new ServiceChangeRowMapper());
     }
 
     private static final class ServiceChangeRowMapper implements RowMapper<ServiceChange> {
         @Override
         public ServiceChange mapRow(ResultSet rs, int rowNum) throws SQLException {
-            Timestamp changedAtTs = rs.getTimestamp("changed_at");
-            Instant changedAt = changedAtTs == null ? null
-                    : changedAtTs.toLocalDateTime().atZone(SEOUL).toInstant();
+            OffsetDateTime odt = rs.getObject("changed_at", OffsetDateTime.class);
+            Instant changedAt = (odt != null) ? odt.toInstant() : Instant.now();
 
             return new ServiceChange(
                     rs.getLong("id"),

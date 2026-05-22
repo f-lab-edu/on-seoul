@@ -20,18 +20,15 @@ public class NotificationDispatchJpaEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "batch_id", nullable = false)
+    private Long batchId;
+
     @Column(name = "subscription_id", nullable = false)
     private Long subscriptionId;
-
-    @Column(name = "change_log_id", nullable = false)
-    private Long changeLogId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 10)
     private DispatchStatus status;
-
-    @Column(name = "attempt_count", nullable = false, columnDefinition = "SMALLINT")
-    private short attemptCount;
 
     @Column(name = "sent_at")
     private Instant sentAt;
@@ -56,11 +53,10 @@ public class NotificationDispatchJpaEntity {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    NotificationDispatchJpaEntity(Long subscriptionId, Long changeLogId) {
+    NotificationDispatchJpaEntity(Long batchId, Long subscriptionId) {
+        this.batchId = batchId;
         this.subscriptionId = subscriptionId;
-        this.changeLogId = changeLogId;
         this.status = DispatchStatus.PENDING;
-        this.attemptCount = 0;
         this.updatedAt = Instant.now();
     }
 
@@ -69,11 +65,10 @@ public class NotificationDispatchJpaEntity {
         this.updatedAt = Instant.now();
     }
 
-    void applyDomain(DispatchStatus status, short attemptCount,
+    void applyDomain(DispatchStatus status,
                      Instant sentAt, String generatedTitle, String generatedBody,
                      TemplateSource templateSource, String lastError) {
         this.status = status;
-        this.attemptCount = attemptCount;
         this.sentAt = sentAt;
         this.generatedTitle = generatedTitle;
         this.generatedBody = generatedBody;
