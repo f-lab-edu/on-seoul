@@ -244,4 +244,169 @@ class NotificationSchedulerTest {
         assertThat(req.oldValue()).isEqualTo("OPEN");
         assertThat(req.newValue()).isEqualTo("CLOSED");
     }
+
+    @Test
+    @DisplayName("연락처 미등록 시 userId만으로 UserContact가 생성되어 push 발송 시도된다")
+    void processChange_noContact_fallbackUserContactWithUserId() throws InterruptedException {
+        NotificationSubscription sub = stubSubscription(1L, "OA-2269");
+        ServiceChange change = stubChange(100L, "OA-2269");
+        NotificationDispatch dispatch = stubDispatch(10L, 1L, 100L);
+        TemplateResult template = new TemplateResult("제목", "본문", TemplateSource.AI);
+
+        when(loadSubscriptionPort.loadAll()).thenReturn(List.of(sub));
+        when(txHelper.txA(any(), anyInt())).thenReturn(List.of(change));
+        when(loadDispatchPort.loadRetryable(anyLong(), anyLong(), anyInt()))
+                .thenReturn(Optional.of(dispatch));
+        when(templateGenerationPort.generate(any())).thenReturn(template);
+        // 연락처 미등록
+        when(loadUserContactPort.loadContact(anyLong())).thenReturn(Optional.empty());
+
+        scheduler.processAllSubscriptions();
+        Thread.sleep(300);
+
+        ArgumentCaptor<dev.jazzybyte.onseoul.notification.domain.UserContact> contactCaptor =
+                ArgumentCaptor.forClass(dev.jazzybyte.onseoul.notification.domain.UserContact.class);
+        verify(pushNotificationPort).send(contactCaptor.capture(), anyString(), anyString(), any(), any());
+        dev.jazzybyte.onseoul.notification.domain.UserContact used = contactCaptor.getValue();
+        assertThat(used.userId()).isEqualTo(1L);
+        assertThat(used.email()).isNull();
+        assertThat(used.phoneNumber()).isNull();
+    }
+
+    @Test
+    @DisplayName("연락처 미등록 + 전체 채널 실패 시 txBFailure가 호출된다")
+    void processChange_noContact_allChannelsFail_callsTxBFailure() throws InterruptedException {
+        NotificationSubscription sub = stubSubscription(1L, "OA-2269");
+        ServiceChange change = stubChange(100L, "OA-2269");
+        NotificationDispatch dispatch = stubDispatch(10L, 1L, 100L);
+        TemplateResult template = new TemplateResult("제목", "본문", TemplateSource.FALLBACK);
+
+        when(loadSubscriptionPort.loadAll()).thenReturn(List.of(sub));
+        when(txHelper.txA(any(), anyInt())).thenReturn(List.of(change));
+        when(loadDispatchPort.loadRetryable(anyLong(), anyLong(), anyInt()))
+                .thenReturn(Optional.of(dispatch));
+        when(templateGenerationPort.generate(any())).thenReturn(template);
+        when(loadUserContactPort.loadContact(anyLong())).thenReturn(Optional.empty());
+        doThrow(new RuntimeException("모든 채널 발송 실패"))
+                .when(pushNotificationPort).send(any(), anyString(), anyString(), any(), any());
+
+        scheduler.processAllSubscriptions();
+        Thread.sleep(300);
+
+        verify(txHelper).txBFailure(eq(dispatch), anyString(), eq(NotificationScheduler.MAX_ATTEMPTS));
+    }
+
+    @Test
+    @DisplayName("template source=AI 이면 notification.template.source{source=AI} 카운터가 증가한다")
+    void processChange_aiTemplate_incrementsAiSourceCounter() throws InterruptedException {
+        NotificationSubscription sub = stubSubscription(1L, "OA-2269");
+        ServiceChange change = stubChange(100L, "OA-2269");
+        NotificationDispatch dispatch = stubDispatch(10L, 1L, 100L);
+        TemplateResult template = new TemplateResult("제목", "본문", TemplateSource.AI);
+
+        when(loadSubscriptionPort.loadAll()).thenReturn(List.of(sub));
+        when(txHelper.txA(any(), anyInt())).thenReturn(List.of(change));
+        when(loadDispatchPort.loadRetryable(anyLong(), anyLong(), anyInt()))
+                .thenReturn(Optional.of(dispatch));
+        when(templateGenerationPort.generate(any())).thenReturn(template);
+
+        scheduler.processAllSubscriptions();
+        Thread.sleep(300);
+
+        double count = meterRegistry.counter("notification.template.source", "source", "AI").count();
+        assertThat(count).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("template source=FALLBACK 이면 notification.template.source{source=FALLBACK} 카운터가 증가한다")
+    void processChange_fallbackTemplate_incrementsFallbackSourceCounter() throws InterruptedException {
+        NotificationSubscription sub = stubSubscription(1L, "OA-2269");
+        ServiceChange change = stubChange(100L, "OA-2269");
+        NotificationDispatch dispatch = stubDispatch(10L, 1L, 100L);
+        TemplateResult template = new TemplateResult("제목", "본문", TemplateSource.FALLBACK);
+
+        when(loadSubscriptionPort.loadAll()).thenReturn(List.of(sub));
+        when(txHelper.txA(any(), anyInt())).thenReturn(List.of(change));
+        when(loadDispatchPort.loadRetryable(anyLong(), anyLong(), anyInt()))
+                .thenReturn(Optional.of(dispatch));
+        when(templateGenerationPort.generate(any())).thenReturn(template);
+
+        scheduler.processAllSubscriptions();
+        Thread.sleep(300);
+
+        double count = meterRegistry.counter("notification.template.source", "source", "FALLBACK").count();
+        assertThat(count).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("push 실패 후 dispatch 상태가 DEAD이면 notification.dispatch.dead 카운터가 증가한다")
+    void processChange_dispatchBecomesDeadAfterPushFail_incrementsDeadCounter()
+            throws InterruptedException {
+        NotificationSubscription sub = stubSubscription(1L, "OA-2269");
+        ServiceChange change = stubChange(100L, "OA-2269");
+        // attemptCount 4 → 이번 실패로 DEAD 전환
+        NotificationDispatch dispatch = NotificationDispatch.create(1L, 100L);
+        for (int i = 0; i < 4; i++) {
+            dispatch.markFailed("이전 오류", 5);
+        }
+        TemplateResult template = new TemplateResult("제목", "본문", TemplateSource.FALLBACK);
+
+        when(loadSubscriptionPort.loadAll()).thenReturn(List.of(sub));
+        when(txHelper.txA(any(), anyInt())).thenReturn(List.of(change));
+        when(loadDispatchPort.loadRetryable(anyLong(), anyLong(), anyInt()))
+                .thenReturn(Optional.of(dispatch));
+        when(templateGenerationPort.generate(any())).thenReturn(template);
+        doThrow(new RuntimeException("Knock 오류")).when(pushNotificationPort)
+                .send(any(), anyString(), anyString(), any(), any());
+        // txBFailure는 실제 markFailed를 호출해야 DEAD 상태가 반영되므로 실제 동작을 모사한다
+        doAnswer(invocation -> {
+            NotificationDispatch d = invocation.getArgument(0);
+            String errorMessage = invocation.getArgument(1);
+            int maxAttempts = invocation.getArgument(2);
+            d.markFailed(errorMessage, maxAttempts);
+            return null;
+        }).when(txHelper).txBFailure(any(), anyString(), anyInt());
+
+        scheduler.processAllSubscriptions();
+        Thread.sleep(300);
+
+        double deadCount = meterRegistry.counter("notification.dispatch.dead").count();
+        assertThat(deadCount).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("push 실패 후 dispatch가 DEAD가 아니면 notification.dispatch.dead 카운터는 증가하지 않는다")
+    void processChange_dispatchFailedNotDead_doesNotIncrementDeadCounter()
+            throws InterruptedException {
+        NotificationSubscription sub = stubSubscription(1L, "OA-2269");
+        ServiceChange change = stubChange(100L, "OA-2269");
+        // 최초 PENDING — 이번 실패로 FAILED(DEAD 아님)
+        NotificationDispatch dispatch = NotificationDispatch.create(1L, 100L);
+        TemplateResult template = new TemplateResult("제목", "본문", TemplateSource.FALLBACK);
+
+        when(loadSubscriptionPort.loadAll()).thenReturn(List.of(sub));
+        when(txHelper.txA(any(), anyInt())).thenReturn(List.of(change));
+        when(loadDispatchPort.loadRetryable(anyLong(), anyLong(), anyInt()))
+                .thenReturn(Optional.of(dispatch));
+        when(templateGenerationPort.generate(any())).thenReturn(template);
+        doThrow(new RuntimeException("Knock 오류")).when(pushNotificationPort)
+                .send(any(), anyString(), anyString(), any(), any());
+        doAnswer(invocation -> {
+            NotificationDispatch d = invocation.getArgument(0);
+            String errorMessage = invocation.getArgument(1);
+            int maxAttempts = invocation.getArgument(2);
+            d.markFailed(errorMessage, maxAttempts);
+            return null;
+        }).when(txHelper).txBFailure(any(), anyString(), anyInt());
+
+        scheduler.processAllSubscriptions();
+        Thread.sleep(300);
+
+        // FAILED 상태이므로 dead 카운터는 0
+        double deadCount = meterRegistry.counter("notification.dispatch.dead").count();
+        assertThat(deadCount).isEqualTo(0.0);
+        // failed 카운터는 증가
+        double failedCount = meterRegistry.counter("notification.dispatch.attempts", "result", "failed").count();
+        assertThat(failedCount).isEqualTo(1.0);
+    }
 }

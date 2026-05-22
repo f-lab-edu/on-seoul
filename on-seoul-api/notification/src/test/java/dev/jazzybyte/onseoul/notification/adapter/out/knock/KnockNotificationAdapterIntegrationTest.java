@@ -3,6 +3,7 @@ package dev.jazzybyte.onseoul.notification.adapter.out.knock;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.reactive.function.client.ClientRequest;
@@ -94,14 +95,18 @@ class KnockNotificationAdapterIntegrationTest {
         adapter.send(
                 recipient,
                 "[on-seoul] 서비스 변경 알림 (이메일 연동 테스트)",
-                "OA-2266 체육시설 예약 서비스의 상태가 변경되었습니다.",
+                "안녕하세요. ON-Seoul 입니다.\nOA-2266 체육시설 예약 서비스의 상태가 변경되었습니다.",
                 99901L,
                 Set.of(NotificationChannel.EMAIL)
         );
     }
 
+    /**
+     * SMS는 Twilio 업그레이드가 필요하여 실제 발송 테스트는 보류한다. 아래 코드는 Twilio 업그레이드 후 활성화할 예정.
+     */
     @Test
     @DisplayName("[실연동] SMS 채널 — Knock SMS 워크플로우 트리거")
+    @Disabled
     void realKnock_smsChannel_triggersSuccessfully() {
         String phone = System.getenv(ENV_TEST_PHONE);
         assumeTrue(phone != null && !phone.isBlank(),
