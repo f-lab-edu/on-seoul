@@ -58,6 +58,9 @@ spring:
 
 app:
   frontend-base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
+  encryption:
+    aes-key: ${APP_AES_KEY}
+    blind-idx-key: ${APP_BLIND_IDX_KEY}
   # HTTPS 환경에서는 true(기본값). 로컬 HTTP 개발 시 COOKIE_SECURE=false 로 재정의.
   cookie-secure: ${COOKIE_SECURE:true}
   cookie-same-site: ${COOKIE_SAME_SITE:Strict} # Strict, Lax, None 중 선택. 로컬 개발 시 None으로 재정의 권장.

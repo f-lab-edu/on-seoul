@@ -25,14 +25,24 @@ class UserJpaEntity {
     @Column(name = "provider_id", nullable = false, length = 100)
     private String providerId;
 
-    @Column(name = "email", length = 255)
-    private String email;
+    /** AES-256-GCM 암호문. 형식: {@code v1:<base64(nonce+cipher+tag)>} */
+    @Column(name = "email_enc", columnDefinition = "TEXT")
+    private String emailEnc;
+
+    /** HMAC-SHA256 Blind Index (hex 64자). WHERE 절 이메일 조회용. */
+    @Column(name = "email_hash", length = 64)
+    private String emailHash;
 
     @Column(name = "nickname", length = 100)
     private String nickname;
 
-    @Column(name = "phone_number", length = 20)
-    private String phoneNumber;
+    /** AES-256-GCM 암호문. 형식: {@code v1:<base64(nonce+cipher+tag)>} */
+    @Column(name = "phone_enc", columnDefinition = "TEXT")
+    private String phoneEnc;
+
+    /** HMAC-SHA256 Blind Index (hex 64자). WHERE 절 전화번호 조회용. */
+    @Column(name = "phone_hash", length = 64)
+    private String phoneHash;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
@@ -46,26 +56,30 @@ class UserJpaEntity {
     @Column(name = "updated_at", nullable = false, columnDefinition = "TIMESTAMPTZ DEFAULT NOW()")
     private OffsetDateTime updatedAt;
 
-    UserJpaEntity(String provider, String providerId, String email, String nickname, UserStatus status) {
+    UserJpaEntity(String provider, String providerId,
+                  String emailEnc, String emailHash,
+                  String nickname, UserStatus status) {
         this.provider = provider;
         this.providerId = providerId;
-        this.email = email;
+        this.emailEnc = emailEnc;
+        this.emailHash = emailHash;
         this.nickname = nickname;
         this.status = status;
         this.createdAt = OffsetDateTime.now();
     }
 
-    void updateProfile(String email, String nickname) {
-        this.email = email;
+    void updateProfile(String emailEnc, String emailHash, String nickname) {
+        this.emailEnc = emailEnc;
+        this.emailHash = emailHash;
         this.nickname = nickname;
     }
 
-    void updatePhoneNumber(String phoneNumber) {
-        this.phoneNumber = phoneNumber;
+    void updatePhone(String phoneEnc, String phoneHash) {
+        this.phoneEnc = phoneEnc;
+        this.phoneHash = phoneHash;
     }
 
     void updateStatus(UserStatus status) {
         this.status = status;
     }
-
 }

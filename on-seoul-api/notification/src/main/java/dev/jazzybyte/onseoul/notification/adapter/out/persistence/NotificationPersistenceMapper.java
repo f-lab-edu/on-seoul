@@ -80,7 +80,9 @@ class NotificationPersistenceMapper implements SubscriptionFilterParserPort {
                     readStringSet(root, "areaNames"),
                     readStringSet(root, "maxClassNames"));
         } catch (JsonProcessingException ex) {
-            log.warn("[NotificationPersistenceMapper] filter JSON 파싱 실패 — empty filter로 폴백 (잘못된 filter 값은 ALL 변경에 알림 발송됨): json={}", filterJson, ex);
+            log.warn("[NotificationPersistenceMapper] filter JSON 파싱 실패 — empty filter로 폴백 "
+                            + "(잘못된 filter 값은 ALL 변경에 알림 발송됨): jsonLength={}",
+                    filterJson.length(), ex);
             return SubscriptionFilter.empty();
         }
     }
