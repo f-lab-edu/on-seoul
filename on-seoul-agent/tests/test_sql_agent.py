@@ -206,6 +206,29 @@ class TestSqlAgent:
         assert result["sql_results"] == []
 
 
+class TestSqlAgentCoT:
+    async def test_reasoning_field_not_passed_to_sql_search(self):
+        """reasoning 필드는 CoT 내부용이며 sql_search bind 파라미터에 전달되지 않는다."""
+        agent, session = _make_agent(
+            _SqlParams(reasoning="오늘이 2026-05-22이므로 이번 주는 05-18~05-24.", area_name="마포구"),
+            [],
+        )
+        await agent.search(_make_state(), session)
+
+        bind = session.execute.call_args[0][1]
+        assert "reasoning" not in bind
+
+    async def test_reasoning_preserved_in_params(self):
+        """reasoning이 있는 _SqlParams는 reasoning 값이 유지된다."""
+        p = _SqlParams(reasoning="5월 계산: 2026-05-01 ~ 2026-05-31.")
+        assert p.reasoning == "5월 계산: 2026-05-01 ~ 2026-05-31."
+
+    async def test_reasoning_defaults_to_none(self):
+        """reasoning 없이 생성하면 None이다."""
+        p = _SqlParams(max_class_name="체육시설")
+        assert p.reasoning is None
+
+
 class TestSqlParamsValidators:
     def test_invalid_max_class_name_coerced_to_none(self):
         """화이트리스트에 없는 max_class_name은 None으로 정규화된다."""

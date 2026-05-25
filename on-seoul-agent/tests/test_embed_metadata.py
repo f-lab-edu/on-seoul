@@ -176,3 +176,80 @@ class TestFetchExistingServiceIds:
         result = await _fetch_existing_service_ids(mock_session)
 
         assert result == set()
+
+    async def test_track_b_filters_by_summary_row_kind(self):
+        """tracks={"B"} 이면 row_kind='summary' 조건이 SQL + bind에 포함된다."""
+        executed: list[tuple] = []  # (sql_str, params)
+
+        async def _capture(stmt, params=None):
+            executed.append((str(stmt), params or {}))
+            m = MagicMock()
+            m.fetchall.return_value = []
+            return m
+
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock(side_effect=_capture)
+
+        from scripts.embed_metadata import _fetch_existing_service_ids
+        await _fetch_existing_service_ids(mock_session, tracks={"B"})
+
+        assert executed, "execute가 호출되어야 한다"
+        sql_str, bind = executed[0]
+        assert "row_kind" in sql_str
+        assert "summary" in bind.values()
+
+    async def test_track_a_filters_by_identity_row_kind(self):
+        """tracks={"A"} 이면 row_kind='identity' 조건이 SQL + bind에 포함된다."""
+        executed: list[tuple] = []
+
+        async def _capture(stmt, params=None):
+            executed.append((str(stmt), params or {}))
+            m = MagicMock()
+            m.fetchall.return_value = []
+            return m
+
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock(side_effect=_capture)
+
+        from scripts.embed_metadata import _fetch_existing_service_ids
+        await _fetch_existing_service_ids(mock_session, tracks={"A"})
+
+        sql_str, bind = executed[0]
+        assert "row_kind" in sql_str
+        assert "identity" in bind.values()
+
+    async def test_all_tracks_no_row_kind_filter(self):
+        """tracks가 A/B/C 전체이면 row_kind 필터 없이 전체 조회한다."""
+        executed_sqls: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.fetchall.return_value = []
+            return m
+
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock(side_effect=_capture)
+
+        from scripts.embed_metadata import _fetch_existing_service_ids
+        await _fetch_existing_service_ids(mock_session, tracks={"A", "B", "C"})
+
+        assert "row_kind" not in executed_sqls[0]
+
+    async def test_tracks_none_no_row_kind_filter(self):
+        """tracks=None 이면 row_kind 필터 없이 전체 조회한다."""
+        executed_sqls: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.fetchall.return_value = []
+            return m
+
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock(side_effect=_capture)
+
+        from scripts.embed_metadata import _fetch_existing_service_ids
+        await _fetch_existing_service_ids(mock_session, tracks=None)
+
+        assert "row_kind" not in executed_sqls[0]

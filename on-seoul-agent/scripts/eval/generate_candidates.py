@@ -49,6 +49,7 @@ from langchain_core.embeddings import Embeddings
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from agents.router_agent import RouterAgent, _IntentOutput
+from agents.sql_agent import SqlAgent
 from core.config import settings
 from core.rrf import reciprocal_rank_fusion
 from llm.client import get_embeddings
@@ -85,6 +86,13 @@ class QueryResult:
     intent: str
     sub_intent: str
     refined_query: str
+    # 라우터가 추출한 필터 메타데이터 — 디버깅·후처리 분석용
+    reasoning: str = ""
+    extracted_max_class_name: str = ""
+    extracted_area_name: str = ""
+    extracted_service_status: str = ""
+    # SqlAgent가 추출한 keyword (SQL_SEARCH 전용)
+    sql_keyword: str = ""
     candidates: list[Candidate] = field(default_factory=list)
 
 
@@ -117,6 +125,7 @@ async def _run_vector(
             top_k=_EVAL_TOP_K, min_similarity=0.5, **filters
         )
     except Exception as e:
+        await ai_session.rollback()
         logger.warning("track_a 실패: %s", e)
         a_rows = []
 
@@ -127,6 +136,7 @@ async def _run_vector(
             top_k=_EVAL_TOP_K, min_similarity=0.5,
         )
     except Exception as e:
+        await ai_session.rollback()
         logger.warning("track_b 실패: %s", e)
         b_rows = []
 
@@ -136,14 +146,16 @@ async def _run_vector(
             ai_session, vec, top_k=_EVAL_TOP_K, min_similarity=0.5,
         )
     except Exception as e:
+        await ai_session.rollback()
         logger.warning("track_c 실패: %s", e)
         c_rows = []
 
-    # BM25
+    # BM25 — bm25_search 파라미터는 limit (top_k 아님)
     tokens = tokenize_query(refined)
     try:
-        d_rows = await bm25_search(ai_session, tokens, top_k=_EVAL_TOP_K) if tokens else []
+        d_rows = await bm25_search(ai_session, tokens, limit=_EVAL_TOP_K) if tokens else []
     except Exception as e:
+        await ai_session.rollback()
         logger.warning("bm25 실패: %s", e)
         d_rows = []
 
@@ -186,21 +198,39 @@ async def _run_vector(
 
 
 async def _run_sql(
+    query: str,
     intent_output: _IntentOutput,
     *,
     data_session: AsyncSession,
-) -> list[Candidate]:
-    """SQL 검색."""
-    from tools.sql_search import sql_search
-    rows = await sql_search(
-        data_session,
-        max_class_name=intent_output.max_class_name,
-        area_name=intent_output.area_name,
-        service_status=intent_output.service_status,
-        keyword=intent_output.refined_query,
-        top_k=_EVAL_TOP_K,
+    sql_agent: SqlAgent,
+) -> tuple[list[Candidate], str]:
+    """SQL 검색 — SqlAgent로 keyword·날짜까지 LLM 추출 후 sql_search 실행.
+
+    refined_query(라우터가 벡터검색용으로 압축한 문자열)를 SqlAgent에 넘기면
+    "시설"·"마포구" 같은 비관련 단어가 ILIKE keyword로 추출되어 0건이 된다.
+    따라서 refined_query=None으로 SqlAgent가 원본 메시지에서 직접 추출하도록 한다.
+    top_k는 _EVAL_TOP_K(20)를 사용해 운영 기본값(10)보다 많은 후보를 확보한다.
+
+    Returns
+    -------
+    (candidates, sql_keyword): 후보 목록과 SqlAgent가 추출한 keyword 문자열
+    """
+    # TypedDict는 런타임에 강제되지 않으므로 필요한 키만 포함한 dict 전달.
+    # refined_query=None → SqlAgent가 원본 message 기반으로 keyword·날짜만 추출.
+    # 라우터 필터(max_class_name/area_name/service_status)는 SqlAgent가 원본에서 재추출.
+    state: dict = {
+        "message": query,
+        "refined_query": None,
+        "max_class_name": None,
+        "area_name": None,
+        "service_status": None,
+    }
+    result_state = await sql_agent.search(  # type: ignore[arg-type]
+        state, data_session, top_k=_EVAL_TOP_K
     )
-    return [
+    rows: list[dict] = result_state.get("sql_results") or []
+    sql_keyword: str = result_state.get("sql_keyword") or ""
+    candidates = [
         Candidate(
             service_id=r["service_id"],
             service_name=r.get("service_name", ""),
@@ -213,6 +243,7 @@ async def _run_sql(
         )
         for i, r in enumerate(rows)
     ]
+    return candidates, sql_keyword
 
 
 async def run_query(
@@ -222,8 +253,10 @@ async def run_query(
     ai_session: AsyncSession,
     data_session: AsyncSession,
     embedder: Embeddings,
+    sql_agent: SqlAgent,
 ) -> QueryResult:
     intent = intent_output.intent
+    sql_keyword = ""
 
     if intent == IntentType.VECTOR_SEARCH:
         candidates = await _run_vector(
@@ -231,7 +264,10 @@ async def run_query(
             ai_session=ai_session, data_session=data_session, embedder=embedder,
         )
     elif intent == IntentType.SQL_SEARCH:
-        candidates = await _run_sql(intent_output, data_session=data_session)
+        candidates, sql_keyword = await _run_sql(
+            query, intent_output,
+            data_session=data_session, sql_agent=sql_agent,
+        )
     else:
         candidates = []
 
@@ -240,6 +276,11 @@ async def run_query(
         intent=intent.value,
         sub_intent=intent_output.vector_sub_intent or "",
         refined_query=intent_output.refined_query or query,
+        reasoning=getattr(intent_output, "reasoning", "") or "",
+        extracted_max_class_name=intent_output.max_class_name or "",
+        extracted_area_name=intent_output.area_name or "",
+        extracted_service_status=intent_output.service_status or "",
+        sql_keyword=sql_keyword,
         candidates=candidates,
     )
 
@@ -288,6 +329,7 @@ async def interactive_loop(
     data_session: AsyncSession,
     embedder: Embeddings,
     router: RouterAgent | None,
+    sql_agent: SqlAgent,
     output_path: Path,
 ) -> None:
     """질의를 직접 입력하고 정답 번호를 지정한다."""
@@ -320,7 +362,8 @@ async def interactive_loop(
         print(f"  검색 중... (intent={intent_output.intent.value})", end="\r")
         result = await run_query(
             query, intent_output,
-            ai_session=ai_session, data_session=data_session, embedder=embedder,
+            ai_session=ai_session, data_session=data_session,
+            embedder=embedder, sql_agent=sql_agent,
         )
         print(f"  질의: {query}")
         print_result(result)
@@ -386,6 +429,7 @@ async def batch_run(
     data_session: AsyncSession,
     embedder: Embeddings,
     router: RouterAgent | None,
+    sql_agent: SqlAgent,
     output_path: Path,
 ) -> None:
     """queries_draft.tsv → candidates_review.tsv."""
@@ -393,29 +437,37 @@ async def batch_run(
     print(f"{len(queries)}개 질의 처리 중...")
 
     rows: list[dict] = []
+    results_for_conditions: list[QueryResult] = []
 
     for i, (query, intent_hint, sub_intent_hint, _) in enumerate(queries, 1):
         print(f"  [{i:>3}/{len(queries)}] {query[:40]}")
 
-        # 인텐트: 파일에 힌트가 있으면 우선 사용, 없으면 라우터 분류.
-        # TSV 힌트로 _IntentOutput을 수동 구성할 때 refined_query/area_name 등 필터는
-        # None으로 남는다 — SQL_SEARCH 힌트여도 keyword 없이 전체 조회가 실행된다.
-        # 필터가 필요한 질의는 --skip-router 없이 라우터 분류를 사용하거나
-        # queries_draft.tsv에 hints 대신 라우터 의존 질의로 남겨두면 된다.
-        if intent_hint and intent_hint in (t.value for t in IntentType):
+        # 인텐트 분류:
+        #   라우터가 있으면 항상 실행 — 필터(max_class_name/area_name/service_status)와
+        #   refined_query를 추출하기 위해서다. intent_hint는 라우터 결과의 intent 필드를
+        #   오버라이드하는 용도로만 사용한다 (평가셋의 ground-truth 레이블).
+        #   --skip-router인 경우에만 hint로 전체를 대체한다.
+        if router is not None:
+            intent_output = await router.classify(query)
+            # TSV hint로 intent 오버라이드 (필터/refined_query는 라우터 추출값 유지)
+            if intent_hint and intent_hint in (t.value for t in IntentType):
+                update: dict = {"intent": IntentType(intent_hint)}
+                if sub_intent_hint:
+                    update["vector_sub_intent"] = sub_intent_hint
+                intent_output = intent_output.model_copy(update=update)
+        elif intent_hint and intent_hint in (t.value for t in IntentType):
             intent_output = _IntentOutput(
                 intent=IntentType(intent_hint),
                 vector_sub_intent=sub_intent_hint or None,
             )
-        elif router is not None:
-            intent_output = await router.classify(query)
         else:
             intent_output = _IntentOutput(intent=IntentType.VECTOR_SEARCH)
 
         try:
             result = await run_query(
                 query, intent_output,
-                ai_session=ai_session, data_session=data_session, embedder=embedder,
+                ai_session=ai_session, data_session=data_session,
+                embedder=embedder, sql_agent=sql_agent,
             )
         except Exception as e:
             logger.error("질의 실패 [%s]: %s", query, e)
@@ -423,6 +475,10 @@ async def batch_run(
                 query=query, intent=intent_output.intent.value,
                 sub_intent=intent_output.vector_sub_intent or "",
                 refined_query=intent_output.refined_query or query,
+                reasoning=getattr(intent_output, "reasoning", "") or "",
+                extracted_max_class_name=intent_output.max_class_name or "",
+                extracted_area_name=intent_output.area_name or "",
+                extracted_service_status=intent_output.service_status or "",
                 candidates=[],
             )
 
@@ -432,8 +488,14 @@ async def batch_run(
             for rank, c in enumerate(result.candidates, 1):
                 rows.append(_candidate_row(result, c, rank=rank))
 
+        # 쿼리별 추출 조건 — candidates_review와 별개 파일로 분리 저장
+        results_for_conditions.append(result)
+
     _write_candidates(rows, output_path)
+    conditions_path = output_path.parent / "query_conditions.tsv"
+    _write_query_conditions(results_for_conditions, conditions_path)
     print(f"\n완료: {len(rows)}행 → {output_path}")
+    print(f"      {len(results_for_conditions)}건 → {conditions_path} (쿼리별 추출 조건)")
     print("is_correct 컬럼(y/공백)을 채운 뒤 finalize_eval_set.py 를 실행하세요.")
 
 
@@ -466,6 +528,37 @@ def _write_candidates(rows: list[dict], path: Path) -> None:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_query_conditions(results: list[QueryResult], path: Path) -> None:
+    """쿼리별 라우터 추출 조건을 별도 TSV에 저장한다.
+
+    candidates_review.tsv는 rank별 row가 반복되므로 쿼리 조건을 한 곳에서
+    확인하기 어렵다. 본 파일은 쿼리당 1행만 가지며, 라우터의 reasoning과
+    추출된 enum 값을 한눈에 비교할 수 있게 한다.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "query", "intent", "sub_intent", "refined_query", "reasoning",
+        "extracted_max_class_name", "extracted_area_name", "extracted_service_status",
+        "sql_keyword", "candidate_count",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for r in results:
+            writer.writerow({
+                "query":                    r.query,
+                "intent":                   r.intent,
+                "sub_intent":               r.sub_intent,
+                "refined_query":            r.refined_query,
+                "reasoning":                r.reasoning,
+                "extracted_max_class_name": r.extracted_max_class_name,
+                "extracted_area_name":      r.extracted_area_name,
+                "extracted_service_status": r.extracted_service_status,
+                "sql_keyword":              r.sql_keyword,
+                "candidate_count":          len(r.candidates),
+            })
 
 
 def _load_queries(path: Path) -> list[tuple[str, str, str, str]]:
@@ -504,6 +597,9 @@ async def main(args: argparse.Namespace) -> None:
             from llm.client import get_chat_model
             router = RouterAgent(model=get_chat_model())
 
+        # SqlAgent는 항상 생성 (SQL 쿼리 keyword 추출용 LLM 체인 초기화만, 비용 없음)
+        sql_agent = SqlAgent()
+
         timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
 
         _eval_dir = Path(__file__).resolve().parent  # scripts/eval/
@@ -515,6 +611,7 @@ async def main(args: argparse.Namespace) -> None:
                     data_session=data_session,
                     embedder=embedder,
                     router=router,
+                    sql_agent=sql_agent,
                     output_path=Path(output),
                 )
             else:
@@ -526,6 +623,7 @@ async def main(args: argparse.Namespace) -> None:
                     data_session=data_session,
                     embedder=embedder,
                     router=router,
+                    sql_agent=sql_agent,
                     output_path=Path(output),
                 )
     finally:

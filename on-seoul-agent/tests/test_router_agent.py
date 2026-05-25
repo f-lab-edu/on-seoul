@@ -71,7 +71,7 @@ class TestRouterAgent:
 
     async def test_few_shot_messages_injected(self):
         """classify 호출 시 few-shot 예시 메시지가 SystemMessage 다음에 주입된다."""
-        from agents.router_agent import _FEW_SHOT_EXAMPLES
+        from llm.prompts.router import ROUTER_FEW_SHOT_EXAMPLES
 
         agent = _make_agent(IntentType.SQL_SEARCH)
         await agent.classify("수영장")
@@ -81,8 +81,8 @@ class TestRouterAgent:
 
         # messages 구조: [SystemMessage, *few_shot(HumanMsg+AIMsg 쌍), HumanMessage(actual)]
         assert messages[0].type == "system"
-        # few-shot 예시 수 검증 (3쌍 = 6 메시지)
-        assert len(messages) == 1 + len(_FEW_SHOT_EXAMPLES) * 2 + 1
+        # few-shot 예시 수 검증 (N쌍 = N*2 메시지)
+        assert len(messages) == 1 + len(ROUTER_FEW_SHOT_EXAMPLES) * 2 + 1
         # 마지막 메시지가 실제 사용자 발화
         assert messages[-1].type == "human"
         assert "수영장" in messages[-1].content

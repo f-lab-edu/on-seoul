@@ -15,17 +15,17 @@ from typing import Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate, FewShotChatMessagePromptTemplate
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from core.config import settings
 from llm.client import get_chat_model
+from llm.prompts.router import ROUTER_FEW_SHOT, ROUTER_SYSTEM
 from schemas.state import IntentType
 
 # Router가 산출하는 post-filter 허용 enum.
 # 자유 텍스트가 들어오면 None으로 강제 대체하여 검색 도구 호출 안정성을 보장한다.
 _ALLOWED_MAX_CLASS_NAMES: frozenset[str] = frozenset(
-    ["체육시설", "문화행사", "시설대관", "교육", "진료"]
+    ["체육시설", "문화체험", "공간시설", "교육강좌", "진료복지"]
 )
 _ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(
     ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
@@ -42,99 +42,13 @@ SEOUL_DISTRICTS: frozenset[str] = frozenset([
     "용산구", "은평구", "종로구", "중구", "중랑구",
 ])
 
-_SYSTEM = """\
-당신은 서울시 공공서비스 예약 챗봇의 라우터입니다.
-사용자 메시지를 읽고 아래 네 가지 의도 중 하나를 반환하세요.
-
-SQL_SEARCH   - 카테고리(체육시설·문화행사·시설대관·교육·진료), 자치구, 접수 상태, 날짜 등
-               구체적 조건으로 시설/서비스를 조회하는 경우
-               예) "지금 접수 중인 수영장", "마포구 이번 주 문화행사"
-VECTOR_SEARCH - 키워드나 의미로 비슷한 시설을 찾는 경우
-               예) "아이랑 체험할 수 있는 곳", "조용한 운동 시설"
-MAP          - 지도, 위치, 반경, 근처 시설을 묻는 경우
-               예) "내 주변 500m 이내 체육관", "지도로 보여줘"
-FALLBACK     - 위 세 가지에 해당하지 않는 경우 (인사, 기능 문의 등)
-
-intent 분류 외에, 검색에 사용할 'refined_query'를 함께 산출하라.
-- SQL_SEARCH / VECTOR_SEARCH: 사용자 발화를 검색 친화적 단문으로 정제 (카테고리·지역 키워드 포함, 군더더기 제거)
-- 직전 맥락이 주어지면 카테고리/지역을 이어받아 병합한다
-- MAP / FALLBACK: refined_query는 null로 두어도 좋다
-
-SQL_SEARCH / VECTOR_SEARCH일 때 가능하면 아래 post-filter 메타데이터도 함께 산출하라.
-명시되지 않으면 반드시 null로 반환한다 (자유 텍스트·추측 금지).
-- max_class_name: 체육시설·문화행사·시설대관·교육·진료 중 하나
-- area_name: 서울 자치구 이름 (예: 강남구, 마포구)
-- service_status: 접수중·예약마감·접수종료·예약일시중지·안내중 중 하나
-직전 맥락의 카테고리·지역은 후속 발화에 이어받아 채워도 좋다.
-
-intent가 VECTOR_SEARCH인 경우 vector_sub_intent를 다음 3종 중 하나로 분류하세요.
-
-- identification: 시설명/지역/분류 식별 (예: "마포구 풋살장", "응봉공원 테니스장")
-- detail: 요금/취소/시간 등 세부정보 (예: "테니스장 평일 이용료", "취소 며칠 전까지")
-- semantic: 활동/체험/맥락 의미 (예: "아이랑 갈 만한 무료 체험", "드론 날릴 수 있는 곳")
-
-intent가 VECTOR_SEARCH가 아니면 vector_sub_intent는 null로 두세요.
-"""
-
-
-# ---------------------------------------------------------------------------
-# Few-shot 예시 — 의도 분류 정확도 향상
-#
-# 4개 예시가 커버하는 경계:
-#   1. SQL_SEARCH       — 접수상태·지역 같은 명시적 조건이 있으면 SQL (VECTOR와 경계)
-#   2. VECTOR/identification — 시설명·지역 조합으로 특정 시설을 찾을 때
-#   3. VECTOR/semantic       — 활동·경험·맥락 기반 탐색 (vector_sub_intent 가중치 최대)
-#   4. VECTOR/detail         — 요금·취소·운영시간 등 세부정보 문의 (Track B 가중치 최대)
-# ---------------------------------------------------------------------------
-_FEW_SHOT_EXAMPLES = [
-    {
-        "message": "마포구 문화행사 이번 주 접수 중인 거 보여줘",
-        "output": (
-            '{"intent": "SQL_SEARCH",'
-            ' "refined_query": "마포구 접수중 문화행사",'
-            ' "max_class_name": "문화행사", "area_name": "마포구",'
-            ' "service_status": "접수중", "vector_sub_intent": null}'
-        ),
-    },
-    {
-        "message": "응봉공원 테니스장 예약하고 싶어",
-        "output": (
-            '{"intent": "VECTOR_SEARCH",'
-            ' "refined_query": "응봉공원 테니스장",'
-            ' "max_class_name": null, "area_name": null,'
-            ' "service_status": null, "vector_sub_intent": "identification"}'
-        ),
-    },
-    {
-        "message": "주말에 아이랑 같이 즐길 수 있는 무료 체험 프로그램",
-        "output": (
-            '{"intent": "VECTOR_SEARCH",'
-            ' "refined_query": "아동 참여 무료 주말 체험 프로그램",'
-            ' "max_class_name": null, "area_name": null,'
-            ' "service_status": null, "vector_sub_intent": "semantic"}'
-        ),
-    },
-    {
-        "message": "수영장 평일 오전 이용 요금이랑 취소 규정 알려줘",
-        "output": (
-            '{"intent": "VECTOR_SEARCH",'
-            ' "refined_query": "수영장 평일 이용 요금 취소 규정",'
-            ' "max_class_name": null, "area_name": null,'
-            ' "service_status": null, "vector_sub_intent": "detail"}'
-        ),
-    },
-]
-
-_FEW_SHOT: FewShotChatMessagePromptTemplate = FewShotChatMessagePromptTemplate(
-    example_prompt=ChatPromptTemplate.from_messages([
-        ("human", "사용자 메시지: {message}"),
-        ("ai", "{output}"),
-    ]),
-    examples=_FEW_SHOT_EXAMPLES,
-)
-
-
 class _IntentOutput(BaseModel):
+    # CoT — LLM이 의도 분류·필터 매핑 근거를 먼저 정리한 뒤 나머지 필드를 채운다.
+    # 검색 쿼리에는 사용하지 않고 디버깅·관측용으로만 보관.
+    reasoning: str | None = Field(
+        default=None,
+        description="의도 분류와 필터 매핑 근거 (CoT 사고 정리, 검색 로직 미사용)",
+    )
     intent: IntentType
     refined_query: str | None = None
     # Post-filter — SQL_SEARCH / VECTOR_SEARCH 경로에서만 의미가 있다.
@@ -225,10 +139,10 @@ class RouterAgent:
                 비어 있으면 system prompt에 컨텍스트 섹션을 추가하지 않는다.
         """
         context_block = self._build_context_block(recent_queries)
-        system_text = _SYSTEM + (f"\n\n{context_block}" if context_block else "")
+        system_text = ROUTER_SYSTEM + (f"\n\n{context_block}" if context_block else "")
         messages = [
             SystemMessage(content=system_text),
-            *_FEW_SHOT.format_messages(),
+            *ROUTER_FEW_SHOT.format_messages(),
             HumanMessage(content=f"사용자 메시지: {message}"),
         ]
         structured = self._llm.with_structured_output(_IntentOutput)

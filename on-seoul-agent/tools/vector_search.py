@@ -81,12 +81,25 @@ async def vector_search(
         "top_k": top_k,
         "scan_k": scan_k,
         "row_kind": row_kind,
-        "max_class_name": max_class_name,
-        "area_name": area_name,
-        "service_status": service_status,
     }
 
-    sql = text("""
+    # post-filter: None인 경우 조건 자체를 생략한다.
+    # asyncpg 파라미터 타입 추론 문제(AmbiguousParameterError) 방지:
+    # None을 바인드 파라미터로 전달하면 PostgreSQL이 $N의 타입을 결정할 수 없다.
+    post_filters: list[str] = []
+    if max_class_name is not None:
+        post_filters.append("metadata->>'max_class_name' = :max_class_name")
+        bind["max_class_name"] = max_class_name
+    if area_name is not None:
+        post_filters.append("metadata->>'area_name' = :area_name")
+        bind["area_name"] = area_name
+    if service_status is not None:
+        post_filters.append("metadata->>'service_status' = :service_status")
+        bind["service_status"] = service_status
+
+    where_clause = ("WHERE " + " AND ".join(post_filters)) if post_filters else ""
+
+    sql = text(f"""
         SELECT service_id, embedding_text, metadata, similarity
         FROM (
             SELECT
@@ -98,9 +111,7 @@ async def vector_search(
             ORDER BY embedding <=> CAST(:query_vector AS vector)
             LIMIT :scan_k
         ) candidates
-        WHERE (:max_class_name IS NULL OR metadata->>'max_class_name' = :max_class_name)
-          AND (:area_name IS NULL OR metadata->>'area_name' = :area_name)
-          AND (:service_status IS NULL OR metadata->>'service_status' = :service_status)
+        {where_clause}
         ORDER BY similarity DESC
         LIMIT :top_k
     """)

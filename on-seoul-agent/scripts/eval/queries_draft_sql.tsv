@@ -1,0 +1,6 @@
+query	intent	sub_intent	notes
+지금 접수 중인 체육시설 알려줘	SQL_SEARCH		service_status+category
+마포구에서 예약 가능한 시설 보여줘	SQL_SEARCH		area+status
+종로구에서 진행 중인 문화체험 프로그램 알려줘	SQL_SEARCH		area+category
+강동구 무료로 이용할 수 있는 시설 있어?	SQL_SEARCH		area+payment_type(keyword fallback)
+마포구 문화행사 이번 주 접수 중인 거	SQL_SEARCH		area+category+date

@@ -156,7 +156,7 @@ async def run(
 
         if incremental and not retry_failed:
             async with OnAiSession() as ai_session:
-                existing_ids = await _fetch_existing_service_ids(ai_session)
+                existing_ids = await _fetch_existing_service_ids(ai_session, tracks=effective_tracks)
             before_count = len(rows)
             rows = [r for r in rows if r["service_id"] not in existing_ids]
             logger.info("기존 %d건 제외, %d건 신규 임베딩", before_count - len(rows), len(rows))
@@ -194,8 +194,38 @@ async def run(
         await on_ai_engine.dispose()
 
 
-async def _fetch_existing_service_ids(session: AsyncSession) -> set[str]:
-    """on_ai.service_embeddings에서 이미 적재된 service_id 집합을 조회한다."""
+_TRACK_TO_ROW_KIND: dict[str, str] = {
+    "A": "identity",
+    "B": "summary",
+    "C": "question",
+}
+
+
+async def _fetch_existing_service_ids(
+    session: AsyncSession,
+    tracks: set[str] | None = None,
+) -> set[str]:
+    """on_ai.service_embeddings에서 이미 적재된 service_id 집합을 조회한다.
+
+    tracks가 지정되면 해당 트랙의 row_kind를 가진 행만 기존 적재로 판단한다.
+    예: tracks={"B"} → row_kind='summary' 가 있는 service_id만 반환.
+
+    tracks=None 또는 {"A","B","C"} 전체이면 row_kind 무관 전체 조회.
+    """
+    if tracks:
+        row_kinds = [_TRACK_TO_ROW_KIND[t] for t in tracks if t in _TRACK_TO_ROW_KIND]
+        if row_kinds and len(row_kinds) < 3:
+            placeholders = ", ".join(f":rk_{i}" for i in range(len(row_kinds)))
+            bind = {f"rk_{i}": rk for i, rk in enumerate(row_kinds)}
+            result = await session.execute(
+                text(
+                    f"SELECT DISTINCT service_id FROM service_embeddings"
+                    f" WHERE row_kind IN ({placeholders})"
+                ),
+                bind,
+            )
+            return {row[0] for row in result.fetchall()}
+
     result = await session.execute(
         text("SELECT DISTINCT service_id FROM service_embeddings")
     )
@@ -267,15 +297,6 @@ async def _fetch_failed_rows(session: AsyncSession) -> list[dict]:
     return [dict(zip(keys, row)) for row in result.fetchall()]
 
 
-# ---------------------------------------------------------------------------
-# 하위 호환성: 기존 테스트가 참조하는 내부 심볼 유지
-# ---------------------------------------------------------------------------
-
-async def _fetch_existing_service_ids(session: AsyncSession) -> set[str]:  # noqa: F811
-    result = await session.execute(
-        text("SELECT DISTINCT service_id FROM service_embeddings")
-    )
-    return {row[0] for row in result.fetchall()}
 
 
 def _parse_args() -> argparse.Namespace:

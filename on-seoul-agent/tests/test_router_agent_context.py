@@ -196,8 +196,8 @@ class TestRouterContextInjection:
 
     async def test_valid_max_class_name_preserved(self):
         """허용된 max_class_name 값은 그대로 유지된다."""
-        rq = _IntentOutput(intent=IntentType.SQL_SEARCH, max_class_name="진료")
-        assert rq.max_class_name == "진료"
+        rq = _IntentOutput(intent=IntentType.SQL_SEARCH, max_class_name="진료복지")
+        assert rq.max_class_name == "진료복지"
 
     async def test_invalid_area_name_with_space_normalized_to_none(self):
         """공백이 포함된 자치구명("강 남구")은 None으로 정규화된다."""

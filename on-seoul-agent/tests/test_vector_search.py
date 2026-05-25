@@ -125,19 +125,22 @@ class TestVectorSearchRowKind:
         assert "max_class_name" in texts[0]
         assert binds[0]["max_class_name"] == "체육시설"
 
-    async def test_summary_passes_null_postfilter_params(self):
-        """row_kind='summary' 시에도 post-filter 파라미터가 SQL에 포함되지만 NULL로 전달된다."""
+    async def test_summary_without_filter_omits_postfilter_from_sql(self):
+        """row_kind='summary' + 필터 없으면 post-filter WHERE 절이 SQL에 없다.
+
+        None 파라미터를 bind하면 asyncpg가 AmbiguousParameterError를 발생시키므로
+        필터 없을 때는 조건 절 자체를 생성하지 않는다.
+        """
         session, texts, binds = _capture_session()
         await vector_search(
             session, _SAMPLE_VECTOR,
             row_kind="summary",
         )
-        # SQL 템플릿에 max_class_name/area_name/service_status가 있어야 한다
-        assert "max_class_name" in texts[0]
-        # bind 파라미터는 모두 None
-        assert binds[0]["max_class_name"] is None
-        assert binds[0]["area_name"] is None
-        assert binds[0]["service_status"] is None
+        # None인 필터는 SQL/bind 모두 제외
+        assert "max_class_name" not in texts[0]
+        assert "max_class_name" not in binds[0]
+        assert "area_name" not in binds[0]
+        assert "service_status" not in binds[0]
 
 
 class TestVectorSearchQueryStructure:
@@ -189,14 +192,17 @@ class TestPostFilterStructure:
         assert area_name_pos != -1
         assert area_name_pos > candidates_pos
 
-    async def test_postfilter_exists_even_without_filter(self):
-        """필터 없을 때도 IS NULL 조건으로 post-filter 절이 SQL에 있다."""
+    async def test_postfilter_absent_when_no_filter_given(self):
+        """필터가 없으면 post-filter WHERE 절이 SQL에 존재하지 않는다.
+
+        None을 bind하면 asyncpg AmbiguousParameterError 발생 → 조건 자체를 생략.
+        """
         session, texts, _ = _capture_session()
         await vector_search(session, _SAMPLE_VECTOR)
         sql = texts[0]
-        assert "max_class_name" in sql
-        assert "area_name" in sql
-        assert "service_status" in sql
+        assert "max_class_name" not in sql
+        assert "area_name" not in sql
+        assert "service_status" not in sql
 
 
 class TestPostFilterBindParams:
@@ -220,13 +226,16 @@ class TestPostFilterBindParams:
         assert "service_status" in binds[0]
         assert binds[0]["service_status"] == "접수중"
 
-    async def test_no_filter_gives_null_postfilter_keys(self):
-        """필터 없을 때 post-filter bind 파라미터가 None으로 전달된다."""
+    async def test_no_filter_excludes_postfilter_keys_from_bind(self):
+        """필터 없을 때 post-filter 키가 bind에 포함되지 않는다.
+
+        None을 bind에 포함하면 asyncpg AmbiguousParameterError 발생.
+        """
         session, _, binds = _capture_session()
         await vector_search(session, _SAMPLE_VECTOR)
-        assert binds[0]["max_class_name"] is None
-        assert binds[0]["area_name"] is None
-        assert binds[0]["service_status"] is None
+        assert "max_class_name" not in binds[0]
+        assert "area_name" not in binds[0]
+        assert "service_status" not in binds[0]
 
     async def test_all_three_postfilters_present_in_bind(self):
         session, _, binds = _capture_session()
