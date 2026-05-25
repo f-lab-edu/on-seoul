@@ -147,6 +147,39 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 
 ---
 
+## Phase 6-2. notification BC — Knock Fallback 탄력성
+
+> Knock 장애(연결 불가·타임아웃·5xx·서킷 오픈) 발생 시 대체 발송 수단으로 라우팅한다.
+> `NotificationScheduler` / `NotificationTxHelper`는 변경 없이 동작한다 — `PushNotificationPort` 계약이 동일하게 유지된다.
+
+**인터페이스 스텁 (완료)**
+
+- [x] `FallbackReason` enum — `KNOCK_UNAVAILABLE / KNOCK_TIMEOUT / KNOCK_CIRCUIT_OPEN / KNOCK_SERVER_ERROR / NO_CONTACT`
+- [x] `FallbackNotificationPort` — fallback 아웃바운드 포트 인터페이스
+- [x] `ResilientPushNotificationAdapter` — `@Primary` 데코레이터. Knock 호출 → `RuntimeException` catch → `FallbackNotificationPort` 라우팅. `notification.push.fallback{reason}` metric 기록
+- [x] `LogOnlyFallbackNotificationAdapter` — `@ConditionalOnMissingBean` 기본 스텁. 로그·메트릭만 기록, 실 발송 없음. 실 구현체 등록 시 자동 교체
+
+**미구현 (Phase 6-2 본 작업)**
+
+- [ ] `FallbackReason` 분류 고도화 — `classifyReason()`에서 예외 타입·HTTP 상태코드로 세분화
+- [ ] Resilience4j `CircuitBreaker` 적용 — Knock 연속 실패 시 fast-fail + `KNOCK_CIRCUIT_OPEN` 트리거
+  - 의존성 추가: `resilience4j-spring-boot3`
+  - `CircuitBreakerConfig`: `slidingWindowSize=10`, `failureRateThreshold=50`, `waitDurationInOpenState=60s`
+- [ ] `SmtpFallbackNotificationAdapter` — JavaMailSender 직접 SMTP 발송 (EMAIL 채널 전용)
+  - `FallbackNotificationPort` 구현, `@ConditionalOnProperty(name="notification.fallback.smtp.enabled")`
+  - `dispatchId`를 `X-Dispatch-Id` 헤더 또는 제목에 포함 (idempotency)
+  - SMS 채널은 로그만 (Twilio 직접 연동은 별도 검토)
+- [ ] `InAppFallbackNotificationAdapter` (선택) — `notification_outbox` 테이블에 미발송 알림 저장
+  - 프론트엔드가 폴링 또는 SSE로 읽어가는 구조 (별도 API 설계 필요)
+- [ ] `ResilientPushNotificationAdapter` 테스트 — Knock 성공/실패/timeout 시나리오, fallback 호출 여부, metric 등록
+- [ ] `LogOnlyFallbackNotificationAdapter` 교체 후 기존 Knock 테스트 와이어링 재확인
+
+**설계 원칙**
+- `FallbackNotificationPort`는 **절대 예외를 던지지 않는다** — 발송 실패 시 로그·metric에 기록하고 종료. Scheduler는 `last_notified_at` 미갱신으로 다음 배치에서 재시도.
+- SMTP fallback도 실패하면 `notification_dispatch.status = FAILED`로 기록 (TxHelper가 처리).
+
+---
+
 ## Phase 7. Embeddings 갱신 워커
 
 > ChangeLog 커밋 후 AI 서비스에 임베딩 갱신을 위임한다. 임베딩 생성과 pgvector 적재는 AI 서비스(`on-seoul-agent`) 책임 — API 서비스는 REST API 호출만 한다.

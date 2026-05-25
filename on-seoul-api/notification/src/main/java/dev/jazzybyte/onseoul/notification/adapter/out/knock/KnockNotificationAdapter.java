@@ -26,7 +26,7 @@ import java.util.Set;
  * 모든 채널이 실패하면 RuntimeException을 던진다.</p>
  */
 @Slf4j
-@Component
+@Component("knockPrimary")
 class KnockNotificationAdapter implements PushNotificationPort {
 
     private final WebClient knockWebClient;
