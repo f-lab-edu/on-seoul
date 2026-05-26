@@ -61,14 +61,25 @@ def _common_patches(
         processed_ids.append(service["service_id"])
 
     return (
-        patch("scripts.embed_metadata.create_async_engine", return_value=_make_async_engine_mock()),
-        patch("scripts.embed_metadata.async_sessionmaker", side_effect=lambda *a, **kw: _make_session_factory_mock()),
-        patch("scripts.embed_metadata._fetch_rows", new=AsyncMock(return_value=all_rows)),
+        patch(
+            "scripts.embed_metadata.create_async_engine",
+            return_value=_make_async_engine_mock(),
+        ),
+        patch(
+            "scripts.embed_metadata.async_sessionmaker",
+            side_effect=lambda *a, **kw: _make_session_factory_mock(),
+        ),
+        patch(
+            "scripts.embed_metadata._fetch_rows", new=AsyncMock(return_value=all_rows)
+        ),
         patch(
             "scripts.embed_metadata._fetch_existing_service_ids",
             new=fetch_existing_mock or AsyncMock(return_value=existing_ids),
         ),
-        patch("scripts.embed_metadata.process_service", new=AsyncMock(side_effect=fake_process_service)),
+        patch(
+            "scripts.embed_metadata.process_service",
+            new=AsyncMock(side_effect=fake_process_service),
+        ),
         patch("scripts.embed_metadata.get_embeddings", return_value=MagicMock()),
         patch("scripts.embed_metadata.get_chat_model", return_value=MagicMock()),
     )
@@ -83,8 +94,17 @@ class TestIncrementalFilterLogic:
         processed: list[str] = []
         patches = _common_patches(all_rows, set(), processed)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+        ):
             from scripts.embed_metadata import run
+
             await run(limit=None, incremental=True)
 
         assert sorted(processed) == ["S001", "S002", "S003"]
@@ -96,8 +116,17 @@ class TestIncrementalFilterLogic:
         processed: list[str] = []
         patches = _common_patches(all_rows, existing_ids, processed)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+        ):
             from scripts.embed_metadata import run
+
             await run(limit=None, incremental=True)
 
         assert processed == []
@@ -109,8 +138,17 @@ class TestIncrementalFilterLogic:
         processed: list[str] = []
         patches = _common_patches(all_rows, existing_ids, processed)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+        ):
             from scripts.embed_metadata import run
+
             await run(limit=None, incremental=True)
 
         assert sorted(processed) == ["S002", "S003"]
@@ -120,10 +158,21 @@ class TestIncrementalFilterLogic:
         all_rows = [_make_row("S001"), _make_row("S002")]
         processed: list[str] = []
         mock_fetch_existing = AsyncMock(return_value={"S001", "S002"})
-        patches = _common_patches(all_rows, set(), processed, fetch_existing_mock=mock_fetch_existing)
+        patches = _common_patches(
+            all_rows, set(), processed, fetch_existing_mock=mock_fetch_existing
+        )
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+        ):
             from scripts.embed_metadata import run
+
             await run(limit=None, incremental=False)
 
         mock_fetch_existing.assert_not_called()
@@ -135,15 +184,25 @@ class TestIncrementalFilterLogic:
         mock_process = AsyncMock()
 
         with (
-            patch("scripts.embed_metadata.create_async_engine", return_value=_make_async_engine_mock()),
-            patch("scripts.embed_metadata.async_sessionmaker", side_effect=lambda *a, **kw: _make_session_factory_mock()),
+            patch(
+                "scripts.embed_metadata.create_async_engine",
+                return_value=_make_async_engine_mock(),
+            ),
+            patch(
+                "scripts.embed_metadata.async_sessionmaker",
+                side_effect=lambda *a, **kw: _make_session_factory_mock(),
+            ),
             patch("scripts.embed_metadata._fetch_rows", new=AsyncMock(return_value=[])),
-            patch("scripts.embed_metadata._fetch_existing_service_ids", new=mock_fetch_existing),
+            patch(
+                "scripts.embed_metadata._fetch_existing_service_ids",
+                new=mock_fetch_existing,
+            ),
             patch("scripts.embed_metadata.process_service", new=mock_process),
             patch("scripts.embed_metadata.get_embeddings", return_value=MagicMock()),
             patch("scripts.embed_metadata.get_chat_model", return_value=MagicMock()),
         ):
             from scripts.embed_metadata import run
+
             await run(limit=None, incremental=True)
 
         mock_fetch_existing.assert_not_called()
@@ -161,6 +220,7 @@ class TestFetchExistingServiceIds:
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         from scripts.embed_metadata import _fetch_existing_service_ids
+
         result = await _fetch_existing_service_ids(mock_session)
 
         assert result == {"S001", "S002", "S003"}
@@ -173,6 +233,7 @@ class TestFetchExistingServiceIds:
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         from scripts.embed_metadata import _fetch_existing_service_ids
+
         result = await _fetch_existing_service_ids(mock_session)
 
         assert result == set()
@@ -191,6 +252,7 @@ class TestFetchExistingServiceIds:
         mock_session.execute = AsyncMock(side_effect=_capture)
 
         from scripts.embed_metadata import _fetch_existing_service_ids
+
         await _fetch_existing_service_ids(mock_session, tracks={"B"})
 
         assert executed, "execute가 호출되어야 한다"
@@ -212,6 +274,7 @@ class TestFetchExistingServiceIds:
         mock_session.execute = AsyncMock(side_effect=_capture)
 
         from scripts.embed_metadata import _fetch_existing_service_ids
+
         await _fetch_existing_service_ids(mock_session, tracks={"A"})
 
         sql_str, bind = executed[0]
@@ -232,6 +295,7 @@ class TestFetchExistingServiceIds:
         mock_session.execute = AsyncMock(side_effect=_capture)
 
         from scripts.embed_metadata import _fetch_existing_service_ids
+
         await _fetch_existing_service_ids(mock_session, tracks={"A", "B", "C"})
 
         assert "row_kind" not in executed_sqls[0]
@@ -250,6 +314,7 @@ class TestFetchExistingServiceIds:
         mock_session.execute = AsyncMock(side_effect=_capture)
 
         from scripts.embed_metadata import _fetch_existing_service_ids
+
         await _fetch_existing_service_ids(mock_session, tracks=None)
 
         assert "row_kind" not in executed_sqls[0]

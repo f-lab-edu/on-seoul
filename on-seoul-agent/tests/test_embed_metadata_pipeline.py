@@ -61,10 +61,20 @@ class TestProcessServiceAllTracks:
 
         with (
             patch("scripts.embed_metadata.delete_rows_by_service_id", AsyncMock()),
-            patch("scripts.embed_metadata.extract_metadata", AsyncMock(return_value=extracted)),
-            patch("scripts.embed_metadata.embed_and_insert_identity", AsyncMock()) as mock_a,
-            patch("scripts.embed_metadata.embed_and_insert_summary", AsyncMock()) as mock_b,
-            patch("scripts.embed_metadata.embed_and_insert_questions", AsyncMock(return_value=True)) as mock_c,
+            patch(
+                "scripts.embed_metadata.extract_metadata",
+                AsyncMock(return_value=extracted),
+            ),
+            patch(
+                "scripts.embed_metadata.embed_and_insert_identity", AsyncMock()
+            ) as mock_a,
+            patch(
+                "scripts.embed_metadata.embed_and_insert_summary", AsyncMock()
+            ) as mock_b,
+            patch(
+                "scripts.embed_metadata.embed_and_insert_questions",
+                AsyncMock(return_value=True),
+            ) as mock_c,
         ):
             await process_service(
                 service,
@@ -85,10 +95,18 @@ class TestProcessServiceAllTracks:
 
         with (
             patch("scripts.embed_metadata.delete_rows_by_service_id", AsyncMock()),
-            patch("scripts.embed_metadata.extract_metadata", AsyncMock(return_value=None)),
-            patch("scripts.embed_metadata.embed_and_insert_identity", AsyncMock()) as mock_a,
-            patch("scripts.embed_metadata.embed_and_insert_summary", AsyncMock()) as mock_b,
-            patch("scripts.embed_metadata.embed_and_insert_questions", AsyncMock()) as mock_c,
+            patch(
+                "scripts.embed_metadata.extract_metadata", AsyncMock(return_value=None)
+            ),
+            patch(
+                "scripts.embed_metadata.embed_and_insert_identity", AsyncMock()
+            ) as mock_a,
+            patch(
+                "scripts.embed_metadata.embed_and_insert_summary", AsyncMock()
+            ) as mock_b,
+            patch(
+                "scripts.embed_metadata.embed_and_insert_questions", AsyncMock()
+            ) as mock_c,
         ):
             await process_service(
                 service,
@@ -110,7 +128,9 @@ class TestProcessServiceAllTracks:
 
         with (
             patch("scripts.embed_metadata.delete_rows_by_service_id", AsyncMock()),
-            patch("scripts.embed_metadata.extract_metadata", AsyncMock(return_value=None)),
+            patch(
+                "scripts.embed_metadata.extract_metadata", AsyncMock(return_value=None)
+            ),
             patch("scripts.embed_metadata.embed_and_insert_identity", AsyncMock()),
         ):
             await process_service(
@@ -133,10 +153,19 @@ class TestProcessServiceTrackA:
 
         with (
             patch("scripts.embed_metadata.delete_rows_by_service_id", AsyncMock()),
-            patch("scripts.embed_metadata.extract_metadata", AsyncMock(return_value=_make_extracted())),
-            patch("scripts.embed_metadata.embed_and_insert_identity", AsyncMock()) as mock_a,
-            patch("scripts.embed_metadata.embed_and_insert_summary", AsyncMock()) as mock_b,
-            patch("scripts.embed_metadata.embed_and_insert_questions", AsyncMock()) as mock_c,
+            patch(
+                "scripts.embed_metadata.extract_metadata",
+                AsyncMock(return_value=_make_extracted()),
+            ),
+            patch(
+                "scripts.embed_metadata.embed_and_insert_identity", AsyncMock()
+            ) as mock_a,
+            patch(
+                "scripts.embed_metadata.embed_and_insert_summary", AsyncMock()
+            ) as mock_b,
+            patch(
+                "scripts.embed_metadata.embed_and_insert_questions", AsyncMock()
+            ) as mock_c,
         ):
             await process_service(
                 service,
@@ -158,11 +187,19 @@ class TestProcessServiceDeleteCalled:
         session = _make_session()
 
         with (
-            patch("scripts.embed_metadata.delete_rows_by_service_id", AsyncMock()) as mock_del,
-            patch("scripts.embed_metadata.extract_metadata", AsyncMock(return_value=_make_extracted())),
+            patch(
+                "scripts.embed_metadata.delete_rows_by_service_id", AsyncMock()
+            ) as mock_del,
+            patch(
+                "scripts.embed_metadata.extract_metadata",
+                AsyncMock(return_value=_make_extracted()),
+            ),
             patch("scripts.embed_metadata.embed_and_insert_identity", AsyncMock()),
             patch("scripts.embed_metadata.embed_and_insert_summary", AsyncMock()),
-            patch("scripts.embed_metadata.embed_and_insert_questions", AsyncMock(return_value=True)),
+            patch(
+                "scripts.embed_metadata.embed_and_insert_questions",
+                AsyncMock(return_value=True),
+            ),
         ):
             await process_service(
                 service,

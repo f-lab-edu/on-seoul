@@ -164,7 +164,11 @@ class GraphNodes:
         이 노드에서 초기화가 완료되므로 router_node는 분류에만 집중한다.
         """
         new_retry_count = (state.get("retry_count") or 0) + 1
-        logger.info("retry.triggered room=%s retry_count=%d", state.get("room_id"), new_retry_count)
+        logger.info(
+            "retry.triggered room=%s retry_count=%d",
+            state.get("room_id"),
+            new_retry_count,
+        )
         self.node_path.append("retry_prep")
         return {
             "retry_count": new_retry_count,
@@ -189,7 +193,9 @@ class GraphNodes:
             self.node_path.append("sql_node")
             sql_rows = new_state.get("sql_results") or []
             keyword = new_state.get("sql_keyword")
-            logger.info("sql.results room=%s count=%d", state.get("room_id"), len(sql_rows))
+            logger.info(
+                "sql.results room=%s count=%d", state.get("room_id"), len(sql_rows)
+            )
 
             channel_data = ChannelData(
                 kind=SearchKind.SQL,
@@ -303,7 +309,9 @@ class GraphNodes:
             new_state = await self._answer.answer(state)
             self.node_path.append("answer_node")
             answer = new_state.get("answer") or ""
-            logger.info("answer.generated room=%s len=%d", state.get("room_id"), len(answer))
+            logger.info(
+                "answer.generated room=%s len=%d", state.get("room_id"), len(answer)
+            )
             return {
                 "answer": new_state.get("answer"),
                 "title": new_state.get("title"),
@@ -371,24 +379,30 @@ class GraphNodes:
             q = data["query"]
             hits = data["hits"]  # ChannelData.hits 는 필수 키
 
-            query_rows.append({
-                "message_id": message_id,
-                "kind": kind,
-                "channel": channel_name,
-                "query_text": q["query_text"],   # ChannelQuery 필수 키 (값은 None 허용)
-                "parameters": json.dumps(q["parameters"] or {}, default=str),
-            })
-
-            for hit in hits:
-                result_rows.append({
+            query_rows.append(
+                {
                     "message_id": message_id,
                     "kind": kind,
                     "channel": channel_name,
-                    "rank": hit["rank"],
-                    "service_id": hit["service_id"],
-                    "score": hit["score"],        # ChannelHit 필수 키 (값은 None 허용)
-                    "meta": json.dumps(hit["meta"] or {}, default=str),
-                })
+                    "query_text": q[
+                        "query_text"
+                    ],  # ChannelQuery 필수 키 (값은 None 허용)
+                    "parameters": json.dumps(q["parameters"] or {}, default=str),
+                }
+            )
+
+            for hit in hits:
+                result_rows.append(
+                    {
+                        "message_id": message_id,
+                        "kind": kind,
+                        "channel": channel_name,
+                        "rank": hit["rank"],
+                        "service_id": hit["service_id"],
+                        "score": hit["score"],  # ChannelHit 필수 키 (값은 None 허용)
+                        "meta": json.dumps(hit["meta"] or {}, default=str),
+                    }
+                )
 
         try:
             if query_rows:
@@ -405,7 +419,9 @@ class GraphNodes:
             self.node_path.append("search_persist")
             logger.info(
                 "search_persist.done message_id=%s queries=%d results=%d",
-                message_id, len(query_rows), len(result_rows),
+                message_id,
+                len(query_rows),
+                len(result_rows),
             )
         except Exception:
             logger.warning(
@@ -554,7 +570,9 @@ class CacheCheckNode:
         if envelope is None:
             logger.info(
                 "cache.miss room=%s intent=%s refined=%r",
-                state.get("room_id"), intent.value, refined[:40],
+                state.get("room_id"),
+                intent.value,
+                refined[:40],
             )
             return {"cache_hit": False}
 
@@ -562,7 +580,9 @@ class CacheCheckNode:
         snap = envelope.get("state", {}) or {}
         logger.info(
             "cache.hit room=%s intent=%s refined=%r",
-            state.get("room_id"), intent.value, refined[:40],
+            state.get("room_id"),
+            intent.value,
+            refined[:40],
         )
         return {
             "answer": payload.get("answer"),

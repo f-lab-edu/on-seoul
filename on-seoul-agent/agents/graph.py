@@ -195,8 +195,7 @@ def _build_shared_graph() -> Any:
 
 
 _StreamEvent = (
-    tuple[Literal["progress"], dict[str, str]]
-    | tuple[Literal["result"], AgentState]
+    tuple[Literal["progress"], dict[str, str]] | tuple[Literal["result"], AgentState]
 )
 
 
@@ -323,15 +322,34 @@ class AgentGraph:
                     _search_progress_emitted = True
                     intent = accumulated.get("intent")
                     # FALLBACK이거나 router_node 에러 시 검색 없이 바로 답변 단계로 간다.
-                    if intent in (IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH, IntentType.MAP):
-                        yield "progress", {"step": "searching", "message": "관련 정보를 검색하고 있습니다..."}
+                    if intent in (
+                        IntentType.SQL_SEARCH,
+                        IntentType.VECTOR_SEARCH,
+                        IntentType.MAP,
+                    ):
+                        yield (
+                            "progress",
+                            {
+                                "step": "searching",
+                                "message": "관련 정보를 검색하고 있습니다...",
+                            },
+                        )
                     else:
                         _answer_progress_emitted = True
-                        yield "progress", {"step": "answering", "message": "답변을 생성하고 있습니다..."}
+                        yield (
+                            "progress",
+                            {
+                                "step": "answering",
+                                "message": "답변을 생성하고 있습니다...",
+                            },
+                        )
 
                 elif node_name in _SEARCH_NODES and not _answer_progress_emitted:
                     _answer_progress_emitted = True
-                    yield "progress", {"step": "answering", "message": "답변을 생성하고 있습니다..."}
+                    yield (
+                        "progress",
+                        {"step": "answering", "message": "답변을 생성하고 있습니다..."},
+                    )
         finally:
             _ACTIVE_NODES.reset(token)
 

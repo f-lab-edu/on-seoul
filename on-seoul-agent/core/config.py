@@ -22,22 +22,22 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6379"
-    redis_socket_connect_timeout: int = 2   # 연결 타임아웃(초) — fail-open 대기 상한
-    redis_socket_timeout: int = 2           # 명령 타임아웃(초)
+    redis_socket_connect_timeout: int = 2  # 연결 타임아웃(초) — fail-open 대기 상한
+    redis_socket_timeout: int = 2  # 명령 타임아웃(초)
 
     # Answer Cache
     answer_cache_enabled: bool = True
-    answer_cache_ttl: int = 900            # 15분 — 수집 스케줄러 주기보다 짧게
-    answer_cache_empty_ttl: int = 300      # 빈 결과 캐시 5분
+    answer_cache_ttl: int = 900  # 15분 — 수집 스케줄러 주기보다 짧게
+    answer_cache_empty_ttl: int = 300  # 빈 결과 캐시 5분
     answer_cache_eligible_intents: tuple[str, ...] = ("SQL_SEARCH", "VECTOR_SEARCH")
 
     # Recent Queries (per-room)
     recent_queries_enabled: bool = True
-    recent_queries_max: int = 5            # 보관 개수
-    recent_queries_ttl: int = 1800         # 30분 슬라이딩 — push 마다 갱신
+    recent_queries_max: int = 5  # 보관 개수
+    recent_queries_ttl: int = 1800  # 30분 슬라이딩 — push 마다 갱신
 
     # Admin
-    admin_internal_token: str = ""         # /admin/* 보호용 공유 토큰
+    admin_internal_token: str = ""  # /admin/* 보호용 공유 토큰
 
     # LLM — Gemini 우선, GPT 폴백
     llm_provider: str = "gemini"  # gemini | openai
@@ -75,9 +75,14 @@ class Settings(BaseSettings):
     # 가중치 프로파일 — sub_intent → {track_a, track_b, track_c, bm25}
     # 평가셋(scripts/eval) 측정 후 사람이 수동 반영. 코드에 직접 박지 않는다.
     rrf_weight_profiles: dict[str, dict[str, float]] = {
-        "identification": {"track_a": 0.5,  "track_b": 0.25, "track_c": 0.25, "bm25": 0.5},
-        "detail":         {"track_a": 0.2,  "track_b": 0.5,  "track_c": 0.3,  "bm25": 0.4},
-        "semantic":       {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5,  "bm25": 0.3},
+        "identification": {
+            "track_a": 0.5,
+            "track_b": 0.25,
+            "track_c": 0.25,
+            "bm25": 0.5,
+        },
+        "detail": {"track_a": 0.2, "track_b": 0.5, "track_c": 0.3, "bm25": 0.4},
+        "semantic": {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3},
     }
 
     # Phase 1 baseline 모드: True → 모든 채널 가중치 1.0 (비가중치 RRF).

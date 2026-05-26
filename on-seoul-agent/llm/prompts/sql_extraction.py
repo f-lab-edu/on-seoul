@@ -96,8 +96,8 @@ SQL_EXTRACTION_FEW_SHOT_EXAMPLES = [
         "message": "마포구 이번 주 문화행사 접수 중인 거 보여줘",
         "output": (
             '{"reasoning": "오늘이 2026-05-18(월)이므로 이번 주는 2026-05-18 ~ 2026-05-24.'
-            ' \'문화행사\'는 enum \'문화체험\'으로 매핑. \'마포구\'는 정확한 자치구명.'
-            ' \'접수 중\'은 \'접수중\'.",'
+            " '문화행사'는 enum '문화체험'으로 매핑. '마포구'는 정확한 자치구명."
+            " '접수 중'은 '접수중'.\","
             ' "max_class_name": "문화체험", "area_name": "마포구",'
             ' "service_status": "접수중", "keyword": null,'
             ' "receipt_date_from": "2026-05-18", "receipt_date_to": "2026-05-24"}'
@@ -107,8 +107,8 @@ SQL_EXTRACTION_FEW_SHOT_EXAMPLES = [
         "message": "5월에 접수 시작하는 강남 교육 프로그램 알려줘",
         "output": (
             '{"reasoning": "5월 전체이므로 2026-05-01 ~ 2026-05-31.'
-            ' \'강남\'은 자치구 표기 \'강남구\'로 정규화.'
-            ' \'교육\'은 enum \'교육강좌\'로 매핑.'
+            " '강남'은 자치구 표기 '강남구'로 정규화."
+            " '교육'은 enum '교육강좌'로 매핑."
             ' 상태 미언급이므로 service_status null.",'
             ' "max_class_name": "교육강좌", "area_name": "강남구",'
             ' "service_status": null, "keyword": null,'
@@ -118,9 +118,9 @@ SQL_EXTRACTION_FEW_SHOT_EXAMPLES = [
     {
         "message": "성동구 테니스장 예약 가능한 곳",
         "output": (
-            '{"reasoning": "지역 \'성동구\'(정확) + 카테고리 enum \'체육시설\'.'
-            ' \'테니스장\'은 enum이 아닌 종목 키워드이므로 keyword에 저장.'
-            ' \'예약 가능\'은 \'접수중\'에 해당. 날짜 미언급.",'
+            "{\"reasoning\": \"지역 '성동구'(정확) + 카테고리 enum '체육시설'."
+            " '테니스장'은 enum이 아닌 종목 키워드이므로 keyword에 저장."
+            " '예약 가능'은 '접수중'에 해당. 날짜 미언급.\","
             ' "max_class_name": "체육시설", "area_name": "성동구",'
             ' "service_status": "접수중", "keyword": "테니스장",'
             ' "receipt_date_from": null, "receipt_date_to": null}'
@@ -129,8 +129,8 @@ SQL_EXTRACTION_FEW_SHOT_EXAMPLES = [
     {
         "message": "노원구 시설 대관 신청할 수 있는 거 알려줘",
         "output": (
-            '{"reasoning": "지역 \'노원구\'(정확). \'시설 대관\'은 enum \'공간시설\'로 매핑.'
-            ' \'신청할 수 있는\'은 \'접수중\'. 날짜 미언급.",'
+            "{\"reasoning\": \"지역 '노원구'(정확). '시설 대관'은 enum '공간시설'로 매핑."
+            " '신청할 수 있는'은 '접수중'. 날짜 미언급.\","
             ' "max_class_name": "공간시설", "area_name": "노원구",'
             ' "service_status": "접수중", "keyword": null,'
             ' "receipt_date_from": null, "receipt_date_to": null}'
@@ -139,7 +139,7 @@ SQL_EXTRACTION_FEW_SHOT_EXAMPLES = [
     {
         "message": "강동구 무료로 이용할 수 있는 시설 있어?",
         "output": (
-            '{"reasoning": "지역 \'강동구\'(정확). \'무료\'는 가격 속성으로 시설명·종목명이 아니므로'
+            "{\"reasoning\": \"지역 '강동구'(정확). '무료'는 가격 속성으로 시설명·종목명이 아니므로"
             ' keyword null. 시설 카테고리 미언급. 상태 미언급.",'
             ' "max_class_name": null, "area_name": "강동구",'
             ' "service_status": null, "keyword": null,'

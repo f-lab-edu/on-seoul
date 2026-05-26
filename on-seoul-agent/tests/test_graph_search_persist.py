@@ -128,10 +128,14 @@ class TestZeroHitQueryRecorded:
             sql_agent=sql_agent,
             answer_agent=make_answer_agent("결과가 없습니다."),
         )
-        await graph.run(_state(message_id=20), data_session=data_session, ai_session=ai_session)
+        await graph.run(
+            _state(message_id=20), data_session=data_session, ai_session=ai_session
+        )
 
         assert _get_queries_rows(ai_session) is not None
-        assert _get_results_rows(ai_session) is None, "0건이면 results INSERT 없어야 한다"
+        assert _get_results_rows(ai_session) is None, (
+            "0건이면 results INSERT 없어야 한다"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -142,16 +146,27 @@ class TestZeroHitQueryRecorded:
 class TestVectorIntentPersist:
     async def test_vector_phase1_persists_three_channels(self):
         """VECTOR_SEARCH → queries: vector_a / vector_b / vector_c / bm25 / rrf / final 6행 INSERT."""
-        vector_rows = [{"service_id": "V001", "embedding_text": "t", "metadata": {}, "similarity": 0.92}]
+        vector_rows = [
+            {
+                "service_id": "V001",
+                "embedding_text": "t",
+                "metadata": {},
+                "similarity": 0.92,
+            }
+        ]
         bm25_rows = [{"service_id": "V001", "bm25_score": 1.5}]
         hydrated = [{"service_id": "V001", "service_name": "체험관", "rrf_score": 0.05}]
         ai_session = make_ai_session()
 
         with (
-            patch("agents.vector_agent.vector_search", AsyncMock(return_value=vector_rows)),
+            patch(
+                "agents.vector_agent.vector_search", AsyncMock(return_value=vector_rows)
+            ),
             patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=bm25_rows)),
-            patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)),
+            patch(
+                "agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)
+            ),
         ):
             graph = AgentGraph(
                 router=make_router(IntentType.VECTOR_SEARCH),
@@ -190,8 +205,14 @@ class TestMapIntentPersist:
         geojson = {
             "type": "FeatureCollection",
             "features": [
-                {"type": "Feature", "properties": {"service_id": "M001", "distance_m": 120.0}},
-                {"type": "Feature", "properties": {"service_id": "M002", "distance_m": 200.0}},
+                {
+                    "type": "Feature",
+                    "properties": {"service_id": "M001", "distance_m": 120.0},
+                },
+                {
+                    "type": "Feature",
+                    "properties": {"service_id": "M002", "distance_m": 200.0},
+                },
             ],
         }
         ai_session = make_ai_session()
@@ -237,7 +258,9 @@ class TestFallbackIntentPersist:
 
         assert _get_queries_rows(ai_session) is None
         assert _get_results_rows(ai_session) is None
-        assert _has_trace_insert(ai_session), "FALLBACK 이어도 trace INSERT 는 있어야 한다"
+        assert _has_trace_insert(ai_session), (
+            "FALLBACK 이어도 trace INSERT 는 있어야 한다"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -2,10 +2,11 @@
 
 from langchain_core.prompts import ChatPromptTemplate
 
-HYQE_PROMPT = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        """\
+HYQE_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """\
 당신은 서울시 공공서비스 예약 시설에 대해 시민이 실제로 검색할 법한 예상 질문을 생성하는 전문가입니다.
 주어진 시설 정보를 바탕으로 정확히 {n}개의 예상 질문을 JSON 배열로 생성하세요.
 
@@ -50,10 +51,10 @@ HYQE_PROMPT = ChatPromptTemplate.from_messages([
 
 반드시 유효한 JSON 배열만 출력하고 다른 텍스트는 포함하지 마세요.
 """,
-    ),
-    (
-        "human",
-        """\
+        ),
+        (
+            "human",
+            """\
 시설명: {service_name}
 지역: {area_name}
 대분류: {max_class_name}
@@ -63,5 +64,6 @@ HYQE_PROMPT = ChatPromptTemplate.from_messages([
 상세 내용:
 {cleaned_detail}
 """,
-    ),
-])
+        ),
+    ]
+)

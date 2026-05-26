@@ -7,9 +7,13 @@ _APP_NAMESPACES = ("routers", "agents", "core", "tools", "llm", "middleware", "s
 
 # 노이즈가 많은 서드파티 라이브러리 — WARNING 이상만 출력한다.
 _QUIET_NAMESPACES = (
-    "httpx", "httpcore",
-    "langchain", "langchain_core", "langchain_google_genai",
-    "openai", "google",
+    "httpx",
+    "httpcore",
+    "langchain",
+    "langchain_core",
+    "langchain_google_genai",
+    "openai",
+    "google",
 )
 
 

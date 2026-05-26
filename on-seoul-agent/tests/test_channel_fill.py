@@ -109,7 +109,9 @@ class TestToHits:
 
 
 class TestSqlNodeChannelData:
-    def _make_sql_agent(self, rows: list[dict], keyword: str | None = "수영장") -> MagicMock:
+    def _make_sql_agent(
+        self, rows: list[dict], keyword: str | None = "수영장"
+    ) -> MagicMock:
         """search() 가 sql_results + sql_keyword 를 반환하는 mock SqlAgent."""
         agent = MagicMock()
         agent.search = AsyncMock(
@@ -257,7 +259,10 @@ class TestVectorNodeChannelData:
                 kind=SearchKind.FINAL,
                 query=ChannelQuery(
                     query_text=None,
-                    parameters={"source_channels": ["vector", "bm25"], "hydration_applied": True},
+                    parameters={
+                        "source_channels": ["vector", "bm25"],
+                        "hydration_applied": True,
+                    },
                 ),
                 hits=_to_hits(hydrated, score_field="rrf_score"),
             ),
@@ -294,9 +299,13 @@ class TestVectorNodeChannelData:
 
         result = await nodes.vector_node(state)
 
-        assert result["search_channels"][SearchChannel.VECTOR]["kind"] == SearchKind.VECTOR
+        assert (
+            result["search_channels"][SearchChannel.VECTOR]["kind"] == SearchKind.VECTOR
+        )
         assert result["search_channels"][SearchChannel.BM25]["kind"] == SearchKind.BM25
-        assert result["search_channels"][SearchChannel.FINAL]["kind"] == SearchKind.FINAL
+        assert (
+            result["search_channels"][SearchChannel.FINAL]["kind"] == SearchKind.FINAL
+        )
 
     async def test_final_channel_query_text_is_none(self):
         nodes = _make_nodes(vector_agent=self._make_vector_agent([]))
@@ -372,9 +381,7 @@ class TestMapNodeChannelData:
     def _make_geojson(self, features: list[dict]) -> dict:
         return {"type": "FeatureCollection", "features": features}
 
-    def _make_feature(
-        self, service_id: str, distance_m: int = 500
-    ) -> dict:
+    def _make_feature(self, service_id: str, distance_m: int = 500) -> dict:
         return {
             "type": "Feature",
             "geometry": {"type": "Point", "coordinates": [126.97, 37.56]},
@@ -457,7 +464,9 @@ class TestMapNodeChannelData:
         nodes = _make_nodes()
         nodes.data_session = _mock_session()
 
-        with patch("agents.nodes.map_search", AsyncMock(side_effect=RuntimeError("DB 오류"))):
+        with patch(
+            "agents.nodes.map_search", AsyncMock(side_effect=RuntimeError("DB 오류"))
+        ):
             state = make_agent_state(user_lat=37.56, user_lng=126.97)
             result = await nodes.map_node(state)
 

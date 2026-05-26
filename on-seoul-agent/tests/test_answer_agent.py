@@ -21,7 +21,9 @@ def _make_agent(
     agent = AnswerAgent.__new__(AnswerAgent)
 
     mock_answer_chain = MagicMock()
-    mock_answer_chain.ainvoke = AsyncMock(return_value=_AnswerOutput(answer=answer_text))
+    mock_answer_chain.ainvoke = AsyncMock(
+        return_value=_AnswerOutput(answer=answer_text)
+    )
     agent._answer_chain = mock_answer_chain
 
     mock_title_chain = MagicMock()
@@ -72,8 +74,12 @@ class TestAnswerAgent:
     async def test_collect_results_merges_sql_and_vector(self):
         """sql_results와 vector_results가 모두 있으면 합쳐서 전달된다."""
         agent = _make_agent()
-        sql_rows = [{"service_id": "S001", "service_name": "수영장", "service_url": None}]
-        vec_rows = [{"service_id": "S002", "service_name": "체험관", "service_url": None}]
+        sql_rows = [
+            {"service_id": "S001", "service_name": "수영장", "service_url": None}
+        ]
+        vec_rows = [
+            {"service_id": "S002", "service_name": "체험관", "service_url": None}
+        ]
         state = _make_state(sql_results=sql_rows, vector_results=vec_rows)
 
         await agent.answer(state)
@@ -126,6 +132,7 @@ class TestAnswerAgent:
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         # 빈 결과 목록 JSON이 전달되어야 한다
         import json
+
         assert json.loads(call_kwargs["results_json"]) == []
         assert result["answer"] == "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다."
 

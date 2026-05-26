@@ -69,8 +69,7 @@ async def vector_search(
     """
     if row_kind not in _ALLOWED_ROW_KIND:
         raise ValueError(
-            f"invalid row_kind: {row_kind!r}. "
-            f"허용 값: {sorted(_ALLOWED_ROW_KIND)}"
+            f"invalid row_kind: {row_kind!r}. 허용 값: {sorted(_ALLOWED_ROW_KIND)}"
         )
 
     scan_k = settings.rrf_scan_k_per_track

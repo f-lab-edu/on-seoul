@@ -97,7 +97,9 @@ def make_answer_agent(
     agent._answer_chain = answer_chain
 
     title_chain = MagicMock()
-    title_chain.ainvoke = AsyncMock(return_value=_TitleOutput(title=title or "수영장 안내"))
+    title_chain.ainvoke = AsyncMock(
+        return_value=_TitleOutput(title=title or "수영장 안내")
+    )
     agent._title_chain = title_chain
     return agent
 

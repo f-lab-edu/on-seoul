@@ -3,7 +3,6 @@
 reciprocal_rank_fusion 함수의 기본 동작, 가중치, 중복 제거, 빈 채널 처리를 검증한다.
 """
 
-
 from core.rrf import reciprocal_rank_fusion
 
 

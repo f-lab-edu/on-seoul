@@ -51,16 +51,30 @@ _REFINE_HUMAN = "사용자 질의: {message}"
 _RRF_K: int = 60  # RRF 공식 상수 (표준값 60)
 _TOP_K: int = 10  # RRF 결합 결과 최대 반환 수
 
-_ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"])
+_ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(
+    ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
+)
 
 # 이 서비스의 모든 문서에 공통으로 등장하는 고빈도 어휘.
 # BM25는 IDF 기반이므로 전 문서에 걸쳐 빈도가 높은 단어는 IDF ≈ 0이 되어
 # 스코어에 기여하지 못한다. BM25 쿼리 전송 전 이 목록으로 필터링하여
 # 변별력 없는 토큰을 제거한다. 유효 토큰이 없으면 BM25를 건너뛴다.
-_BM25_STOPWORDS: frozenset[str] = frozenset({
-    "예약", "서울", "서울시", "공공", "서비스", "공공서비스",
-    "접수", "신청", "이용", "안내", "시설", "프로그램",
-})
+_BM25_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "예약",
+        "서울",
+        "서울시",
+        "공공",
+        "서비스",
+        "공공서비스",
+        "접수",
+        "신청",
+        "이용",
+        "안내",
+        "시설",
+        "프로그램",
+    }
+)
 
 
 class _RefinedQuery(BaseModel):
@@ -161,7 +175,9 @@ def _resolve_weights(sub_intent: str | None) -> dict[str, float] | None:
     return settings.rrf_weight_profiles.get(label, _fallback)
 
 
-async def _safe_vector_search(session: AsyncSession, query_vector: list[float], **kwargs) -> list[dict]:
+async def _safe_vector_search(
+    session: AsyncSession, query_vector: list[float], **kwargs
+) -> list[dict]:
     """vector_search 예외를 격리하여 빈 결과 반환."""
     try:
         return await vector_search(session, query_vector, **kwargs)
@@ -170,7 +186,9 @@ async def _safe_vector_search(session: AsyncSession, query_vector: list[float], 
         return []
 
 
-async def _safe_question_search(session: AsyncSession, query_vector: list[float]) -> list[dict]:
+async def _safe_question_search(
+    session: AsyncSession, query_vector: list[float]
+) -> list[dict]:
     """question_search 예외를 격리하여 빈 결과 반환."""
     try:
         return await question_search(session, query_vector)
@@ -202,10 +220,12 @@ class VectorAgent:
     ) -> None:
         llm = model or get_chat_model()
         self._embeddings = embeddings or get_embeddings()
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", _REFINE_SYSTEM),
-            ("human", _REFINE_HUMAN),
-        ])
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", _REFINE_SYSTEM),
+                ("human", _REFINE_HUMAN),
+            ]
+        )
         self._refine_chain = prompt | llm.with_structured_output(_RefinedQuery)
 
     async def search(
@@ -236,9 +256,7 @@ class VectorAgent:
                 service_status=state.get("service_status"),
             )
         else:
-            refined = await self._refine_chain.ainvoke(
-                {"message": state["message"]}
-            )
+            refined = await self._refine_chain.ainvoke({"message": state["message"]})
 
         query_vector = await self._embeddings.aembed_query(refined.refined_query)
         tokens = tokenize_query(refined.refined_query)
@@ -248,7 +266,8 @@ class VectorAgent:
         # asyncpg 단일 세션은 동시 쿼리를 허용하지 않으므로 순차 실행한다.
         # 각 _safe_* 래퍼가 예외를 개별 격리하므로 한 채널 실패가 전체에 영향을 주지 않는다.
         a_rows = await _safe_vector_search(
-            ai_session, query_vector,
+            ai_session,
+            query_vector,
             row_kind="identity",
             max_class_name=refined.max_class_name,
             area_name=refined.area_name,
@@ -272,13 +291,13 @@ class VectorAgent:
                 "track_a": [r["service_id"] for r in a_rows],
                 "track_b": [r["service_id"] for r in b_rows],
                 "track_c": [r["service_id"] for r in c_rows],
-                "bm25":    [r["service_id"] for r in d_rows],
+                "bm25": [r["service_id"] for r in d_rows],
             },
             weights=weights,
             k_constant=settings.rrf_k_constant,
         )
 
-        service_ids = [sid for sid, _ in merged[:settings.rrf_top_k_final]]
+        service_ids = [sid for sid, _ in merged[: settings.rrf_top_k_final]]
 
         try:
             hydrated: list[dict] = await hydrate_services(data_session, service_ids)

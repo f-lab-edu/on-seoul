@@ -87,9 +87,7 @@ class TestRouterContextInjection:
         assert "- q1" in block
         assert "- q2" in block
 
-    async def test_build_context_block_truncates_to_settings_max(
-        self, monkeypatch
-    ):
+    async def test_build_context_block_truncates_to_settings_max(self, monkeypatch):
         """recent_queries는 settings.recent_queries_max 만큼만 사용된다.
 
         기본값(5) 가정 없이 monkeypatch로 명시 후 검증한다.
@@ -105,9 +103,7 @@ class TestRouterContextInjection:
         assert "- q5" not in block
         assert "- q6" not in block
 
-    async def test_build_context_block_respects_changed_max(
-        self, monkeypatch
-    ):
+    async def test_build_context_block_respects_changed_max(self, monkeypatch):
         """settings.recent_queries_max를 3으로 바꾸면 7개 입력에서 3개만 포함된다.
 
         운영자가 max를 변경해도 Router 주입 개수가 일관되게 따라가야 한다 (회귀).
@@ -210,7 +206,7 @@ class TestRouterContextInjection:
         assert rq.area_name is None
 
     async def test_invalid_area_name_without_gu_normalized_to_none(self):
-        """"구" 접미사 없는 축약형("강남")은 None으로 정규화된다."""
+        """ "구" 접미사 없는 축약형("강남")은 None으로 정규화된다."""
         rq = _IntentOutput(intent=IntentType.SQL_SEARCH, area_name="강남")
         assert rq.area_name is None
 

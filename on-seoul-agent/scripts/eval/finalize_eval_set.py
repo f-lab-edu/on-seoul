@@ -58,12 +58,14 @@ def convert(rows: list[dict]) -> list[dict]:
     for key, ranked in correct.items():
         query, intent, sub_intent = key
         service_ids = [sid for _, sid in sorted(ranked.items())]
-        results.append({
-            "query":               query,
-            "intent":              intent,
-            "sub_intent":          sub_intent,
-            "correct_service_ids": ",".join(service_ids),
-        })
+        results.append(
+            {
+                "query": query,
+                "intent": intent,
+                "sub_intent": sub_intent,
+                "correct_service_ids": ",".join(service_ids),
+            }
+        )
 
     return results
 
@@ -81,9 +83,7 @@ def write_holdout(records: list[dict], path: Path, append: bool = False) -> None
 
 def print_summary(records: list[dict]) -> None:
     intent_counts = Counter(r["intent"] for r in records)
-    sub_intent_counts = Counter(
-        r["sub_intent"] for r in records if r["sub_intent"]
-    )
+    sub_intent_counts = Counter(r["sub_intent"] for r in records if r["sub_intent"])
     print(f"\n총 {len(records)}건")
     print("Intent 분포:")
     for intent, cnt in sorted(intent_counts.items()):
@@ -134,13 +134,19 @@ def main(args: argparse.Namespace) -> None:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="후보 검토 파일 → eval_set_holdout.tsv")
+    parser = argparse.ArgumentParser(
+        description="후보 검토 파일 → eval_set_holdout.tsv"
+    )
     parser.add_argument("--input", required=True, help="candidates_review.tsv 경로")
     parser.add_argument("--output", required=True, help="eval_set_holdout.tsv 경로")
-    parser.add_argument("--append", action="store_true",
-                        help="기존 holdout 파일에 추가 (기본값: 덮어씀)")
-    parser.add_argument("--force", action="store_true",
-                        help="is_correct 미표시 행이 있어도 계속 진행")
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help="기존 holdout 파일에 추가 (기본값: 덮어씀)",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="is_correct 미표시 행이 있어도 계속 진행"
+    )
     return parser.parse_args()
 
 

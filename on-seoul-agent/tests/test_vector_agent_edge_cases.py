@@ -33,7 +33,9 @@ def _make_agent(
         vector = [0.1, 0.2, 0.3]
     agent = VectorAgent.__new__(VectorAgent)
     mock_chain = MagicMock()
-    mock_chain.ainvoke = AsyncMock(return_value=_RefinedQuery(refined_query=refined_query))
+    mock_chain.ainvoke = AsyncMock(
+        return_value=_RefinedQuery(refined_query=refined_query)
+    )
     agent._refine_chain = mock_chain
     mock_embeddings = MagicMock()
     mock_embeddings.aembed_query = AsyncMock(return_value=vector)
@@ -48,16 +50,24 @@ def _patch_all_empty():
         def __enter__(self):
             self._stack = ExitStack()
             self._stack.enter_context(
-                patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[]))
+                patch(
+                    "agents.vector_agent.vector_search", new=AsyncMock(return_value=[])
+                )
             )
             self._stack.enter_context(
-                patch("agents.vector_agent.question_search", new=AsyncMock(return_value=[]))
+                patch(
+                    "agents.vector_agent.question_search",
+                    new=AsyncMock(return_value=[]),
+                )
             )
             self._stack.enter_context(
                 patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[]))
             )
             self.mock_hydrate = self._stack.enter_context(
-                patch("agents.vector_agent.hydrate_services", new=AsyncMock(return_value=[]))
+                patch(
+                    "agents.vector_agent.hydrate_services",
+                    new=AsyncMock(return_value=[]),
+                )
             )
             return self
 
@@ -78,21 +88,32 @@ class TestVectorAgentWeightPassthrough:
             captured_kwargs.append(kwargs)
             return []
 
-        with _patch_all_empty(), \
-             patch("agents.vector_agent.settings") as mock_settings, \
-             patch("agents.vector_agent.reciprocal_rank_fusion", side_effect=_capture_rrf):
+        with (
+            _patch_all_empty(),
+            patch("agents.vector_agent.settings") as mock_settings,
+            patch(
+                "agents.vector_agent.reciprocal_rank_fusion", side_effect=_capture_rrf
+            ),
+        ):
             mock_settings.rrf_unweighted_baseline = True
             mock_settings.rrf_k_constant = 60
             mock_settings.rrf_top_k_final = 10
             mock_settings.vector_sub_intent_enabled = False
             mock_settings.vector_default_sub_intent = "semantic"
             mock_settings.rrf_weight_profiles = {
-                "semantic": {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3}
+                "semantic": {
+                    "track_a": 0.15,
+                    "track_b": 0.35,
+                    "track_c": 0.5,
+                    "bm25": 0.3,
+                }
             }
 
             await agent.search(_make_state(), MagicMock(), MagicMock())
 
-        assert len(captured_kwargs) == 1, "reciprocal_rank_fusion이 정확히 1번 호출돼야 한다"
+        assert len(captured_kwargs) == 1, (
+            "reciprocal_rank_fusion이 정확히 1번 호출돼야 한다"
+        )
         assert captured_kwargs[0].get("weights") is None, (
             f"rrf_unweighted_baseline=True이면 weights=None이어야 하지만 "
             f"{captured_kwargs[0].get('weights')!r} 전달됨"
@@ -141,7 +162,9 @@ class TestVectorAgentAllChannelsEmpty:
         call_args = ctx.mock_hydrate.call_args
         # hydrate_services(data_session, service_ids) — service_ids는 빈 리스트
         service_ids_arg = call_args[0][1]
-        assert service_ids_arg == [], f"빈 채널 결과면 service_ids가 [] 이어야 하지만 {service_ids_arg!r}"
+        assert service_ids_arg == [], (
+            f"빈 채널 결과면 service_ids가 [] 이어야 하지만 {service_ids_arg!r}"
+        )
 
 
 class TestResolveWeightsEdgeCases:
@@ -152,13 +175,28 @@ class TestResolveWeightsEdgeCases:
             mock_settings.vector_sub_intent_enabled = False
             mock_settings.vector_default_sub_intent = "semantic"
             mock_settings.rrf_weight_profiles = {
-                "identification": {"track_a": 0.5, "track_b": 0.25, "track_c": 0.25, "bm25": 0.5},
-                "semantic": {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3},
+                "identification": {
+                    "track_a": 0.5,
+                    "track_b": 0.25,
+                    "track_c": 0.25,
+                    "bm25": 0.5,
+                },
+                "semantic": {
+                    "track_a": 0.15,
+                    "track_b": 0.35,
+                    "track_c": 0.5,
+                    "bm25": 0.3,
+                },
             }
 
             # sub_intent가 'identification'이어도 enabled=False이면 default 'semantic' 반환
             result = _resolve_weights("identification")
-            assert result == {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3}, (
+            assert result == {
+                "track_a": 0.15,
+                "track_b": 0.35,
+                "track_c": 0.5,
+                "bm25": 0.3,
+            }, (
                 "vector_sub_intent_enabled=False이면 sub_intent를 무시하고 default 프로파일을 써야 한다"
             )
 
@@ -173,7 +211,12 @@ class TestResolveWeightsEdgeCases:
             }
 
             result = _resolve_weights(None)
-            assert result == {"track_a": 0.2, "track_b": 0.5, "track_c": 0.3, "bm25": 0.4}
+            assert result == {
+                "track_a": 0.2,
+                "track_b": 0.5,
+                "track_c": 0.3,
+                "bm25": 0.4,
+            }
 
     def test_unknown_sub_intent_falls_back_to_default_not_error(self):
         """허용되지 않는 sub_intent는 KeyError 없이 default 프로파일로 폴백한다."""
@@ -182,12 +225,22 @@ class TestResolveWeightsEdgeCases:
             mock_settings.vector_sub_intent_enabled = True
             mock_settings.vector_default_sub_intent = "semantic"
             mock_settings.rrf_weight_profiles = {
-                "semantic": {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3},
+                "semantic": {
+                    "track_a": 0.15,
+                    "track_b": 0.35,
+                    "track_c": 0.5,
+                    "bm25": 0.3,
+                },
             }
 
             # 예외 없이 실행되어야 한다
             result = _resolve_weights("totally_invalid_intent")
-            assert result == {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3}
+            assert result == {
+                "track_a": 0.15,
+                "track_b": 0.35,
+                "track_c": 0.5,
+                "bm25": 0.3,
+            }
 
 
 class TestIntentOutputValidation:

@@ -61,7 +61,9 @@ class TestResolveRedis:
 
         fallback_redis = MagicMock(name="fallback_redis")
         request = _make_request(app)
-        with patch("routers.chat.get_redis", return_value=fallback_redis) as mock_get_redis:
+        with patch(
+            "routers.chat.get_redis", return_value=fallback_redis
+        ) as mock_get_redis:
             result = _resolve_redis(request)
 
         assert result is fallback_redis
@@ -78,7 +80,9 @@ class TestResolveRedis:
 
         fallback_redis = MagicMock(name="fallback_redis")
         request = _make_request(app)
-        with patch("routers.chat.get_redis", return_value=fallback_redis) as mock_get_redis:
+        with patch(
+            "routers.chat.get_redis", return_value=fallback_redis
+        ) as mock_get_redis:
             result = _resolve_redis(request)
 
         assert result is fallback_redis
@@ -114,7 +118,9 @@ class TestResolveGraph:
 
         new_graph = MagicMock(name="new_graph")
         request = _make_request(app)
-        with patch("routers.chat.AgentGraph", return_value=new_graph) as mock_agent_graph:
+        with patch(
+            "routers.chat.AgentGraph", return_value=new_graph
+        ) as mock_agent_graph:
             result = _resolve_graph(request)
 
         assert result is new_graph
@@ -131,7 +137,9 @@ class TestResolveGraph:
 
         new_graph = MagicMock(name="new_graph")
         request = _make_request(app)
-        with patch("routers.chat.AgentGraph", return_value=new_graph) as mock_agent_graph:
+        with patch(
+            "routers.chat.AgentGraph", return_value=new_graph
+        ) as mock_agent_graph:
             result = _resolve_graph(request)
 
         assert result is new_graph
@@ -150,8 +158,12 @@ class TestResolveGraph:
         new_graph = MagicMock(name="new_graph")
         request = _make_request(app)
 
-        with patch("routers.chat.get_redis", return_value=fallback_redis), \
-             patch("routers.chat.AgentGraph", return_value=new_graph) as mock_agent_graph:
+        with (
+            patch("routers.chat.get_redis", return_value=fallback_redis),
+            patch(
+                "routers.chat.AgentGraph", return_value=new_graph
+            ) as mock_agent_graph,
+        ):
             result = _resolve_graph(request)
 
         assert result is new_graph
@@ -174,9 +186,11 @@ class TestFixtureCompatibility:
         """test_chat_router.py의 _mock_redis_io와 동일한 패치 셋."""
         from unittest.mock import AsyncMock
 
-        with patch("routers.chat.get_recent_queries", new=AsyncMock(return_value=[])), \
-             patch("routers.chat.push_recent_query", new=AsyncMock(return_value=None)), \
-             patch("routers.chat._resolve_redis", return_value=MagicMock()):
+        with (
+            patch("routers.chat.get_recent_queries", new=AsyncMock(return_value=[])),
+            patch("routers.chat.push_recent_query", new=AsyncMock(return_value=None)),
+            patch("routers.chat._resolve_redis", return_value=MagicMock()),
+        ):
             yield
 
     def test_mock_graph_and_mock_redis_io_do_not_conflict(
@@ -200,4 +214,5 @@ class TestFixtureCompatibility:
         # mock_graph fixture가 _resolve_graph 자체를 교체했으므로
         # 모듈 내 _resolve_graph 심볼을 직접 호출하면 mock이 반환된다
         import routers.chat as chat_module  # noqa: PLC0415
+
         assert chat_module._resolve_graph(request) is mock_graph

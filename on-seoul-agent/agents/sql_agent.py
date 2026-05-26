@@ -80,17 +80,21 @@ class SqlAgent:
         llm = model or get_chat_model(temperature=0)
 
         few_shot = FewShotChatMessagePromptTemplate(
-            example_prompt=ChatPromptTemplate.from_messages([
-                ("human", "사용자 메시지: {message}"),
-                ("ai", "{output}"),
-            ]),
+            example_prompt=ChatPromptTemplate.from_messages(
+                [
+                    ("human", "사용자 메시지: {message}"),
+                    ("ai", "{output}"),
+                ]
+            ),
             examples=SQL_EXTRACTION_FEW_SHOT_EXAMPLES,
         )
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", SQL_EXTRACTION_SYSTEM),
-            few_shot,
-            ("human", SQL_EXTRACTION_HUMAN),
-        ])
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", SQL_EXTRACTION_SYSTEM),
+                few_shot,
+                ("human", SQL_EXTRACTION_HUMAN),
+            ]
+        )
         self._chain = prompt | llm.with_structured_output(_SqlParams)
 
     async def search(
@@ -118,10 +122,12 @@ class SqlAgent:
 
         # Router refined_query가 있으면 더 짧고 정제된 텍스트를 LLM에 전달
         input_message = router_refined or state["message"]
-        params: _SqlParams = await self._chain.ainvoke({
-            "message": input_message,
-            "today": today_str,
-        })
+        params: _SqlParams = await self._chain.ainvoke(
+            {
+                "message": input_message,
+                "today": today_str,
+            }
+        )
 
         if router_refined:
             max_class_name = state.get("max_class_name")

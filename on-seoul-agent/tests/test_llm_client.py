@@ -4,6 +4,7 @@ _rate_limited 데코레이터, _GeminiEmbeddings 래퍼,
 get_chat_model / get_embeddings 팩토리 함수의 동작을 검증한다.
 실제 API 호출 없이 mock으로만 실행된다.
 """
+
 import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch

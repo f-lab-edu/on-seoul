@@ -49,9 +49,13 @@ class TestEmbedAndInsertQuestions:
         service = _make_service()
         session = _make_session()
 
-        with patch("scripts.tracks.questions.generate_questions", AsyncMock(return_value=questions)):
+        with patch(
+            "scripts.tracks.questions.generate_questions",
+            AsyncMock(return_value=questions),
+        ):
             result = await embed_and_insert_questions(
-                session, service,
+                session,
+                service,
                 embedder=_make_embedder(),
                 llm_client=_make_llm(),
                 cleaned_detail="상세 내용",
@@ -67,9 +71,13 @@ class TestEmbedAndInsertQuestions:
         service = _make_service()
         session = _make_session()
 
-        with patch("scripts.tracks.questions.generate_questions", AsyncMock(return_value=questions)):
+        with patch(
+            "scripts.tracks.questions.generate_questions",
+            AsyncMock(return_value=questions),
+        ):
             await embed_and_insert_questions(
-                session, service,
+                session,
+                service,
                 embedder=_make_embedder(),
                 llm_client=_make_llm(),
                 cleaned_detail="",
@@ -86,9 +94,12 @@ class TestEmbedAndInsertQuestions:
         service = _make_service()
         session = _make_session()
 
-        with patch("scripts.tracks.questions.generate_questions", AsyncMock(return_value=[])):
+        with patch(
+            "scripts.tracks.questions.generate_questions", AsyncMock(return_value=[])
+        ):
             result = await embed_and_insert_questions(
-                session, service,
+                session,
+                service,
                 embedder=_make_embedder(),
                 llm_client=_make_llm(),
                 cleaned_detail="",
@@ -110,9 +121,13 @@ class TestEmbedAndInsertQuestions:
 
         session.execute = AsyncMock(side_effect=_capture_execute)
 
-        with patch("scripts.tracks.questions.generate_questions", AsyncMock(return_value=questions)):
+        with patch(
+            "scripts.tracks.questions.generate_questions",
+            AsyncMock(return_value=questions),
+        ):
             await embed_and_insert_questions(
-                session, service,
+                session,
+                service,
                 embedder=_make_embedder(),
                 llm_client=_make_llm(),
                 cleaned_detail="",

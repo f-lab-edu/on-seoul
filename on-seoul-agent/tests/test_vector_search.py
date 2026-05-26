@@ -119,8 +119,10 @@ class TestVectorSearchRowKind:
         """row_kind='identity' + max_class_name 전달 시 bind에 max_class_name이 포함된다."""
         session, texts, binds = _capture_session()
         await vector_search(
-            session, _SAMPLE_VECTOR,
-            row_kind="identity", max_class_name="체육시설",
+            session,
+            _SAMPLE_VECTOR,
+            row_kind="identity",
+            max_class_name="체육시설",
         )
         assert "max_class_name" in texts[0]
         assert binds[0]["max_class_name"] == "체육시설"
@@ -133,7 +135,8 @@ class TestVectorSearchRowKind:
         """
         session, texts, binds = _capture_session()
         await vector_search(
-            session, _SAMPLE_VECTOR,
+            session,
+            _SAMPLE_VECTOR,
             row_kind="summary",
         )
         # None인 필터는 SQL/bind 모두 제외
@@ -240,8 +243,11 @@ class TestPostFilterBindParams:
     async def test_all_three_postfilters_present_in_bind(self):
         session, _, binds = _capture_session()
         await vector_search(
-            session, _SAMPLE_VECTOR,
-            max_class_name="체육시설", area_name="강남구", service_status="접수중",
+            session,
+            _SAMPLE_VECTOR,
+            max_class_name="체육시설",
+            area_name="강남구",
+            service_status="접수중",
         )
         assert binds[0]["max_class_name"] == "체육시설"
         assert binds[0]["area_name"] == "강남구"
@@ -250,8 +256,11 @@ class TestPostFilterBindParams:
     async def test_all_three_postfilters_appear_in_sql_text(self):
         session, texts, _ = _capture_session()
         await vector_search(
-            session, _SAMPLE_VECTOR,
-            max_class_name="체육시설", area_name="강남구", service_status="접수중",
+            session,
+            _SAMPLE_VECTOR,
+            max_class_name="체육시설",
+            area_name="강남구",
+            service_status="접수중",
         )
         sql_text = texts[0]
         assert "max_class_name" in sql_text
@@ -267,8 +276,11 @@ class TestPostFilterBindParams:
         for bad_value in injected_values:
             session, texts, _ = _capture_session()
             await vector_search(
-                session, _SAMPLE_VECTOR,
-                max_class_name=bad_value, area_name=bad_value, service_status=bad_value,
+                session,
+                _SAMPLE_VECTOR,
+                max_class_name=bad_value,
+                area_name=bad_value,
+                service_status=bad_value,
             )
             sql_text = texts[0]
             assert bad_value not in sql_text

@@ -75,10 +75,8 @@ def _print_results(results: list[dict]) -> None:
     col_name = "시설명"
     col_area = "지역"
     col_sim = "유사도"
-    print(
-        f"  {'순위':<4} {col_name:<30} {col_area:<12} {col_sim}"
-    )
-    print(f"  {'-'*4} {'-'*30} {'-'*12} {'-'*6}")
+    print(f"  {'순위':<4} {col_name:<30} {col_area:<12} {col_sim}")
+    print(f"  {'-' * 4} {'-' * 30} {'-' * 12} {'-' * 6}")
     for i, row in enumerate(results, start=1):
         name = (row.get("service_name") or "")[:28]
         metadata = row.get("metadata") or {}

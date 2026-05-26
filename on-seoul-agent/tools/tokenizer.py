@@ -10,15 +10,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-DOMAIN_TOKENS: frozenset[str] = frozenset({
-    "따릉이",
-    "한강공원",
-    "세빛섬",
-    "노들섬",
-    "광화문광장",
-    "DDP",
-    "ddp",
-})
+DOMAIN_TOKENS: frozenset[str] = frozenset(
+    {
+        "따릉이",
+        "한강공원",
+        "세빛섬",
+        "노들섬",
+        "광화문광장",
+        "DDP",
+        "ddp",
+    }
+)
 
 try:
     from lindera_py import Tokenizer as _LinderaTokenizer

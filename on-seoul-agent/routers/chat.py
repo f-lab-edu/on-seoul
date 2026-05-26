@@ -73,12 +73,16 @@ def _resolve_graph(request: Request) -> AgentGraph:
     """
     graph = getattr(request.app.state, "graph", None)
     if graph is None:
-        logger.warning("app.state.graph 미설정 — fallback AgentGraph 생성. lifespan 실행 여부 확인 필요")
+        logger.warning(
+            "app.state.graph 미설정 — fallback AgentGraph 생성. lifespan 실행 여부 확인 필요"
+        )
         graph = AgentGraph(redis=_resolve_redis(request))
     return graph
 
 
-async def _stream(request: ChatRequest, graph: AgentGraph, redis: Any) -> AsyncGenerator[bytes, None]:
+async def _stream(
+    request: ChatRequest, graph: AgentGraph, redis: Any
+) -> AsyncGenerator[bytes, None]:
     """워크플로우를 실행하고 SSE 프레임을 yield한다."""
     logger.info(
         "chat.request room=%s msg_id=%d msg=%r",
@@ -137,7 +141,9 @@ async def _stream(request: ChatRequest, graph: AgentGraph, redis: Any) -> AsyncG
                     if result.get("error"):
                         logger.error(
                             "chat.workflow_error room=%s intent=%s error=%s",
-                            result.get("room_id"), intent, result["error"],
+                            result.get("room_id"),
+                            intent,
+                            result["error"],
                         )
                         payload["error"] = "서비스 처리 중 오류가 발생했습니다."
                         yield sse_frame("workflow_error", payload)
@@ -155,7 +161,10 @@ async def _stream(request: ChatRequest, graph: AgentGraph, redis: Any) -> AsyncG
     except Exception:
         # 세션·DB 레벨 예외 — 워크플로우 진입 자체가 실패한 경우
         logger.exception("워크플로우 실행 중 오류")
-        yield sse_frame("error", {"message": "서비스 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."})
+        yield sse_frame(
+            "error",
+            {"message": "서비스 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."},
+        )
         return
 
     # 정상 final만 recent_queries에 push (workflow_error/error 경로는 push 안 함)

@@ -36,14 +36,18 @@ class TestRrfMissingWeightKey:
 
         ids_empty = [sid for sid, _ in result_empty_weights]
         ids_none = [sid for sid, _ in result_none_weights]
-        assert ids_empty == ids_none, "빈 weights dict는 weights=None과 같은 순서를 내야 한다"
+        assert ids_empty == ids_none, (
+            "빈 weights dict는 weights=None과 같은 순서를 내야 한다"
+        )
 
     def test_scores_differ_when_weight_applied_to_one_channel(self):
         """한 채널에만 가중치가 적용되면 해당 채널 기여도가 달라진다."""
         channels = {
             "track_a": ["S1"],
         }
-        score_weighted = reciprocal_rank_fusion(channels, weights={"track_a": 2.0})[0][1]
+        score_weighted = reciprocal_rank_fusion(channels, weights={"track_a": 2.0})[0][
+            1
+        ]
         score_default = reciprocal_rank_fusion(channels, weights=None)[0][1]
         assert abs(score_weighted - score_default * 2) < 1e-9
 

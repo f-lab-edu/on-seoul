@@ -10,7 +10,13 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents.nodes import GraphNodes
-from schemas.search import ChannelData, ChannelHit, ChannelQuery, SearchChannel, SearchKind
+from schemas.search import (
+    ChannelData,
+    ChannelHit,
+    ChannelQuery,
+    SearchChannel,
+    SearchKind,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +40,9 @@ def _make_channel(
     )
 
 
-def _make_hit(rank: int, service_id: str = "SVC001", score: float | None = 0.9) -> ChannelHit:
+def _make_hit(
+    rank: int, service_id: str = "SVC001", score: float | None = 0.9
+) -> ChannelHit:
     return ChannelHit(rank=rank, service_id=service_id, score=score, meta={})
 
 
@@ -544,10 +552,14 @@ class TestSearchPersistNodeMultiChannelKinds:
         nodes = _make_nodes(session)
         channels = {
             SearchChannel.SQL: _make_channel(
-                SearchKind.SQL, query_text="수영장", hits=[_make_hit(1, "SVC_SQL", None)]
+                SearchKind.SQL,
+                query_text="수영장",
+                hits=[_make_hit(1, "SVC_SQL", None)],
             ),
             SearchChannel.VECTOR: _make_channel(
-                SearchKind.VECTOR, query_text="공원", hits=[_make_hit(1, "SVC_VEC", 0.88)]
+                SearchKind.VECTOR,
+                query_text="공원",
+                hits=[_make_hit(1, "SVC_VEC", 0.88)],
             ),
         }
         state = _base_state(search_channels=channels)

@@ -108,7 +108,9 @@ class TestSearchKindValues:
     def test_mapping_values_are_valid_kinds(self):
         """모든 매핑 값이 SearchKind 상수 중 하나여야 한다."""
         valid_kinds = self._get_kind_constants()
-        invalid = [kind for kind in _CHANNEL_TO_KIND.values() if kind not in valid_kinds]
+        invalid = [
+            kind for kind in _CHANNEL_TO_KIND.values() if kind not in valid_kinds
+        ]
         assert invalid == [], f"유효하지 않은 kind 값: {invalid}"
 
 

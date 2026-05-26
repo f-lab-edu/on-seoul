@@ -114,7 +114,8 @@ async def process_service(
 
         if "C" in tracks:
             await embed_and_insert_questions(
-                session, service,
+                session,
+                service,
                 embedder=embedder,
                 llm_client=llm_client,
                 cleaned_detail=cleaned,
@@ -156,10 +157,14 @@ async def run(
 
         if incremental and not retry_failed:
             async with OnAiSession() as ai_session:
-                existing_ids = await _fetch_existing_service_ids(ai_session, tracks=effective_tracks)
+                existing_ids = await _fetch_existing_service_ids(
+                    ai_session, tracks=effective_tracks
+                )
             before_count = len(rows)
             rows = [r for r in rows if r["service_id"] not in existing_ids]
-            logger.info("기존 %d건 제외, %d건 신규 임베딩", before_count - len(rows), len(rows))
+            logger.info(
+                "기존 %d건 제외, %d건 신규 임베딩", before_count - len(rows), len(rows)
+            )
             if not rows:
                 logger.info("신규 데이터가 없습니다.")
                 return
@@ -170,7 +175,11 @@ async def run(
 
         logger.info("총 %d건 처리 시작 (트랙: %s)", len(rows), sorted(effective_tracks))
 
-        failed_path = _EXTRACTION_FAILED_FILE if "B" in effective_tracks or "C" in effective_tracks else None
+        failed_path = (
+            _EXTRACTION_FAILED_FILE
+            if "B" in effective_tracks or "C" in effective_tracks
+            else None
+        )
 
         for i, row in enumerate(rows, start=1):
             async with OnAiSession() as ai_session:
@@ -297,16 +306,20 @@ async def _fetch_failed_rows(session: AsyncSession) -> list[dict]:
     return [dict(zip(keys, row)) for row in result.fetchall()]
 
 
-
-
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="시설 메타데이터 Triple-Track 임베딩 적재")
+    parser = argparse.ArgumentParser(
+        description="시설 메타데이터 Triple-Track 임베딩 적재"
+    )
 
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--all", action="store_true", help="전량 적재 (기본값: seed 100건)")
+    group.add_argument(
+        "--all", action="store_true", help="전량 적재 (기본값: seed 100건)"
+    )
     group.add_argument("--limit", type=int, default=None, help="적재할 최대 건수")
 
-    parser.add_argument("--incremental", action="store_true", help="신규 service_id만 임베딩")
+    parser.add_argument(
+        "--incremental", action="store_true", help="신규 service_id만 임베딩"
+    )
     parser.add_argument(
         "--track",
         nargs="+",
@@ -315,8 +328,12 @@ def _parse_args() -> argparse.Namespace:
         metavar="TRACK",
         help="적재할 트랙 (A B C 중 하나 이상, 기본값: A B C). 예: --track A B",
     )
-    parser.add_argument("--retry-failed", action="store_true", help="extraction_failed.tsv 재처리")
-    parser.add_argument("--dry-run", action="store_true", help="실제 적재 없이 대상 건수만 확인")
+    parser.add_argument(
+        "--retry-failed", action="store_true", help="extraction_failed.tsv 재처리"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="실제 적재 없이 대상 건수만 확인"
+    )
     return parser.parse_args()
 
 

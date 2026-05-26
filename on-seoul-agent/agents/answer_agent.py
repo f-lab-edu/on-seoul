@@ -65,16 +65,20 @@ class AnswerAgent:
     def __init__(self, model: BaseChatModel | None = None) -> None:
         llm = model or get_chat_model()
 
-        answer_prompt = ChatPromptTemplate.from_messages([
-            ("system", _ANSWER_SYSTEM),
-            ("human", _ANSWER_HUMAN),
-        ])
+        answer_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", _ANSWER_SYSTEM),
+                ("human", _ANSWER_HUMAN),
+            ]
+        )
         self._answer_chain = answer_prompt | llm.with_structured_output(_AnswerOutput)
 
-        title_prompt = ChatPromptTemplate.from_messages([
-            ("system", _TITLE_SYSTEM),
-            ("human", _TITLE_HUMAN),
-        ])
+        title_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", _TITLE_SYSTEM),
+                ("human", _TITLE_HUMAN),
+            ]
+        )
         self._title_chain = title_prompt | llm.with_structured_output(_TitleOutput)
 
     async def answer(self, state: AgentState) -> AgentState:
@@ -82,10 +86,12 @@ class AnswerAgent:
         results = self._collect_results(state)
         results_json = json.dumps(results, ensure_ascii=False, default=str)
 
-        answer_out: _AnswerOutput = await self._answer_chain.ainvoke({
-            "message": state["message"],
-            "results_json": results_json,
-        })
+        answer_out: _AnswerOutput = await self._answer_chain.ainvoke(
+            {
+                "message": state["message"],
+                "results_json": results_json,
+            }
+        )
 
         updates: dict = {"answer": answer_out.answer}
 

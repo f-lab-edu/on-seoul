@@ -5,8 +5,8 @@
 해당 구간만 추출하여 임베딩 품질을 높인다.
 """
 
-START_MARKER = "3. 상세내용"
-END_MARKER = "4. 주의사항"
+from llm.embedding_config import DETAIL_END_MARKER as END_MARKER
+from llm.embedding_config import DETAIL_START_MARKER as START_MARKER
 
 
 def clean_detail_content(raw: str | None) -> str:

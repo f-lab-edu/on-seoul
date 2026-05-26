@@ -30,7 +30,9 @@ class AgentState(TypedDict):
     service_status: str | None  # 접수중·예약마감·접수종료·예약일시중지·안내중 중 하나
     sql_results: list[dict[str, Any]] | None  # SQL Agent 결과
     sql_keyword: str | None  # SqlAgent가 LLM으로 추출한 키워드 (search_channels 적재용)
-    vector_sub_intent: str | None  # Router가 분류한 벡터 검색 세부 의도 (VECTOR_SEARCH 전용)
+    vector_sub_intent: (
+        str | None
+    )  # Router가 분류한 벡터 검색 세부 의도 (VECTOR_SEARCH 전용)
     vector_results: list[dict[str, Any]] | None  # Vector Agent 결과
     map_results: dict[str, Any] | None  # map_search GeoJSON FeatureCollection 결과
     answer: str | None  # Answer Agent가 생성한 최종 답변

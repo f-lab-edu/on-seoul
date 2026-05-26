@@ -104,8 +104,8 @@ ROUTER_FEW_SHOT_EXAMPLES = [
         "message": "마포구 문화행사 이번 주 접수 중인 거 보여줘",
         "output": (
             '{"reasoning": "구체 조건 3종(지역·카테고리·상태)이 모두 명시되어 SQL_SEARCH로 분류.'
-            ' 사용자의 \'문화행사\'는 enum \'문화체험\'으로 매핑. \'마포구\'는 정확한 자치구명.'
-            ' \'접수 중\'은 \'접수중\'에 해당.",'
+            " 사용자의 '문화행사'는 enum '문화체험'으로 매핑. '마포구'는 정확한 자치구명."
+            " '접수 중'은 '접수중'에 해당.\","
             ' "intent": "SQL_SEARCH",'
             ' "refined_query": "마포구 접수중 문화체험",'
             ' "max_class_name": "문화체험", "area_name": "마포구",'
@@ -116,7 +116,7 @@ ROUTER_FEW_SHOT_EXAMPLES = [
         "message": "응봉공원 테니스장 예약하고 싶어",
         "output": (
             '{"reasoning": "특정 시설명(고유명사+시설 종류)으로 식별 검색이 필요하므로'
-            ' VECTOR_SEARCH/identification. 자치구 미언급(\'응봉공원\'은 시설명).",'
+            " VECTOR_SEARCH/identification. 자치구 미언급('응봉공원'은 시설명).\","
             ' "intent": "VECTOR_SEARCH",'
             ' "refined_query": "응봉공원 테니스장",'
             ' "max_class_name": null, "area_name": null,'
@@ -138,7 +138,7 @@ ROUTER_FEW_SHOT_EXAMPLES = [
         "message": "강동구 무료로 이용할 수 있는 시설 있어?",
         "output": (
             '{"reasoning": "\'무료\'가 주요 탐색 조건(가격 속성)이므로 VECTOR_SEARCH/detail.'
-            ' 활동·체험·맥락이 아닌 가격 기반 필터링이 핵심. \'강동구\'는 area_name 추출.",'
+            " 활동·체험·맥락이 아닌 가격 기반 필터링이 핵심. '강동구'는 area_name 추출.\","
             ' "intent": "VECTOR_SEARCH",'
             ' "refined_query": "강동구 무료 시설",'
             ' "max_class_name": null, "area_name": "강동구",'
@@ -149,7 +149,7 @@ ROUTER_FEW_SHOT_EXAMPLES = [
         "message": "수영장 평일 오전 이용 요금이랑 취소 규정 알려줘",
         "output": (
             '{"reasoning": "요금·취소 규정 같은 세부정보 문의이므로 VECTOR_SEARCH/detail.'
-            ' 시설 카테고리는 \'체육시설\'에 해당하지만 사용자가 명시한 필터 조건은 아니므로 null.",'
+            " 시설 카테고리는 '체육시설'에 해당하지만 사용자가 명시한 필터 조건은 아니므로 null.\","
             ' "intent": "VECTOR_SEARCH",'
             ' "refined_query": "수영장 평일 이용 요금 취소 규정",'
             ' "max_class_name": null, "area_name": null,'
@@ -160,8 +160,8 @@ ROUTER_FEW_SHOT_EXAMPLES = [
         "message": "강남 교육 프로그램 신청 가능한 거",
         "output": (
             '{"reasoning": "지역·카테고리·상태 모두 명시되어 SQL_SEARCH.'
-            ' \'강남\'은 자치구 표기 \'강남구\'로 정규화. \'교육\'은 enum \'교육강좌\'로 매핑.'
-            ' \'신청 가능\'은 \'접수중\'에 해당.",'
+            " '강남'은 자치구 표기 '강남구'로 정규화. '교육'은 enum '교육강좌'로 매핑."
+            " '신청 가능'은 '접수중'에 해당.\","
             ' "intent": "SQL_SEARCH",'
             ' "refined_query": "강남구 접수중 교육강좌",'
             ' "max_class_name": "교육강좌", "area_name": "강남구",'
@@ -172,9 +172,11 @@ ROUTER_FEW_SHOT_EXAMPLES = [
 
 
 ROUTER_FEW_SHOT: FewShotChatMessagePromptTemplate = FewShotChatMessagePromptTemplate(
-    example_prompt=ChatPromptTemplate.from_messages([
-        ("human", "사용자 메시지: {message}"),
-        ("ai", "{output}"),
-    ]),
+    example_prompt=ChatPromptTemplate.from_messages(
+        [
+            ("human", "사용자 메시지: {message}"),
+            ("ai", "{output}"),
+        ]
+    ),
     examples=ROUTER_FEW_SHOT_EXAMPLES,
 )

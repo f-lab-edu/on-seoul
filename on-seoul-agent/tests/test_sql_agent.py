@@ -61,7 +61,9 @@ class TestSqlAgent:
 
         await agent.search(state, session)
 
-        agent._chain.ainvoke.assert_called_once_with({"message": "강남구 체육시설", "today": ANY})
+        agent._chain.ainvoke.assert_called_once_with(
+            {"message": "강남구 체육시설", "today": ANY}
+        )
 
     async def test_chain_receives_today_as_iso_date(self):
         """today는 YYYY-MM-DD ISO 형식 문자열로 전달된다."""
@@ -106,9 +108,7 @@ class TestSqlAgent:
 
     async def test_query_builds_category_filter(self):
         """max_class_name 파라미터가 있으면 WHERE에 포함된다."""
-        agent, session = _make_agent(
-            _SqlParams(max_class_name="체육시설"), []
-        )
+        agent, session = _make_agent(_SqlParams(max_class_name="체육시설"), [])
         await agent.search(_make_state(), session)
 
         call_args = session.execute.call_args
@@ -210,7 +210,10 @@ class TestSqlAgentCoT:
     async def test_reasoning_field_not_passed_to_sql_search(self):
         """reasoning 필드는 CoT 내부용이며 sql_search bind 파라미터에 전달되지 않는다."""
         agent, session = _make_agent(
-            _SqlParams(reasoning="오늘이 2026-05-22이므로 이번 주는 05-18~05-24.", area_name="마포구"),
+            _SqlParams(
+                reasoning="오늘이 2026-05-22이므로 이번 주는 05-18~05-24.",
+                area_name="마포구",
+            ),
             [],
         )
         await agent.search(_make_state(), session)
@@ -242,7 +245,7 @@ class TestSqlParamsValidators:
 
     def test_invalid_area_name_coerced_to_none(self):
         """25개 자치구가 아닌 area_name은 None으로 정규화된다."""
-        p = _SqlParams(area_name="강남")       # '강남구'가 아님
+        p = _SqlParams(area_name="강남")  # '강남구'가 아님
         assert p.area_name is None
 
     def test_valid_area_name_preserved(self):

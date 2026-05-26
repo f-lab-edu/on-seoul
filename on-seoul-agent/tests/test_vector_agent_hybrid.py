@@ -31,7 +31,9 @@ def _make_agent(
         vector = [0.1, 0.2, 0.3]
     agent = VectorAgent.__new__(VectorAgent)
     mock_chain = MagicMock()
-    mock_chain.ainvoke = AsyncMock(return_value=_RefinedQuery(refined_query=refined_query))
+    mock_chain.ainvoke = AsyncMock(
+        return_value=_RefinedQuery(refined_query=refined_query)
+    )
     agent._refine_chain = mock_chain
     mock_embeddings = MagicMock()
     mock_embeddings.aembed_query = AsyncMock(return_value=vector)
@@ -61,16 +63,28 @@ def _patch_all_searches(
         def __enter__(self):
             self._stack = ExitStack()
             self.mock_vs = self._stack.enter_context(
-                patch("agents.vector_agent.vector_search", new=AsyncMock(side_effect=_vs_side_effect))
+                patch(
+                    "agents.vector_agent.vector_search",
+                    new=AsyncMock(side_effect=_vs_side_effect),
+                )
             )
             self.mock_qs = self._stack.enter_context(
-                patch("agents.vector_agent.question_search", new=AsyncMock(return_value=_c_rows))
+                patch(
+                    "agents.vector_agent.question_search",
+                    new=AsyncMock(return_value=_c_rows),
+                )
             )
             self.mock_bm25 = self._stack.enter_context(
-                patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=_d_rows))
+                patch(
+                    "agents.vector_agent.bm25_search",
+                    new=AsyncMock(return_value=_d_rows),
+                )
             )
             self.mock_hydrate = self._stack.enter_context(
-                patch("agents.vector_agent.hydrate_services", new=AsyncMock(return_value=_hydrated))
+                patch(
+                    "agents.vector_agent.hydrate_services",
+                    new=AsyncMock(return_value=_hydrated),
+                )
             )
             return self
 
@@ -98,8 +112,17 @@ class TestVectorAgentHybrid:
 
     async def test_rrf_merges_and_hydrates(self):
         """4채널 결과가 RRF로 결합된 후 hydrate_services로 원본 데이터를 hydration한다."""
-        a_rows = [{"service_id": "S001", "embedding_text": "t", "metadata": {}, "similarity": 0.9}]
-        hydrated = [{"service_id": "S001", "service_name": "체험관", "service_status": "접수중"}]
+        a_rows = [
+            {
+                "service_id": "S001",
+                "embedding_text": "t",
+                "metadata": {},
+                "similarity": 0.9,
+            }
+        ]
+        hydrated = [
+            {"service_id": "S001", "service_name": "체험관", "service_status": "접수중"}
+        ]
         agent = _make_agent()
 
         with _patch_all_searches(a_rows=a_rows, hydrated=hydrated) as ctx:
@@ -114,8 +137,12 @@ class TestVectorAgentHybrid:
         """모든 토큰이 stopword이면 bm25_search를 호출하지 않는다."""
         agent = _make_agent(refined_query="예약 서비스")
 
-        with _patch_all_searches() as ctx, \
-             patch("agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]):
+        with (
+            _patch_all_searches() as ctx,
+            patch(
+                "agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]
+            ),
+        ):
             await agent.search(_make_state(), MagicMock(), MagicMock())
 
         ctx.mock_bm25.assert_not_called()
@@ -147,8 +174,12 @@ class TestVectorAgentHybrid:
 
         agent = _make_agent()
 
-        with _patch_all_searches(), \
-             patch("agents.vector_agent.reciprocal_rank_fusion", wraps=lambda ch, **kw: []) as mock_rrf_fn:
+        with (
+            _patch_all_searches(),
+            patch(
+                "agents.vector_agent.reciprocal_rank_fusion", wraps=lambda ch, **kw: []
+            ) as mock_rrf_fn,
+        ):
             await agent.search(_make_state(), MagicMock(), MagicMock())
 
         # rrf_unweighted_baseline=True 이면 weights=None
@@ -158,7 +189,14 @@ class TestVectorAgentHybrid:
 
     async def test_hydration_failure_returns_empty(self):
         """hydrate_services가 예외를 던지면 vector_results가 빈 리스트가 된다."""
-        a_rows = [{"service_id": "S001", "embedding_text": "t", "metadata": {}, "similarity": 0.9}]
+        a_rows = [
+            {
+                "service_id": "S001",
+                "embedding_text": "t",
+                "metadata": {},
+                "similarity": 0.9,
+            }
+        ]
         agent = _make_agent()
 
         with _patch_all_searches(a_rows=a_rows) as ctx:
@@ -169,8 +207,17 @@ class TestVectorAgentHybrid:
 
     async def test_search_channels_populated(self):
         """search_channels에 vector_a, vector_b, vector_c, bm25, rrf, final 6개 채널이 모두 채워진다."""
-        a_rows = [{"service_id": "S001", "embedding_text": "t", "metadata": {}, "similarity": 0.9}]
-        hydrated = [{"service_id": "S001", "service_name": "체험관", "service_status": "접수중"}]
+        a_rows = [
+            {
+                "service_id": "S001",
+                "embedding_text": "t",
+                "metadata": {},
+                "similarity": 0.9,
+            }
+        ]
+        hydrated = [
+            {"service_id": "S001", "service_name": "체험관", "service_status": "접수중"}
+        ]
         agent = _make_agent()
 
         with _patch_all_searches(a_rows=a_rows, hydrated=hydrated):
@@ -187,13 +234,31 @@ class TestVectorAgentHybrid:
     async def test_vector_search_failure_degrades_gracefully(self):
         """vector_search가 예외를 던져도 다른 채널로 검색을 계속한다."""
         agent = _make_agent()
-        c_rows = [{"service_id": "S002", "embedding_text": "q", "intent_label": "detail", "similarity": 0.8}]
+        c_rows = [
+            {
+                "service_id": "S002",
+                "embedding_text": "q",
+                "intent_label": "detail",
+                "similarity": 0.8,
+            }
+        ]
         hydrated = [{"service_id": "S002", "service_name": "질문관"}]
 
-        with patch("agents.vector_agent.vector_search", new=AsyncMock(side_effect=RuntimeError("VS 오류"))), \
-             patch("agents.vector_agent.question_search", new=AsyncMock(return_value=c_rows)), \
-             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])), \
-             patch("agents.vector_agent.hydrate_services", new=AsyncMock(return_value=hydrated)):
+        with (
+            patch(
+                "agents.vector_agent.vector_search",
+                new=AsyncMock(side_effect=RuntimeError("VS 오류")),
+            ),
+            patch(
+                "agents.vector_agent.question_search",
+                new=AsyncMock(return_value=c_rows),
+            ),
+            patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])),
+            patch(
+                "agents.vector_agent.hydrate_services",
+                new=AsyncMock(return_value=hydrated),
+            ),
+        ):
             result = await agent.search(_make_state(), MagicMock(), MagicMock())
 
         # 실패해도 빈 결과 대신 다른 채널 결과가 들어온다
@@ -220,14 +285,29 @@ class TestResolveWeights:
             mock_settings.vector_sub_intent_enabled = True
             mock_settings.vector_default_sub_intent = "semantic"
             mock_settings.rrf_weight_profiles = {
-                "identification": {"track_a": 0.5, "track_b": 0.25, "track_c": 0.25, "bm25": 0.5},
-                "detail":         {"track_a": 0.2, "track_b": 0.5,  "track_c": 0.3,  "bm25": 0.4},
-                "semantic":       {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3},
+                "identification": {
+                    "track_a": 0.5,
+                    "track_b": 0.25,
+                    "track_c": 0.25,
+                    "bm25": 0.5,
+                },
+                "detail": {"track_a": 0.2, "track_b": 0.5, "track_c": 0.3, "bm25": 0.4},
+                "semantic": {
+                    "track_a": 0.15,
+                    "track_b": 0.35,
+                    "track_c": 0.5,
+                    "bm25": 0.3,
+                },
             }
             mock_settings.rrf_unweighted_baseline = False
 
             result = _resolve_weights("identification")
-            assert result == {"track_a": 0.5, "track_b": 0.25, "track_c": 0.25, "bm25": 0.5}
+            assert result == {
+                "track_a": 0.5,
+                "track_b": 0.25,
+                "track_c": 0.25,
+                "bm25": 0.5,
+            }
 
     def test_unknown_sub_intent_falls_back_to_default(self):
         """허용되지 않는 sub_intent → vector_default_sub_intent 프로파일 반환."""
@@ -237,9 +317,19 @@ class TestResolveWeights:
             mock_settings.vector_sub_intent_enabled = True
             mock_settings.vector_default_sub_intent = "semantic"
             mock_settings.rrf_weight_profiles = {
-                "semantic": {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3},
+                "semantic": {
+                    "track_a": 0.15,
+                    "track_b": 0.35,
+                    "track_c": 0.5,
+                    "bm25": 0.3,
+                },
             }
             mock_settings.rrf_unweighted_baseline = False
 
             result = _resolve_weights("unknown_intent")
-            assert result == {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3}
+            assert result == {
+                "track_a": 0.15,
+                "track_b": 0.35,
+                "track_c": 0.5,
+                "bm25": 0.3,
+            }

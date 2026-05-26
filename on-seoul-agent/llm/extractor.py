@@ -8,14 +8,13 @@ import logging
 
 from pydantic import BaseModel, Field
 
+from llm.embedding_config import EXTRACTION_MAX_RETRIES, EXTRACTION_MIN_CHARS
 from llm.prompts.extraction import (
     EXTRACTION_PROMPT_FULL,
     EXTRACTION_PROMPT_METADATA_ONLY,
 )
 
 logger = logging.getLogger(__name__)
-
-MIN_CHARS: int = 50  # cleaned_detail 길이 임계값. 이상이면 FULL 프롬프트 사용.
 
 
 class ExtractedMetadata(BaseModel):
@@ -42,11 +41,11 @@ async def extract_metadata(
 ) -> ExtractedMetadata | None:
     """시설 메타데이터 구조화 추출.
 
-    cleaned_detail 길이 >= MIN_CHARS 이면 EXTRACTION_PROMPT_FULL 사용.
+    cleaned_detail 길이 >= EXTRACTION_MIN_CHARS 이면 EXTRACTION_PROMPT_FULL 사용.
     짧거나 비어있으면 EXTRACTION_PROMPT_METADATA_ONLY 사용.
-    LLM 1회 재시도 후 실패하면 None 반환.
+    EXTRACTION_MAX_RETRIES 회 재시도 후 실패하면 None 반환.
     """
-    use_full = len(cleaned_detail) >= MIN_CHARS
+    use_full = len(cleaned_detail) >= EXTRACTION_MIN_CHARS
     prompt = EXTRACTION_PROMPT_FULL if use_full else EXTRACTION_PROMPT_METADATA_ONLY
 
     chain = prompt | llm_client.with_structured_output(ExtractedMetadata)
@@ -62,14 +61,18 @@ async def extract_metadata(
         "cleaned_detail": cleaned_detail,
     }
 
-    for attempt in range(2):
+    for attempt in range(EXTRACTION_MAX_RETRIES + 1):
         try:
             result = await chain.ainvoke(input_data)
             return result
         except Exception:
-            if attempt == 0:
-                logger.warning("extract_metadata 1차 실패, 재시도 중", exc_info=True)
+            if attempt < EXTRACTION_MAX_RETRIES:
+                logger.warning(
+                    "extract_metadata %d차 실패, 재시도 중", attempt + 1, exc_info=True
+                )
             else:
-                logger.error("extract_metadata 2차 실패, None 반환", exc_info=True)
+                logger.error(
+                    "extract_metadata %d차 실패, None 반환", attempt + 1, exc_info=True
+                )
 
     return None

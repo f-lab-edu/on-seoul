@@ -94,11 +94,15 @@ class TestConditionalEdgeRouting:
         """VECTOR_SEARCH intent → vector_node 실행, vector_results 채워짐."""
         rows = [{"service_id": "V001", "service_name": "체험관", "similarity": 0.9}]
         vector_agent, ai_session, mock_bm25 = _vector_agent(rows)
-        hydrated = [{"service_id": "V001", "service_name": "체험관", "service_status": "접수중"}]
+        hydrated = [
+            {"service_id": "V001", "service_name": "체험관", "service_status": "접수중"}
+        ]
 
         with (
             patch("agents.vector_agent.bm25_search", mock_bm25),
-            patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)),
+            patch(
+                "agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)
+            ),
         ):
             graph = AgentGraph(
                 router=_router(IntentType.VECTOR_SEARCH),
@@ -247,7 +251,6 @@ class TestTraceNode:
         assert trace["elapsed_ms"] >= 0
 
 
-
 # ---------------------------------------------------------------------------
 # 3. 자기 교정(Self-Correction) 사이클 테스트
 # ---------------------------------------------------------------------------
@@ -350,7 +353,6 @@ class TestSelfCorrectionCycle:
         assert result["retry_count"] == 0
         assert result["answer"] is not None
         assert len(result["answer"]) > 0
-
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +459,6 @@ class TestAgentStateContract:
         answer_agent._title_chain.ainvoke.assert_called_once()
 
 
-
 # ---------------------------------------------------------------------------
 # 5. stream() 검증
 # ---------------------------------------------------------------------------
@@ -518,7 +519,6 @@ class TestAgentGraphStream:
         assert "routing" in progress_steps
         assert "searching" in progress_steps
         assert "answering" in progress_steps
-
 
 
 # ---------------------------------------------------------------------------
@@ -582,6 +582,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
     False를 반환한다. recursion_limit=10으로 무한 루프를 차단하고, 예외 핸들러가 fallback answer를
     주입하여 _self_correction_edge의 `not answer.strip()` 조건을 False로 만들어 종료한다.
     """
+
     async def test_router_always_failing_terminates_without_recursion_error(self):
         """router 가 예외를 던지면 fallback answer 가 설정되어 1 cycle 만에 종료된다.
 
@@ -690,12 +691,13 @@ class TestSelfCorrectionInfiniteLoopRegression:
             "error": None,
             "retry_count": 0,
         }
-        assert graph._nodes.self_correction_edge(state_empty_answer) == "retry_prep_node"
+        assert (
+            graph._nodes.self_correction_edge(state_empty_answer) == "retry_prep_node"
+        )
 
         # retry_count >= 1 이면 항상 end_normal
         state_after_retry = {**state_empty_answer, "retry_count": 1}
         assert graph._nodes.self_correction_edge(state_after_retry) == "end_normal"
-
 
 
 # ---------------------------------------------------------------------------
@@ -797,4 +799,3 @@ class TestRouterRefinedQueryPropagation:
 
         assert update["intent"] == IntentType.FALLBACK
         assert "refined_query" not in update
-

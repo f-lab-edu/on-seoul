@@ -13,7 +13,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from core.config import settings
 from llm.client import get_chat_model, get_embeddings
-from schemas.embeddings import ServiceEmbeddingsSyncRequest, ServiceEmbeddingsSyncResponse
+from schemas.embeddings import (
+    ServiceEmbeddingsSyncRequest,
+    ServiceEmbeddingsSyncResponse,
+)
 from scripts.embed_metadata import process_service
 from scripts.tracks._shared import ServiceRecord
 
@@ -56,13 +59,16 @@ async def _run_services_sync(upsert: list[str], delete: list[str]) -> None:
                 async with ai_session.begin():
                     for sid in delete:
                         await ai_session.execute(
-                            text("DELETE FROM service_embeddings WHERE service_id = :sid"),
+                            text(
+                                "DELETE FROM service_embeddings WHERE service_id = :sid"
+                            ),
                             {"sid": sid},
                         )
             logger.info("임베딩 삭제 완료: %d건", len(delete))
 
         # upsert 처리
         if upsert:
+
             async def _upsert_one(service_id: str) -> None:
                 async with sem:
                     async with OnDataSession() as data_session:
@@ -80,7 +86,9 @@ async def _run_services_sync(upsert: list[str], delete: list[str]) -> None:
                                 tracks={"A", "B", "C"},
                             )
                         except Exception:
-                            logger.exception("임베딩 처리 실패: service_id=%s", service_id)
+                            logger.exception(
+                                "임베딩 처리 실패: service_id=%s", service_id
+                            )
 
             await asyncio.gather(*[_upsert_one(sid) for sid in upsert])
             logger.info("임베딩 upsert 완료: %d건", len(upsert))

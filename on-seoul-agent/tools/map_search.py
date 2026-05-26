@@ -132,11 +132,13 @@ def _to_geojson(rows: list[dict]) -> dict:
         # distance_m은 properties에 포함하고 좌표 컬럼은 geometry로 이동했으므로 제외
         properties = {k: v for k, v in row.items() if k not in ("coord_x", "coord_y")}
 
-        features.append({
-            "type": "Feature",
-            "geometry": geometry,
-            "properties": properties,
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": geometry,
+                "properties": properties,
+            }
+        )
 
     return {
         "type": "FeatureCollection",

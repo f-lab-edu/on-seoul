@@ -15,7 +15,9 @@ class ServiceEmbeddingsSyncRequest(BaseModel):
     @model_validator(mode="after")
     def validate_request(self) -> "ServiceEmbeddingsSyncRequest":
         if not self.upsert and not self.delete:
-            raise ValueError("upsert와 delete 중 하나 이상에 service_id를 지정해야 합니다.")
+            raise ValueError(
+                "upsert와 delete 중 하나 이상에 service_id를 지정해야 합니다."
+            )
 
         total = len(self.upsert) + len(self.delete)
         if total > _MAX_ITEMS:

@@ -75,8 +75,13 @@ class _CatchAllMiddleware:
         except Exception:
             logger.exception("처리되지 않은 예외")
             body = json.dumps({"detail": "Internal server error"}).encode()
-            await send({"type": "http.response.start", "status": 500,
-                        "headers": [(b"content-type", b"application/json")]})
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 500,
+                    "headers": [(b"content-type", b"application/json")],
+                }
+            )
             await send({"type": "http.response.body", "body": body})
 
 

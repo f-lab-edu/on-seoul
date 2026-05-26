@@ -41,12 +41,24 @@ async def embed_and_insert_identity(
         "payment_type": service.get("payment_type"),
         "target_info": service.get("target_info"),
         "service_url": service.get("service_url"),
-        "receipt_start_dt": str(service["receipt_start_dt"]) if service.get("receipt_start_dt") else None,
-        "receipt_end_dt": str(service["receipt_end_dt"]) if service.get("receipt_end_dt") else None,
-        "service_open_start_dt": str(service["service_open_start_dt"]) if service.get("service_open_start_dt") else None,
-        "service_open_end_dt": str(service["service_open_end_dt"]) if service.get("service_open_end_dt") else None,
-        "coord_x": float(service["coord_x"]) if service.get("coord_x") is not None else None,
-        "coord_y": float(service["coord_y"]) if service.get("coord_y") is not None else None,
+        "receipt_start_dt": str(service["receipt_start_dt"])
+        if service.get("receipt_start_dt")
+        else None,
+        "receipt_end_dt": str(service["receipt_end_dt"])
+        if service.get("receipt_end_dt")
+        else None,
+        "service_open_start_dt": str(service["service_open_start_dt"])
+        if service.get("service_open_start_dt")
+        else None,
+        "service_open_end_dt": str(service["service_open_end_dt"])
+        if service.get("service_open_end_dt")
+        else None,
+        "coord_x": float(service["coord_x"])
+        if service.get("coord_x") is not None
+        else None,
+        "coord_y": float(service["coord_y"])
+        if service.get("coord_y") is not None
+        else None,
         "extracted": extracted.model_dump() if extracted is not None else None,
     }
 

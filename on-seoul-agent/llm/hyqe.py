@@ -11,17 +11,18 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from llm.embedding_config import (
+    HYQE_DIST_TOLERANCE,
+    HYQE_INTENT_DISTRIBUTION,
+    HYQE_QUESTIONS_PER_SERVICE,
+)
 from llm.prompts.hyqe import HYQE_PROMPT
 
 logger = logging.getLogger(__name__)
 
-# 분포 목표 (비율)
-_DIST_TARGET: dict[str, float] = {
-    "semantic": 0.5,
-    "detail": 0.3,
-    "keyword": 0.2,
-}
-_DIST_TOLERANCE: float = 0.15  # ±15% (소수 개수에서 유연성 확보)
+# 분포 목표·허용 오차 (embedding_config에서 관리)
+_DIST_TARGET: dict[str, float] = HYQE_INTENT_DISTRIBUTION
+_DIST_TOLERANCE: float = HYQE_DIST_TOLERANCE
 
 # 템플릿 질문 (분포 부족 시 채우기용 — LLM 실패/재시도 후 최후 수단)
 _TEMPLATE_QUESTIONS: dict[str, list[str]] = {
@@ -87,18 +88,24 @@ def _enforce_distribution(
     target_counts = {
         "semantic": round(n * _DIST_TARGET["semantic"]),
         "detail": round(n * _DIST_TARGET["detail"]),
-        "keyword": n - round(n * _DIST_TARGET["semantic"]) - round(n * _DIST_TARGET["detail"]),
+        "keyword": n
+        - round(n * _DIST_TARGET["semantic"])
+        - round(n * _DIST_TARGET["detail"]),
     }
 
     fmt = {
         "service_name": service_name or "해당 시설",
-        "area_name":    area_name    or "서울",
+        "area_name": area_name or "서울",
         "max_class_name": max_class_name or "공공시설",
         "min_class_name": min_class_name or "시설",
     }
 
     # 레이블별 그룹화
-    by_label: dict[str, list[HyQEQuestion]] = {"semantic": [], "detail": [], "keyword": []}
+    by_label: dict[str, list[HyQEQuestion]] = {
+        "semantic": [],
+        "detail": [],
+        "keyword": [],
+    }
     for q in questions:
         by_label[q.intent_label].append(q)
 
@@ -111,10 +118,12 @@ def _enforce_distribution(
             templates = _TEMPLATE_QUESTIONS[label]
             for i in range(shortage):
                 tmpl = templates[i % len(templates)]
-                result.append(HyQEQuestion(
-                    question_text=tmpl.format(**fmt),
-                    intent_label=label,  # type: ignore[arg-type]
-                ))
+                result.append(
+                    HyQEQuestion(
+                        question_text=tmpl.format(**fmt),
+                        intent_label=label,  # type: ignore[arg-type]
+                    )
+                )
 
     return result[:n]
 
@@ -127,7 +136,7 @@ async def generate_questions(
     min_class_name: str | None,
     cleaned_detail: str,
     extracted_summary: str,
-    n: int = 6,
+    n: int = HYQE_QUESTIONS_PER_SERVICE,
     llm_client,
 ) -> list[HyQEQuestion]:
     """예상질문 N개 생성.
@@ -165,13 +174,14 @@ async def generate_questions(
             raw = await chain.ainvoke(input_data)
             if isinstance(raw, list):
                 questions = [
-                    HyQEQuestion(**q) if isinstance(q, dict) else q
-                    for q in raw
+                    HyQEQuestion(**q) if isinstance(q, dict) else q for q in raw
                 ]
             else:
                 questions = []
         except Exception:
-            logger.warning("generate_questions 실패 (시도 %d/2)", attempt + 1, exc_info=True)
+            logger.warning(
+                "generate_questions 실패 (시도 %d/2)", attempt + 1, exc_info=True
+            )
             return []
 
         if _check_distribution(questions, n):

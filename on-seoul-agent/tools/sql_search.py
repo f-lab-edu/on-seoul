@@ -22,11 +22,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tools._result_columns import PUBLIC_SERVICE_RESERVATIONS_COLUMNS
 
 TOP_K: int = 10
-_LIKE_ESCAPE_TABLE = str.maketrans({
-    "\\": "\\\\",
-    "%":  "\\%",
-    "_":  "\\_",
-})
+_LIKE_ESCAPE_TABLE = str.maketrans(
+    {
+        "\\": "\\\\",
+        "%": "\\%",
+        "_": "\\_",
+    }
+)
+
 
 def _escape_like(value: str) -> str:
     """ILIKE 패턴에서 와일드카드 문자를 이스케이프한다.
@@ -35,6 +38,7 @@ def _escape_like(value: str) -> str:
     백슬래시로 이스케이프한다. SQL 쪽에는 ESCAPE '\\' 절을 함께 사용한다.
     """
     return value.translate(_LIKE_ESCAPE_TABLE)
+
 
 _RESULT_COLUMNS = PUBLIC_SERVICE_RESERVATIONS_COLUMNS
 

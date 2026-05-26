@@ -77,7 +77,7 @@ class Candidate:
     service_status: str
     service_url: str
     channels: list[str]  # 이 결과를 반환한 채널 목록
-    score: float         # rrf_score 또는 유사도
+    score: float  # rrf_score 또는 유사도
 
 
 @dataclass
@@ -100,6 +100,7 @@ class QueryResult:
 # 검색 실행
 # ---------------------------------------------------------------------------
 
+
 async def _run_vector(
     query: str,
     intent_output: _IntentOutput,
@@ -121,8 +122,12 @@ async def _run_vector(
     # Track A — identity, post-filter 적용
     try:
         a_rows = await vector_search(
-            ai_session, vec, row_kind="identity",
-            top_k=_EVAL_TOP_K, min_similarity=0.5, **filters
+            ai_session,
+            vec,
+            row_kind="identity",
+            top_k=_EVAL_TOP_K,
+            min_similarity=0.5,
+            **filters,
         )
     except Exception as e:
         await ai_session.rollback()
@@ -132,8 +137,11 @@ async def _run_vector(
     # Track B — summary, post-filter 미적용
     try:
         b_rows = await vector_search(
-            ai_session, vec, row_kind="summary",
-            top_k=_EVAL_TOP_K, min_similarity=0.5,
+            ai_session,
+            vec,
+            row_kind="summary",
+            top_k=_EVAL_TOP_K,
+            min_similarity=0.5,
         )
     except Exception as e:
         await ai_session.rollback()
@@ -143,7 +151,10 @@ async def _run_vector(
     # Track C — question, service_id별 dedup
     try:
         c_rows = await question_search(
-            ai_session, vec, top_k=_EVAL_TOP_K, min_similarity=0.5,
+            ai_session,
+            vec,
+            top_k=_EVAL_TOP_K,
+            min_similarity=0.5,
         )
     except Exception as e:
         await ai_session.rollback()
@@ -153,7 +164,9 @@ async def _run_vector(
     # BM25 — bm25_search 파라미터는 limit (top_k 아님)
     tokens = tokenize_query(refined)
     try:
-        d_rows = await bm25_search(ai_session, tokens, limit=_EVAL_TOP_K) if tokens else []
+        d_rows = (
+            await bm25_search(ai_session, tokens, limit=_EVAL_TOP_K) if tokens else []
+        )
     except Exception as e:
         await ai_session.rollback()
         logger.warning("bm25 실패: %s", e)
@@ -164,19 +177,25 @@ async def _run_vector(
         "track_a": {r["service_id"] for r in a_rows},
         "track_b": {r["service_id"] for r in b_rows},
         "track_c": {r["service_id"] for r in c_rows},
-        "bm25":    {r["service_id"] for r in d_rows},
+        "bm25": {r["service_id"] for r in d_rows},
     }
 
     merged = reciprocal_rank_fusion(
-        {ch: [r["service_id"] for r in rows]
-         for ch, rows in [("track_a", a_rows), ("track_b", b_rows),
-                          ("track_c", c_rows), ("bm25", d_rows)]},
+        {
+            ch: [r["service_id"] for r in rows]
+            for ch, rows in [
+                ("track_a", a_rows),
+                ("track_b", b_rows),
+                ("track_c", c_rows),
+                ("bm25", d_rows),
+            ]
+        },
         weights=None,  # 평가용 baseline: 비가중치
         k_constant=60,
     )
 
     service_ids = [sid for sid, _ in merged[:_EVAL_TOP_K]]
-    rrf_scores  = {sid: score for sid, score in merged}
+    rrf_scores = {sid: score for sid, score in merged}
 
     hydrated = await hydrate_services(data_session, service_ids)
 
@@ -184,16 +203,18 @@ async def _run_vector(
     for row in hydrated:
         sid = row["service_id"]
         contributed = [ch for ch, ids in channel_hits.items() if sid in ids]
-        candidates.append(Candidate(
-            service_id=sid,
-            service_name=row.get("service_name", ""),
-            area_name=row.get("area_name", ""),
-            max_class_name=row.get("max_class_name", ""),
-            service_status=row.get("service_status", ""),
-            service_url=row.get("service_url", ""),
-            channels=contributed,
-            score=rrf_scores.get(sid, 0.0),
-        ))
+        candidates.append(
+            Candidate(
+                service_id=sid,
+                service_name=row.get("service_name", ""),
+                area_name=row.get("area_name", ""),
+                max_class_name=row.get("max_class_name", ""),
+                service_status=row.get("service_status", ""),
+                service_url=row.get("service_url", ""),
+                channels=contributed,
+                score=rrf_scores.get(sid, 0.0),
+            )
+        )
     return candidates
 
 
@@ -260,13 +281,18 @@ async def run_query(
 
     if intent == IntentType.VECTOR_SEARCH:
         candidates = await _run_vector(
-            query, intent_output,
-            ai_session=ai_session, data_session=data_session, embedder=embedder,
+            query,
+            intent_output,
+            ai_session=ai_session,
+            data_session=data_session,
+            embedder=embedder,
         )
     elif intent == IntentType.SQL_SEARCH:
         candidates, sql_keyword = await _run_sql(
-            query, intent_output,
-            data_session=data_session, sql_agent=sql_agent,
+            query,
+            intent_output,
+            data_session=data_session,
+            sql_agent=sql_agent,
         )
     else:
         candidates = []
@@ -289,13 +315,17 @@ async def run_query(
 # 출력 포맷
 # ---------------------------------------------------------------------------
 
+
 def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
 def print_result(result: QueryResult) -> None:
     print()
-    print(f"  Intent  : {result.intent}" + (f" / {result.sub_intent}" if result.sub_intent else ""))
+    print(
+        f"  Intent  : {result.intent}"
+        + (f" / {result.sub_intent}" if result.sub_intent else "")
+    )
     print(f"  Refined : {result.refined_query}")
     print()
 
@@ -322,6 +352,7 @@ def print_result(result: QueryResult) -> None:
 # ---------------------------------------------------------------------------
 # 인터랙티브 모드
 # ---------------------------------------------------------------------------
+
 
 async def interactive_loop(
     *,
@@ -355,24 +386,36 @@ async def interactive_loop(
             intent_output = await router.classify(query)
         else:
             # 라우터 없이 직접 지정
-            intent_str = input("  intent (V=vector, S=sql, skip=fallback) [V]: ").strip().upper() or "V"
+            intent_str = (
+                input("  intent (V=vector, S=sql, skip=fallback) [V]: ").strip().upper()
+                or "V"
+            )
             intent_map = {"V": IntentType.VECTOR_SEARCH, "S": IntentType.SQL_SEARCH}
-            intent_output = _IntentOutput(intent=intent_map.get(intent_str, IntentType.VECTOR_SEARCH))
+            intent_output = _IntentOutput(
+                intent=intent_map.get(intent_str, IntentType.VECTOR_SEARCH)
+            )
 
         print(f"  검색 중... (intent={intent_output.intent.value})", end="\r")
         result = await run_query(
-            query, intent_output,
-            ai_session=ai_session, data_session=data_session,
-            embedder=embedder, sql_agent=sql_agent,
+            query,
+            intent_output,
+            ai_session=ai_session,
+            data_session=data_session,
+            embedder=embedder,
+            sql_agent=sql_agent,
         )
         print(f"  질의: {query}")
         print_result(result)
 
         if not result.candidates:
-            records.append({
-                "query": query, "intent": result.intent,
-                "sub_intent": result.sub_intent, "correct_service_ids": "",
-            })
+            records.append(
+                {
+                    "query": query,
+                    "intent": result.intent,
+                    "sub_intent": result.sub_intent,
+                    "correct_service_ids": "",
+                }
+            )
             continue
 
         answer_input = input("  정답 번호 (쉼표 구분, 없으면 Enter, 스킵 s): ").strip()
@@ -389,12 +432,14 @@ async def interactive_loop(
                     if 0 <= idx < len(result.candidates):
                         correct_ids.append(result.candidates[idx].service_id)
 
-        records.append({
-            "query": query,
-            "intent": result.intent,
-            "sub_intent": result.sub_intent,
-            "correct_service_ids": ",".join(correct_ids),
-        })
+        records.append(
+            {
+                "query": query,
+                "intent": result.intent,
+                "sub_intent": result.sub_intent,
+                "correct_service_ids": ",".join(correct_ids),
+            }
+        )
         print(f"  저장됨 (정답 {len(correct_ids)}건)\n")
 
     if records:
@@ -410,6 +455,7 @@ def _write_holdout(records: list[dict], path: Path) -> None:
     mode = "a" if path.exists() else "w"
     if mode == "a":
         import sys as _sys
+
         print(f"  [경고] {path} 에 추가 기록합니다 (기존 내용 유지).", file=_sys.stderr)
     with path.open(mode, newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
@@ -421,6 +467,7 @@ def _write_holdout(records: list[dict], path: Path) -> None:
 # ---------------------------------------------------------------------------
 # 배치 모드
 # ---------------------------------------------------------------------------
+
 
 async def batch_run(
     queries_file: Path,
@@ -465,14 +512,18 @@ async def batch_run(
 
         try:
             result = await run_query(
-                query, intent_output,
-                ai_session=ai_session, data_session=data_session,
-                embedder=embedder, sql_agent=sql_agent,
+                query,
+                intent_output,
+                ai_session=ai_session,
+                data_session=data_session,
+                embedder=embedder,
+                sql_agent=sql_agent,
             )
         except Exception as e:
             logger.error("질의 실패 [%s]: %s", query, e)
             result = QueryResult(
-                query=query, intent=intent_output.intent.value,
+                query=query,
+                intent=intent_output.intent.value,
                 sub_intent=intent_output.vector_sub_intent or "",
                 refined_query=intent_output.refined_query or query,
                 reasoning=getattr(intent_output, "reasoning", "") or "",
@@ -495,34 +546,46 @@ async def batch_run(
     conditions_path = output_path.parent / "query_conditions.tsv"
     _write_query_conditions(results_for_conditions, conditions_path)
     print(f"\n완료: {len(rows)}행 → {output_path}")
-    print(f"      {len(results_for_conditions)}건 → {conditions_path} (쿼리별 추출 조건)")
+    print(
+        f"      {len(results_for_conditions)}건 → {conditions_path} (쿼리별 추출 조건)"
+    )
     print("is_correct 컬럼(y/공백)을 채운 뒤 finalize_eval_set.py 를 실행하세요.")
 
 
 def _candidate_row(result: QueryResult, c: Candidate | None, rank: int) -> dict:
     return {
-        "query":          result.query,
-        "intent":         result.intent,
-        "sub_intent":     result.sub_intent,
-        "refined_query":  result.refined_query,
-        "rank":           rank,
-        "service_id":     c.service_id if c else "",
-        "service_name":   c.service_name if c else "",
-        "area_name":      c.area_name if c else "",
+        "query": result.query,
+        "intent": result.intent,
+        "sub_intent": result.sub_intent,
+        "refined_query": result.refined_query,
+        "rank": rank,
+        "service_id": c.service_id if c else "",
+        "service_name": c.service_name if c else "",
+        "area_name": c.area_name if c else "",
         "max_class_name": c.max_class_name if c else "",
         "service_status": c.service_status if c else "",
-        "channels":       ",".join(c.channels) if c else "",
-        "score":          f"{c.score:.4f}" if c else "",
-        "is_correct":     "",  # 사람이 채움
+        "channels": ",".join(c.channels) if c else "",
+        "score": f"{c.score:.4f}" if c else "",
+        "is_correct": "",  # 사람이 채움
     }
 
 
 def _write_candidates(rows: list[dict], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
-        "query", "intent", "sub_intent", "refined_query",
-        "rank", "service_id", "service_name", "area_name", "max_class_name",
-        "service_status", "channels", "score", "is_correct",
+        "query",
+        "intent",
+        "sub_intent",
+        "refined_query",
+        "rank",
+        "service_id",
+        "service_name",
+        "area_name",
+        "max_class_name",
+        "service_status",
+        "channels",
+        "score",
+        "is_correct",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
@@ -539,26 +602,35 @@ def _write_query_conditions(results: list[QueryResult], path: Path) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
-        "query", "intent", "sub_intent", "refined_query", "reasoning",
-        "extracted_max_class_name", "extracted_area_name", "extracted_service_status",
-        "sql_keyword", "candidate_count",
+        "query",
+        "intent",
+        "sub_intent",
+        "refined_query",
+        "reasoning",
+        "extracted_max_class_name",
+        "extracted_area_name",
+        "extracted_service_status",
+        "sql_keyword",
+        "candidate_count",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
         writer.writeheader()
         for r in results:
-            writer.writerow({
-                "query":                    r.query,
-                "intent":                   r.intent,
-                "sub_intent":               r.sub_intent,
-                "refined_query":            r.refined_query,
-                "reasoning":                r.reasoning,
-                "extracted_max_class_name": r.extracted_max_class_name,
-                "extracted_area_name":      r.extracted_area_name,
-                "extracted_service_status": r.extracted_service_status,
-                "sql_keyword":              r.sql_keyword,
-                "candidate_count":          len(r.candidates),
-            })
+            writer.writerow(
+                {
+                    "query": r.query,
+                    "intent": r.intent,
+                    "sub_intent": r.sub_intent,
+                    "refined_query": r.refined_query,
+                    "reasoning": r.reasoning,
+                    "extracted_max_class_name": r.extracted_max_class_name,
+                    "extracted_area_name": r.extracted_area_name,
+                    "extracted_service_status": r.extracted_service_status,
+                    "sql_keyword": r.sql_keyword,
+                    "candidate_count": len(r.candidates),
+                }
+            )
 
 
 def _load_queries(path: Path) -> list[tuple[str, str, str, str]]:
@@ -567,12 +639,14 @@ def _load_queries(path: Path) -> list[tuple[str, str, str, str]]:
     with path.open(encoding="utf-8") as f:
         reader = csv.DictReader(f, delimiter="\t")
         for row in reader:
-            results.append((
-                row.get("query", "").strip(),
-                row.get("intent", "").strip(),
-                row.get("sub_intent", "").strip(),
-                row.get("notes", "").strip(),
-            ))
+            results.append(
+                (
+                    row.get("query", "").strip(),
+                    row.get("intent", "").strip(),
+                    row.get("sub_intent", "").strip(),
+                    row.get("notes", "").strip(),
+                )
+            )
     return [(q, i, s, n) for q, i, s, n in results if q]
 
 
@@ -580,10 +654,12 @@ def _load_queries(path: Path) -> list[tuple[str, str, str, str]]:
 # 진입점
 # ---------------------------------------------------------------------------
 
+
 async def main(args: argparse.Namespace) -> None:
     on_data_engine = create_async_engine(settings.on_data_database_url, echo=False)
     on_ai_engine = create_async_engine(
-        settings.on_ai_database_url, echo=False,
+        settings.on_ai_database_url,
+        echo=False,
         connect_args={"statement_cache_size": 0},
     )
 
@@ -595,6 +671,7 @@ async def main(args: argparse.Namespace) -> None:
         router: RouterAgent | None = None
         if not args.skip_router:
             from llm.client import get_chat_model
+
             router = RouterAgent(model=get_chat_model())
 
         # SqlAgent는 항상 생성 (SQL 쿼리 keyword 추출용 LLM 체인 초기화만, 비용 없음)
@@ -637,15 +714,29 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--interactive", dest="mode", action="store_const", const="interactive",
-                      help="REPL 방식: 직접 질의 입력 → 정답 선택")
-    mode.add_argument("--batch", metavar="QUERIES_FILE",
-                      help="배치 방식: queries_draft.tsv 읽어 candidates_review.tsv 출력")
+    mode.add_argument(
+        "--interactive",
+        dest="mode",
+        action="store_const",
+        const="interactive",
+        help="REPL 방식: 직접 질의 입력 → 정답 선택",
+    )
+    mode.add_argument(
+        "--batch",
+        metavar="QUERIES_FILE",
+        help="배치 방식: queries_draft.tsv 읽어 candidates_review.tsv 출력",
+    )
 
-    parser.add_argument("--output", metavar="OUTPUT_FILE",
-                        help="출력 파일 경로 (기본값: 타임스탬프 자동 생성)")
-    parser.add_argument("--skip-router", action="store_true",
-                        help="RouterAgent LLM 호출 생략 (벡터 검색 only)")
+    parser.add_argument(
+        "--output",
+        metavar="OUTPUT_FILE",
+        help="출력 파일 경로 (기본값: 타임스탬프 자동 생성)",
+    )
+    parser.add_argument(
+        "--skip-router",
+        action="store_true",
+        help="RouterAgent LLM 호출 생략 (벡터 검색 only)",
+    )
     return parser.parse_args()
 
 

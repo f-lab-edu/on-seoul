@@ -16,17 +16,17 @@ from typing import Any, Final, TypedDict
 class ChannelHit(TypedDict):
     """채널 검색 결과 1건 (chat_search_results 1행)."""
 
-    rank: int               # 1-based 순위
+    rank: int  # 1-based 순위
     service_id: str
-    score: float | None     # 채널 native 점수. SQL 채널 등 점수 없으면 None
-    meta: dict[str, Any]    # 채널별 부가 정보. 빈 dict 허용
+    score: float | None  # 채널 native 점수. SQL 채널 등 점수 없으면 None
+    meta: dict[str, Any]  # 채널별 부가 정보. 빈 dict 허용
 
 
 class ChannelQuery(TypedDict):
     """채널 검색 입력 (chat_search_queries 1행)."""
 
-    query_text: str | None   # 임베딩 텍스트 / SQL keyword / BM25 토큰 join 등.
-                             # rrf / final 채널은 원본 검색 미수행이므로 None.
+    query_text: str | None  # 임베딩 텍스트 / SQL keyword / BM25 토큰 join 등.
+    # rrf / final 채널은 원본 검색 미수행이므로 None.
     parameters: dict[str, Any]  # 구조화 파라미터 (top_k, filters, weights 등)
 
 
@@ -37,7 +37,7 @@ class ChannelData(TypedDict):
     kind + query + hits 를 함께 두어 짝을 잃지 않는다.
     """
 
-    kind: str               # SearchKind 상수 값 중 하나
+    kind: str  # SearchKind 상수 값 중 하나
     query: ChannelQuery
     hits: list[ChannelHit]
 
@@ -74,11 +74,11 @@ class SearchChannel:
     SQL: Final[str] = "sql"
 
     # kind=vector
-    VECTOR: Final[str] = "vector"           # Phase 1 단일 경쟁
-    VECTOR_A: Final[str] = "vector_a"       # Phase 2+ (post-filter A)
-    VECTOR_B: Final[str] = "vector_b"       # Phase 2+ (post-filter B)
-    VECTOR_C: Final[str] = "vector_c"       # Phase 2+ (intent 분류 트랙)
-    HYDE_VECTOR: Final[str] = "hyde_vector" # Phase 3+ (HyDE 생성 후 임베딩)
+    VECTOR: Final[str] = "vector"  # Phase 1 단일 경쟁
+    VECTOR_A: Final[str] = "vector_a"  # Phase 2+ (post-filter A)
+    VECTOR_B: Final[str] = "vector_b"  # Phase 2+ (post-filter B)
+    VECTOR_C: Final[str] = "vector_c"  # Phase 2+ (intent 분류 트랙)
+    HYDE_VECTOR: Final[str] = "hyde_vector"  # Phase 3+ (HyDE 생성 후 임베딩)
 
     # kind=bm25
     BM25: Final[str] = "bm25"
@@ -153,4 +153,6 @@ def kind_of(channel: str) -> str:
     try:
         return _CHANNEL_TO_KIND[channel]
     except KeyError:
-        raise ValueError(f"unknown channel: {channel!r}. _CHANNEL_TO_KIND 에 매핑을 추가하세요.")
+        raise ValueError(
+            f"unknown channel: {channel!r}. _CHANNEL_TO_KIND 에 매핑을 추가하세요."
+        )

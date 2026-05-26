@@ -93,7 +93,11 @@ async def set_cached_answer(
     """payload + state 일부를 envelope로 저장. 장애 시 무시."""
     if not settings.answer_cache_enabled:
         return
-    ttl = settings.answer_cache_empty_ttl if _is_empty_state(state) else settings.answer_cache_ttl
+    ttl = (
+        settings.answer_cache_empty_ttl
+        if _is_empty_state(state)
+        else settings.answer_cache_ttl
+    )
     envelope = {"payload": payload, "state": state}
     try:
         await redis.set(
@@ -126,5 +130,7 @@ async def flush_answer_cache(redis: aioredis.Redis) -> int:
             deleted += len(batch)
         logger.info("cache.flush deleted=%d", deleted)
     except Exception:
-        logger.warning("answer cache flush 오류 (deleted=%d 반영 안 됨)", deleted, exc_info=True)
+        logger.warning(
+            "answer cache flush 오류 (deleted=%d 반영 안 됨)", deleted, exc_info=True
+        )
     return deleted

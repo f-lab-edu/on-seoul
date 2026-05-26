@@ -40,9 +40,7 @@ class ProcessTimeMiddleware:
                 elapsed = time.monotonic() - start
                 # headers는 list[tuple[bytes, bytes]]
                 headers = list(message.get("headers", []))
-                headers.append(
-                    (b"x-process-time", f"{elapsed:.3f}".encode())
-                )
+                headers.append((b"x-process-time", f"{elapsed:.3f}".encode()))
                 message = {**message, "headers": headers}
             await send(message)
 

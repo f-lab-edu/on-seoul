@@ -14,7 +14,8 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 
-from llm.extractor import ExtractedMetadata, MIN_CHARS, extract_metadata
+from llm.embedding_config import EXTRACTION_MIN_CHARS as MIN_CHARS
+from llm.extractor import ExtractedMetadata, extract_metadata
 
 _PASSTHROUGH = RunnablePassthrough()
 
