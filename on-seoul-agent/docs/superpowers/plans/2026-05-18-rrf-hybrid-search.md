@@ -479,13 +479,13 @@ uv run python scripts/eval/tune_weights.py \
 - Create: `scripts/eval/run_recall.py`
 - Create: `scripts/eval/tune_weights.py`
 
-- [ ] **Step 1: 평가 스크립트 + smoke test**
+- [x] **Step 1: 평가 스크립트 + smoke test**
 
 ```bash
 uv run python scripts/eval/run_recall.py --limit 10   # holdout 일부만
 ```
 
-- [ ] **Step 2: 봉인 평가셋 노출 금지 검증**
+- [x] **Step 2: 봉인 평가셋 노출 금지 검증**
 
 ```bash
 grep -rn "eval_set_fewshot" scripts/eval/run_recall.py   # 빈 결과여야 함
