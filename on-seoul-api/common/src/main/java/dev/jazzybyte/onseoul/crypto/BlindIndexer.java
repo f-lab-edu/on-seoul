@@ -51,7 +51,7 @@ public class BlindIndexer {
             byte[] hmac = mac.doFinal(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(hmac);
         } catch (Exception e) {
-            throw new RuntimeException("Blind index computation failed", e);
+            throw new CryptoException("Blind index computation failed", e);
         }
     }
 

@@ -40,7 +40,8 @@ public class AesGcmEncryptor {
      *
      * @param plaintext 평문 (nullable)
      * @param userId    AAD로 사용할 사용자 ID
-     * @return {@code v1:<base64(nonce+cipher+tag)>} 형식의 암호문
+     * @return {@code v1:<base64(nonce[12] + ciphertext + tag[16])>} 형식의 암호문
+     * @throws CryptoException 암호화 실패 시
      */
     public String encrypt(String plaintext, long userId) {
         if (plaintext == null) {
@@ -64,7 +65,7 @@ public class AesGcmEncryptor {
 
             return VERSION_PREFIX + Base64.getEncoder().encodeToString(payload);
         } catch (Exception e) {
-            throw new RuntimeException("Encryption failed", e);
+            throw new CryptoException("Encryption failed", e);
         }
     }
 
@@ -74,8 +75,8 @@ public class AesGcmEncryptor {
      * @param ciphertext {@code v1:<base64>} 형식의 암호문 (nullable)
      * @param userId     AAD로 사용할 사용자 ID (encrypt 시와 동일해야 함)
      * @return 복호화된 평문
-     * @throws IllegalArgumentException  버전 접두사가 맞지 않을 때
-     * @throws RuntimeException          복호화 실패 (cause: {@link javax.crypto.AEADBadTagException})
+     * @throws IllegalArgumentException 버전 접두사가 맞지 않을 때
+     * @throws CryptoException          복호화 실패 (cause: {@link javax.crypto.AEADBadTagException})
      */
     public String decrypt(String ciphertext, long userId) {
         if (ciphertext == null) {

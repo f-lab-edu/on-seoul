@@ -59,7 +59,12 @@ class UserPersistenceAdapter implements LoadUserPort, SaveUserPort {
                     .orElseGet(() -> mapper.toEntity(user));
             return mapper.toDomain(jpaRepository.save(entity));
         } else {
-            // 신규 유저: 1단계 — id 채번을 위해 placeholder(AAD=0) 로 저장
+            // ─── 신규 유저: 2-phase save ──────────────────────────────────────
+            // 두 단계 모두 클래스 레벨 @Transactional 하나의 트랜잭션 안에서 실행된다.
+            // 2단계 재암호화 전 예외가 발생하면 1단계 INSERT를 포함한 전체 트랜잭션이
+            // 롤백되므로 AAD=0L placeholder 암호문이 커밋되는 일은 없다.
+            //
+            // 1단계: GenerationType.IDENTITY로 id 채번 (flush → INSERT 강제)
             entity = mapper.toEntity(user);
             UserJpaEntity saved = jpaRepository.save(entity);
             jpaRepository.flush();

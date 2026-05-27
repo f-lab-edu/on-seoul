@@ -5,7 +5,6 @@ import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.FallbackNotificationPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -45,7 +44,8 @@ public class ResilientPushNotificationAdapter implements PushNotificationPort {
 
     private final PushNotificationPort primary;
     private final FallbackNotificationPort fallback;
-    private final MeterRegistry meterRegistry;
+    // FallbackReason별 counter를 생성자에서 미리 등록하여 매 호출마다 lookup overhead를 제거한다.
+    private final java.util.Map<FallbackReason, io.micrometer.core.instrument.Counter> fallbackCounters;
 
     public ResilientPushNotificationAdapter(
             @Qualifier("knockPrimary") PushNotificationPort primary,
@@ -53,7 +53,13 @@ public class ResilientPushNotificationAdapter implements PushNotificationPort {
             MeterRegistry meterRegistry) {
         this.primary = primary;
         this.fallback = fallback;
-        this.meterRegistry = meterRegistry;
+        this.fallbackCounters = java.util.Arrays.stream(FallbackReason.values())
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        r -> r,
+                        r -> io.micrometer.core.instrument.Counter.builder(METRIC_FALLBACK)
+                                .tag("reason", r.name())
+                                .register(meterRegistry)
+                ));
     }
 
     @Override
@@ -63,13 +69,10 @@ public class ResilientPushNotificationAdapter implements PushNotificationPort {
             primary.send(recipient, title, body, dispatchId, channels);
         } catch (RuntimeException e) {
             FallbackReason reason = classifyReason(e);
-            log.warn("[ResilientPush] Knock 발송 실패 — fallback 실행: dispatchId={}, reason={}, error={}",
-                    dispatchId, reason, e.getMessage());
+            log.warn("[ResilientPush] Knock 발송 실패 — fallback 실행: dispatchId={}, reason={}, exceptionType={}",
+                    dispatchId, reason, e.getClass().getSimpleName());
 
-            Counter.builder(METRIC_FALLBACK)
-                    .tag("reason", reason.name())
-                    .register(meterRegistry)
-                    .increment();
+            fallbackCounters.get(reason).increment();
 
             fallback.sendFallback(recipient, title, body, dispatchId, channels, reason, e);
         }

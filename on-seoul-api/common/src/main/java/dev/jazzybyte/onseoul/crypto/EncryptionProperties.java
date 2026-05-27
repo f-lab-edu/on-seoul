@@ -1,6 +1,7 @@
 package dev.jazzybyte.onseoul.crypto;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 /**
  * AES-256-GCM 암호화 및 Blind Index 키 설정.
@@ -14,6 +15,7 @@ public class EncryptionProperties {
 
     private final String blindIdxKey;
 
+    @ConstructorBinding
     public EncryptionProperties(String aesKey, String blindIdxKey) {
         this.aesKey = aesKey;
         this.blindIdxKey = blindIdxKey;
