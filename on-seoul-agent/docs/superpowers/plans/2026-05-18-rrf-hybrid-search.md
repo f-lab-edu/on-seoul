@@ -593,7 +593,7 @@ uv run python scripts/eval/run_recall.py --output eval_results/baseline.json
 - [x] `VectorAgent.search` 가 4 채널 병렬 호출 + RRF 결합 + hydration 수행
 - [x] `vector_sub_intent_enabled=False` 일 때는 항상 `semantic` 프로파일 사용
 - [x] `rrf_unweighted_baseline=True` 일 때는 모든 채널 가중치 1.0
-- [ ] 봉인 평가셋 80개로 baseline recall@10 측정 결과 저장됨 (Task 7 — 실 DB 필요)
+- [ ] 봉인 평가셋(현 19건, 목표 80건)으로 baseline recall@10 측정 결과 저장됨 (Task 9 — 실 DB 필요)
 - [x] 6개 문서 일괄 갱신 (agent-design / architecture / README × 2 / hybrid-search-strategy / vector_search.md + 신규 question_search.md)
 - [x] `tools/README.md` 표에 `question_search` 행 추가
 
