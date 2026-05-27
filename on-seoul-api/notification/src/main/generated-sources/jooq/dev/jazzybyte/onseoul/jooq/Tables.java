@@ -10,23 +10,24 @@ import dev.jazzybyte.onseoul.jooq.tables.Users;
 
 
 /**
- * Convenience access to all tables in the default schema.
+ * Convenience access to all tables in public.
  */
 @SuppressWarnings({ "all", "unchecked", "rawtypes", "this-escape" })
 public class Tables {
 
     /**
-     * The table <code>public_service_reservations</code>.
+     * The table <code>public.public_service_reservations</code>.
      */
     public static final PublicServiceReservations PUBLIC_SERVICE_RESERVATIONS = PublicServiceReservations.PUBLIC_SERVICE_RESERVATIONS;
 
     /**
-     * The table <code>service_change_log</code>.
+     * 공공서비스 수집 시 감지된 변경 이력. 추적 대상 필드(service_status, service_name, place_name,
+     * receipt_start_dt, receipt_end_dt)의 변경만 기록한다.
      */
     public static final ServiceChangeLog SERVICE_CHANGE_LOG = ServiceChangeLog.SERVICE_CHANGE_LOG;
 
     /**
-     * The table <code>users</code>.
+     * OAuth2 소셜 로그인 사용자. 비밀번호 없음 — 인증은 외부 제공자에 위임
      */
     public static final Users USERS = Users.USERS;
 }

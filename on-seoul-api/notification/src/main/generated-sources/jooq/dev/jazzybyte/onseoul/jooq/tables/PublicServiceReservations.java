@@ -4,10 +4,13 @@
 package dev.jazzybyte.onseoul.jooq.tables;
 
 
-import dev.jazzybyte.onseoul.jooq.DefaultSchema;
+import dev.jazzybyte.onseoul.jooq.Indexes;
 import dev.jazzybyte.onseoul.jooq.Keys;
+import dev.jazzybyte.onseoul.jooq.Public;
 import dev.jazzybyte.onseoul.jooq.tables.records.PublicServiceReservationsRecord;
 
+import java.math.BigDecimal;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.Collection;
@@ -16,6 +19,7 @@ import java.util.List;
 import org.jooq.Condition;
 import org.jooq.Field;
 import org.jooq.Identity;
+import org.jooq.Index;
 import org.jooq.Name;
 import org.jooq.PlainSQL;
 import org.jooq.QueryPart;
@@ -41,7 +45,7 @@ public class PublicServiceReservations extends TableImpl<PublicServiceReservatio
     private static final long serialVersionUID = 1L;
 
     /**
-     * The reference instance of <code>public_service_reservations</code>
+     * The reference instance of <code>public.public_service_reservations</code>
      */
     public static final PublicServiceReservations PUBLIC_SERVICE_RESERVATIONS = new PublicServiceReservations();
 
@@ -54,37 +58,161 @@ public class PublicServiceReservations extends TableImpl<PublicServiceReservatio
     }
 
     /**
-     * The column <code>public_service_reservations.id</code>.
+     * The column <code>public.public_service_reservations.id</code>.
      */
     public final TableField<PublicServiceReservationsRecord, Long> ID = createField(DSL.name("id"), SQLDataType.BIGINT.nullable(false).identity(true), this, "");
 
     /**
-     * The column <code>public_service_reservations.service_id</code>.
+     * The column <code>public.public_service_reservations.service_id</code>.
      */
     public final TableField<PublicServiceReservationsRecord, String> SERVICE_ID = createField(DSL.name("service_id"), SQLDataType.VARCHAR(30).nullable(false), this, "");
 
     /**
-     * The column <code>public_service_reservations.service_name</code>.
+     * The column <code>public.public_service_reservations.service_gubun</code>.
      */
-    public final TableField<PublicServiceReservationsRecord, String> SERVICE_NAME = createField(DSL.name("service_name"), SQLDataType.VARCHAR(200), this, "");
+    public final TableField<PublicServiceReservationsRecord, String> SERVICE_GUBUN = createField(DSL.name("service_gubun"), SQLDataType.VARCHAR(20), this, "");
 
     /**
-     * The column <code>public_service_reservations.service_status</code>.
-     */
-    public final TableField<PublicServiceReservationsRecord, String> SERVICE_STATUS = createField(DSL.name("service_status"), SQLDataType.VARCHAR(20), this, "");
-
-    /**
-     * The column <code>public_service_reservations.area_name</code>.
-     */
-    public final TableField<PublicServiceReservationsRecord, String> AREA_NAME = createField(DSL.name("area_name"), SQLDataType.VARCHAR(50), this, "");
-
-    /**
-     * The column <code>public_service_reservations.max_class_name</code>.
+     * The column
+     * <code>public.public_service_reservations.max_class_name</code>.
      */
     public final TableField<PublicServiceReservationsRecord, String> MAX_CLASS_NAME = createField(DSL.name("max_class_name"), SQLDataType.VARCHAR(50), this, "");
 
     /**
-     * The column <code>public_service_reservations.deleted_at</code>.
+     * The column
+     * <code>public.public_service_reservations.min_class_name</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> MIN_CLASS_NAME = createField(DSL.name("min_class_name"), SQLDataType.VARCHAR(50), this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.service_name</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> SERVICE_NAME = createField(DSL.name("service_name"), SQLDataType.VARCHAR(200).nullable(false), this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.service_status</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> SERVICE_STATUS = createField(DSL.name("service_status"), SQLDataType.VARCHAR(20).nullable(false), this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.prev_service_status</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> PREV_SERVICE_STATUS = createField(DSL.name("prev_service_status"), SQLDataType.VARCHAR(20), this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.payment_type</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> PAYMENT_TYPE = createField(DSL.name("payment_type"), SQLDataType.VARCHAR(50), this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.target_info</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> TARGET_INFO = createField(DSL.name("target_info"), SQLDataType.VARCHAR(200), this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.service_url</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> SERVICE_URL = createField(DSL.name("service_url"), SQLDataType.CLOB, this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.image_url</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> IMAGE_URL = createField(DSL.name("image_url"), SQLDataType.CLOB, this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.detail_content</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> DETAIL_CONTENT = createField(DSL.name("detail_content"), SQLDataType.CLOB, this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.tel_no</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> TEL_NO = createField(DSL.name("tel_no"), SQLDataType.VARCHAR(100), this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.place_name</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> PLACE_NAME = createField(DSL.name("place_name"), SQLDataType.VARCHAR(200), this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.area_name</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> AREA_NAME = createField(DSL.name("area_name"), SQLDataType.VARCHAR(50), this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.coord_x</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, BigDecimal> COORD_X = createField(DSL.name("coord_x"), SQLDataType.NUMERIC(20, 15), this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.coord_y</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, BigDecimal> COORD_Y = createField(DSL.name("coord_y"), SQLDataType.NUMERIC(20, 15), this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.service_open_start_dt</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, OffsetDateTime> SERVICE_OPEN_START_DT = createField(DSL.name("service_open_start_dt"), SQLDataType.TIMESTAMPWITHTIMEZONE(6), this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.service_open_end_dt</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, OffsetDateTime> SERVICE_OPEN_END_DT = createField(DSL.name("service_open_end_dt"), SQLDataType.TIMESTAMPWITHTIMEZONE(6), this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.receipt_start_dt</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, OffsetDateTime> RECEIPT_START_DT = createField(DSL.name("receipt_start_dt"), SQLDataType.TIMESTAMPWITHTIMEZONE(6), this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.receipt_end_dt</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, OffsetDateTime> RECEIPT_END_DT = createField(DSL.name("receipt_end_dt"), SQLDataType.TIMESTAMPWITHTIMEZONE(6), this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.use_time_start</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, LocalTime> USE_TIME_START = createField(DSL.name("use_time_start"), SQLDataType.LOCALTIME(6), this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.use_time_end</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, LocalTime> USE_TIME_END = createField(DSL.name("use_time_end"), SQLDataType.LOCALTIME(6), this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.cancel_std_type</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, String> CANCEL_STD_TYPE = createField(DSL.name("cancel_std_type"), SQLDataType.VARCHAR(30), this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.cancel_std_days</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, Short> CANCEL_STD_DAYS = createField(DSL.name("cancel_std_days"), SQLDataType.SMALLINT, this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.first_collected_at</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, OffsetDateTime> FIRST_COLLECTED_AT = createField(DSL.name("first_collected_at"), SQLDataType.TIMESTAMPWITHTIMEZONE(6).nullable(false).defaultValue(DSL.field(DSL.raw("now()"), SQLDataType.TIMESTAMPWITHTIMEZONE)), this, "");
+
+    /**
+     * The column
+     * <code>public.public_service_reservations.last_synced_at</code>.
+     */
+    public final TableField<PublicServiceReservationsRecord, OffsetDateTime> LAST_SYNCED_AT = createField(DSL.name("last_synced_at"), SQLDataType.TIMESTAMPWITHTIMEZONE(6).nullable(false).defaultValue(DSL.field(DSL.raw("now()"), SQLDataType.TIMESTAMPWITHTIMEZONE)), this, "");
+
+    /**
+     * The column <code>public.public_service_reservations.deleted_at</code>.
      */
     public final TableField<PublicServiceReservationsRecord, OffsetDateTime> DELETED_AT = createField(DSL.name("deleted_at"), SQLDataType.TIMESTAMPWITHTIMEZONE(6), this, "");
 
@@ -97,7 +225,7 @@ public class PublicServiceReservations extends TableImpl<PublicServiceReservatio
     }
 
     /**
-     * Create an aliased <code>public_service_reservations</code> table
+     * Create an aliased <code>public.public_service_reservations</code> table
      * reference
      */
     public PublicServiceReservations(String alias) {
@@ -105,7 +233,7 @@ public class PublicServiceReservations extends TableImpl<PublicServiceReservatio
     }
 
     /**
-     * Create an aliased <code>public_service_reservations</code> table
+     * Create an aliased <code>public.public_service_reservations</code> table
      * reference
      */
     public PublicServiceReservations(Name alias) {
@@ -113,7 +241,7 @@ public class PublicServiceReservations extends TableImpl<PublicServiceReservatio
     }
 
     /**
-     * Create a <code>public_service_reservations</code> table reference
+     * Create a <code>public.public_service_reservations</code> table reference
      */
     public PublicServiceReservations() {
         this(DSL.name("public_service_reservations"), null);
@@ -121,7 +249,12 @@ public class PublicServiceReservations extends TableImpl<PublicServiceReservatio
 
     @Override
     public Schema getSchema() {
-        return aliased() ? null : DefaultSchema.DEFAULT_SCHEMA;
+        return aliased() ? null : Public.PUBLIC;
+    }
+
+    @Override
+    public List<Index> getIndexes() {
+        return Arrays.asList(Indexes.IDX_PSR_AREA_NAME, Indexes.IDX_PSR_MAX_CLASS_NAME, Indexes.IDX_PSR_RECEIPT_END_DT, Indexes.IDX_PSR_SERVICE_STATUS);
     }
 
     @Override
@@ -131,12 +264,12 @@ public class PublicServiceReservations extends TableImpl<PublicServiceReservatio
 
     @Override
     public UniqueKey<PublicServiceReservationsRecord> getPrimaryKey() {
-        return Keys.CONSTRAINT_7;
+        return Keys.PUBLIC_SERVICE_RESERVATIONS_PKEY;
     }
 
     @Override
     public List<UniqueKey<PublicServiceReservationsRecord>> getUniqueKeys() {
-        return Arrays.asList(Keys.CONSTRAINT_7C);
+        return Arrays.asList(Keys.PUBLIC_SERVICE_RESERVATIONS_SERVICE_ID_KEY);
     }
 
     @Override

@@ -18,8 +18,8 @@ import org.jooq.impl.Internal;
 
 
 /**
- * A class modelling foreign key relationships and constraints of tables in the
- * default schema.
+ * A class modelling foreign key relationships and constraints of tables in
+ * public.
  */
 @SuppressWarnings({ "all", "unchecked", "rawtypes", "this-escape" })
 public class Keys {
@@ -28,8 +28,10 @@ public class Keys {
     // UNIQUE and PRIMARY KEY definitions
     // -------------------------------------------------------------------------
 
-    public static final UniqueKey<PublicServiceReservationsRecord> CONSTRAINT_7 = Internal.createUniqueKey(PublicServiceReservations.PUBLIC_SERVICE_RESERVATIONS, DSL.name("CONSTRAINT_7"), new TableField[] { PublicServiceReservations.PUBLIC_SERVICE_RESERVATIONS.ID }, true);
-    public static final UniqueKey<PublicServiceReservationsRecord> CONSTRAINT_7C = Internal.createUniqueKey(PublicServiceReservations.PUBLIC_SERVICE_RESERVATIONS, DSL.name("CONSTRAINT_7C"), new TableField[] { PublicServiceReservations.PUBLIC_SERVICE_RESERVATIONS.SERVICE_ID }, true);
-    public static final UniqueKey<ServiceChangeLogRecord> CONSTRAINT_A = Internal.createUniqueKey(ServiceChangeLog.SERVICE_CHANGE_LOG, DSL.name("CONSTRAINT_A"), new TableField[] { ServiceChangeLog.SERVICE_CHANGE_LOG.ID }, true);
-    public static final UniqueKey<UsersRecord> CONSTRAINT_6 = Internal.createUniqueKey(Users.USERS, DSL.name("CONSTRAINT_6"), new TableField[] { Users.USERS.ID }, true);
+    public static final UniqueKey<PublicServiceReservationsRecord> PUBLIC_SERVICE_RESERVATIONS_PKEY = Internal.createUniqueKey(PublicServiceReservations.PUBLIC_SERVICE_RESERVATIONS, DSL.name("public_service_reservations_pkey"), new TableField[] { PublicServiceReservations.PUBLIC_SERVICE_RESERVATIONS.ID }, true);
+    public static final UniqueKey<PublicServiceReservationsRecord> PUBLIC_SERVICE_RESERVATIONS_SERVICE_ID_KEY = Internal.createUniqueKey(PublicServiceReservations.PUBLIC_SERVICE_RESERVATIONS, DSL.name("public_service_reservations_service_id_key"), new TableField[] { PublicServiceReservations.PUBLIC_SERVICE_RESERVATIONS.SERVICE_ID }, true);
+    public static final UniqueKey<ServiceChangeLogRecord> SERVICE_CHANGE_LOG_PKEY = Internal.createUniqueKey(ServiceChangeLog.SERVICE_CHANGE_LOG, DSL.name("service_change_log_pkey"), new TableField[] { ServiceChangeLog.SERVICE_CHANGE_LOG.ID }, true);
+    public static final UniqueKey<UsersRecord> UQ_USERS_EMAIL_HASH = Internal.createUniqueKey(Users.USERS, DSL.name("uq_users_email_hash"), new TableField[] { Users.USERS.EMAIL_HASH }, true);
+    public static final UniqueKey<UsersRecord> UQ_USERS_PROVIDER = Internal.createUniqueKey(Users.USERS, DSL.name("uq_users_provider"), new TableField[] { Users.USERS.PROVIDER, Users.USERS.PROVIDER_ID }, true);
+    public static final UniqueKey<UsersRecord> USERS_PKEY = Internal.createUniqueKey(Users.USERS, DSL.name("users_pkey"), new TableField[] { Users.USERS.ID }, true);
 }
