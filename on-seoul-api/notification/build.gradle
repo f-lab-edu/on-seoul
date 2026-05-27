@@ -12,41 +12,43 @@ dependencies {
     implementation 'org.springframework:spring-context'
     runtimeOnly 'org.postgresql:postgresql'
 
-    // jooq-meta-extensions 버전은 codegen 플러그인 버전(build.gradle root)과 일치시킨다.
-    jooqCodegen 'org.jooq:jooq-meta-extensions:3.19.31'
+    // JDBC codegen: 실제 PostgreSQL에 연결하여 Q-클래스 생성
+    // jooq-meta-extensions 불필요 — PostgresDatabase 는 jooq-codegen에 내장
+    jooqCodegen 'org.postgresql:postgresql'
 
     testRuntimeOnly 'com.h2database:h2'
     testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
     testImplementation 'io.projectreactor:reactor-test'
 }
 
+// ── jOOQ 코드 생성 ──────────────────────────────────────────────────────────
+// DB_URL / DB_USERNAME / DB_PASSWORD 환경변수(= Spring Boot 런타임과 동일 변수)를 사용한다.
+// 실행 방법: DB가 떠 있는 상태에서 ./gradlew :notification:jooqCodegen
+// 생성된 Q-클래스는 Git에 커밋한다 — CI는 DB 없이 커밋된 파일로 빌드한다.
+// ────────────────────────────────────────────────────────────────────────────
 jooq {
     configuration {
+        jdbc {
+            driver   = 'org.postgresql.Driver'
+            url      = System.getenv('DB_URL') ?: 'jdbc:postgresql://localhost:5432/on_data'
+            user     = System.getenv('DB_USERNAME') ?: ''
+            password = System.getenv('DB_PASSWORD') ?: ''
+        }
         generator {
             database {
-                name = 'org.jooq.meta.extensions.ddl.DDLDatabase'
-                properties {
-                    property {
-                        key = 'scripts'
-                        value = "${projectDir}/src/main/resources/jooq-codegen-schema.sql"
-                    }
-                    property {
-                        key = 'defaultNameCase'
-                        value = 'lower'
-                    }
-                    property {
-                        key = 'sort'
-                        value = 'semantic'
-                    }
-                }
+                name        = 'org.jooq.meta.postgres.PostgresDatabase'
+                inputSchema = 'public'
+                // notification 어댑터가 직접 조회하는 테이블만 포함한다.
+                // 테이블 추가 시 이 목록과 jooqCodegen을 재실행한다.
+                includes    = 'users|service_change_log|public_service_reservations'
             }
             target {
                 packageName = 'dev.jazzybyte.onseoul.jooq'
-                directory = 'src/main/generated-sources/jooq'
+                directory   = 'src/main/generated-sources/jooq'
             }
             generate {
-                daos = false
-                pojos = false
+                daos    = false
+                pojos   = false
                 records = true
             }
         }
@@ -61,8 +63,6 @@ sourceSets {
     }
 }
 
-// CI clean checkout 시 jooqCodegen 없이 compileJava가 실행되면 Q-클래스를 찾지 못한다.
-// compileJava가 jooqCodegen에 반드시 의존하도록 명시한다.
-tasks.named('compileJava') {
-    dependsOn 'jooqCodegen'
-}
+// JDBC codegen은 스키마 변경 후 수동 실행이 원칙이다.
+// compileJava 가 jooqCodegen에 의존하지 않아야 CI가 DB 없이 빌드할 수 있다.
+// (생성된 Q-클래스를 Git에 커밋하여 오프라인 빌드를 보장)
