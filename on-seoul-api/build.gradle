@@ -5,6 +5,7 @@ plugins {
 
     id 'groovy'
     id 'java-library'
+    id 'org.jooq.jooq-codegen-gradle' version '3.19.18' apply false
 }
 
 allprojects {

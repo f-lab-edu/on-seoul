@@ -3,17 +3,17 @@ package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 import dev.jazzybyte.onseoul.notification.domain.ServiceChange;
 import dev.jazzybyte.onseoul.notification.domain.SubscriptionFilter;
 import dev.jazzybyte.onseoul.notification.port.out.LoadServiceChangePort;
-import org.springframework.jdbc.core.RowMapper;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.jooq.Condition;
+import org.jooq.DSLContext;
 import org.springframework.stereotype.Component;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.Instant;
-import java.time.OffsetDateTime;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
+
+import static dev.jazzybyte.onseoul.jooq.Tables.PUBLIC_SERVICE_RESERVATIONS;
+import static dev.jazzybyte.onseoul.jooq.Tables.SERVICE_CHANGE_LOG;
 
 /**
  * service_change_log JOIN public_service_reservations 결과를 SubscriptionFilter 조건으로 필터링한다.
@@ -24,77 +24,74 @@ import java.util.List;
 @Component
 class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
 
+    private static final ZoneId ZONE_SEOUL = ZoneId.of("Asia/Seoul");
+
+    private final DSLContext dsl;
+
+    ServiceChangePersistenceAdapter(DSLContext dsl) {
+        this.dsl = dsl;
+    }
+
     /**
      * service_change_log L JOIN public_service_reservations P ON L.service_id = P.service_id.
      *
      * 동적 WHERE:
-     *   - L.service_id = :serviceId
-     *   - :since IS NULL OR L.changed_at > :since
-     *   - filter.statuses     비었으면 무시, 아니면 P.service_status   IN (:statuses)
-     *   - filter.areaNames    비었으면 무시, 아니면 P.area_name        IN (:areaNames)
-     *   - filter.maxClassNames 비었으면 무시, 아니면 P.max_class_name IN (:maxClassNames)
+     *   - L.service_id = serviceId
+     *   - lastNotifiedAt != null → L.changed_at > lastNotifiedAt
+     *   - filter.statuses     비었으면 무시, 아니면 P.service_status   IN (statuses)
+     *   - filter.areaNames    비었으면 무시, 아니면 P.area_name        IN (areaNames)
+     *   - filter.maxClassNames 비었으면 무시, 아니면 P.max_class_name IN (maxClassNames)
      *   - P.deleted_at IS NULL  (소프트 삭제 제외)
      */
-    private static final String BASE_SQL = """
-            SELECT L.id, L.service_id, L.change_type, L.field_name, L.old_value, L.new_value, L.changed_at
-            FROM service_change_log L
-            JOIN public_service_reservations P ON P.service_id = L.service_id
-            WHERE L.service_id = :serviceId
-              AND P.deleted_at IS NULL
-              AND (:since IS NULL OR L.changed_at > :since)
-            """;
-
-    private final NamedParameterJdbcTemplate jdbc;
-
-    ServiceChangePersistenceAdapter(final NamedParameterJdbcTemplate jdbc) {
-        this.jdbc = jdbc;
-    }
-
     @Override
-    public List<ServiceChange> loadFiltered(String serviceId, SubscriptionFilter filter,
+    public List<ServiceChange> loadFiltered(String serviceId,
+                                            SubscriptionFilter filter,
                                             Instant lastNotifiedAt) {
         SubscriptionFilter f = filter == null ? SubscriptionFilter.empty() : filter;
-        Timestamp sinceTs = lastNotifiedAt == null ? null : Timestamp.from(lastNotifiedAt);
 
-        MapSqlParameterSource params = new MapSqlParameterSource()
-                .addValue("serviceId", serviceId)
-                .addValue("since", sinceTs);
+        Condition condition = SERVICE_CHANGE_LOG.SERVICE_ID.eq(serviceId)
+                .and(PUBLIC_SERVICE_RESERVATIONS.DELETED_AT.isNull());
 
-        StringBuilder sql = new StringBuilder(BASE_SQL);
-
+        if (lastNotifiedAt != null) {
+            LocalDateTime since = LocalDateTime.ofInstant(lastNotifiedAt, ZONE_SEOUL);
+            condition = condition.and(SERVICE_CHANGE_LOG.CHANGED_AT.gt(since));
+        }
         if (!f.statuses().isEmpty()) {
-            sql.append(" AND P.service_status IN (:statuses)");
-            params.addValue("statuses", f.statuses());
+            condition = condition.and(PUBLIC_SERVICE_RESERVATIONS.SERVICE_STATUS.in(f.statuses()));
         }
         if (!f.areaNames().isEmpty()) {
-            sql.append(" AND P.area_name IN (:areaNames)");
-            params.addValue("areaNames", f.areaNames());
+            condition = condition.and(PUBLIC_SERVICE_RESERVATIONS.AREA_NAME.in(f.areaNames()));
         }
         if (!f.maxClassNames().isEmpty()) {
-            sql.append(" AND P.max_class_name IN (:maxClassNames)");
-            params.addValue("maxClassNames", f.maxClassNames());
+            condition = condition.and(PUBLIC_SERVICE_RESERVATIONS.MAX_CLASS_NAME.in(f.maxClassNames()));
         }
 
-        sql.append(" ORDER BY L.changed_at ASC");
-
-        return jdbc.query(sql.toString(), params, new ServiceChangeRowMapper());
-    }
-
-    private static final class ServiceChangeRowMapper implements RowMapper<ServiceChange> {
-        @Override
-        public ServiceChange mapRow(ResultSet rs, int rowNum) throws SQLException {
-            OffsetDateTime odt = rs.getObject("changed_at", OffsetDateTime.class);
-            Instant changedAt = (odt != null) ? odt.toInstant() : Instant.now();
-
-            return new ServiceChange(
-                    rs.getLong("id"),
-                    rs.getString("service_id"),
-                    rs.getString("change_type"),
-                    rs.getString("field_name"),
-                    rs.getString("old_value"),
-                    rs.getString("new_value"),
-                    changedAt
-            );
-        }
+        return dsl.select(
+                        SERVICE_CHANGE_LOG.ID,
+                        SERVICE_CHANGE_LOG.SERVICE_ID,
+                        SERVICE_CHANGE_LOG.CHANGE_TYPE,
+                        SERVICE_CHANGE_LOG.FIELD_NAME,
+                        SERVICE_CHANGE_LOG.OLD_VALUE,
+                        SERVICE_CHANGE_LOG.NEW_VALUE,
+                        SERVICE_CHANGE_LOG.CHANGED_AT)
+                .from(SERVICE_CHANGE_LOG)
+                .join(PUBLIC_SERVICE_RESERVATIONS)
+                    .on(PUBLIC_SERVICE_RESERVATIONS.SERVICE_ID.eq(SERVICE_CHANGE_LOG.SERVICE_ID))
+                .where(condition)
+                .orderBy(SERVICE_CHANGE_LOG.CHANGED_AT.asc())
+                .fetch(r -> {
+                    LocalDateTime ldt = r.get(SERVICE_CHANGE_LOG.CHANGED_AT);
+                    Instant changedAt = (ldt != null)
+                            ? ldt.atZone(ZONE_SEOUL).toInstant()
+                            : Instant.now();
+                    return new ServiceChange(
+                            r.get(SERVICE_CHANGE_LOG.ID),
+                            r.get(SERVICE_CHANGE_LOG.SERVICE_ID),
+                            r.get(SERVICE_CHANGE_LOG.CHANGE_TYPE),
+                            r.get(SERVICE_CHANGE_LOG.FIELD_NAME),
+                            r.get(SERVICE_CHANGE_LOG.OLD_VALUE),
+                            r.get(SERVICE_CHANGE_LOG.NEW_VALUE),
+                            changedAt);
+                });
     }
 }

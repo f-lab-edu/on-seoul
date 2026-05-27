@@ -2,32 +2,32 @@ package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 
 import dev.jazzybyte.onseoul.crypto.AesGcmEncryptor;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
+import org.jooq.DSLContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.jooq.JooqTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.Optional;
 
+import static dev.jazzybyte.onseoul.jooq.Tables.USERS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * UserContactPersistenceAdapter 통합 테스트.
  * users 테이블에 암호화된 컬럼을 직접 INSERT 후 복호화 결과를 검증한다.
  */
-@DataJpaTest
+@JooqTest
 @TestPropertySource(properties = {
         "spring.datasource.url=jdbc:h2:mem:notif-contact-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH",
-        "spring.jpa.hibernate.ddl-auto=none",
         "spring.sql.init.mode=embedded",
-        "spring.sql.init.schema-locations=classpath:user-contact-test-schema.sql"
+        "spring.sql.init.schema-locations=classpath:user-contact-test-schema.sql",
+        "spring.jooq.sql-dialect=H2"
 })
 @Import({
         UserContactPersistenceAdapter.class,
@@ -49,25 +49,29 @@ class UserContactPersistenceAdapterTest {
     private UserContactPersistenceAdapter adapter;
 
     @Autowired
-    private NamedParameterJdbcTemplate jdbc;
+    private DSLContext dsl;
 
     private final AesGcmEncryptor encryptor = new AesGcmEncryptor(AES_KEY);
 
     @BeforeEach
-    void insertUser() {
-        // userId=1 로 암호화된 email/phone 삽입
+    void setUp() {
+        dsl.deleteFrom(USERS).execute();
+
         long userId = 1L;
         String emailEnc = encryptor.encrypt("user@seoul.go.kr", userId);
         String phoneEnc = encryptor.encrypt("010-9999-8888", userId);
 
-        String sql = """
-                INSERT INTO users (id, provider, provider_id, email_enc, email_hash, phone_enc, phone_hash, nickname, status, created_at, updated_at)
-                VALUES (:id, 'google', 'gid-001', :emailEnc, 'somehash', :phoneEnc, 'phonehash', '서울시민', 'ACTIVE', NOW(), NOW())
-                """;
-        jdbc.update(sql, new MapSqlParameterSource()
-                .addValue("id", userId)
-                .addValue("emailEnc", emailEnc)
-                .addValue("phoneEnc", phoneEnc));
+        dsl.insertInto(USERS)
+                .set(USERS.ID, userId)
+                .set(USERS.PROVIDER, "google")
+                .set(USERS.PROVIDER_ID, "gid-001")
+                .set(USERS.EMAIL_ENC, emailEnc)
+                .set(USERS.EMAIL_HASH, "somehash")
+                .set(USERS.PHONE_ENC, phoneEnc)
+                .set(USERS.PHONE_HASH, "phonehash")
+                .set(USERS.NICKNAME, "서울시민")
+                .set(USERS.STATUS, "ACTIVE")
+                .execute();
     }
 
     @Test
@@ -92,13 +96,16 @@ class UserContactPersistenceAdapterTest {
     void loadContact_nullPhone_returnsNullPhoneNumber() {
         long userId = 2L;
         String emailEnc = encryptor.encrypt("noPhone@example.com", userId);
-        jdbc.update("""
-                INSERT INTO users (id, provider, provider_id, email_enc, email_hash, nickname, status, created_at, updated_at)
-                VALUES (:id, 'kakao', 'kid-002', :emailEnc, 'hash2', '전화없음', 'ACTIVE', NOW(), NOW())
-                """,
-                new MapSqlParameterSource()
-                        .addValue("id", userId)
-                        .addValue("emailEnc", emailEnc));
+
+        dsl.insertInto(USERS)
+                .set(USERS.ID, userId)
+                .set(USERS.PROVIDER, "kakao")
+                .set(USERS.PROVIDER_ID, "kid-002")
+                .set(USERS.EMAIL_ENC, emailEnc)
+                .set(USERS.EMAIL_HASH, "hash2")
+                .set(USERS.NICKNAME, "전화없음")
+                .set(USERS.STATUS, "ACTIVE")
+                .execute();
 
         Optional<UserContact> result = adapter.loadContact(userId);
 

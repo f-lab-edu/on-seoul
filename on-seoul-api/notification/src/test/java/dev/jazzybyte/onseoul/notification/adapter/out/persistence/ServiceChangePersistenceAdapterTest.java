@@ -2,46 +2,44 @@ package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 
 import dev.jazzybyte.onseoul.notification.domain.ServiceChange;
 import dev.jazzybyte.onseoul.notification.domain.SubscriptionFilter;
+import org.jooq.DSLContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
-import org.springframework.boot.test.autoconfigure.jdbc.JdbcTest;
+import org.springframework.boot.test.autoconfigure.jooq.JooqTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
+import static dev.jazzybyte.onseoul.jooq.Tables.PUBLIC_SERVICE_RESERVATIONS;
+import static dev.jazzybyte.onseoul.jooq.Tables.SERVICE_CHANGE_LOG;
 import static org.assertj.core.api.Assertions.assertThat;
 
-@JdbcTest
-@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@JooqTest
 @TestPropertySource(properties = {
         "spring.datasource.url=jdbc:h2:mem:notif-change-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH",
         "spring.sql.init.mode=embedded",
-        "spring.sql.init.schema-locations=classpath:jpa-test-schema.sql"
+        "spring.sql.init.schema-locations=classpath:jpa-test-schema.sql",
+        "spring.jooq.sql-dialect=H2"
 })
 @Import(ServiceChangePersistenceAdapter.class)
 class ServiceChangePersistenceAdapterTest {
 
     @Autowired private ServiceChangePersistenceAdapter adapter;
-    @Autowired private NamedParameterJdbcTemplate jdbc;
+    @Autowired private DSLContext dsl;
 
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
 
     @BeforeEach
     void cleanup() {
-        jdbc.update("DELETE FROM service_change_log", Map.of());
-        jdbc.update("DELETE FROM public_service_reservations", Map.of());
+        dsl.deleteFrom(SERVICE_CHANGE_LOG).execute();
+        dsl.deleteFrom(PUBLIC_SERVICE_RESERVATIONS).execute();
     }
 
     private void insertReservation(String serviceId, String status, String areaName, String maxClassName) {
@@ -50,31 +48,26 @@ class ServiceChangePersistenceAdapterTest {
 
     private void insertReservation(String serviceId, String status, String areaName,
                                    String maxClassName, LocalDateTime deletedAt) {
-        Map<String, Object> params = new HashMap<>();
-        params.put("serviceId", serviceId);
-        params.put("status", status);
-        params.put("areaName", areaName);
-        params.put("maxClassName", maxClassName);
-        params.put("deletedAt", deletedAt == null ? null : Timestamp.valueOf(deletedAt));
-        jdbc.update(
-                "INSERT INTO public_service_reservations (service_id, service_name, service_status, area_name, max_class_name, deleted_at) " +
-                        "VALUES (:serviceId, :serviceId, :status, :areaName, :maxClassName, :deletedAt)",
-                params);
+        dsl.insertInto(PUBLIC_SERVICE_RESERVATIONS)
+                .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_ID, serviceId)
+                .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_NAME, serviceId)
+                .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_STATUS, status)
+                .set(PUBLIC_SERVICE_RESERVATIONS.AREA_NAME, areaName)
+                .set(PUBLIC_SERVICE_RESERVATIONS.MAX_CLASS_NAME, maxClassName)
+                .set(PUBLIC_SERVICE_RESERVATIONS.DELETED_AT, deletedAt)
+                .execute();
     }
 
     private void insertChange(String serviceId, String changeType, String fieldName,
                               String oldValue, String newValue, LocalDateTime changedAt) {
-        Map<String, Object> params = new HashMap<>();
-        params.put("serviceId", serviceId);
-        params.put("changeType", changeType);
-        params.put("fieldName", fieldName);
-        params.put("oldValue", oldValue);
-        params.put("newValue", newValue);
-        params.put("changedAt", Timestamp.valueOf(changedAt));
-        jdbc.update(
-                "INSERT INTO service_change_log (service_id, change_type, field_name, old_value, new_value, changed_at) " +
-                        "VALUES (:serviceId, :changeType, :fieldName, :oldValue, :newValue, :changedAt)",
-                params);
+        dsl.insertInto(SERVICE_CHANGE_LOG)
+                .set(SERVICE_CHANGE_LOG.SERVICE_ID, serviceId)
+                .set(SERVICE_CHANGE_LOG.CHANGE_TYPE, changeType)
+                .set(SERVICE_CHANGE_LOG.FIELD_NAME, fieldName)
+                .set(SERVICE_CHANGE_LOG.OLD_VALUE, oldValue)
+                .set(SERVICE_CHANGE_LOG.NEW_VALUE, newValue)
+                .set(SERVICE_CHANGE_LOG.CHANGED_AT, changedAt)
+                .execute();
     }
 
     @Test
@@ -112,7 +105,6 @@ class ServiceChangePersistenceAdapterTest {
     @Test
     @DisplayName("public_service_reservations에 매칭 row 없으면 빈 결과 (JOIN 실패)")
     void loadFiltered_noMatchingReservation_returnsEmpty() {
-        // 예약 row 미삽입 — JOIN 실패
         LocalDateTime now = LocalDateTime.now();
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
@@ -148,8 +140,10 @@ class ServiceChangePersistenceAdapterTest {
         assertThat(filtered).isEmpty();
 
         // RECEIVING으로 변경하면 매칭
-        jdbc.update("UPDATE public_service_reservations SET service_status='RECEIVING' WHERE service_id='OA-2269'",
-                Map.of());
+        dsl.update(PUBLIC_SERVICE_RESERVATIONS)
+                .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_STATUS, "RECEIVING")
+                .where(PUBLIC_SERVICE_RESERVATIONS.SERVICE_ID.eq("OA-2269"))
+                .execute();
         List<ServiceChange> matched = adapter.loadFiltered(
                 "OA-2269",
                 new SubscriptionFilter(Set.of("RECEIVING"), Set.of(), Set.of()),
