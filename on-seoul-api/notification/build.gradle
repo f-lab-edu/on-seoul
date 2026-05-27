@@ -1,6 +1,19 @@
 
 apply plugin: 'org.jooq.jooq-codegen-gradle'
 
+// 루트 .env 파일을 읽어 환경변수를 보완한다.
+// System.getenv()에 이미 값이 있으면 우선 적용(export된 쉘 변수 > .env 파일).
+def dotenv = { String key, String defaultValue = '' ->
+    def envVal = System.getenv(key)
+    if (envVal) return envVal
+    def envFile = rootProject.file('.env')
+    if (envFile.exists()) {
+        def line = envFile.readLines().find { it.startsWith("${key}=") && !it.startsWith('#') }
+        if (line) return line.substring(key.length() + 1).trim()
+    }
+    return defaultValue
+}
+
 dependencies {
     api project(':common')
 
@@ -30,9 +43,9 @@ jooq {
     configuration {
         jdbc {
             driver   = 'org.postgresql.Driver'
-            url      = System.getenv('DB_URL') ?: 'jdbc:postgresql://localhost:5432/on_data'
-            user     = System.getenv('DB_USERNAME') ?: ''
-            password = System.getenv('DB_PASSWORD') ?: ''
+            url      = dotenv('DB_URL', 'jdbc:postgresql://localhost:5432/on_data')
+            user     = dotenv('DB_USERNAME')
+            password = dotenv('DB_PASSWORD')
         }
         generator {
             database {
