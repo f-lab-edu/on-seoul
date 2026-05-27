@@ -8,8 +8,8 @@ import org.jooq.DSLContext;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 import static dev.jazzybyte.onseoul.jooq.Tables.PUBLIC_SERVICE_RESERVATIONS;
@@ -20,11 +20,12 @@ import static dev.jazzybyte.onseoul.jooq.Tables.SERVICE_CHANGE_LOG;
  *
  * <p>도메인은 SQL을 알지 못한다 — 이 어댑터가 SubscriptionFilter의 필드를 읽어 WHERE 절을 동적 구성한다.
  * 도메인은 카테고리/지역/상태 같은 구조화된 필드만 노출.
+ *
+ * <p>changed_at 은 TIMESTAMPTZ 이므로 jOOQ 가 {@link OffsetDateTime} 으로 반환한다.
+ * {@link Instant} 변환은 {@code .toInstant()} 한 번으로 끝난다 — 별도 ZoneId 변환 불필요.
  */
 @Component
 class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
-
-    private static final ZoneId ZONE_SEOUL = ZoneId.of("Asia/Seoul");
 
     private final DSLContext dsl;
 
@@ -53,7 +54,7 @@ class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
                 .and(PUBLIC_SERVICE_RESERVATIONS.DELETED_AT.isNull());
 
         if (lastNotifiedAt != null) {
-            LocalDateTime since = LocalDateTime.ofInstant(lastNotifiedAt, ZONE_SEOUL);
+            OffsetDateTime since = lastNotifiedAt.atOffset(ZoneOffset.UTC);
             condition = condition.and(SERVICE_CHANGE_LOG.CHANGED_AT.gt(since));
         }
         if (!f.statuses().isEmpty()) {
@@ -80,10 +81,13 @@ class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
                 .where(condition)
                 .orderBy(SERVICE_CHANGE_LOG.CHANGED_AT.asc())
                 .fetch(r -> {
-                    LocalDateTime ldt = r.get(SERVICE_CHANGE_LOG.CHANGED_AT);
-                    Instant changedAt = (ldt != null)
-                            ? ldt.atZone(ZONE_SEOUL).toInstant()
-                            : Instant.now();
+                    OffsetDateTime odt = r.get(SERVICE_CHANGE_LOG.CHANGED_AT);
+                    if (odt == null) {
+                        // changed_at NOT NULL 제약이 있으므로 null은 DDL-DB 불일치를 의미한다.
+                        throw new IllegalStateException(
+                                "service_change_log.changed_at is null — schema mismatch?");
+                    }
+                    Instant changedAt = odt.toInstant();
                     return new ServiceChange(
                             r.get(SERVICE_CHANGE_LOG.ID),
                             r.get(SERVICE_CHANGE_LOG.SERVICE_ID),

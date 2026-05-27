@@ -5,7 +5,9 @@ plugins {
 
     id 'groovy'
     id 'java-library'
-    id 'org.jooq.jooq-codegen-gradle' version '3.19.18' apply false
+    // jOOQ codegen plugin 버전은 Spring Boot BOM이 관리하는 jOOQ 런타임 버전과 반드시 일치시킨다.
+    // BOM 버전 확인: ./gradlew dependencyInsight --dependency jooq --configuration runtimeClasspath
+    id 'org.jooq.jooq-codegen-gradle' version '3.19.31' apply false
 }
 
 allprojects {

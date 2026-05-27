@@ -12,7 +12,8 @@ dependencies {
     implementation 'org.springframework:spring-context'
     runtimeOnly 'org.postgresql:postgresql'
 
-    jooqCodegen 'org.jooq:jooq-meta-extensions:3.19.18'
+    // jooq-meta-extensions 버전은 codegen 플러그인 버전(build.gradle root)과 일치시킨다.
+    jooqCodegen 'org.jooq:jooq-meta-extensions:3.19.31'
 
     testRuntimeOnly 'com.h2database:h2'
     testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
@@ -58,4 +59,10 @@ sourceSets {
             srcDir 'src/main/generated-sources/jooq'
         }
     }
+}
+
+// CI clean checkout 시 jooqCodegen 없이 compileJava가 실행되면 Q-클래스를 찾지 못한다.
+// compileJava가 jooqCodegen에 반드시 의존하도록 명시한다.
+tasks.named('compileJava') {
+    dependsOn 'jooqCodegen'
 }
