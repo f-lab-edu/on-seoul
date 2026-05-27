@@ -116,16 +116,10 @@ def main(args: argparse.Namespace) -> None:
 
     total_rows = len(rows)
     labeled = sum(1 for r in rows if r.get("is_correct", "").strip().lower() == "y")
-    empty = sum(1 for r in rows if not r.get("is_correct", "").strip())
+    # 공백·빈 값은 "부적합(not correct)"으로 간주 — 별도 확인 불필요
+    incorrect = total_rows - labeled
 
-    print(f"입력: {total_rows}행 (정답 표시 {labeled}건, 미표시 {empty}건)")
-
-    if empty > 0 and not args.force:
-        print(
-            f"\n[경고] is_correct 가 비어 있는 행이 {empty}건 있습니다.\n"
-            "계속하려면 --force 옵션을 추가하세요."
-        )
-        sys.exit(1)
+    print(f"입력: {total_rows}행 (정답 {labeled}건, 부적합/공백 {incorrect}건)")
 
     records = convert(rows)
     write_holdout(records, output_path, append=args.append)
@@ -143,9 +137,6 @@ def _parse_args() -> argparse.Namespace:
         "--append",
         action="store_true",
         help="기존 holdout 파일에 추가 (기본값: 덮어씀)",
-    )
-    parser.add_argument(
-        "--force", action="store_true", help="is_correct 미표시 행이 있어도 계속 진행"
     )
     return parser.parse_args()
 
