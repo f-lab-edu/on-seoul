@@ -107,7 +107,7 @@ management:
       show-details: never
 
 knock:
-  api-key: ${KNOCK_API_KEY:}  # Knock API 키. 필수
+  api-key: ${KNOCK_API_KEY}    # Knock API 키. 필수 — 미설정 시 앱 시작 실패
   email-workflow-key: "service-change-email"
   sms-workflow-key: "service-change-sms"
   timeout-seconds: 10
