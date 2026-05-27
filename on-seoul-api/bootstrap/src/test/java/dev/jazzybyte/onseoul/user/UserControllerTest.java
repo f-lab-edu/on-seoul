@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.user;
 
+import dev.jazzybyte.onseoul.crypto.CryptoException;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import dev.jazzybyte.onseoul.shared.adapter.in.web.GlobalExceptionHandler;
@@ -99,6 +100,22 @@ class UserControllerTest {
     }
 
     // ── downstream failure ────────────────────────────────────────
+
+    @Test
+    @DisplayName("PATCH /api/users/me/contact — CryptoException 발생 시 500 + internal_error 반환")
+    void updateContact_cryptoException_returns500() throws Exception {
+        doThrow(new CryptoException("decryption failed", new RuntimeException()))
+                .when(updateContactUseCase).updateContact(eq(1L), any(UpdateContactCommand.class));
+
+        mockMvc.perform(patch("/api/users/me/contact")
+                        .requestAttr("userId", 1L)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"phoneNumber\":\"010-1111-2222\"}"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error").value("internal_error"));
+
+        verify(updateContactUseCase).updateContact(eq(1L), any(UpdateContactCommand.class));
+    }
 
     @Test
     @DisplayName("PATCH /api/users/me/contact — 존재하지 않는 userId → 404")
