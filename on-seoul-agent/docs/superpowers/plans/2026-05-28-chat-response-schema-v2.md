@@ -518,3 +518,41 @@ async def test_cache_envelope_preserves_blocks(self):
 6. **`metadata` 자유 dict 슬롯**: A/B 실험·디버깅 데이터를 스키마 변경 없이 실어 보낼 수 있다.
 7. **`suggested_followups` 는 Phase 2 이후**: 본 계획에서는 빈 리스트로 placeholder만 유지. 별도 LLM 호출 비용·UX 검증 후 채운다.
 8. **Spring Boot `chat_messages.content` 컬럼 마이그레이션은 별도 결정**: JSONB로 가는 게 권장 방향이나, 본 계획 외부 의사결정이다.
+
+---
+
+## 부록 — 운영 중 발견된 미완 사항 (2026-05-28 라이브 검증)
+
+`/chat/stream` 실제 호출 검증에서 드러난 답변 품질 이슈. v2 스키마 본격 도입 전이라도 가능한 부분은 v1 프롬프트 패치로 우선 처리하고, 구조적 개선이 필요한 부분은 v2 Phase A 작업 항목에 통합한다.
+
+### A. v1 프롬프트로 즉시 해결 (적용 완료)
+
+- [x] **이용 기간(service_open_*_dt) 출력 제외** — DB에 `2021-01-01 ~ 2031-12-30` 같은 비현실적 값이 다수. 사용자 혼란을 유발하므로 LLM 컨텍스트에서도 제거.
+- [x] **친절한 도입문/마무리** — "조회된 데이터 [...]"식 무미건조한 출력 대신:
+  - 도입: "관련 시설을 찾아봤어요" 류 1~2 문장
+  - 마무리: 접수중 시설이 있으면 절차 안내(서울시 통합회원 가입·휴대폰 본인인증), 자치구/요금 조건 미명시 시 후속 질문 유도
+- [x] **`}` 누수 버그** — 프롬프트 내 `{{service_name}}` placeholder 표기를 LLM이 그대로 출력. placeholder 문법 완전 제거 후 구체 예시 형태로 전환.
+
+### B. v2 Phase A 에서 함께 처리할 항목
+
+- [ ] **`vector_sub_intent` 분기 응답**
+  - `detail` 의도(절차/요금/규정 문의)일 때 카드 나열보다 안내문 위주의 narrative 강화
+  - `identification` 의도(고유명사 식별)일 때 가장 가까운 후보 1~3개 위주 출력
+  - `semantic` 의도일 때 다양성 우선 (지역/카테고리 분포 노출)
+  - 구현 위치: `AnswerAgent.answer()` 에서 `state["vector_sub_intent"]` 분기 → 프롬프트 또는 narrative 템플릿 선택
+
+- [ ] **자격 제한 강조** — `target_info` 가 "어르신", "65세이상", "회원전용" 등이면 카드에 ⚠️ 또는 별도 라벨 노출. 일반 사용자가 신청 불가능한 시설을 상위로 안내할 때 혼란 최소화.
+
+- [ ] **데이터 신뢰성 필터** — `service_open_*_dt` 비정상 값(10년 이상 운영 기간) 검출 시 메타데이터 별도 표기 또는 카드 노출 우선순위 하향.
+
+- [ ] **후속 질문 유도(suggested_followups)** — narrative 마무리에서 자치구·요금·시간대 미명시 시 구체적 follow-up 질문 1~2개 제시.
+  - 예: "어느 자치구를 선호하시나요?", "무료 시설만 보시겠어요, 유료 포함 안내드릴까요?"
+  - v2 의 `suggested_followups: list[str]` 필드 도입 시 LLM이 narrative 와 별도로 생성하도록.
+
+- [ ] **DB 자체 검증** — `public_service_reservations.service_open_*_dt` 컬럼의 비정상 값 비율 측정.
+  - Spring Boot 측 데이터 수집 단계에서 sanity check 추가 검토 (별도 작업)
+  - 임시로 AI 서비스 LLM 컨텍스트에서 제외 (적용 완료)
+
+### C. 라우터 보강 (별도 PR 가능)
+
+- [ ] **"어떻게/방법" 등 절차 질의의 sub_intent=detail 안정화** — 라우터 few-shot 1건 추가했으나 부정형/혼합 표현(예: "예약 가능한 테니스장 어떻게 찾아?") 케이스 회귀 검증 필요. eval_set_holdout 에 case 보강.

@@ -187,7 +187,11 @@ class TestAnswerAgentVectorResultsFlatSchema:
         assert normalized["service_url"] == _FALLBACK_URL
 
     def test_normalize_preserves_extended_fields_for_prompt(self):
-        """LLM 프롬프트가 사용하는 확장 필드(분류·요금·대상·이용기간)가 모두 보존된다."""
+        """LLM 프롬프트가 사용하는 확장 필드(분류·요금·대상·접수일정)가 모두 보존된다.
+
+        service_open_*_dt(이용 기간) 는 LLM 컨텍스트에서 의도적으로 제외 —
+        DB 에 비현실적 값(예: 2021~2031)이 많아 사용자 혼란을 유발하므로 답변에 노출하지 않는다.
+        """
         from agents.answer_agent import AnswerAgent
 
         row = {
@@ -211,7 +215,8 @@ class TestAnswerAgentVectorResultsFlatSchema:
         assert n["min_class_name"] == "테니스장"
         assert n["payment_type"] == "무료"
         assert n["target_info"] == "제한없음"
-        assert n["service_open_start_dt"] == "2026-05-08"
-        assert n["service_open_end_dt"] == "2026-12-31"
+        # 이용 기간 필드는 의도적으로 제외 (DB 신뢰성 이슈)
+        assert "service_open_start_dt" not in n
+        assert "service_open_end_dt" not in n
         # 시설별 service_url 보존 — fallback URL 로 덮이지 않아야 한다
         assert "rsv_svc_id=S100" in n["service_url"]

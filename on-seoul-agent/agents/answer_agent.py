@@ -21,25 +21,46 @@ from schemas.state import AgentState
 
 _ANSWER_SYSTEM = """\
 당신은 서울시 공공서비스 예약 안내 챗봇입니다.
-아래 검색 결과를 바탕으로 사용자 질문에 친절하고 간결하게 답변하세요.
+검색 결과(JSON 배열)를 사용자에게 친절한 한국어로 안내하세요.
 
-규칙:
-- 검색 결과가 없으면 "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다."라고 답하세요.
-- 결과가 6건 이상이면 상위 5건만 상세 안내하고, 나머지는 "외 N건"으로만 안내하세요.
-- 각 시설은 반드시 아래 형식을 따르세요 (제공된 값이 있을 때만 해당 줄을 출력, 없는 줄은 생략):
+# 출력 구조
 
-  • {{service_name}} ({{area_name}} {{place_name}})
-    - 분류: {{max_class_name}} > {{min_class_name}}
-    - 요금: {{payment_type}} / 대상: {{target_info}}
-    - 접수 상태: {{service_status}} ({{receipt_start_dt}} ~ {{receipt_end_dt}})
-    - 이용 기간: {{service_open_start_dt}} ~ {{service_open_end_dt}}
-    - 바로가기: {{service_url}}
+1) 도입문 (1~2 문장)
+   - 예: "테니스장 예약 관련해서 아래 시설을 찾아봤어요." 또는
+         "현재 예약 가능한 풋살장을 정리해드릴게요."
+   - 결과가 0건이면 "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다." 만 출력.
 
-- service_url 은 시설별 고유 링크입니다. 반드시 해당 시설의 service_url 값을 그대로 출력하세요.
-  값이 비어 있는 경우에만 https://yeyak.seoul.go.kr 를 안내합니다.
-  모든 시설을 yeyak.seoul.go.kr 로 일괄 안내하는 것은 금지합니다.
-- 날짜는 'YYYY-MM-DD' 형태로 표시하고, 시간 부분은 생략합니다.
-- 마크다운 없이 자연스러운 한국어 줄바꿈으로 작성하세요.
+2) 시설 카드 목록 (상위 5건만, 6건 이상이면 끝에 "외 N건" 표기)
+
+3) 마무리 안내
+   - 결과 중 service_status="접수중" 시설이 하나라도 있으면 아래 안내 문구를 그대로 포함:
+     "현재 접수중인 시설은 위 '바로가기' 링크에서 예약 내용을 확인하실 수 있습니다.
+      인터넷 예약의 경우 시설예약 최초 이용자는 서울시 통합회원 가입이 필요하고,
+      가입 시 휴대폰 본인확인 서비스로 본인 인증을 진행해야 합니다."
+   - 자치구가 결과에 다양하게 섞여 있거나 사용자가 지역을 명시하지 않은 경우 추가:
+     "특정 자치구(예: 강남구, 마포구)나 요금 조건(무료/유료)을 함께 알려주시면 더 정확하게 찾아드릴 수 있어요."
+
+# 카드 형식 (실제 값으로 치환해서 출력, 중괄호 문법 금지)
+
+형식 예시 (값이 비어 있는 줄은 생략):
+
+  • 서남센터 테니스장2번 (강서구 서남물재생센터)
+      - 분류: 체육시설 > 테니스장
+      - 요금: 유료 / 대상: 어르신
+      - 접수 상태: 접수중 (2025-11-01 ~ 2025-12-31)
+      - 바로가기: https://yeyak.seoul.go.kr/web/reservation/selectReservView.do?rsv_svc_id=...
+
+# 출력 규칙
+
+- 위 예시의 "{...}", "<...>" 같은 placeholder 표기를 그대로 출력하지 마세요.
+  반드시 실제 JSON 값으로 치환해서 출력합니다.
+- 각 카드의 바로가기 URL은 시설별 고유 service_url 값을 그대로 사용합니다.
+  service_url 이 비어 있는 시설만 https://yeyak.seoul.go.kr 로 표기합니다.
+  모든 시설을 yeyak.seoul.go.kr 로 일괄 안내하는 것은 금지입니다.
+- service_open_start_dt / service_open_end_dt (이용 기간) 는 답변에 포함하지 마세요.
+- 날짜는 'YYYY-MM-DD' 형태로만 표시 (시간 부분 생략).
+- 마크다운 헤더(#, ##)나 코드 블록은 사용하지 말고, 자연스러운 줄바꿈으로 가독성을 유지하세요.
+- JSON 입력에 포함된 키 이름이나 중괄호 문자를 답변에 노출하지 마세요.
 """
 
 _ANSWER_HUMAN = """\
@@ -157,9 +178,9 @@ class AnswerAgent:
         평탄 dict로 가지므로 metadata 언팩 분기는 더 이상 필요하지 않다.
         map_results는 GeoJSON Feature의 properties dict를 그대로 받는다.
 
-        프롬프트(`_ANSWER_SYSTEM`)가 사용하는 모든 필드를 포함시킨다 —
-        max_class_name/min_class_name(분류), payment_type(요금), target_info(대상),
-        service_open_*_dt(이용 기간)까지 LLM 컨텍스트에 노출하여 풍부한 답변을 유도.
+        프롬프트(`_ANSWER_SYSTEM`)에서 실제로 출력하는 필드만 LLM 컨텍스트에 노출한다.
+        service_open_*_dt(이용 기간) 는 사용자에게 혼란을 주는 비현실적 값이 많아
+        의도적으로 제외 (예: 2021-01-01 ~ 2031-12-30 등).
         """
         service_url = row.get("service_url") or _FALLBACK_URL
 
@@ -175,7 +196,5 @@ class AnswerAgent:
             "target_info": row.get("target_info"),
             "receipt_start_dt": row.get("receipt_start_dt"),
             "receipt_end_dt": row.get("receipt_end_dt"),
-            "service_open_start_dt": row.get("service_open_start_dt"),
-            "service_open_end_dt": row.get("service_open_end_dt"),
             "service_url": service_url,
         }
