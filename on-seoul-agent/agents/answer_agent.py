@@ -25,9 +25,21 @@ _ANSWER_SYSTEM = """\
 
 규칙:
 - 검색 결과가 없으면 "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다."라고 답하세요.
-- 시설 정보는 service_name, area_name, service_status, receipt_start_dt, receipt_end_dt를 활용하세요.
-- 예약 링크(service_url)가 있으면 안내에 포함하세요. 없으면 서울시 공공서비스 예약 사이트(https://yeyak.seoul.go.kr)를 안내하세요.
-- 마크다운 없이 자연스러운 한국어로 작성하세요.
+- 결과가 6건 이상이면 상위 5건만 상세 안내하고, 나머지는 "외 N건"으로만 안내하세요.
+- 각 시설은 반드시 아래 형식을 따르세요 (제공된 값이 있을 때만 해당 줄을 출력, 없는 줄은 생략):
+
+  • {service_name} ({area_name} {place_name})
+    - 분류: {max_class_name} > {min_class_name}
+    - 요금: {payment_type} / 대상: {target_info}
+    - 접수 상태: {service_status} ({receipt_start_dt} ~ {receipt_end_dt})
+    - 이용 기간: {service_open_start_dt} ~ {service_open_end_dt}
+    - 바로가기: {service_url}
+
+- service_url 은 시설별 고유 링크입니다. 반드시 해당 시설의 service_url 값을 그대로 출력하세요.
+  값이 비어 있는 경우에만 https://yeyak.seoul.go.kr 를 안내합니다.
+  모든 시설을 yeyak.seoul.go.kr 로 일괄 안내하는 것은 금지합니다.
+- 날짜는 'YYYY-MM-DD' 형태로 표시하고, 시간 부분은 생략합니다.
+- 마크다운 없이 자연스러운 한국어 줄바꿈으로 작성하세요.
 """
 
 _ANSWER_HUMAN = """\
@@ -124,11 +136,15 @@ class AnswerAgent:
 
     @staticmethod
     def _normalize(row: dict) -> dict:
-        """카드 렌더링에 필요한 필드만 추출하고 fallback URL을 보정한다.
+        """카드 렌더링에 필요한 필드를 추출하고 fallback URL을 보정한다.
 
         sql_results와 vector_results는 모두 public_service_reservations 원본 컬럼을
         평탄 dict로 가지므로 metadata 언팩 분기는 더 이상 필요하지 않다.
         map_results는 GeoJSON Feature의 properties dict를 그대로 받는다.
+
+        프롬프트(`_ANSWER_SYSTEM`)가 사용하는 모든 필드를 포함시킨다 —
+        max_class_name/min_class_name(분류), payment_type(요금), target_info(대상),
+        service_open_*_dt(이용 기간)까지 LLM 컨텍스트에 노출하여 풍부한 답변을 유도.
         """
         service_url = row.get("service_url") or _FALLBACK_URL
 
@@ -137,8 +153,14 @@ class AnswerAgent:
             "service_name": row.get("service_name"),
             "area_name": row.get("area_name"),
             "place_name": row.get("place_name"),
+            "max_class_name": row.get("max_class_name"),
+            "min_class_name": row.get("min_class_name"),
             "service_status": row.get("service_status"),
+            "payment_type": row.get("payment_type"),
+            "target_info": row.get("target_info"),
             "receipt_start_dt": row.get("receipt_start_dt"),
             "receipt_end_dt": row.get("receipt_end_dt"),
+            "service_open_start_dt": row.get("service_open_start_dt"),
+            "service_open_end_dt": row.get("service_open_end_dt"),
             "service_url": service_url,
         }

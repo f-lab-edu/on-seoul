@@ -185,3 +185,33 @@ class TestAnswerAgentVectorResultsFlatSchema:
 
         normalized = AnswerAgent._normalize({"service_id": "S002"})
         assert normalized["service_url"] == _FALLBACK_URL
+
+    def test_normalize_preserves_extended_fields_for_prompt(self):
+        """LLM 프롬프트가 사용하는 확장 필드(분류·요금·대상·이용기간)가 모두 보존된다."""
+        from agents.answer_agent import AnswerAgent
+
+        row = {
+            "service_id": "S100",
+            "service_name": "마루공원 테니스장 1면",
+            "area_name": "강남구",
+            "place_name": "마루공원",
+            "max_class_name": "체육시설",
+            "min_class_name": "테니스장",
+            "service_status": "접수중",
+            "payment_type": "무료",
+            "target_info": "제한없음",
+            "receipt_start_dt": "2026-05-08",
+            "receipt_end_dt": "2026-12-31",
+            "service_open_start_dt": "2026-05-08",
+            "service_open_end_dt": "2026-12-31",
+            "service_url": "https://yeyak.seoul.go.kr/web/reservation/selectReservView.do?rsv_svc_id=S100",
+        }
+        n = AnswerAgent._normalize(row)
+        assert n["max_class_name"] == "체육시설"
+        assert n["min_class_name"] == "테니스장"
+        assert n["payment_type"] == "무료"
+        assert n["target_info"] == "제한없음"
+        assert n["service_open_start_dt"] == "2026-05-08"
+        assert n["service_open_end_dt"] == "2026-12-31"
+        # 시설별 service_url 보존 — fallback URL 로 덮이지 않아야 한다
+        assert "rsv_svc_id=S100" in n["service_url"]
