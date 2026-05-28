@@ -28,6 +28,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.answer_agent import AnswerAgent
+from agents.hydration_node import HydrationNode
 from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.vector_agent import VectorAgent
@@ -77,11 +78,13 @@ class GraphNodes:
         vector_agent: VectorAgent,
         answer_agent: AnswerAgent,
         redis: Any = None,
+        hydration: HydrationNode | None = None,
     ) -> None:
         self._router = router
         self._sql = sql_agent
         self._vector = vector_agent
         self._answer = answer_agent
+        self._hydration = hydration or HydrationNode()
         self._cache_check = CacheCheckNode(redis=redis)
         self._cache_write = CacheWriteNode(redis=redis)
 
@@ -176,6 +179,7 @@ class GraphNodes:
             "sql_results": None,
             "vector_results": None,
             "map_results": None,
+            "hydrated_services": None,
             "refined_query": None,
             "max_class_name": None,
             "area_name": None,
@@ -254,6 +258,33 @@ class GraphNodes:
             logger.exception("vector_node 실행 오류")
             self.node_path.append("vector_error")
             return {"error": str(exc)}
+
+    async def hydration_node(self, state: AgentState) -> dict[str, Any]:
+        """검색 결과 service_id → 원본 데이터 통합 슬롯 매핑.
+
+        sql_node / vector_node 직후, answer_node 직전에 실행된다.
+        검색 노드별 출력 형식(sql_results / vector_results / pending_service_ids)을
+        단일 슬롯 hydrated_services 로 통합하여 AnswerAgent 가 검색 경로에 의존하지
+        않도록 한다.
+
+        세션:
+            data_session — public_service_reservations 원본 조회 전용 (on_data_reader)
+        """
+        assert self.data_session is not None
+        try:
+            update = await self._hydration(state, self.data_session)
+            self.node_path.append("hydration_node")
+            hydrated = update.get("hydrated_services") or []
+            logger.info(
+                "hydration.done room=%s count=%d",
+                state.get("room_id"),
+                len(hydrated),
+            )
+            return update
+        except Exception:
+            logger.exception("hydration_node 실행 오류")
+            self.node_path.append("hydration_error")
+            return {"hydrated_services": []}
 
     async def map_node(self, state: AgentState) -> dict[str, Any]:
         """map_search 호출 — map_results 설정.
@@ -589,6 +620,9 @@ class CacheCheckNode:
             "title": payload.get("title"),
             "vector_results": snap.get("vector_results"),
             "sql_results": snap.get("sql_results"),
+            # hydrated_services 도 envelope 에 포함되어 있으면 복원한다.
+            # 미보유 envelope(구버전 캐시 엔트리) 인 경우 None — AnswerAgent 가 폴백 처리.
+            "hydrated_services": snap.get("hydrated_services"),
             "max_class_name": snap.get("max_class_name"),
             "area_name": snap.get("area_name"),
             "service_status": snap.get("service_status"),
@@ -635,6 +669,8 @@ class CacheWriteNode:
             "service_status": service_status,
             "vector_results": state.get("vector_results"),
             "sql_results": state.get("sql_results"),
+            # HydrationNode 가 채운 통합 슬롯 — cache hit 시 hydration 라운드트립 절감.
+            "hydrated_services": state.get("hydrated_services"),
         }
         await set_cached_answer(
             refined,

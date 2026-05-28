@@ -9,6 +9,10 @@
    - Track D: bm25_search — ParadeDB 전문 검색
 4. 4채널 결과를 가중 RRF(Reciprocal Rank Fusion)로 결합한다.
 5. 최종 service_id 목록으로 public_service_reservations를 hydration한다.
+
+Phase 2 계획: hydration 책임을 HydrationNode 로 이관하여 vector_results 를
+[{service_id, rrf_score}] 형태로만 채울 예정. 현재는 28개 테스트의 호환을 위해
+hydrate_services 호출을 유지한다.
 """
 
 import logging
@@ -246,6 +250,10 @@ class VectorAgent:
         Router가 이미 refined_query와 post-filter를 산출한 경우
         (state["refined_query"] 존재), 중복 LLM 호출을 피하기 위해 refine 체인을 skip하고
         state["max_class_name"/"area_name"/"service_status"] 값을 그대로 사용한다.
+
+        Phase 2 (별도 PR): 본 메서드의 hydration 호출과 search_channels.FINAL 구성은
+        HydrationNode 로 이관 예정. 그 시점에 data_session 파라미터를 제거하고
+        vector_results 를 [{service_id, rrf_score}] 메타-only 로 단순화한다.
         """
         router_refined = state.get("refined_query")
         if router_refined:

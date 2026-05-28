@@ -120,13 +120,28 @@ class AnswerAgent:
     # ------------------------------------------------------------------
 
     def _collect_results(self, state: AgentState) -> list[dict]:
-        """sql_results / vector_results / map_results를 단일 목록으로 합친다."""
+        """검색 결과를 단일 목록으로 합친다.
+
+        우선순위:
+          1. hydrated_services  — HydrationNode 가 채운 통합 슬롯 (정식 경로)
+          2. sql_results / vector_results — 통합 슬롯 미설정 시 호환 폴백
+             (cache hit envelope 또는 단위 테스트에서 HydrationNode 없이 호출되는 경우)
+          3. map_results        — GeoJSON 구조라 별도로 unpack
+
+        HydrationNode 가 그래프에 정상 삽입된 정식 경로에서는 항상 (1)로 처리된다.
+        """
         raw: list[dict] = []
 
-        if state.get("sql_results"):
-            raw.extend(state["sql_results"])
-        if state.get("vector_results"):
-            raw.extend(state["vector_results"])
+        hydrated = state.get("hydrated_services")
+        if hydrated:
+            raw.extend(hydrated)
+        else:
+            # 폴백 — hydrated_services 슬롯이 비었을 때만 검색 경로별 슬롯에서 채집.
+            if state.get("sql_results"):
+                raw.extend(state["sql_results"])
+            if state.get("vector_results"):
+                raw.extend(state["vector_results"])
+
         if state.get("map_results"):
             # map_results는 GeoJSON dict — features 배열 언팩
             features = state["map_results"].get("features", [])

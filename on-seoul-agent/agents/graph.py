@@ -102,6 +102,10 @@ async def _dispatch_map_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().map_node(state)
 
 
+async def _dispatch_hydration_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().hydration_node(state)
+
+
 async def _dispatch_answer_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().answer_node(state)
 
@@ -142,6 +146,7 @@ def _build_shared_graph() -> Any:
     builder.add_node("sql_node", _dispatch_sql_node)
     builder.add_node("vector_node", _dispatch_vector_node)
     builder.add_node("map_node", _dispatch_map_node)
+    builder.add_node("hydration_node", _dispatch_hydration_node)
     builder.add_node("answer_node", _dispatch_answer_node)
     builder.add_node("search_persist_node", _dispatch_search_persist_node)
     builder.add_node("trace_node", _dispatch_trace_node)
@@ -170,8 +175,13 @@ def _build_shared_graph() -> Any:
         },
     )
 
-    builder.add_edge("sql_node", "answer_node")
-    builder.add_edge("vector_node", "answer_node")
+    # sql_node / vector_node → hydration_node → answer_node
+    # 검색 노드는 service_id 산출에 집중하고, hydration_node 가 단일 책임으로
+    # public_service_reservations 원본을 hydrated_services 슬롯에 통합한다.
+    # map_node 는 GeoJSON 구조이므로 hydration 을 건너뛰고 직접 answer_node 로 간다.
+    builder.add_edge("sql_node", "hydration_node")
+    builder.add_edge("vector_node", "hydration_node")
+    builder.add_edge("hydration_node", "answer_node")
     builder.add_edge("map_node", "answer_node")
 
     builder.add_conditional_edges(
@@ -256,13 +266,14 @@ class AgentGraph:
 
         token = _ACTIVE_NODES.set(self._nodes)
         try:
-            # recursion_limit=15:
-            # 1회 정상 흐름은 router → cache_check → (search) → answer → cache_write → trace
-            # = 6 super-step. retry 1회 포함 시 router/retry_prep까지 추가되어 ~12.
-            # 여유 3을 더해 15로 설정한다.
+            # recursion_limit=16:
+            # 1회 정상 흐름은 router → cache_check → (search) → hydration → answer →
+            # cache_write → search_persist → trace = 8 super-step.
+            # retry 1회 포함 시 router/retry_prep까지 추가되어 ~14.
+            # 여유 2를 더해 16으로 설정한다.
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
-                config={"recursion_limit": 15},
+                config={"recursion_limit": 16},
             )  # type: ignore[arg-type]
         finally:
             _ACTIVE_NODES.reset(token)
@@ -311,7 +322,7 @@ class AgentGraph:
         try:
             async for chunk in AgentGraph._compiled_graph.astream(
                 state,
-                config={"recursion_limit": 15},
+                config={"recursion_limit": 16},
             ):
                 node_name: str = next(iter(chunk))
                 node_updates: dict[str, Any] | None = chunk[node_name]

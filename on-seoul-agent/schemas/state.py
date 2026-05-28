@@ -35,6 +35,19 @@ class AgentState(TypedDict):
     )  # Router가 분류한 벡터 검색 세부 의도 (VECTOR_SEARCH 전용)
     vector_results: list[dict[str, Any]] | None  # Vector Agent 결과
     map_results: dict[str, Any] | None  # map_search GeoJSON FeatureCollection 결과
+    # ─── Hydration (service_id → public_service_reservations 원본) ───
+    # HydrationNode 가 검색 노드(sql/vector) 직후에 채우는 통합 슬롯.
+    # AnswerAgent 등 후속 단계는 이 슬롯을 사용하여 검색 경로에 의존하지 않는다.
+    #
+    # 책임 분리:
+    #   - VECTOR_SEARCH: VectorAgent 는 vector_results 에 {service_id, rrf_score, ...} 만 채운다.
+    #                    HydrationNode 가 service_id 를 추출하여 hydrate_services 호출 + 메타 머지.
+    #   - SQL_SEARCH:    sql_search 가 이미 원본 행을 반환하므로 HydrationNode 는 통과.
+    #
+    # service_id 추출 책임: agents.hydration_node._extract_service_ids() 함수
+    # (intent → vector_results/sql_results 의 service_id 키 추출).
+    # 별도 슬롯을 두지 않는 이유는 State 단일 진실원 원칙을 위배하지 않기 위함.
+    hydrated_services: list[dict[str, Any]] | None
     answer: str | None  # Answer Agent가 생성한 최종 답변
     title: str | None  # Answer Agent가 생성한 대화 제목 (title_needed=True일 때)
     trace: dict[str, Any] | None  # LangGraph 실행 메타데이터
