@@ -52,15 +52,14 @@ _ANSWER_SYSTEM = """\
 
 # 출력 규칙
 
-- 위 예시의 "{...}", "<...>" 같은 placeholder 표기를 그대로 출력하지 마세요.
-  반드시 실제 JSON 값으로 치환해서 출력합니다.
+- 답변에 중괄호 기호나 JSON 입력의 키 이름(예: service_name, area_name)을 그대로 노출하지 마세요.
+  반드시 해당 필드의 실제 값으로 치환해서 출력합니다.
 - 각 카드의 바로가기 URL은 시설별 고유 service_url 값을 그대로 사용합니다.
   service_url 이 비어 있는 시설만 https://yeyak.seoul.go.kr 로 표기합니다.
   모든 시설을 yeyak.seoul.go.kr 로 일괄 안내하는 것은 금지입니다.
 - service_open_start_dt / service_open_end_dt (이용 기간) 는 답변에 포함하지 마세요.
 - 날짜는 'YYYY-MM-DD' 형태로만 표시 (시간 부분 생략).
 - 마크다운 헤더(#, ##)나 코드 블록은 사용하지 말고, 자연스러운 줄바꿈으로 가독성을 유지하세요.
-- JSON 입력에 포함된 키 이름이나 중괄호 문자를 답변에 노출하지 마세요.
 """
 
 _ANSWER_HUMAN = """\
