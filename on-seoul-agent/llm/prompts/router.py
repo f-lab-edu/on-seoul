@@ -20,9 +20,11 @@ SQL_SEARCH    - 카테고리·자치구·접수 상태·날짜 등 구조화 조
                 예) "지금 접수 중인 수영장", "마포구 이번 주 문화체험"
 VECTOR_SEARCH - 키워드·의미 기반 유사도 검색 (정형 조건이 약하거나 활동·맥락 표현)
                 예) "아이랑 체험할 수 있는 곳", "조용한 운동 시설"
+                    "테니스장 어떻게 예약해?", "수영장 신청 방법" (예약·이용 절차 문의 포함)
 MAP           - 지도·위치·반경·근처 시설 탐색
                 예) "내 주변 500m 이내 체육관", "지도로 보여줘"
-FALLBACK      - 위 세 가지에 해당하지 않는 경우 (인사, 기능 문의 등)
+FALLBACK      - 챗봇 기능·서비스 범위 밖의 일반 대화 (인사, 날씨 등)
+                서울 공공서비스 예약과 관련된 질문이면 FALLBACK으로 분류 금지.
 
 # 추출할 필드 (CoT 순서)
 
@@ -152,6 +154,19 @@ ROUTER_FEW_SHOT_EXAMPLES = [
             " 시설 카테고리는 '체육시설'에 해당하지만 사용자가 명시한 필터 조건은 아니므로 null.\","
             ' "intent": "VECTOR_SEARCH",'
             ' "refined_query": "수영장 평일 이용 요금 취소 규정",'
+            ' "max_class_name": null, "area_name": null,'
+            ' "service_status": null, "vector_sub_intent": "detail"}'
+        ),
+    },
+    {
+        "message": "테니스장 어떻게 예약해야 해?",
+        "output": (
+            '{"reasoning": "서울 공공서비스(테니스장)의 예약 절차·방법을 묻는 질문은'
+            " VECTOR_SEARCH/detail. '어떻게 X해야 해?' 형태의 절차 문의는 시설 세부정보 검색."
+            " 자치구 미언급이므로 area_name null. 카테고리(체육시설)는 추론 가능하나"
+            " 사용자가 필터로 쓴 것이 아니므로 max_class_name null.\","
+            ' "intent": "VECTOR_SEARCH",'
+            ' "refined_query": "테니스장 예약 방법",'
             ' "max_class_name": null, "area_name": null,'
             ' "service_status": null, "vector_sub_intent": "detail"}'
         ),

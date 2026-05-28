@@ -28,12 +28,12 @@ _ANSWER_SYSTEM = """\
 - 결과가 6건 이상이면 상위 5건만 상세 안내하고, 나머지는 "외 N건"으로만 안내하세요.
 - 각 시설은 반드시 아래 형식을 따르세요 (제공된 값이 있을 때만 해당 줄을 출력, 없는 줄은 생략):
 
-  • {service_name} ({area_name} {place_name})
-    - 분류: {max_class_name} > {min_class_name}
-    - 요금: {payment_type} / 대상: {target_info}
-    - 접수 상태: {service_status} ({receipt_start_dt} ~ {receipt_end_dt})
-    - 이용 기간: {service_open_start_dt} ~ {service_open_end_dt}
-    - 바로가기: {service_url}
+  • {{service_name}} ({{area_name}} {{place_name}})
+    - 분류: {{max_class_name}} > {{min_class_name}}
+    - 요금: {{payment_type}} / 대상: {{target_info}}
+    - 접수 상태: {{service_status}} ({{receipt_start_dt}} ~ {{receipt_end_dt}})
+    - 이용 기간: {{service_open_start_dt}} ~ {{service_open_end_dt}}
+    - 바로가기: {{service_url}}
 
 - service_url 은 시설별 고유 링크입니다. 반드시 해당 시설의 service_url 값을 그대로 출력하세요.
   값이 비어 있는 경우에만 https://yeyak.seoul.go.kr 를 안내합니다.
@@ -133,7 +133,7 @@ class AnswerAgent:
         raw: list[dict] = []
 
         hydrated = state.get("hydrated_services")
-        if hydrated:
+        if hydrated is not None:
             raw.extend(hydrated)
         else:
             # 폴백 — hydrated_services 슬롯이 비었을 때만 검색 경로별 슬롯에서 채집.

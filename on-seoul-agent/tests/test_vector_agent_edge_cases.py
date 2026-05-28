@@ -44,7 +44,10 @@ def _make_agent(
 
 
 def _patch_all_empty():
-    """4채널 모두 빈 결과 + hydrate_services 빈 결과."""
+    """4채널 모두 빈 결과.
+
+    Phase 2: hydrate_services 는 HydrationNode 책임이므로 여기서 patch 하지 않는다.
+    """
 
     class _Ctx:
         def __enter__(self):
@@ -62,12 +65,6 @@ def _patch_all_empty():
             )
             self._stack.enter_context(
                 patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[]))
-            )
-            self.mock_hydrate = self._stack.enter_context(
-                patch(
-                    "agents.vector_agent.hydrate_services",
-                    new=AsyncMock(return_value=[]),
-                )
             )
             return self
 
@@ -109,7 +106,7 @@ class TestVectorAgentWeightPassthrough:
                 }
             }
 
-            await agent.search(_make_state(), MagicMock(), MagicMock())
+            await agent.search(_make_state(), MagicMock())
 
         assert len(captured_kwargs) == 1, (
             "reciprocal_rank_fusion이 정확히 1번 호출돼야 한다"
@@ -126,45 +123,32 @@ class TestVectorAgentAllChannelsEmpty:
         agent = _make_agent()
 
         with _patch_all_empty():
-            result = await agent.search(_make_state(), MagicMock(), MagicMock())
+            result = await agent.search(_make_state(), MagicMock())
 
         assert result["vector_results"] == [], (
             f"4채널 모두 빈 결과이면 vector_results=[] 이어야 하지만 {result['vector_results']!r}"
         )
 
-    async def test_all_channels_empty_search_channels_still_has_6_keys(self):
-        """4채널 모두 빈 결과여도 search_channels에 6개 채널 키가 모두 있어야 한다."""
+    async def test_all_channels_empty_search_channels_has_rrf_key(self):
+        """4채널 모두 빈 결과여도 search_channels에 core 채널 키가 존재해야 한다.
+
+        Phase 2: VectorAgent 는 FINAL 채널을 구성하지 않는다 (HydrationNode 책임).
+        VECTOR_A/B/C, BM25, RRF 5개 채널이 항상 포함된다.
+        """
         agent = _make_agent()
 
         with _patch_all_empty():
-            result = await agent.search(_make_state(), MagicMock(), MagicMock())
+            result = await agent.search(_make_state(), MagicMock())
 
         channels = result["search_channels"]
-        expected_keys = {
+        for key in (
             SearchChannel.VECTOR_A,
             SearchChannel.VECTOR_B,
             SearchChannel.VECTOR_C,
             SearchChannel.BM25,
             SearchChannel.RRF,
-            SearchChannel.FINAL,
-        }
-        assert set(channels.keys()) == expected_keys, (
-            f"search_channels에 누락된 키: {expected_keys - set(channels.keys())}"
-        )
-
-    async def test_all_channels_empty_hydrate_not_called_with_ids(self):
-        """4채널 모두 빈 결과이면 hydrate_services는 빈 리스트로 호출된다."""
-        agent = _make_agent()
-
-        with _patch_all_empty() as ctx:
-            await agent.search(_make_state(), MagicMock(), MagicMock())
-
-        call_args = ctx.mock_hydrate.call_args
-        # hydrate_services(data_session, service_ids) — service_ids는 빈 리스트
-        service_ids_arg = call_args[0][1]
-        assert service_ids_arg == [], (
-            f"빈 채널 결과면 service_ids가 [] 이어야 하지만 {service_ids_arg!r}"
-        )
+        ):
+            assert key in channels, f"search_channels에 누락된 키: {key}"
 
 
 class TestResolveWeightsEdgeCases:

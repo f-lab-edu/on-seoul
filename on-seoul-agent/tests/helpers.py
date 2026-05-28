@@ -46,6 +46,7 @@ def make_agent_state(**overrides: Any) -> AgentState:
         recent_queries=[],
         cache_hit=False,
         search_channels={},
+        hydrated_services=None,
     )
     base.update(overrides)
     return base

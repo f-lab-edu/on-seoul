@@ -2,17 +2,14 @@
 
 1. LLM으로 사용자 질의를 검색에 최적화된 문장으로 정제한다.
 2. 정제된 질의를 임베딩한다.
-3. 4채널을 asyncio.gather로 병렬 실행한다:
+3. 4채널을 순차 실행한다 (asyncpg 단일 세션 제약):
    - Track A: vector_search(row_kind='identity')  + post-filter
    - Track B: vector_search(row_kind='summary')
    - Track C: question_search(row_kind='question') — PARTITION BY dedup
    - Track D: bm25_search — ParadeDB 전문 검색
 4. 4채널 결과를 가중 RRF(Reciprocal Rank Fusion)로 결합한다.
-5. 최종 service_id 목록으로 public_service_reservations를 hydration한다.
-
-Phase 2 계획: hydration 책임을 HydrationNode 로 이관하여 vector_results 를
-[{service_id, rrf_score}] 형태로만 채울 예정. 현재는 28개 테스트의 호환을 위해
-hydrate_services 호출을 유지한다.
+5. vector_results 에는 검색 메타데이터만 채운다 ({service_id, rrf_score}).
+   hydration(원본 조회)은 HydrationNode 가 단독으로 담당한다.
 """
 
 import logging
@@ -30,7 +27,6 @@ from llm.client import get_chat_model, get_embeddings
 from schemas.search import ChannelData, ChannelQuery, SearchChannel, SearchKind
 from schemas.state import AgentState
 from tools.bm25_search import bm25_search
-from tools.hydrate_services import hydrate_services
 from tools.question_search import question_search
 from tools.tokenizer import tokenize_query
 from tools.vector_search import MIN_SIMILARITY, TOP_K as _VECTOR_TOP_K
@@ -236,24 +232,18 @@ class VectorAgent:
         self,
         state: AgentState,
         ai_session: AsyncSession,
-        data_session: AsyncSession,
     ) -> dict:
-        """질의 정제 → 임베딩 → 4채널 병렬 검색 → 가중 RRF → hydration.
+        """질의 정제 → 임베딩 → 4채널 순차 검색 → 가중 RRF.
 
-        ai_session   : service_embeddings(on_ai)에 대한 의미 검색·BM25 용도
-        data_session : public_service_reservations(on_data) hydration 용도
+        ai_session : service_embeddings(on_ai)에 대한 의미 검색·BM25 용도
 
-        vector_results에는 hydration된 원본 행이 채워진다.
-        스키마는 sql_results와 동일하며 추가로 rrf_score를 포함한다.
-        임베딩 metadata는 stale일 수 있으므로 답변 컨텍스트로 사용하지 않는다.
+        vector_results 에는 검색 메타데이터만 채운다:
+          [{service_id, rrf_score}, ...]
+        원본 데이터 hydration 은 HydrationNode 가 단독으로 담당한다.
 
         Router가 이미 refined_query와 post-filter를 산출한 경우
         (state["refined_query"] 존재), 중복 LLM 호출을 피하기 위해 refine 체인을 skip하고
         state["max_class_name"/"area_name"/"service_status"] 값을 그대로 사용한다.
-
-        Phase 2 (별도 PR): 본 메서드의 hydration 호출과 search_channels.FINAL 구성은
-        HydrationNode 로 이관 예정. 그 시점에 data_session 파라미터를 제거하고
-        vector_results 를 [{service_id, rrf_score}] 메타-only 로 단순화한다.
         """
         router_refined = state.get("refined_query")
         if router_refined:
@@ -305,17 +295,11 @@ class VectorAgent:
             k_constant=settings.rrf_k_constant,
         )
 
-        service_ids = [sid for sid, _ in merged[: settings.rrf_top_k_final]]
-
-        try:
-            hydrated: list[dict] = await hydrate_services(data_session, service_ids)
-        except Exception:
-            logger.warning("hydrate_services 실패, 빈 결과로 대체", exc_info=True)
-            hydrated = []
-
-        rrf_score_by_id: dict[str, float] = {sid: score for sid, score in merged}
-        for row in hydrated:
-            row["rrf_score"] = rrf_score_by_id.get(row["service_id"], 0.0)
+        # vector_results: 메타데이터 only — hydration 은 HydrationNode 책임
+        rrf_top = merged[: settings.rrf_top_k_final]
+        meta_results: list[dict] = [
+            {"service_id": sid, "rrf_score": score} for sid, score in rrf_top
+        ]
 
         # --- search_channels 구성 (6채널) ---
         search_channels: dict[str, ChannelData] = {
@@ -386,21 +370,10 @@ class VectorAgent:
                     score_field="rrf_score",
                 ),
             ),
-            SearchChannel.FINAL: ChannelData(
-                kind=SearchKind.FINAL,
-                query=ChannelQuery(
-                    query_text=None,
-                    parameters={
-                        "source_channels": [SearchChannel.RRF],
-                        "hydration_applied": True,
-                    },
-                ),
-                hits=_to_hits(hydrated, score_field="rrf_score"),
-            ),
         }
 
         return {
             "refined_query": refined.refined_query,
-            "vector_results": hydrated,
+            "vector_results": meta_results,
             "search_channels": search_channels,
         }

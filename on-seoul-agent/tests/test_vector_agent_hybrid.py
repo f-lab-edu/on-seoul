@@ -46,14 +46,15 @@ def _patch_all_searches(
     b_rows: list[dict] | None = None,
     c_rows: list[dict] | None = None,
     d_rows: list[dict] | None = None,
-    hydrated: list[dict] | None = None,
 ):
-    """4채널 검색 + hydrate_services 를 동시에 patch하는 컨텍스트 매니저."""
+    """4채널 검색을 동시에 patch하는 컨텍스트 매니저.
+
+    Phase 2: hydrate_services 는 HydrationNode 책임이므로 여기서 patch 하지 않는다.
+    """
     _a_rows = a_rows or []
     _b_rows = b_rows or []
     _c_rows = c_rows or []
     _d_rows = d_rows or []
-    _hydrated = hydrated or []
 
     async def _vs_side_effect(*args, **kwargs):
         rk = kwargs.get("row_kind", "identity")
@@ -80,12 +81,6 @@ def _patch_all_searches(
                     new=AsyncMock(return_value=_d_rows),
                 )
             )
-            self.mock_hydrate = self._stack.enter_context(
-                patch(
-                    "agents.vector_agent.hydrate_services",
-                    new=AsyncMock(return_value=_hydrated),
-                )
-            )
             return self
 
         def __exit__(self, *args):
@@ -101,7 +96,7 @@ class TestVectorAgentHybrid:
         state = _make_state()
 
         with _patch_all_searches() as ctx:
-            await agent.search(state, MagicMock(), MagicMock())
+            await agent.search(state, MagicMock())
 
         # vector_search는 identity + summary 두 번 호출
         assert ctx.mock_vs.call_count == 2
@@ -110,8 +105,11 @@ class TestVectorAgentHybrid:
         # bm25_search는 유효 토큰이 있을 때 호출 (refined_query="체험 시설" → 유효 토큰 있음)
         ctx.mock_bm25.assert_called_once()
 
-    async def test_rrf_merges_and_hydrates(self):
-        """4채널 결과가 RRF로 결합된 후 hydrate_services로 원본 데이터를 hydration한다."""
+    async def test_rrf_result_service_id_in_vector_results(self):
+        """4채널 결과가 RRF로 결합된 후 service_id가 vector_results 에 포함된다.
+
+        Phase 2: vector_results 는 메타데이터 only — service_id + rrf_score 만 포함.
+        """
         a_rows = [
             {
                 "service_id": "S001",
@@ -120,15 +118,11 @@ class TestVectorAgentHybrid:
                 "similarity": 0.9,
             }
         ]
-        hydrated = [
-            {"service_id": "S001", "service_name": "체험관", "service_status": "접수중"}
-        ]
         agent = _make_agent()
 
-        with _patch_all_searches(a_rows=a_rows, hydrated=hydrated) as ctx:
-            result = await agent.search(_make_state(), MagicMock(), MagicMock())
+        with _patch_all_searches(a_rows=a_rows):
+            result = await agent.search(_make_state(), MagicMock())
 
-        ctx.mock_hydrate.assert_called_once()
         assert result["vector_results"] is not None
         assert result["vector_results"][0]["service_id"] == "S001"
         assert "rrf_score" in result["vector_results"][0]
@@ -143,7 +137,7 @@ class TestVectorAgentHybrid:
                 "agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]
             ),
         ):
-            await agent.search(_make_state(), MagicMock(), MagicMock())
+            await agent.search(_make_state(), MagicMock())
 
         ctx.mock_bm25.assert_not_called()
 
@@ -180,33 +174,19 @@ class TestVectorAgentHybrid:
                 "agents.vector_agent.reciprocal_rank_fusion", wraps=lambda ch, **kw: []
             ) as mock_rrf_fn,
         ):
-            await agent.search(_make_state(), MagicMock(), MagicMock())
+            await agent.search(_make_state(), MagicMock())
 
         # rrf_unweighted_baseline=True 이면 weights=None
         if mock_rrf_fn.call_count > 0:
             call_kwargs = mock_rrf_fn.call_args[1]
             assert call_kwargs.get("weights") is None
 
-    async def test_hydration_failure_returns_empty(self):
-        """hydrate_services가 예외를 던지면 vector_results가 빈 리스트가 된다."""
-        a_rows = [
-            {
-                "service_id": "S001",
-                "embedding_text": "t",
-                "metadata": {},
-                "similarity": 0.9,
-            }
-        ]
-        agent = _make_agent()
-
-        with _patch_all_searches(a_rows=a_rows) as ctx:
-            ctx.mock_hydrate.side_effect = RuntimeError("DB down")
-            result = await agent.search(_make_state(), MagicMock(), MagicMock())
-
-        assert result["vector_results"] == []
-
     async def test_search_channels_populated(self):
-        """search_channels에 vector_a, vector_b, vector_c, bm25, rrf, final 6개 채널이 모두 채워진다."""
+        """search_channels에 vector_a, vector_b, vector_c, bm25, rrf 5개 채널이 모두 채워진다.
+
+        Phase 2: FINAL 채널은 VectorAgent 가 더 이상 구성하지 않는다.
+        HydrationNode 가 hydration 완료 후 FINAL 채널을 담당한다.
+        """
         a_rows = [
             {
                 "service_id": "S001",
@@ -215,13 +195,10 @@ class TestVectorAgentHybrid:
                 "similarity": 0.9,
             }
         ]
-        hydrated = [
-            {"service_id": "S001", "service_name": "체험관", "service_status": "접수중"}
-        ]
         agent = _make_agent()
 
-        with _patch_all_searches(a_rows=a_rows, hydrated=hydrated):
-            result = await agent.search(_make_state(), MagicMock(), MagicMock())
+        with _patch_all_searches(a_rows=a_rows):
+            result = await agent.search(_make_state(), MagicMock())
 
         channels = result["search_channels"]
         assert SearchChannel.VECTOR_A in channels
@@ -229,7 +206,6 @@ class TestVectorAgentHybrid:
         assert SearchChannel.VECTOR_C in channels
         assert SearchChannel.BM25 in channels
         assert SearchChannel.RRF in channels
-        assert SearchChannel.FINAL in channels
 
     async def test_vector_search_failure_degrades_gracefully(self):
         """vector_search가 예외를 던져도 다른 채널로 검색을 계속한다."""
@@ -242,7 +218,6 @@ class TestVectorAgentHybrid:
                 "similarity": 0.8,
             }
         ]
-        hydrated = [{"service_id": "S002", "service_name": "질문관"}]
 
         with (
             patch(
@@ -254,12 +229,8 @@ class TestVectorAgentHybrid:
                 new=AsyncMock(return_value=c_rows),
             ),
             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])),
-            patch(
-                "agents.vector_agent.hydrate_services",
-                new=AsyncMock(return_value=hydrated),
-            ),
         ):
-            result = await agent.search(_make_state(), MagicMock(), MagicMock())
+            result = await agent.search(_make_state(), MagicMock())
 
         # 실패해도 빈 결과 대신 다른 채널 결과가 들어온다
         assert result["vector_results"] is not None

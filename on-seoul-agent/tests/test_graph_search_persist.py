@@ -165,7 +165,7 @@ class TestVectorIntentPersist:
             patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=bm25_rows)),
             patch(
-                "agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)
+                "agents.hydration_node.hydrate_services", AsyncMock(return_value=hydrated)
             ),
         ):
             graph = AgentGraph(
@@ -182,14 +182,14 @@ class TestVectorIntentPersist:
         query_rows = _get_queries_rows(ai_session)
         assert query_rows is not None, "chat_search_queries INSERT 없음"
         channels = {r["channel"] for r in query_rows}
-        # Phase RRF: 6채널 (vector_a, vector_b, vector_c, bm25, rrf, final)
+        # Phase RRF: 5채널 (vector_a, vector_b, vector_c, bm25, rrf)
+        # FINAL 채널은 VectorAgent 가 더 이상 구성하지 않는다 (HydrationNode 책임)
         expected = {
             SearchChannel.VECTOR_A,
             SearchChannel.VECTOR_B,
             SearchChannel.VECTOR_C,
             SearchChannel.BM25,
             SearchChannel.RRF,
-            SearchChannel.FINAL,
         }
         assert expected == channels
 

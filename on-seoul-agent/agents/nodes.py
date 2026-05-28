@@ -226,17 +226,14 @@ class GraphNodes:
             return {"error": str(exc)}
 
     async def vector_node(self, state: AgentState) -> dict[str, Any]:
-        """VectorAgent.search() 호출 — vector_results, refined_query 설정.
+        """VectorAgent.search() 호출 — vector_results(메타데이터 only), refined_query 설정.
 
-        VectorAgent는 임베딩 검색(ai_session)과 원본 hydration(data_session)을
-        모두 수행하므로 두 세션을 모두 전달한다.
+        hydration(원본 조회)은 후속 hydration_node 가 담당하므로
+        ai_session 만 전달한다.
         """
         assert self.ai_session is not None
-        assert self.data_session is not None
         try:
-            new_state = await self._vector.search(
-                state, self.ai_session, self.data_session
-            )
+            new_state = await self._vector.search(state, self.ai_session)
             self.node_path.append("vector_node")
             results = new_state.get("vector_results") or []
             logger.info(
@@ -263,7 +260,7 @@ class GraphNodes:
         """검색 결과 service_id → 원본 데이터 통합 슬롯 매핑.
 
         sql_node / vector_node 직후, answer_node 직전에 실행된다.
-        검색 노드별 출력 형식(sql_results / vector_results / pending_service_ids)을
+        검색 노드별 출력 형식(sql_results / vector_results)을
         단일 슬롯 hydrated_services 로 통합하여 AnswerAgent 가 검색 경로에 의존하지
         않도록 한다.
 

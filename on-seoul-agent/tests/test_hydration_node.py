@@ -1,14 +1,13 @@
 """HydrationNode 단위 테스트.
 
-Phase 1 동작:
-- VECTOR_SEARCH: vector_results 통과 (이미 hydrated)
-- SQL_SEARCH:    sql_results 통과 (이미 원본)
+Phase 2 동작:
+- VECTOR_SEARCH: service_id 추출 → hydrate_services 호출 → 메타 머지 → hydrated_services
+- SQL_SEARCH:    sql_results 통과 (sql_search 가 이미 원본 반환)
 - 그 외 intent:  빈 리스트
 - 재호출 안전 (cache hit envelope 복원 후 등)
 
 별도 메서드(hydrate_by_service_ids):
 - service_id 리스트로 직접 hydrate + 메타 머지 + FINAL 채널
-- Phase 2 에서 그래프에 직접 사용될 미래의 정식 경로
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -174,18 +173,32 @@ class TestHydrationNodeCall:
         # 원본 list 와 다른 새 list (얕은 복사) — 후속 수정이 sql_results 에 영향 X
         assert update["hydrated_services"] is not sql_results
 
-    async def test_vector_path_passes_through_vector_results(self, data_session):
-        """VECTOR_SEARCH 경로 — Phase 1 에서는 vector_results 통과 (이중 hydration 방지)."""
+    async def test_vector_path_calls_hydrate_services(self, data_session):
+        """VECTOR_SEARCH 경로 — service_id 추출 + hydrate_services 호출 + 메타 머지."""
         vector_results = [
-            {"service_id": "S1", "service_name": "시설1", "rrf_score": 0.9},
-            {"service_id": "S2", "service_name": "시설2", "rrf_score": 0.5},
+            {"service_id": "S1", "rrf_score": 0.9},
+            {"service_id": "S2", "rrf_score": 0.5},
+        ]
+        hydrated_rows = [
+            {"service_id": "S1", "service_name": "시설1"},
+            {"service_id": "S2", "service_name": "시설2"},
         ]
         state = {"intent": IntentType.VECTOR_SEARCH, "vector_results": vector_results}
         node = HydrationNode()
-        update = await node(state, data_session)
+        with patch(
+            "agents.hydration_node.hydrate_services",
+            new=AsyncMock(return_value=hydrated_rows),
+        ) as mock_hydrate:
+            update = await node(state, data_session)
 
-        assert update["hydrated_services"] == vector_results
-        assert update["hydrated_services"] is not vector_results
+        mock_hydrate.assert_awaited_once_with(data_session, ["S1", "S2"])
+        # 원본 필드 + 검색 메타 머지 확인
+        result = update["hydrated_services"]
+        assert len(result) == 2
+        assert result[0]["service_name"] == "시설1"
+        assert result[0]["rrf_score"] == 0.9  # 메타 머지됨
+        assert result[1]["service_name"] == "시설2"
+        assert result[1]["rrf_score"] == 0.5
 
     async def test_other_intent_returns_empty(self, data_session):
         """MAP / FALLBACK 등 — hydration 대상 아님."""
@@ -210,10 +223,28 @@ class TestHydrationNodeCall:
         assert update == {}
 
     async def test_empty_results_returns_empty_list(self, data_session):
-        """검색 결과가 비어 있으면 hydrated_services = []."""
+        """검색 결과가 비어 있으면 hydrated_services = [] (hydrate_services 호출 없음)."""
         state = {"intent": IntentType.VECTOR_SEARCH, "vector_results": []}
         node = HydrationNode()
-        update = await node(state, data_session)
+        with patch(
+            "agents.hydration_node.hydrate_services", new=AsyncMock()
+        ) as mock_hydrate:
+            update = await node(state, data_session)
+        mock_hydrate.assert_not_awaited()
+        assert update["hydrated_services"] == []
+
+    async def test_vector_hydrate_failure_returns_empty(self, data_session):
+        """hydrate_services 예외 시 hydrated_services = [] (오류 전파 X)."""
+        state = {
+            "intent": IntentType.VECTOR_SEARCH,
+            "vector_results": [{"service_id": "S1", "rrf_score": 0.9}],
+        }
+        node = HydrationNode()
+        with patch(
+            "agents.hydration_node.hydrate_services",
+            new=AsyncMock(side_effect=RuntimeError("DB 오류")),
+        ):
+            update = await node(state, data_session)
         assert update["hydrated_services"] == []
 
 

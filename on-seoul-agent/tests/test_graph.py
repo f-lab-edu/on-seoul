@@ -91,7 +91,7 @@ class TestConditionalEdgeRouting:
         assert result["error"] is None
 
     async def test_vector_search_route(self):
-        """VECTOR_SEARCH intent → vector_node 실행, vector_results 채워짐."""
+        """VECTOR_SEARCH intent → vector_node 실행, HydrationNode hydration, vector_results 채워짐."""
         rows = [{"service_id": "V001", "service_name": "체험관", "similarity": 0.9}]
         vector_agent, ai_session, mock_bm25 = _vector_agent(rows)
         hydrated = [
@@ -99,9 +99,11 @@ class TestConditionalEdgeRouting:
         ]
 
         with (
+            patch("agents.vector_agent.vector_search", AsyncMock(return_value=rows)),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", mock_bm25),
             patch(
-                "agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)
+                "agents.hydration_node.hydrate_services", AsyncMock(return_value=hydrated)
             ),
         ):
             graph = AgentGraph(

@@ -6,12 +6,15 @@
     router_node          — RouterAgent.classify(), state.intent · refined_query 설정
       ↓
     cache_check_node     — refined_query 기반 전역 Answer Cache lookup
-      ├─ hit  → trace_node (sql/vector/map/answer 전체 우회)
+      ├─ hit  → search_persist_node(skip) → trace_node (sql/vector/map/answer 전체 우회)
       └─ miss → intent에 따라 분기
             ├─ SQL_SEARCH    → sql_node
             ├─ VECTOR_SEARCH → vector_node
             ├─ MAP           → map_node
             └─ FALLBACK      → answer_node (검색 없이 바로 답변)
+      ↓
+    sql_node / vector_node → hydration_node → answer_node
+    map_node               → answer_node (GeoJSON 구조라 hydration 건너뜀)
       ↓
     answer_node          — AnswerAgent.answer()
       ↓
@@ -267,10 +270,10 @@ class AgentGraph:
         token = _ACTIVE_NODES.set(self._nodes)
         try:
             # recursion_limit=16:
-            # 1회 정상 흐름은 router → cache_check → (search) → hydration → answer →
-            # cache_write → search_persist → trace = 8 super-step.
-            # retry 1회 포함 시 router/retry_prep까지 추가되어 ~14.
-            # 여유 2를 더해 16으로 설정한다.
+            # 1회 정상 흐름은 router → cache_check → (search) → hydration_node →
+            # answer → cache_write → search_persist → trace = 9 super-step.
+            # retry 1회 포함 시 router/retry_prep까지 추가되어 ~15.
+            # 여유 1을 더해 16으로 설정한다.
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
                 config={"recursion_limit": 16},
@@ -316,6 +319,7 @@ class AgentGraph:
         _search_progress_emitted = False
         _answer_progress_emitted = False
 
+        # hydration_node 완료 후 answering 이벤트로 이동 고려 (별도 이슈)
         _SEARCH_NODES = frozenset({"sql_node", "vector_node", "map_node"})
 
         token = _ACTIVE_NODES.set(self._nodes)

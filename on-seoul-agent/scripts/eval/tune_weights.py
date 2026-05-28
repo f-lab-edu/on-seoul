@@ -235,6 +235,9 @@ async def main(args: argparse.Namespace) -> None:
             f"  {row['mrr']:>8.4f}  {w_str}"
         )
 
+    if not results_summary:
+        print("ERROR: 모든 그리드 조합이 실패했습니다.", file=sys.stderr)
+        sys.exit(1)
     best = results_summary[0]
     print("\n[추천 가중치]")
     print(f"  {json.dumps(best['weights'], ensure_ascii=False, indent=4)}")
