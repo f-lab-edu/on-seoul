@@ -1,9 +1,10 @@
-"""Korean query tokenizer — Lindera KoDic 기반 형태소 분석기 래퍼.
+"""Korean query tokenizer — Kiwi(kiwipiepy) 기반 형태소 분석기 래퍼.
 
-lindera-py가 설치되지 않은 환경(CI, 로컬 개발)에서도 임포트 가능하도록
+kiwipiepy가 설치되지 않은 환경에서도 임포트 가능하도록
 ImportError를 포착해 폴백 토크나이저(공백 분리)로 대체한다.
 
-프로덕션 환경에서는 lindera-py 바이너리가 빌드·설치된 상태에서 실행된다.
+BM25 검색 품질을 위해 의미 있는 품사(체언·용언 어간)만 추출한다.
+입자·어미·특수문자 등은 제거하여 불필요한 BM25 노이즈를 줄인다.
 """
 
 import logging
@@ -22,22 +23,52 @@ DOMAIN_TOKENS: frozenset[str] = frozenset(
     }
 )
 
+# BM25 검색에 의미 있는 품사 태그 (kiwipiepy 기준).
+# 체언(N*): 일반명사/고유명사/의존명사/수사, 용언 어간(V*, XR): 동사/형용사/보조용언/어근
+# SL: 외국어, SH: 한자, SN: 숫자
+_CONTENT_POS: frozenset[str] = frozenset(
+    {
+        "NNG",  # 일반명사
+        "NNP",  # 고유명사
+        "NNB",  # 의존명사
+        "NR",   # 수사
+        "VV",   # 동사
+        "VA",   # 형용사
+        "VX",   # 보조용언
+        "XR",   # 어근
+        "SL",   # 외국어
+        "SH",   # 한자
+        "SN",   # 숫자
+    }
+)
+
 try:
-    from lindera_py import Tokenizer as _LinderaTokenizer
+    from kiwipiepy import Kiwi as _Kiwi
 
-    _tokenizer = _LinderaTokenizer.from_config({"dictionary": {"kind": "KoDic"}})
+    _kiwi = _Kiwi()
 
-    def _lindera_tokenize(text: str) -> list[str]:
-        return [t.text for t in _tokenizer.tokenize(text)]
+    def _kiwi_tokenize(text: str) -> list[str]:
+        """Kiwi 형태소 분석 — 의미 품사만 추출."""
+        return [
+            token.form
+            for token in _kiwi.tokenize(text)
+            if token.tag in _CONTENT_POS
+        ]
+
+    logger.debug("kiwipiepy 토크나이저 초기화 완료")
 
 except ImportError:
     import re as _re
 
-    logger.warning("lindera-py not installed, falling back to whitespace tokenizer")
+    logger.warning("kiwipiepy not installed, falling back to whitespace tokenizer")
 
-    def _lindera_tokenize(text: str) -> list[str]:  # type: ignore[misc]
-        """lindera-py 미설치 환경 폴백: 공백·구두점 분리."""
+    def _kiwi_tokenize(text: str) -> list[str]:  # type: ignore[misc]
+        """kiwipiepy 미설치 환경 폴백: 공백·구두점 분리."""
         return [tok for tok in _re.split(r"[\s,]+", text) if tok]
+
+
+# 내부 토크나이즈 함수 (하위 호환 별칭 유지)
+_lindera_tokenize = _kiwi_tokenize
 
 
 def tokenize_query(text: str) -> list[str]:
