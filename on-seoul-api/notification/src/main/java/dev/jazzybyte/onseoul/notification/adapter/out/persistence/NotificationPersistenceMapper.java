@@ -24,7 +24,7 @@ class NotificationPersistenceMapper implements SubscriptionFilterParserPort {
             new TypeReference<>() {};
 
     NotificationSubscription toDomain(NotificationSubscriptionJpaEntity e) {
-        return new NotificationSubscription(
+        return NotificationSubscription.ofPersistence(
                 e.getId(),
                 e.getUserId(),
                 e.getServiceId(),
@@ -39,6 +39,22 @@ class NotificationPersistenceMapper implements SubscriptionFilterParserPort {
             return OBJECT_MAPPER.writeValueAsString(channels);
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("channels 직렬화 실패", ex);
+        }
+    }
+
+    /**
+     * {@link SubscriptionFilter} 를 DB(JSONB) 저장용 JSON 문자열로 직렬화한다.
+     * 모든 필드가 비어 있으면 {@code "{}"} 를 반환한다.
+     */
+    @Override
+    public String serialize(SubscriptionFilter filter) {
+        if (filter == null || filter.isEmpty()) {
+            return "{}";
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(filter);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("filter 직렬화 실패", ex);
         }
     }
 

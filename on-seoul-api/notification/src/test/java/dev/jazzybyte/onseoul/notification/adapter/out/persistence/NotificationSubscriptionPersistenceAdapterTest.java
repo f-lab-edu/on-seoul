@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
+import dev.jazzybyte.onseoul.notification.domain.SubscriptionFilter;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -79,6 +80,89 @@ class NotificationSubscriptionPersistenceAdapterTest {
         NotificationSubscription updated = adapter.save(saved);
 
         assertThat(updated.getLastNotifiedAt()).isEqualTo(now);
+    }
+
+    @Test
+    @DisplayName("loadByUserId() — 해당 유저의 구독만 반환, id ASC 정렬")
+    void loadByUserId_returnsOnlyOwnSubscriptions() {
+        adapter.save(NotificationSubscription.create(7L, "OA-A", Set.of(NotificationChannel.EMAIL)));
+        adapter.save(NotificationSubscription.create(7L, "OA-B", Set.of(NotificationChannel.EMAIL)));
+        adapter.save(NotificationSubscription.create(8L, "OA-C", Set.of(NotificationChannel.EMAIL)));
+
+        List<NotificationSubscription> user7 = adapter.loadByUserId(7L);
+
+        assertThat(user7).extracting(NotificationSubscription::getServiceId)
+                .containsExactly("OA-A", "OA-B");
+        assertThat(user7).extracting(NotificationSubscription::getUserId)
+                .containsOnly(7L);
+    }
+
+    @Test
+    @DisplayName("loadById() — 미존재 시 Optional.empty")
+    void loadById_missing_returnsEmpty() {
+        assertThat(adapter.loadById(999_999L)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("insert() — uq_ns_user_service 위반 시 DataIntegrityViolationException")
+    void insert_duplicate_throwsDataIntegrityViolation() {
+        NotificationSubscription first = NotificationSubscription.create(
+                20L, "OA-DUP", Set.of(NotificationChannel.EMAIL));
+        adapter.insert(first);
+
+        NotificationSubscription dup = NotificationSubscription.create(
+                20L, "OA-DUP", Set.of(NotificationChannel.EMAIL));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> adapter.insert(dup))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @DisplayName("updatePartial() — filter 만 갱신, channels/lastNotifiedAt 보존")
+    void updatePartial_filterOnly_preservesChannelsAndLastNotifiedAt() {
+        NotificationSubscription created = adapter.save(NotificationSubscription.create(
+                30L, "OA-UP1", Set.of(NotificationChannel.EMAIL, NotificationChannel.SMS)));
+        Instant when = Instant.parse("2026-05-20T10:00:00Z");
+        created.markNotified(when);
+        adapter.save(created);
+
+        NotificationSubscription after = adapter.updatePartial(
+                created.getId(),
+                new SubscriptionFilter(Set.of("RECEIVING"), null, null),
+                null);
+
+        assertThat(after.getFilter()).contains("RECEIVING");
+        assertThat(after.getChannels()).containsExactlyInAnyOrder(
+                NotificationChannel.EMAIL, NotificationChannel.SMS);
+        assertThat(after.getLastNotifiedAt()).isEqualTo(when);
+    }
+
+    @Test
+    @DisplayName("updatePartial() — channels 만 갱신, filter/lastNotifiedAt 보존")
+    void updatePartial_channelsOnly_preservesFilterAndLastNotifiedAt() {
+        NotificationSubscription created = adapter.save(NotificationSubscription.create(
+                31L, "OA-UP2", Set.of(NotificationChannel.EMAIL)));
+        Instant when = Instant.parse("2026-05-21T10:00:00Z");
+        created.markNotified(when);
+        adapter.save(created);
+
+        NotificationSubscription after = adapter.updatePartial(
+                created.getId(), null, Set.of(NotificationChannel.SMS));
+
+        assertThat(after.getFilter()).isEqualTo("{}");
+        assertThat(after.getChannels()).containsExactly(NotificationChannel.SMS);
+        assertThat(after.getLastNotifiedAt()).isEqualTo(when);
+    }
+
+    @Test
+    @DisplayName("deleteById() — row 삭제")
+    void deleteById_removesRow() {
+        NotificationSubscription created = adapter.save(NotificationSubscription.create(
+                40L, "OA-DEL", Set.of(NotificationChannel.EMAIL)));
+
+        adapter.deleteById(created.getId());
+
+        assertThat(adapter.loadById(created.getId())).isEmpty();
     }
 
     @Test

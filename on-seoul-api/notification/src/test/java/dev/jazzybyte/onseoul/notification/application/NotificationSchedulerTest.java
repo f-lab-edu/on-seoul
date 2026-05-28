@@ -80,7 +80,7 @@ class NotificationSchedulerTest {
     }
 
     private NotificationSubscription sub(Long id, String serviceId) {
-        return new NotificationSubscription(id, 1L, serviceId, "{}",
+        return NotificationSubscription.ofPersistence(id, 1L, serviceId, "{}",
                 Set.of(NotificationChannel.EMAIL), null, Instant.now());
     }
 

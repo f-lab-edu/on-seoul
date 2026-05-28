@@ -162,6 +162,64 @@ class NotificationDispatchPersistenceAdapterTest {
     }
 
     @Test
+    @DisplayName("loadByUserId() — 다른 유저의 dispatch 는 제외, id DESC 정렬")
+    void loadByUserId_filtersByOwnership_andSortsDesc() {
+        // user 10 (setUp 의 subscriptionId) 의 dispatch 2건
+        NotificationDispatch d1 = dispatchAdapter
+                .saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId))
+                .orElseThrow();
+        NotificationBatch batch2 = batchAdapter.insertRunning(NotificationBatch.start());
+        NotificationDispatch d2 = dispatchAdapter
+                .saveIfAbsent(NotificationDispatch.create(batch2.getId(), subscriptionId))
+                .orElseThrow();
+
+        // 다른 유저 (userId=999) 소유 subscription + dispatch
+        Long otherSubId = subscriptionAdapter.save(
+                dev.jazzybyte.onseoul.notification.domain.NotificationSubscription.create(
+                        999L, "SVC-OTHER", Set.of(NotificationChannel.EMAIL))).getId();
+        dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batchId, otherSubId));
+
+        var list = dispatchAdapter.loadByUserId(10L, null, 50);
+
+        assertThat(list).extracting(NotificationDispatch::getSubscriptionId)
+                .containsOnly(subscriptionId);
+        // id DESC: 마지막에 만든 d2 가 먼저
+        assertThat(list.get(0).getId()).isEqualTo(d2.getId());
+        assertThat(list.get(1).getId()).isEqualTo(d1.getId());
+    }
+
+    @Test
+    @DisplayName("loadByUserId() — cursor 적용 시 id < cursor 만 반환")
+    void loadByUserId_withCursor_returnsOnlyOlder() {
+        NotificationDispatch d1 = dispatchAdapter
+                .saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId))
+                .orElseThrow();
+        NotificationBatch batch2 = batchAdapter.insertRunning(NotificationBatch.start());
+        NotificationDispatch d2 = dispatchAdapter
+                .saveIfAbsent(NotificationDispatch.create(batch2.getId(), subscriptionId))
+                .orElseThrow();
+
+        var list = dispatchAdapter.loadByUserId(10L, d2.getId(), 50);
+
+        assertThat(list).extracting(NotificationDispatch::getId)
+                .containsExactly(d1.getId());
+    }
+
+    @Test
+    @DisplayName("loadByUserId() — limit 가 적용된다")
+    void loadByUserId_respectsLimit() {
+        dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId));
+        NotificationBatch batch2 = batchAdapter.insertRunning(NotificationBatch.start());
+        dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batch2.getId(), subscriptionId));
+        NotificationBatch batch3 = batchAdapter.insertRunning(NotificationBatch.start());
+        dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batch3.getId(), subscriptionId));
+
+        var list = dispatchAdapter.loadByUserId(10L, null, 2);
+
+        assertThat(list).hasSize(2);
+    }
+
+    @Test
     @DisplayName("saveIfAbsent() — EntityManager 직접 insert 후 saveIfAbsent → DataIntegrityViolationException 경로로 empty")
     void saveIfAbsent_directDuplicateInsert_returnsEmpty() {
         NotificationDispatchJpaEntity duplicate =

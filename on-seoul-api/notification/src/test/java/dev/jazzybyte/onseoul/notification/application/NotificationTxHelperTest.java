@@ -54,12 +54,12 @@ class NotificationTxHelperTest {
 
     private NotificationSubscription subscription(Long lastNotifiedAtNullable, String filterJson) {
         Instant last = lastNotifiedAtNullable == null ? null : Instant.ofEpochSecond(0);
-        return new NotificationSubscription(1L, 100L, "OA-2269",
+        return NotificationSubscription.ofPersistence(1L, 100L, "OA-2269",
                 filterJson, Set.of(NotificationChannel.EMAIL), last, Instant.now());
     }
 
     private NotificationSubscription subscriptionWithLastNotifiedAt(Instant lastNotifiedAt) {
-        return new NotificationSubscription(1L, 100L, "OA-2269",
+        return NotificationSubscription.ofPersistence(1L, 100L, "OA-2269",
                 "{}", Set.of(NotificationChannel.EMAIL), lastNotifiedAt, Instant.now());
     }
 

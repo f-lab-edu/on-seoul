@@ -55,4 +55,12 @@ public class NotificationSubscriptionJpaEntity {
     void updateLastNotifiedAt(Instant lastNotifiedAt) {
         this.lastNotifiedAt = lastNotifiedAt;
     }
+
+    void updateFilter(String filter) {
+        this.filter = filter;
+    }
+
+    void updateChannels(String channels) {
+        this.channels = channels;
+    }
 }

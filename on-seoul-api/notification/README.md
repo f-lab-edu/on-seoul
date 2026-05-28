@@ -43,14 +43,34 @@ notification/
 │       └── PushNotificationPort.java    # 알림 발송 (채널별)
 │
 ├── application/
-│   └── CreateDefaultSubscriptionsService.java  # 기본 구독 생성 구현체
+│   ├── CreateDefaultSubscriptionsService.java  # 기본 구독 생성 구현체
+│   ├── NotificationSubscriptionService.java    # 구독 CRUD use case
+│   └── NotificationDispatchService.java        # 발송 이력 조회 use case
 │
 └── adapter/
+    ├── in/
+    │   └── web/        # NotificationSubscriptionController, NotificationDispatchController
     └── out/
         ├── agent/       # TemplateAgentClient — FastAPI POST /notification/template
         ├── knock/       # KnockNotificationAdapter — Knock REST API (SMS/이메일)
         └── persistence/ # JPA 어댑터 — notification_subscriptions, notification_dispatches
 ```
+
+---
+
+## REST 엔드포인트 (개인화 알림 관리)
+
+JWT 인증 필수. `JwtAuthenticationFilter` 가 `userId` request attribute 를 세팅.
+
+| Method | Path | 설명 | 성공/실패 |
+|---|---|---|---|
+| GET    | `/api/notifications/subscriptions`      | 내 구독 목록 | 200 / 401 |
+| POST   | `/api/notifications/subscriptions`      | 구독 생성    | 201 / 400, 409 |
+| PATCH  | `/api/notifications/subscriptions/{id}` | 구독 수정 (filter/channels 부분 업데이트) | 200 / 400, 403, 404 |
+| DELETE | `/api/notifications/subscriptions/{id}` | 구독 해지 | 204 / 403, 404 |
+| GET    | `/api/notifications/dispatches?cursor=&size=` | 발송 이력 (cursor 기반, size 기본 20 / 최대 100) | 200 / 401 |
+
+요청·응답 스키마는 `docs/superpowers/plans/2026-05-28-frontend-personalized-notification.md` 4장 참조.
 
 ---
 

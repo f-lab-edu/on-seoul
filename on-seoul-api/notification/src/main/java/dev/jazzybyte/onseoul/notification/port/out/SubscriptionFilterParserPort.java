@@ -10,4 +10,7 @@ import dev.jazzybyte.onseoul.notification.domain.SubscriptionFilter;
  */
 public interface SubscriptionFilterParserPort {
     SubscriptionFilter parse(String filterJson);
+
+    /** 도메인 {@link SubscriptionFilter} → DB 저장용 JSONB 문자열로 직렬화한다. */
+    String serialize(SubscriptionFilter filter);
 }

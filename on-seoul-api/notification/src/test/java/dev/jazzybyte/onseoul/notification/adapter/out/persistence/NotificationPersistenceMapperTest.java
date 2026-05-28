@@ -111,4 +111,34 @@ class NotificationPersistenceMapperTest {
 
         assertThat(first).isEqualTo(second);
     }
+
+    // ── serialize() ───────────────────────────────────────────
+
+    @Test
+    @DisplayName("serialize(null) → \"{}\"")
+    void serialize_null_returnsEmptyJson() {
+        assertThat(mapper.serialize(null)).isEqualTo("{}");
+    }
+
+    @Test
+    @DisplayName("serialize(empty filter) → \"{}\"")
+    void serialize_empty_returnsEmptyJson() {
+        assertThat(mapper.serialize(SubscriptionFilter.empty())).isEqualTo("{}");
+    }
+
+    @Test
+    @DisplayName("serialize → parse 라운드트립으로 동일 도메인 복원")
+    void serialize_then_parse_roundTrip() {
+        SubscriptionFilter original = new SubscriptionFilter(
+                java.util.Set.of("RECEIVING"),
+                java.util.Set.of("강남구"),
+                java.util.Set.of("문화행사"));
+
+        String json = mapper.serialize(original);
+        SubscriptionFilter parsed = mapper.parse(json);
+
+        assertThat(parsed.statuses()).containsExactly("RECEIVING");
+        assertThat(parsed.areaNames()).containsExactly("강남구");
+        assertThat(parsed.maxClassNames()).containsExactly("문화행사");
+    }
 }
