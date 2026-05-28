@@ -143,11 +143,17 @@ class TestBm25SearchEmptyQueryGuard:
 
 
 class TestBm25SearchBasic:
-    async def test_executes_two_queries_for_two_columns(self):
-        """service_name + metadata 두 컬럼에 대해 각각 1회씩, 총 2회 execute."""
+    async def test_single_token_executes_two_queries(self):
+        """단일 토큰 × 2 컬럼 = 2회 execute."""
         session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
         await bm25_search(["테니스"], session)
         assert session.execute.call_count == 2
+
+    async def test_two_tokens_execute_four_queries(self):
+        """2 토큰 × 2 컬럼 = 4회 execute."""
+        session = _make_session([], [], [], [])
+        await bm25_search(["테니스", "예약"], session)
+        assert session.execute.call_count == 4
 
     async def test_returns_list_of_dicts(self):
         session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
@@ -163,7 +169,7 @@ class TestBm25SearchBasic:
             assert "service_name" in row
             assert "bm25_score" in row
 
-    async def test_empty_results_in_both_columns(self):
+    async def test_empty_results_in_all_queries(self):
         session = _make_session([], [])
         result = await bm25_search(["없는키워드"], session)
         assert result == []
@@ -209,14 +215,18 @@ class TestBm25SearchMerge:
 
 
 class TestBm25SearchBindParams:
-    async def test_token_bind_params_per_column(self):
-        """각 컬럼 호출마다 토큰이 tok_0, tok_1 ... 바인드로 전달된다."""
-        session = _make_session([])
+    async def test_each_query_uses_single_tok_bind(self):
+        """각 쿼리는 단일 bind(:tok) 만 사용한다 (ParadeDB multi-clause 제약 우회)."""
+        session = _make_session([], [], [], [])
         await bm25_search(["따릉이", "대여소"], session)
+        token_values = []
         for call in session.execute.call_args_list:
             params = call[0][1]
-            assert params["tok_0"] == "따릉이"
-            assert params["tok_1"] == "대여소"
+            # 바인드 키는 정확히 'tok'과 'limit' 두 개여야 함
+            assert set(params.keys()) == {"tok", "limit"}
+            token_values.append(params["tok"])
+        # 호출별로 토큰이 한 개씩 전달됨 (2 토큰 × 2 컬럼 = 4 호출)
+        assert sorted(token_values) == sorted(["따릉이", "따릉이", "대여소", "대여소"])
 
     async def test_limit_in_bind(self):
         session = _make_session([])
@@ -245,8 +255,8 @@ class TestBm25SearchSqlSafety:
 
         for call in session.execute.call_args_list:
             stmt, params = call[0][0], call[0][1]
-            # tok_0 바인드 파라미터에 값 전달
-            assert "tok_0" in params
+            # tok 바인드 파라미터에 값 전달
+            assert "tok" in params
             # DROP TABLE 문이 SQL 템플릿에 직접 삽입되지 않음
             assert "DROP TABLE" not in str(stmt)
 

@@ -1,23 +1,28 @@
-"""BM25 Search Tool — ParadeDB BM25 전문 검색 (이중 컬럼 머지 전략).
+"""BM25 Search Tool — ParadeDB BM25 전문 검색 (토큰×컬럼 분리 호출).
 
 pg_search 0.23.4 환경의 검증된 제약
 ------------------------------------
-- ✅ `col @@@ 'X' OR col @@@ 'Y'` — 같은 컬럼에 PostgreSQL native OR 가능
-- ❌ `service_name @@@ ... OR metadata @@@ ...` — 서로 다른 컬럼 결합 불가
-- ❌ `UNION ALL` 로 두 컬럼 BM25 합치기 — 단일 plan 안에서 실패
-- ❌ `paradedb.boolean(...)` 결과를 `@@@` 우측에 사용 — Unsupported query shape
-- ❌ `service_name @@@ 'tok1 OR tok2'` — query string 안의 OR/공백 분리 실패
+- ✅ 리터럴 `col @@@ 'X' OR col @@@ 'Y'` — 같은 컬럼 OR 가능
+- ❌ Bind 파라미터 `col @@@ $1 OR col @@@ $2` — Unsupported query shape
+  (prepared statement + multi-clause OR 조합에서 ParadeDB 깨짐)
+- ❌ 서로 다른 컬럼 결합 (`service_name @@@ ... OR metadata @@@ ...`)
+- ❌ `UNION ALL` 로 두 컬럼 BM25 합치기
+- ❌ `paradedb.boolean(...)` / `paradedb.parse(...)` API 호출
+- ❌ Query string 내 OR/공백 분리 (`service_name @@@ 'tok1 OR tok2'`)
 
-→ 전략: **두 번 호출 + Python 사이드 머지**
-   1) service_name @@@ tok1 OR tok2 OR ... (단일 쿼리)
-   2) metadata @@@ tok1 OR tok2 OR ... (단일 쿼리)
-   3) service_id 기준 MAX(bm25_score) 로 병합 후 정렬·제한
+→ 전략: **토큰당 1쿼리 (단일 bind), 컬럼당 N쿼리. Python 머지**
+   for column in (service_name, metadata):
+       for token in tokens:
+           SELECT ... WHERE column @@@ :tok  (단일 bind, OR 없음)
+   → service_id 기준 MAX(bm25_score) 머지, 점수 내림차순, limit 컷
+
+성능: 일반적인 2~3 토큰 × 2 컬럼 = 4~6 쿼리. BM25 인덱스가 빠르므로 부담 없음.
 
 SQL Injection 방지
 -------------------
 - 토큰은 Tantivy 특수문자·예약어 제거 후 SQLAlchemy bind 파라미터로 전달.
 - 컬럼명(service_name, metadata)은 코드 하드코딩 (외부 입력 아님).
-- OR 절은 토큰 수만큼 동적으로 생성하되 바인드 이름만 SQL 에 삽입.
+- 단일 bind 만 사용하므로 ParadeDB 의 multi-clause 제약 우회.
 
 FastAPI Depends 미사용 — Agent 에서 직접 호출되는 내부 도구.
 """
@@ -73,48 +78,29 @@ def build_bm25_query(tokens: list[str]) -> str:
     return " OR ".join(safe)
 
 
-def _build_or_clause(column: str, tokens: list[str]) -> tuple[str, dict]:
-    """단일 컬럼에 대해 `col @@@ :tokN OR col @@@ :tokM ...` WHERE 절을 생성한다.
-
-    Parameters
-    ----------
-    column:
-        BM25 인덱싱된 컬럼명 (service_name | metadata). 코드 하드코딩.
-    tokens:
-        sanitize 된 유효 토큰 리스트.
-
-    Returns
-    -------
-    tuple[str, dict]
-        (WHERE 절 문자열, 바인드 파라미터 dict).
-    """
-    bind_names = [f"tok_{i}" for i in range(len(tokens))]
-    clause = " OR ".join(f"{column} @@@ :{name}" for name in bind_names)
-    params = dict(zip(bind_names, tokens))
-    return clause, params
-
-
-async def _search_column(
+async def _search_one(
     column: str,
-    tokens: list[str],
+    token: str,
     session: AsyncSession,
     *,
     limit: int,
 ) -> list[dict]:
-    """단일 컬럼 BM25 검색 — 토큰 OR 결합."""
-    where_clause, bind_params = _build_or_clause(column, tokens)
+    """단일 (컬럼, 토큰) 조합 BM25 검색 — bind 1개만 사용.
+
+    Bind 가 1개이면 ParadeDB 의 multi-clause OR 제약을 우회할 수 있다.
+    컬럼명은 코드 하드코딩이라 f-string 삽입 가능.
+    """
     sql = text(f"""
         SELECT
             service_id,
             service_name,
             paradedb.score(id) AS bm25_score
         FROM service_embeddings
-        WHERE {where_clause}
+        WHERE {column} @@@ :tok
         ORDER BY bm25_score DESC
         LIMIT :limit
     """)
-    bind_params["limit"] = limit
-    result = await session.execute(sql, bind_params)
+    result = await session.execute(sql, {"tok": token, "limit": limit})
     keys = result.keys()
     return [dict(zip(keys, row)) for row in result.fetchall()]
 
@@ -170,12 +156,14 @@ async def bm25_search(
         # 모든 토큰이 특수문자/예약어로 제거된 경우 DB 호출 생략.
         return []
 
-    # 각 컬럼 BM25 인덱스를 독립적으로 조회 후 머지.
-    # 각 컬럼당 limit 만큼 가져와서 합쳐도 최종 limit 로 잘라낸다.
-    rows_per_column = [
-        await _search_column(column, safe, session, limit=limit)
-        for column in _BM25_COLUMNS
-    ]
+    # 각 (컬럼, 토큰) 조합을 단일 bind 쿼리로 실행 후 머지.
+    # ParadeDB 0.23.4 가 multi-clause OR + bind 조합을 지원하지 않으므로
+    # bind 를 1개로 제한하기 위해 토큰별로 분리 실행한다.
+    all_rows: list[list[dict]] = []
+    for column in _BM25_COLUMNS:
+        for token in safe:
+            rows = await _search_one(column, token, session, limit=limit)
+            all_rows.append(rows)
 
-    merged = _merge_by_max_score(rows_per_column)
+    merged = _merge_by_max_score(all_rows)
     return merged[:limit]
