@@ -31,6 +31,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 BM25_LIMIT: int = 50
 
+# DoS / SQL 안전성: 인라인 SQL 의 토큰 길이 상한. kiwipiepy 형태소가 보통 1-10자라
+# 64 면 충분. 64 자 초과는 잘라낸다.
+_BM25_MAX_TOKEN_LEN: int = 64
+
+# 컬럼당 동시 실행 토큰 상한. 너무 많은 토큰이 들어오면 DB 부하 위험.
+_BM25_MAX_TOKENS: int = 8
+
 # ParadeDB(Tantivy) 쿼리 파서가 특수하게 해석하는 문자.
 # 토큰에 포함되면 접두사 검색·구문 검색·퍼지·필수/제외·필드 한정 등
 # 의도치 않은 동작이 발생한다.
@@ -61,12 +68,15 @@ def _sanitize_tokens(tokens: list[str]) -> list[str]:
 
     1단계: Tantivy 특수문자 제거 (의도치 않은 쿼리 동작 방지)
     2단계: 화이트리스트 정제 (Hangul + alphanumeric 만 허용) — SQL 인라인 안전성 확보
-    3단계: 예약어 필터링
+    3단계: 길이 상한 적용 (DoS 방지)
+    4단계: 예약어 필터링
     """
     safe = []
     for t in tokens:
         t = _BM25_SPECIAL.sub("", t)
         t = _BM25_INLINE_SAFE.sub("", t)
+        if len(t) > _BM25_MAX_TOKEN_LEN:
+            t = t[:_BM25_MAX_TOKEN_LEN]
         if t and t.upper() not in _BM25_RESERVED:
             safe.append(t)
     return safe
@@ -105,16 +115,20 @@ async def _search_one(
     - `paradedb.score` 미사용. ParadeDB 가 BM25 relevance 순으로 결과를 반환하므로
       `ROW_NUMBER() OVER ()` 로 rank 를 부여하고 `bm25_score = 1.0 / rank` 로 환산.
 
-    안전성:
+    안전성 가드 (defense-in-depth):
+    - 빈 token → 빈 결과 반환 (`WHERE col @@@ ''` 발급 방지).
+    - limit 은 max(1, int(limit)) 로 보정 (음수/0 → 의도 외 SQL 방지).
     - token 은 사전에 _sanitize_tokens 통과 (Hangul + alphanumeric only).
     - column 은 _BM25_COLUMNS 하드코딩 값 (외부 입력 아님).
-    - limit 은 호출자가 int 로 제공.
 
     Returns
     -------
     list[dict]
         service_id, service_name, bm25_score(=1.0/rank), bm25_rank 키 포함.
     """
+    if not token:
+        return []
+    limit_int = max(1, int(limit))
     sql = text(f"""
         SELECT
             service_id,
@@ -122,7 +136,7 @@ async def _search_one(
             ROW_NUMBER() OVER () AS bm25_rank
         FROM service_embeddings
         WHERE {column} @@@ '{token}'
-        LIMIT {int(limit)}
+        LIMIT {limit_int}
     """)
     result = await session.execute(sql)
     keys = result.keys()
@@ -135,7 +149,12 @@ async def _search_one(
 
 
 def _merge_by_max_score(rows_list: list[list[dict]]) -> list[dict]:
-    """service_id 기준 MAX(bm25_score) 로 병합 후 점수 내림차순 정렬."""
+    """service_id 기준 MAX(bm25_score) 로 병합 후 결정적 정렬.
+
+    정렬 키:
+      1) bm25_score 내림차순 (높은 점수 우선)
+      2) service_id 오름차순 (점수 동률 시 결정적 tie-break)
+    """
     best: dict[str, dict] = {}
     for rows in rows_list:
         for row in rows:
@@ -148,7 +167,10 @@ def _merge_by_max_score(rows_list: list[list[dict]]) -> list[dict]:
                     "service_name": row.get("service_name"),
                     "bm25_score": score,
                 }
-    return sorted(best.values(), key=lambda r: r["bm25_score"], reverse=True)
+    return sorted(
+        best.values(),
+        key=lambda r: (-r["bm25_score"], r["service_id"]),
+    )
 
 
 async def bm25_search(
@@ -185,9 +207,12 @@ async def bm25_search(
         # 모든 토큰이 특수문자/예약어로 제거된 경우 DB 호출 생략.
         return []
 
-    # 각 (컬럼, 토큰) 조합을 단일 bind 쿼리로 실행 후 머지.
-    # ParadeDB 0.23.4 가 multi-clause OR + bind 조합을 지원하지 않으므로
-    # bind 를 1개로 제한하기 위해 토큰별로 분리 실행한다.
+    # DoS 방지 — 토큰 상한 적용 (앞쪽 토큰 우선).
+    safe = safe[:_BM25_MAX_TOKENS]
+
+    # 각 (컬럼, 토큰) 조합을 단일 token 쿼리로 실행 후 머지.
+    # asyncpg 단일 세션 제약으로 순차 실행 (vector_agent.py 와 동일 패턴).
+    # 토큰 상한 덕분에 최대 C × T = 2 × 8 = 16 쿼리로 제한.
     all_rows: list[list[dict]] = []
     for column in _BM25_COLUMNS:
         for token in safe:

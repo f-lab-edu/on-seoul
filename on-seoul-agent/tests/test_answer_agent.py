@@ -220,3 +220,43 @@ class TestAnswerAgentVectorResultsFlatSchema:
         assert "service_open_end_dt" not in n
         # 시설별 service_url 보존 — fallback URL 로 덮이지 않아야 한다
         assert "rsv_svc_id=S100" in n["service_url"]
+
+
+class TestAnswerAgentLangChainCompat:
+    """LangChain ChatPromptTemplate 호환성 회귀 테스트.
+
+    프롬프트의 `{...}` placeholder 잔재가 ValueError 를 일으키지 않는지,
+    그리고 results_json 에 포함된 중괄호가 변수로 오인되지 않는지 검증.
+    """
+
+    def test_prompt_template_loads_without_value_error(self):
+        """AnswerAgent() 초기화가 ChatPromptTemplate 파싱 오류 없이 성공한다."""
+        from agents.answer_agent import AnswerAgent
+
+        # 실제 LLM 호출은 안 하지만 ChatPromptTemplate.from_messages 가 호출됨.
+        # 만약 _ANSWER_SYSTEM 에 미escape `{var}` 잔재가 있으면 여기서 ValueError.
+        try:
+            AnswerAgent()
+        except ValueError as e:
+            if "Invalid variable name" in str(e):
+                raise AssertionError(
+                    f"_ANSWER_SYSTEM 프롬프트에 미escape placeholder 잔재: {e}"
+                ) from e
+            raise
+
+    async def test_results_json_with_curly_braces_does_not_break_prompt(self):
+        """results_json (JSON 직렬화 결과) 에 중괄호가 포함돼도 프롬프트가 깨지지 않는다.
+
+        LangChain 의 ChatPromptTemplate 은 system/human 메시지에서만 변수를 치환하며,
+        변수 값 자체에 포함된 `{` 는 추가 파싱 대상이 아니다. 회귀 방지 차원에서
+        실제 JSON 입력으로 ainvoke 흐름을 한 번 더 검증한다.
+        """
+        agent = _make_agent("응답 내용")
+        state = _make_state(
+            sql_results=[
+                {"service_id": "S1", "service_name": "테스트{시설}", "metadata": {"key": "val"}}
+            ]
+        )
+        # 예외 없이 통과하면 OK
+        result = await agent.answer(state)
+        assert result["answer"] == "응답 내용"

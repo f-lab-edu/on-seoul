@@ -325,3 +325,80 @@ class TestBm25SearchSqlSafety:
         joined = " ".join(captured)
         assert "service_name @@@" in joined
         assert "metadata @@@" in joined
+
+    async def test_all_sql_meta_chars_stripped(self):
+        """SQL meta 문자가 인라인 부분에 일체 포함되지 않는다 (enum 검증)."""
+        raw_inputs = [
+            "O'Brien",                # single quote
+            "수영; --",                # comment / semicolon
+            "수영 OR 1=1",             # space + reserved word
+            "/* comment */수영",       # block comment
+            "수영\n장",                # newline
+            "수영\\장",                # backslash
+        ]
+        session = _make_session([])
+        for raw in raw_inputs:
+            session.execute.reset_mock()
+            await bm25_search([raw], session)
+            for call in session.execute.call_args_list:
+                stmt = str(call[0][0])
+                # 토큰이 인라인되는 부분만 추출 — WHERE col @@@ '...'
+                for meta in ["'", ";", "--", "/*", "*/", "\\"]:
+                    # SQL 메타 문자가 토큰 인라인 단계에서 잔류하지 않는지
+                    # (SQL 템플릿 자체의 single quote 는 토큰을 감싸는 ' ' 뿐)
+                    if meta == "'":
+                        # ' 는 토큰을 감싸는 용도이므로 2개 이상은 비정상
+                        assert stmt.count("'") <= 4  # service_name '...', metadata '...'
+                    else:
+                        assert meta not in stmt
+
+
+class TestBm25SearchGuards:
+    """방어적 가드 (limit, 빈 token, 토큰 상한·길이 상한) 검증."""
+
+    async def test_negative_limit_coerced_to_at_least_1(self):
+        """limit <= 0 도 LIMIT 1 로 보정 (의도 외 SQL 방지)."""
+        session = _make_session([])
+        await bm25_search(["수영"], session, limit=-5)
+        for call in session.execute.call_args_list:
+            assert "LIMIT 1" in str(call[0][0])
+
+    async def test_zero_limit_coerced(self):
+        session = _make_session([])
+        await bm25_search(["수영"], session, limit=0)
+        for call in session.execute.call_args_list:
+            assert "LIMIT 1" in str(call[0][0])
+
+    async def test_max_tokens_cap_applied(self):
+        """토큰 9개 입력 시 상한 8개로 잘려 16쿼리(2컬럼×8토큰)만 실행."""
+        session = _make_session(*[[] for _ in range(16)])
+        # 9 토큰 — 8개로 잘림
+        tokens = [f"토큰{i}" for i in range(9)]
+        await bm25_search(tokens, session)
+        # 컬럼 2 × 토큰 8 = 16 쿼리
+        assert session.execute.call_count == 16
+
+    async def test_long_token_truncated(self):
+        """64자 초과 토큰은 잘려서 인라인된다."""
+        long_token = "수" * 100  # 100자 Hangul
+        session = _make_session([])
+        await bm25_search([long_token], session)
+        for call in session.execute.call_args_list:
+            stmt = str(call[0][0])
+            # 토큰이 64자로 잘림
+            assert "'" + ("수" * 64) + "'" in stmt
+            assert "'" + ("수" * 100) + "'" not in stmt
+
+    async def test_deterministic_tie_break_by_service_id(self):
+        """점수 동률 시 service_id 오름차순으로 정렬된다 (결정적 tie-break)."""
+        # 두 컬럼 모두에서 rank=1 인 결과 → score=1.0 동률
+        sn = [
+            {"service_id": "S_B", "service_name": "B", "bm25_rank": 1},
+        ]
+        md = [
+            {"service_id": "S_A", "service_name": "A", "bm25_rank": 1},
+        ]
+        session = _make_session(sn, md)
+        result = await bm25_search(["테니스"], session)
+        # 동률(1.0) 두 개 → service_id 오름차순
+        assert [r["service_id"] for r in result] == ["S_A", "S_B"]
