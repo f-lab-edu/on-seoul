@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 
 import { AgentTrace } from "@/components/chat/agent-trace";
 import { MessageBubble } from "@/components/chat/message-bubble";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { ChatStreamState } from "@/hooks/useChatStream";
 import type { MessageRole } from "@/types/chat";
 
@@ -40,6 +41,9 @@ export function MessageList({ messages, streamState }: MessageListProps) {
     streamState.phase === "streaming" && streamingContent.length > 0;
   const trace =
     streamState.phase === "streaming" ? streamState.trace : [];
+  // 스트림은 시작했지만 첫 토큰/trace 도착 전 — 빈 화면 대신 응답 자리표시자 노출.
+  const showStreamPlaceholder =
+    streamState.phase === "streaming" && trace.length === 0 && streamingContent.length === 0;
 
   return (
     <div className="flex flex-col gap-3 pb-4">
@@ -53,6 +57,21 @@ export function MessageList({ messages, streamState }: MessageListProps) {
 
       {showStreamBubble && (
         <MessageBubble role="ASSISTANT" content={streamingContent} streaming />
+      )}
+
+      {showStreamPlaceholder && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-label="응답 준비 중"
+          className="flex w-full justify-start"
+        >
+          <div className="flex max-w-[80%] flex-col gap-2 rounded-2xl rounded-bl-sm bg-muted px-4 py-3">
+            <Skeleton className="h-3 w-40" />
+            <Skeleton className="h-3 w-56" />
+            <Skeleton className="h-3 w-32" />
+          </div>
+        </div>
       )}
 
       <div ref={bottomRef} />
