@@ -198,11 +198,19 @@ async def _safe_question_search(
 
 
 async def _safe_bm25_search(session: AsyncSession, tokens: list[str]) -> list[dict]:
-    """bm25_search 예외를 격리하여 빈 결과 반환."""
+    """bm25_search 예외를 격리하여 빈 결과 반환.
+
+    예외 발생 시 세션 트랜잭션을 롤백하여 이후 쿼리(search_persist 등)가
+    InFailedSQLTransactionError 로 연쇄 실패하지 않도록 복구한다.
+    """
     try:
         return await bm25_search(tokens, session)
     except Exception:
         logger.warning("bm25_search 실패, 빈 결과로 대체", exc_info=True)
+        try:
+            await session.rollback()
+        except Exception:
+            pass
         return []
 
 

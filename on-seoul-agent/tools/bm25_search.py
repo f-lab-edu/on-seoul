@@ -89,13 +89,23 @@ async def bm25_search(
         # 모든 토큰이 특수문자/예약어로 제거된 경우 DB 호출을 생략한다.
         return []
 
+    # ParadeDB는 서로 다른 컬럼에 @@@ 를 OR로 연결하는 쿼리를 지원하지 않는다.
+    # 복수 필드 검색은 paradedb.boolean(should => ARRAY[...]) 으로 처리한다.
+    # metadata 는 json_fields로 색인되므로 paradedb.parse 대신 paradedb.term_set 을
+    # 사용할 수 없어, service_name(text_fields) + metadata(json_fields) 를
+    # boolean should 로 결합한다.
     sql = text("""
         SELECT
             service_id,
             service_name,
             paradedb.score(id) AS bm25_score
         FROM service_embeddings
-        WHERE service_name @@@ :query OR metadata @@@ :query
+        WHERE id @@@ paradedb.boolean(
+            should => ARRAY[
+                paradedb.parse('service_name', :query),
+                paradedb.parse('metadata', :query)
+            ]
+        )
         ORDER BY paradedb.score(id) DESC
         LIMIT :limit
     """)
