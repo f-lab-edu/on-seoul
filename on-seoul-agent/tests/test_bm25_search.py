@@ -6,7 +6,7 @@ Mock DB 세션으로 BM25 쿼리 변환, bind 파라미터, 반환 형식을 검
 
 from unittest.mock import AsyncMock, MagicMock
 
-from tools.bm25_search import BM25_LIMIT, bm25_search, build_bm25_query
+from tools.bm25_search import BM25_LIMIT, bm25_search, build_bm25_query, build_field_queries
 
 
 def _make_session(rows: list[dict]) -> MagicMock:
@@ -34,9 +34,9 @@ class TestBuildBm25Query:
         """단일 토큰은 그대로 반환된다."""
         assert build_bm25_query(["따릉이"]) == "따릉이"
 
-    def test_multiple_tokens_joined_with_space(self):
-        """복수 토큰은 공백으로 연결된다."""
-        assert build_bm25_query(["따릉이", "대여소"]) == "따릉이 대여소"
+    def test_multiple_tokens_joined_with_or(self):
+        """복수 토큰은 OR로 연결된다."""
+        assert build_bm25_query(["따릉이", "대여소"]) == "따릉이 OR 대여소"
 
     def test_empty_tokens_returns_empty_string(self):
         """빈 토큰 리스트는 빈 문자열을 반환한다."""
@@ -77,7 +77,7 @@ class TestBuildBm25Query:
     def test_reserved_words_removed_from_token_list(self):
         """예약어가 포함된 리스트에서 예약어만 제거되고 나머지 토큰은 유지된다."""
         result = build_bm25_query(["수영", "AND", "강습"])
-        assert result == "수영 강습"
+        assert result == "수영 OR 강습"
 
     def test_special_chars_and_reserved_word_combined(self):
         """특수문자 제거 후 예약어가 되는 토큰도 필터링된다."""
@@ -107,6 +107,25 @@ class TestBuildBm25Query:
     def test_question_mark_removed(self):
         """와일드카드 문자(?)가 토큰에서 제거된다."""
         assert build_bm25_query(["수영?장"]) == "수영장"
+
+
+class TestBuildFieldQueries:
+    def test_single_token_no_parentheses(self):
+        """단일 토큰은 괄호 없이 'field:token' 형태."""
+        sn, md = build_field_queries(["테니스장"])
+        assert sn == "service_name:테니스장"
+        assert md == "metadata:테니스장"
+
+    def test_multiple_tokens_or_grouped(self):
+        """복수 토큰은 '(tok1 OR tok2)' 로 감싼다."""
+        sn, md = build_field_queries(["테니스장", "예약", "방법"])
+        assert sn == "service_name:(테니스장 OR 예약 OR 방법)"
+        assert md == "metadata:(테니스장 OR 예약 OR 방법)"
+
+    def test_empty_returns_none(self):
+        """유효 토큰 없으면 None."""
+        assert build_field_queries([]) is None
+        assert build_field_queries(["AND", "OR"]) is None
 
 
 class TestBm25SearchEmptyQueryGuard:
@@ -157,11 +176,12 @@ class TestBm25SearchBasic:
 
 class TestBm25SearchBindParams:
     async def test_query_string_in_bind(self):
-        """공백 연결된 토큰 문자열이 bind 파라미터로 전달된다."""
+        """필드-스코프 쿼리 문자열이 query_sn / query_md 로 분리되어 bind에 전달된다."""
         session = _make_session([])
         await bm25_search(["따릉이", "대여소"], session)
         bind = session.execute.call_args[0][1]
-        assert bind["query"] == "따릉이 대여소"
+        assert bind["query_sn"] == "service_name:(따릉이 OR 대여소)"
+        assert bind["query_md"] == "metadata:(따릉이 OR 대여소)"
 
     async def test_limit_in_bind(self):
         """LIMIT 파라미터가 bind에 포함된다."""
@@ -171,11 +191,12 @@ class TestBm25SearchBindParams:
         assert bind["limit"] == BM25_LIMIT
 
     async def test_single_token_bind(self):
-        """단일 토큰도 bind query에 정상 전달된다."""
+        """단일 토큰은 괄호 없이 필드-스코프 형태로 전달된다."""
         session = _make_session([])
         await bm25_search(["수영"], session)
         bind = session.execute.call_args[0][1]
-        assert bind["query"] == "수영"
+        assert bind["query_sn"] == "service_name:수영"
+        assert bind["query_md"] == "metadata:수영"
 
     async def test_custom_limit_in_bind(self):
         """limit 파라미터를 명시하면 bind에 해당 값이 전달된다."""
@@ -187,25 +208,25 @@ class TestBm25SearchBindParams:
 
 class TestBm25SearchSqlSafety:
     async def test_token_values_passed_as_bind_params(self):
-        """SQL Injection 방지: 입력값은 sanitize 후 bind 파라미터로만 전달되고 SQL 템플릿에 삽입되지 않는다.
+        """SQL Injection 방지: 입력값은 sanitize 후 필드-스코프 문자열로 조립되어
+        bind 파라미터(query_sn/query_md)로만 전달되고 SQL 템플릿에 삽입되지 않는다.
 
-        특수문자(-, ')가 포함된 입력을 사용한다.
-        sanitize 단계에서 '-'가 제거되어 bind["query"]는 원본과 다를 수 있지만,
-        SQL 템플릿에 직접 삽입되지 않는다는 점만 보장하면 된다.
+        특수문자(')가 포함된 입력을 사용한다.
+        Tantivy 특수문자 제거 후 build_field_queries 에서 필드-스코프로 감싼다.
         """
-        # 특수문자 중 '-'는 sanitize 단계에서 제거되므로 정제된 값이 bind에 전달된다.
         raw = "'; DROP TABLE service_embeddings;"
-        expected_sanitized = "'; DROP TABLE service_embeddings;"  # '-' 없으므로 그대로
+        # 특수문자 중 sanitize 대상이 아닌 '' 가 남아 서비스명 부분에 포함됨
         session = _make_session([])
         await bm25_search([raw], session)
 
         call_args = session.execute.call_args
         stmt, params = call_args[0][0], call_args[0][1]
 
-        # sanitize된 값이 bind 파라미터로 전달됨
-        assert params["query"] == expected_sanitized
-        # SQL 템플릿 문자열에는 삽입되지 않음
-        assert raw not in str(stmt)
+        # bind 파라미터에 query_sn/query_md 키가 존재함
+        assert "query_sn" in params
+        assert "query_md" in params
+        # 원본 DROP 문이 SQL 템플릿에 삽입되지 않음
+        assert "DROP TABLE" not in str(stmt)
 
     async def test_bm25_operator_in_sql(self):
         """SQL에 ParadeDB BM25 연산자(@@@)가 포함된다."""

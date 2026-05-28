@@ -1,9 +1,17 @@
 """BM25 Search Tool — ParadeDB BM25 전문 검색.
 
-토큰 배열을 공백으로 연결한 쿼리 문자열을 구성하고,
-ParadeDB의 @@@ 연산자로 service_embeddings 테이블을 검색한다.
+ParadeDB 멀티 필드 검색 전략:
+  - `col @@@ parse('field', query)` 2인자 형태는 단일 토큰에서 불안정.
+  - 필드 스코프를 쿼리 문자열에 직접 포함하는 1인자 형태를 사용한다:
+      paradedb.parse('service_name:(토큰1 OR 토큰2)')
+      paradedb.parse('metadata:(토큰1 OR 토큰2)')
+  - 단일 토큰: 'service_name:토큰'  (괄호 생략)
+  - 복수 토큰: 'service_name:(tok1 OR tok2 OR ...)'
 
-SQL Injection 방지: 쿼리 문자열은 bind 파라미터(:query)로만 전달된다.
+SQL Injection 방지:
+  - 토큰은 Python 사이드에서 Tantivy 특수문자·예약어를 제거한 뒤
+    필드-스코프 쿼리 문자열로 조립되어 bind 파라미터로 전달된다.
+  - 필드명(service_name, metadata)은 코드에 하드코딩되어 외부 입력이 아니다.
 
 FastAPI Depends로 주입되지 않고 Agent에서 직접 호출되는 내부 도구다.
 """
@@ -31,29 +39,57 @@ _BM25_SPECIAL: re.Pattern[str] = re.compile(r'[+\-:?\\*~^(){}\[\]"]')
 _BM25_RESERVED: frozenset[str] = frozenset({"AND", "OR", "NOT", "TO", "IN"})
 
 
-def build_bm25_query(tokens: list[str]) -> str:
-    """토큰 배열을 ParadeDB BM25 쿼리 문자열로 변환한다.
-
-    ParadeDB @@@: 공백으로 구분된 토큰을 OR 매칭한다.
-    각 토큰에서 Tantivy 특수문자를 제거하고 예약어를 필터링하여
-    의도치 않은 쿼리 동작을 방지한다.
-
-    Parameters
-    ----------
-    tokens:
-        형태소 분석된 토큰 리스트.
-
-    Returns
-    -------
-    str
-        공백 구분 토큰 문자열. 빈 리스트이거나 안전한 토큰이 없으면 빈 문자열.
-    """
+def _sanitize_tokens(tokens: list[str]) -> list[str]:
+    """토큰에서 Tantivy 특수문자·예약어를 제거하고 유효 토큰만 반환한다."""
     safe = []
     for t in tokens:
         t = _BM25_SPECIAL.sub("", t)
         if t and t.upper() not in _BM25_RESERVED:
             safe.append(t)
-    return " ".join(safe)
+    return safe
+
+
+def build_bm25_query(tokens: list[str]) -> str:
+    """토큰 배열을 ParadeDB BM25 쿼리 문자열로 변환한다 (하위 호환 유지).
+
+    반환값은 'token1 OR token2' 형태의 raw 토큰 문자열.
+    실제 필드-스코프 조립은 build_field_query() 가 담당한다.
+
+    Returns
+    -------
+    str
+        OR 구분 토큰 문자열. 유효 토큰이 없으면 빈 문자열.
+    """
+    safe = _sanitize_tokens(tokens)
+    if not safe:
+        return ""
+    if len(safe) == 1:
+        return safe[0]
+    return " OR ".join(safe)
+
+
+def build_field_queries(tokens: list[str]) -> tuple[str, str] | None:
+    """토큰 배열을 필드-스코프 paradedb.parse 인자 문자열 쌍으로 변환한다.
+
+    ParadeDB 1인자 parse 형식:
+      단일 토큰 → 'service_name:토큰'
+      복수 토큰 → 'service_name:(tok1 OR tok2 OR ...)'
+
+    Returns
+    -------
+    tuple[str, str] | None
+        (service_name 쿼리, metadata 쿼리). 유효 토큰 없으면 None.
+    """
+    safe = _sanitize_tokens(tokens)
+    if not safe:
+        return None
+
+    if len(safe) == 1:
+        body = safe[0]
+    else:
+        body = f"({' OR '.join(safe)})"
+
+    return f"service_name:{body}", f"metadata:{body}"
 
 
 async def bm25_search(
@@ -63,8 +99,6 @@ async def bm25_search(
     limit: int = BM25_LIMIT,
 ) -> list[dict]:
     """ParadeDB BM25 전문 검색을 수행한다.
-
-    FastAPI Depends로 주입되지 않고 Agent에서 직접 호출되는 내부 도구다.
 
     Parameters
     ----------
@@ -78,22 +112,21 @@ async def bm25_search(
     Returns
     -------
     list[dict]
-        service_id, bm25_score 키를 가진 딕셔너리 리스트.
+        service_id, service_name, bm25_score 키를 가진 딕셔너리 리스트.
         토큰이 비어 있거나 결과가 없으면 빈 리스트.
     """
     if not tokens:
         return []
 
-    query_str = build_bm25_query(tokens)
-    if not query_str:
+    field_queries = build_field_queries(tokens)
+    if field_queries is None:
         # 모든 토큰이 특수문자/예약어로 제거된 경우 DB 호출을 생략한다.
         return []
 
-    # ParadeDB는 서로 다른 컬럼에 @@@ 를 OR로 연결하는 쿼리를 지원하지 않는다.
-    # 복수 필드 검색은 paradedb.boolean(should => ARRAY[...]) 으로 처리한다.
-    # metadata 는 json_fields로 색인되므로 paradedb.parse 대신 paradedb.term_set 을
-    # 사용할 수 없어, service_name(text_fields) + metadata(json_fields) 를
-    # boolean should 로 결합한다.
+    query_sn, query_md = field_queries
+
+    # 필드-스코프 1인자 parse 형태: 단일/복수 토큰 모두 안정적으로 동작.
+    # 2인자 parse('field', :query) 는 단일 토큰에서 "Unsupported query shape" 오류 발생.
     sql = text("""
         SELECT
             service_id,
@@ -102,14 +135,16 @@ async def bm25_search(
         FROM service_embeddings
         WHERE id @@@ paradedb.boolean(
             should => ARRAY[
-                paradedb.parse('service_name', :query),
-                paradedb.parse('metadata', :query)
+                paradedb.parse(:query_sn),
+                paradedb.parse(:query_md)
             ]
         )
         ORDER BY paradedb.score(id) DESC
         LIMIT :limit
     """)
 
-    result = await session.execute(sql, {"query": query_str, "limit": limit})
+    result = await session.execute(
+        sql, {"query_sn": query_sn, "query_md": query_md, "limit": limit}
+    )
     keys = result.keys()
     return [dict(zip(keys, row)) for row in result.fetchall()]
