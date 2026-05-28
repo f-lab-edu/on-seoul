@@ -1,28 +1,24 @@
-"""BM25 Search Tool — ParadeDB BM25 전문 검색 (토큰×컬럼 분리 호출).
+"""BM25 Search Tool — ParadeDB BM25 전문 검색 (인라인 토큰 + 토큰×컬럼 분리).
 
 pg_search 0.23.4 환경의 검증된 제약
 ------------------------------------
-- ✅ 리터럴 `col @@@ 'X' OR col @@@ 'Y'` — 같은 컬럼 OR 가능
-- ❌ Bind 파라미터 `col @@@ $1 OR col @@@ $2` — Unsupported query shape
-  (prepared statement + multi-clause OR 조합에서 ParadeDB 깨짐)
-- ❌ 서로 다른 컬럼 결합 (`service_name @@@ ... OR metadata @@@ ...`)
-- ❌ `UNION ALL` 로 두 컬럼 BM25 합치기
+- ✅ 리터럴 `col @@@ '테니스장'` — 인라인 문자열 OK
+- ❌ Bind 파라미터 `col @@@ $1` — Unsupported query shape
+  (asyncpg 의 prepared statement 프로토콜 자체를 ParadeDB 가 지원 안 함)
 - ❌ `paradedb.boolean(...)` / `paradedb.parse(...)` API 호출
-- ❌ Query string 내 OR/공백 분리 (`service_name @@@ 'tok1 OR tok2'`)
+- ❌ 서로 다른 컬럼 결합 (`service_name @@@ ... OR metadata @@@ ...`)
 
-→ 전략: **토큰당 1쿼리 (단일 bind), 컬럼당 N쿼리. Python 머지**
-   for column in (service_name, metadata):
-       for token in tokens:
-           SELECT ... WHERE column @@@ :tok  (단일 bind, OR 없음)
-   → service_id 기준 MAX(bm25_score) 머지, 점수 내림차순, limit 컷
+→ 전략: **토큰을 SQL 에 직접 인라인 + (컬럼, 토큰) 조합별 분리 실행**
+   토큰을 strict 화이트리스트(Hangul + alphanumeric)로 sanitize 한 후
+   SQL 문자열에 직접 삽입하여 prepared statement 를 회피한다.
 
-성능: 일반적인 2~3 토큰 × 2 컬럼 = 4~6 쿼리. BM25 인덱스가 빠르므로 부담 없음.
-
-SQL Injection 방지
--------------------
-- 토큰은 Tantivy 특수문자·예약어 제거 후 SQLAlchemy bind 파라미터로 전달.
-- 컬럼명(service_name, metadata)은 코드 하드코딩 (외부 입력 아님).
-- 단일 bind 만 사용하므로 ParadeDB 의 multi-clause 제약 우회.
+SQL Injection 방지 (인라인 안전성)
+----------------------------------
+1. Tantivy 특수문자 제거 (`+-:?\\*~^(){}[]"`)
+2. **Strict 화이트리스트**: Hangul(가-힣) + alphanumeric 만 통과.
+   single quote, semicolon, 공백 등 SQL meta 문자 전부 제거.
+3. 컬럼명·LIMIT 은 코드 하드코딩 → 외부 입력 미수용.
+4. 통과된 토큰만 `'{token}'` 형태로 SQL 에 인라인.
 
 FastAPI Depends 미사용 — Agent 에서 직접 호출되는 내부 도구.
 """
@@ -48,15 +44,28 @@ _BM25_SPECIAL: re.Pattern[str] = re.compile(r'[+\-:?\\*~^(){}\[\]"]')
 # Tantivy 논리 연산 예약어. 토큰으로 전달되면 논리 검색으로 해석됨.
 _BM25_RESERVED: frozenset[str] = frozenset({"AND", "OR", "NOT", "TO", "IN"})
 
+# Strict 화이트리스트 — SQL 인라인 안전 문자.
+# 한글(가-힣, ㄱ-ㅎ, ㅏ-ㅣ) + ASCII alphanumeric. 그 외 모두 제거.
+# single quote / semicolon / 공백 등 SQL meta 문자 일체 거부.
+_BM25_INLINE_SAFE: re.Pattern[str] = re.compile(
+    r"[^가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9]"
+)
+
 # 검색 대상 컬럼 — 코드 하드코딩, 외부 입력 받지 않음.
 _BM25_COLUMNS: tuple[str, ...] = ("service_name", "metadata")
 
 
 def _sanitize_tokens(tokens: list[str]) -> list[str]:
-    """토큰에서 Tantivy 특수문자·예약어를 제거하고 유효 토큰만 반환한다."""
+    """토큰을 BM25 검색 안전 형태로 정제한다.
+
+    1단계: Tantivy 특수문자 제거 (의도치 않은 쿼리 동작 방지)
+    2단계: 화이트리스트 정제 (Hangul + alphanumeric 만 허용) — SQL 인라인 안전성 확보
+    3단계: 예약어 필터링
+    """
     safe = []
     for t in tokens:
         t = _BM25_SPECIAL.sub("", t)
+        t = _BM25_INLINE_SAFE.sub("", t)
         if t and t.upper() not in _BM25_RESERVED:
             safe.append(t)
     return safe
@@ -85,10 +94,15 @@ async def _search_one(
     *,
     limit: int,
 ) -> list[dict]:
-    """단일 (컬럼, 토큰) 조합 BM25 검색 — bind 1개만 사용.
+    """단일 (컬럼, 토큰) 조합 BM25 검색.
 
-    Bind 가 1개이면 ParadeDB 의 multi-clause OR 제약을 우회할 수 있다.
-    컬럼명은 코드 하드코딩이라 f-string 삽입 가능.
+    ParadeDB 0.23.4 가 asyncpg prepared statement 의 `@@@ $N` 형태를
+    지원하지 않으므로 토큰을 SQL 에 직접 인라인한다.
+
+    안전성 보장:
+    - token 은 사전에 _sanitize_tokens 통과 (Hangul + alphanumeric only).
+    - column 은 _BM25_COLUMNS 하드코딩 값 (외부 입력 아님).
+    - limit 은 호출자가 int 로 제공.
     """
     sql = text(f"""
         SELECT
@@ -96,11 +110,11 @@ async def _search_one(
             service_name,
             paradedb.score(id) AS bm25_score
         FROM service_embeddings
-        WHERE {column} @@@ :tok
+        WHERE {column} @@@ '{token}'
         ORDER BY bm25_score DESC
-        LIMIT :limit
+        LIMIT {int(limit)}
     """)
-    result = await session.execute(sql, {"tok": token, "limit": limit})
+    result = await session.execute(sql)
     keys = result.keys()
     return [dict(zip(keys, row)) for row in result.fetchall()]
 

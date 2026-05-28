@@ -10,9 +10,9 @@
 
 |검색 유형|담당 채널|역할|
 |---|---|---|
-|의미 기반, 정형 메타데이터 매칭 (Track A)|`vector_search(row_kind="identity")`|시설 신원 임베딩 (서울시 자치구 체육시설 테니스장...)|
+|의미 기반, 식별 메타데이터 매칭 (Track A)|`vector_search(row_kind="identity")`|시설 신원 임베딩 (서울시 자치구 체육시설 테니스장...)|
 |의미 기반, 자연어 설명 매칭 (Track B)|`vector_search(row_kind="summary")`|시설 요약 임베딩 (자연어 설명 중심)|
-|FAQ·세부정보 매칭 (Track C)|`question_search()`|예상 질문 임베딩, service_id별 dedup|
+|HyQE 질문 매칭 (Track C)|`question_search()`|예상 질문 임베딩, service_id별 dedup|
 |정확 키워드 매칭|`bm25_search()`|고유명사·희귀어 BM25 매칭|
 |최종 순위 결합|`core/rrf.py` RRF|4채널 결과를 Reciprocal Rank Fusion으로 통합|
 

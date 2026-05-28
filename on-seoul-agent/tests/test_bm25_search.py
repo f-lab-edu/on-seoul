@@ -214,31 +214,40 @@ class TestBm25SearchMerge:
 # ---------------------------------------------------------------------------
 
 
-class TestBm25SearchBindParams:
-    async def test_each_query_uses_single_tok_bind(self):
-        """각 쿼리는 단일 bind(:tok) 만 사용한다 (ParadeDB multi-clause 제약 우회)."""
+class TestBm25SearchInlineSql:
+    """ParadeDB 0.23.4 가 prepared statement(@@@ $N)를 지원하지 않으므로
+    토큰을 SQL 에 직접 인라인한다. 인라인 안전성·SQL 형태를 검증한다.
+    """
+
+    async def test_tokens_inlined_in_sql(self):
+        """sanitize 된 토큰이 single quote 로 감싸여 SQL 에 직접 삽입된다."""
         session = _make_session([], [], [], [])
         await bm25_search(["따릉이", "대여소"], session)
-        token_values = []
-        for call in session.execute.call_args_list:
-            params = call[0][1]
-            # 바인드 키는 정확히 'tok'과 'limit' 두 개여야 함
-            assert set(params.keys()) == {"tok", "limit"}
-            token_values.append(params["tok"])
-        # 호출별로 토큰이 한 개씩 전달됨 (2 토큰 × 2 컬럼 = 4 호출)
-        assert sorted(token_values) == sorted(["따릉이", "따릉이", "대여소", "대여소"])
+        # call_args[0] 은 (stmt,) 단일 요소 튜플 — bind dict 없음
+        all_sql = " ".join(str(call[0][0]) for call in session.execute.call_args_list)
+        assert "'따릉이'" in all_sql
+        assert "'대여소'" in all_sql
 
-    async def test_limit_in_bind(self):
+    async def test_no_bind_params_passed_to_execute(self):
+        """execute 호출 시 bind dict 를 전달하지 않는다 (prepared statement 회피)."""
         session = _make_session([])
         await bm25_search(["검색어"], session)
         for call in session.execute.call_args_list:
-            assert call[0][1]["limit"] == BM25_LIMIT
+            args = call[0]
+            # 인자는 stmt 1개만 (bind dict 없음)
+            assert len(args) == 1
 
-    async def test_custom_limit_in_bind(self):
+    async def test_limit_inlined_in_sql(self):
+        session = _make_session([])
+        await bm25_search(["검색어"], session)
+        for call in session.execute.call_args_list:
+            assert f"LIMIT {BM25_LIMIT}" in str(call[0][0])
+
+    async def test_custom_limit_inlined(self):
         session = _make_session([])
         await bm25_search(["수영"], session, limit=10)
         for call in session.execute.call_args_list:
-            assert call[0][1]["limit"] == 10
+            assert "LIMIT 10" in str(call[0][0])
 
 
 # ---------------------------------------------------------------------------
@@ -247,18 +256,23 @@ class TestBm25SearchBindParams:
 
 
 class TestBm25SearchSqlSafety:
-    async def test_token_passed_as_bind_param_not_inlined(self):
-        """SQL Injection 방지: 토큰은 sanitize 후 바인드 파라미터로만 전달된다."""
+    async def test_sql_injection_neutralized_by_strict_sanitize(self):
+        """SQL Injection 시도: strict 화이트리스트(Hangul + alphanumeric)로
+        single quote, semicolon, 공백 등 SQL meta 문자가 전부 제거된다.
+
+        ' ; - 가 제거된 후 'DROPTABLEx' 형태로 남으므로 무력화된다.
+        """
         raw = "'; DROP TABLE service_embeddings;"
         session = _make_session([])
         await bm25_search([raw], session)
 
         for call in session.execute.call_args_list:
-            stmt, params = call[0][0], call[0][1]
-            # tok 바인드 파라미터에 값 전달
-            assert "tok" in params
-            # DROP TABLE 문이 SQL 템플릿에 직접 삽입되지 않음
-            assert "DROP TABLE" not in str(stmt)
+            stmt = str(call[0][0])
+            # SQL meta 문자가 인라인 부분에 포함되지 않음
+            assert "; DROP" not in stmt
+            assert "DROP TABLE service_embeddings" not in stmt
+            # 원본의 single quote / semicolon 가 그대로 SQL 에 삽입되지 않음
+            assert "'; " not in stmt
 
     async def test_bm25_operator_in_sql(self):
         """SQL 에 ParadeDB BM25 연산자(@@@)가 포함된다."""
