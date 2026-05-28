@@ -1,16 +1,17 @@
-"""BM25 Search Tool — ParadeDB BM25 전문 검색 (인라인 토큰 + 토큰×컬럼 분리).
+"""BM25 Search Tool — ParadeDB BM25 전문 검색 (인라인 토큰 + score 함수 회피).
 
 pg_search 0.23.4 환경의 검증된 제약
 ------------------------------------
-- ✅ 리터럴 `col @@@ '테니스장'` — 인라인 문자열 OK
-- ❌ Bind 파라미터 `col @@@ $1` — Unsupported query shape
-  (asyncpg 의 prepared statement 프로토콜 자체를 ParadeDB 가 지원 안 함)
+- ✅ 리터럴 `col @@@ '테니스장'` (인라인) + ORDER BY 없이 LIMIT
+- ❌ Bind 파라미터 `col @@@ $1`
+- ❌ `paradedb.score(id)` SELECT 또는 ORDER BY 사용 (service_name 컬럼에서 깨짐)
 - ❌ `paradedb.boolean(...)` / `paradedb.parse(...)` API 호출
 - ❌ 서로 다른 컬럼 결합 (`service_name @@@ ... OR metadata @@@ ...`)
 
-→ 전략: **토큰을 SQL 에 직접 인라인 + (컬럼, 토큰) 조합별 분리 실행**
-   토큰을 strict 화이트리스트(Hangul + alphanumeric)로 sanitize 한 후
-   SQL 문자열에 직접 삽입하여 prepared statement 를 회피한다.
+→ 전략: **인라인 토큰 + score 함수 미사용 + ROW_NUMBER 로 rank 부여**
+   ParadeDB 가 BM25 자연 순서로 결과를 반환하므로 SELECT 에 ROW_NUMBER 만
+   추가하면 BM25 rank 를 얻을 수 있다. RRF 는 rank 만 필요하므로 충분.
+   호환성: bm25_score = 1.0 / rank 로 환산하여 다운스트림 코드 무변경.
 
 SQL Injection 방지 (인라인 안전성)
 ----------------------------------
@@ -96,27 +97,41 @@ async def _search_one(
 ) -> list[dict]:
     """단일 (컬럼, 토큰) 조합 BM25 검색.
 
-    ParadeDB 0.23.4 가 asyncpg prepared statement 의 `@@@ $N` 형태를
-    지원하지 않으므로 토큰을 SQL 에 직접 인라인한다.
+    ParadeDB 0.23.4 가 asyncpg prepared statement 의 `@@@ $N` 형태와
+    `paradedb.score(id)` 함수 (service_name 컬럼 대상) 를 지원하지 않는다.
 
-    안전성 보장:
+    회피 전략:
+    - 토큰을 SQL 에 직접 인라인 (no bind).
+    - `paradedb.score` 미사용. ParadeDB 가 BM25 relevance 순으로 결과를 반환하므로
+      `ROW_NUMBER() OVER ()` 로 rank 를 부여하고 `bm25_score = 1.0 / rank` 로 환산.
+
+    안전성:
     - token 은 사전에 _sanitize_tokens 통과 (Hangul + alphanumeric only).
     - column 은 _BM25_COLUMNS 하드코딩 값 (외부 입력 아님).
     - limit 은 호출자가 int 로 제공.
+
+    Returns
+    -------
+    list[dict]
+        service_id, service_name, bm25_score(=1.0/rank), bm25_rank 키 포함.
     """
     sql = text(f"""
         SELECT
             service_id,
             service_name,
-            paradedb.score(id) AS bm25_score
+            ROW_NUMBER() OVER () AS bm25_rank
         FROM service_embeddings
         WHERE {column} @@@ '{token}'
-        ORDER BY bm25_score DESC
         LIMIT {int(limit)}
     """)
     result = await session.execute(sql)
     keys = result.keys()
-    return [dict(zip(keys, row)) for row in result.fetchall()]
+    rows = [dict(zip(keys, row)) for row in result.fetchall()]
+    # ROW_NUMBER() returns int; convert to bm25_score for downstream RRF compatibility.
+    for r in rows:
+        rank = int(r["bm25_rank"])
+        r["bm25_score"] = 1.0 / rank if rank > 0 else 0.0
+    return rows
 
 
 def _merge_by_max_score(rows_list: list[list[dict]]) -> list[dict]:

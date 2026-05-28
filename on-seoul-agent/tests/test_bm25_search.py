@@ -39,13 +39,15 @@ def _make_session(*responses: list[dict]) -> MagicMock:
     return session
 
 
+# ParadeDB가 BM25 relevance 순으로 결과를 반환하면 ROW_NUMBER 로 rank 부여.
+# bm25_score 는 Python 사이드에서 1.0/rank 로 산출됨.
 _SAMPLE_ROWS_SN = [
-    {"service_id": "S001", "service_name": "테니스장1", "bm25_score": 2.5},
-    {"service_id": "S002", "service_name": "테니스장2", "bm25_score": 1.8},
+    {"service_id": "S001", "service_name": "테니스장1", "bm25_rank": 1},
+    {"service_id": "S002", "service_name": "테니스장2", "bm25_rank": 2},
 ]
 _SAMPLE_ROWS_MD = [
-    {"service_id": "S002", "service_name": "테니스장2", "bm25_score": 3.0},
-    {"service_id": "S003", "service_name": "수영장1", "bm25_score": 1.2},
+    {"service_id": "S002", "service_name": "테니스장2", "bm25_rank": 1},
+    {"service_id": "S003", "service_name": "수영장1", "bm25_rank": 2},
 ]
 
 
@@ -182,12 +184,14 @@ class TestBm25SearchBasic:
 
 class TestBm25SearchMerge:
     async def test_duplicate_service_id_takes_max_score(self):
-        """두 컬럼 모두에 매칭된 service_id 는 최대 점수가 채택된다."""
-        # S002 는 SN=1.8, MD=3.0 → MD 점수 채택
+        """두 컬럼 모두에 매칭된 service_id 는 최대 점수(=최소 rank)가 채택된다.
+
+        S002: SN rank=2 (score 0.5), MD rank=1 (score 1.0) → MD 의 1.0 채택.
+        """
         session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
         result = await bm25_search(["테니스"], session)
         s002 = next(r for r in result if r["service_id"] == "S002")
-        assert s002["bm25_score"] == 3.0
+        assert s002["bm25_score"] == 1.0
 
     async def test_results_sorted_by_score_desc(self):
         session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
@@ -207,6 +211,17 @@ class TestBm25SearchMerge:
         session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
         result = await bm25_search(["테니스"], session, limit=2)
         assert len(result) == 2
+
+    async def test_bm25_score_derived_from_rank(self):
+        """bm25_score 는 1.0/rank 로 산출된다 (rank=1 → score=1.0)."""
+        session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
+        result = await bm25_search(["테니스"], session)
+        # S001 은 SN 단독, rank=1 → score=1.0
+        s001 = next(r for r in result if r["service_id"] == "S001")
+        assert s001["bm25_score"] == 1.0
+        # S003 은 MD 단독, rank=2 → score=0.5
+        s003 = next(r for r in result if r["service_id"] == "S003")
+        assert s003["bm25_score"] == 0.5
 
 
 # ---------------------------------------------------------------------------
