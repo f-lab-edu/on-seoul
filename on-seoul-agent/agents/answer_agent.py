@@ -57,7 +57,6 @@ _ANSWER_SYSTEM = """\
 - 각 카드의 바로가기 URL은 시설별 고유 service_url 값을 그대로 사용합니다.
   service_url 이 비어 있는 시설만 https://yeyak.seoul.go.kr 로 표기합니다.
   모든 시설을 yeyak.seoul.go.kr 로 일괄 안내하는 것은 금지입니다.
-- service_open_start_dt / service_open_end_dt (이용 기간) 는 답변에 포함하지 마세요.
 - 날짜는 'YYYY-MM-DD' 형태로만 표시 (시간 부분 생략).
 - 마크다운 헤더(#, ##)나 코드 블록은 사용하지 말고, 자연스러운 줄바꿈으로 가독성을 유지하세요.
 """
@@ -178,8 +177,16 @@ class AnswerAgent:
         map_results는 GeoJSON Feature의 properties dict를 그대로 받는다.
 
         프롬프트(`_ANSWER_SYSTEM`)에서 실제로 출력하는 필드만 LLM 컨텍스트에 노출한다.
-        service_open_*_dt(이용 기간) 는 사용자에게 혼란을 주는 비현실적 값이 많아
-        의도적으로 제외 (예: 2021-01-01 ~ 2031-12-30 등).
+
+        ## 의도적 제외 필드: service_open_start_dt / service_open_end_dt (이용 기간)
+
+        DB(`public_service_reservations`) 의 운영 기간 컬럼에 신뢰할 수 없는 값이
+        다수 존재한다 (예: 2021-01-01 ~ 2031-12-30 처럼 10년에 걸친 비현실적 범위).
+        사용자가 답변에서 이 값을 보면 혼란을 유발하므로 LLM 컨텍스트에서 아예
+        제외한다. 결과적으로:
+          - `_normalize()` 반환 dict 에 두 필드를 **포함하지 않는다** (현재 구현).
+          - 프롬프트(`_ANSWER_SYSTEM`)의 카드 형식 예시에도 이용 기간 줄이 **없다**.
+          - 데이터 신뢰성이 개선되면(별도 작업) 다시 노출 검토.
         """
         service_url = row.get("service_url") or _FALLBACK_URL
 
