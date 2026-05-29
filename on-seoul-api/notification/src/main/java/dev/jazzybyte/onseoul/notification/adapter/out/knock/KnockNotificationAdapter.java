@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.notification.adapter.out.knock;
 
+import dev.jazzybyte.onseoul.notification.domain.FallbackReason;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
@@ -8,12 +9,14 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Knock REST API를 통해 알림을 발송한다.
@@ -48,6 +51,7 @@ class KnockNotificationAdapter implements PushNotificationPort {
         }
 
         int failCount = 0;
+        KnockDispatchException lastException = null;
 
         for (NotificationChannel channel : channels) {
             if (!hasRequiredContact(recipient, channel)) {
@@ -62,17 +66,21 @@ class KnockNotificationAdapter implements PushNotificationPort {
                 triggerWorkflow(workflowKey, recipient, title, body, dispatchId);
                 log.info("[Knock] 발송 성공: userId={}, channel={}, dispatchId={}",
                         recipient.userId(), channel, dispatchId);
-            } catch (Exception ex) {
+            } catch (KnockDispatchException ex) {
                 failCount++;
-                log.warn("[Knock] 발송 실패: userId={}, channel={}, dispatchId={}, error={}",
-                        recipient.userId(), channel, dispatchId, ex.getMessage());
+                lastException = ex;
+                log.warn("[Knock] 발송 실패: userId={}, channel={}, dispatchId={}, reason={}, error={}",
+                        recipient.userId(), channel, dispatchId, ex.getReason(), ex.getMessage());
             }
         }
 
         if (failCount > 0 && failCount == channels.size()) {
-            throw new RuntimeException(
-                    String.format("[Knock] 모든 채널 발송 실패: userId=%d, dispatchId=%d",
-                            recipient.userId(), dispatchId));
+            String msg = String.format("[Knock] 모든 채널 발송 실패: userId=%d, dispatchId=%d",
+                    recipient.userId(), dispatchId);
+            FallbackReason reason = lastException != null
+                    ? lastException.getReason()
+                    : FallbackReason.KNOCK_UNAVAILABLE;
+            throw new KnockDispatchException(reason, msg, lastException);
         }
     }
 
@@ -117,12 +125,38 @@ class KnockNotificationAdapter implements PushNotificationPort {
                 )
         );
 
-        knockWebClient.post()
-                .uri("/v1/workflows/{key}/trigger", workflowKey)
-                .bodyValue(requestBody)
-                .retrieve()
-                .bodyToMono(Void.class)
-                .timeout(Duration.ofSeconds(props.timeoutSeconds()))
-                .block();
+        try {
+            knockWebClient.post()
+                    .uri("/v1/workflows/{key}/trigger", workflowKey)
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .onStatus(status -> status.is5xxServerError(),
+                            resp -> resp.createException().map(ex ->
+                                    new KnockDispatchException(FallbackReason.KNOCK_SERVER_ERROR,
+                                            "Knock 서버 오류: " + resp.statusCode(), ex)))
+                    .bodyToMono(Void.class)
+                    .timeout(Duration.ofSeconds(props.timeoutSeconds()))
+                    .block();
+        } catch (KnockDispatchException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new KnockDispatchException(classifyException(e),
+                    "Knock 워크플로우 트리거 실패: workflowKey=" + workflowKey, e);
+        }
+    }
+
+    /**
+     * WebClient/Reactor 계층의 예외를 {@link FallbackReason}으로 분류한다.
+     */
+    private FallbackReason classifyException(Exception e) {
+        Throwable cause = e.getCause() != null ? e.getCause() : e;
+        if (cause instanceof TimeoutException
+                || cause.getClass().getName().contains("TimeoutException")) {
+            return FallbackReason.KNOCK_TIMEOUT;
+        }
+        if (e instanceof WebClientResponseException wce && wce.getStatusCode().is5xxServerError()) {
+            return FallbackReason.KNOCK_SERVER_ERROR;
+        }
+        return FallbackReason.KNOCK_UNAVAILABLE;
     }
 }

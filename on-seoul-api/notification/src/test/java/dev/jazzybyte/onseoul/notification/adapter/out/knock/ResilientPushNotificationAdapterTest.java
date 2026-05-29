@@ -61,9 +61,9 @@ class ResilientPushNotificationAdapterTest {
     }
 
     @Test
-    @DisplayName("timeout 포함 메시지 → FallbackReason.KNOCK_TIMEOUT")
-    void send_timeoutException_classifiesAsKnockTimeout() {
-        doThrow(new RuntimeException("read timeout exceeded"))
+    @DisplayName("KnockDispatchException(KNOCK_TIMEOUT) → FallbackReason.KNOCK_TIMEOUT")
+    void send_knockTimeoutException_classifiesAsKnockTimeout() {
+        doThrow(new KnockDispatchException(FallbackReason.KNOCK_TIMEOUT, "타임아웃", null))
                 .when(primary).send(any(), anyString(), anyString(), anyLong(), anySet());
 
         adapter.send(recipient, "제목", "본문", 10L, channels);
@@ -102,9 +102,9 @@ class ResilientPushNotificationAdapterTest {
     }
 
     @Test
-    @DisplayName("circuit 포함 메시지 → FallbackReason.KNOCK_CIRCUIT_OPEN")
-    void send_circuitException_classifiesAsKnockCircuitOpen() {
-        doThrow(new RuntimeException("circuit breaker open"))
+    @DisplayName("KnockDispatchException(KNOCK_SERVER_ERROR) → FallbackReason.KNOCK_SERVER_ERROR")
+    void send_knockServerErrorException_classifiesAsKnockServerError() {
+        doThrow(new KnockDispatchException(FallbackReason.KNOCK_SERVER_ERROR, "5xx 오류", null))
                 .when(primary).send(any(), anyString(), anyString(), anyLong(), anySet());
 
         adapter.send(recipient, "제목", "본문", 10L, channels);
@@ -112,6 +112,6 @@ class ResilientPushNotificationAdapterTest {
         ArgumentCaptor<FallbackReason> reasonCaptor = ArgumentCaptor.forClass(FallbackReason.class);
         verify(fallback).sendFallback(any(), anyString(), anyString(), anyLong(), anySet(),
                 reasonCaptor.capture(), any());
-        assertThat(reasonCaptor.getValue()).isEqualTo(FallbackReason.KNOCK_CIRCUIT_OPEN);
+        assertThat(reasonCaptor.getValue()).isEqualTo(FallbackReason.KNOCK_SERVER_ERROR);
     }
 }

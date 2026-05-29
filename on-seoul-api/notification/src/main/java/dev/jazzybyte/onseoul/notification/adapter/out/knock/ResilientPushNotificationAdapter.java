@@ -21,12 +21,10 @@ import java.util.Set;
  * {@link FallbackNotificationPort}로 라우팅한다.
  * {@code NotificationScheduler} / {@code NotificationTxHelper}는 변경 없이 동작한다.</p>
  *
- * <h3>TODO — Phase 6-2 구현 항목</h3>
+ * <h3>TODO — Phase 6-2 잔여 구현 항목</h3>
  * <ol>
  *   <li>Resilience4j {@code CircuitBreaker} 적용 — Knock 연속 실패 시 fast-fail +
  *       {@link FallbackReason#KNOCK_CIRCUIT_OPEN} 트리거</li>
- *   <li>{@code FallbackReason} 분류 로직 고도화 — 현재는 모두 {@link FallbackReason#KNOCK_UNAVAILABLE}
- *       로 단순화. 예외 타입·HTTP 상태코드로 세분화 필요</li>
  *   <li>{@link FallbackNotificationPort} 실 구현체 선택 — SMTP / in-app 중 확정 후
  *       {@code LogOnlyFallbackNotificationAdapter} 교체</li>
  * </ol>
@@ -79,20 +77,15 @@ public class ResilientPushNotificationAdapter implements PushNotificationPort {
     }
 
     /**
-     * 예외 타입으로 {@link FallbackReason}을 분류한다.
+     * {@link KnockDispatchException}이 보유한 구조화된 {@link FallbackReason}을 반환한다.
      *
-     * <p>TODO: HTTP 상태 코드(5xx), 타임아웃, 서킷 오픈 예외 등을 세분화한다.</p>
+     * <p>Knock 계층이 항상 {@link KnockDispatchException}을 던지므로
+     * 문자열 매칭 없이 정확한 분류가 가능하다.
+     * 예상치 못한 예외 타입이 올 경우 {@link FallbackReason#KNOCK_UNAVAILABLE}로 처리한다.</p>
      */
     private FallbackReason classifyReason(RuntimeException e) {
-        String message = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
-        if (message.contains("timeout")) {
-            return FallbackReason.KNOCK_TIMEOUT;
-        }
-        if (message.contains("circuit")) {
-            return FallbackReason.KNOCK_CIRCUIT_OPEN;
-        }
-        if (message.contains("500") || message.contains("server error")) {
-            return FallbackReason.KNOCK_SERVER_ERROR;
+        if (e instanceof KnockDispatchException kde) {
+            return kde.getReason();
         }
         return FallbackReason.KNOCK_UNAVAILABLE;
     }
