@@ -30,7 +30,7 @@ _ANSWER_SYSTEM = """\
          "현재 예약 가능한 풋살장을 정리해드릴게요."
    - 결과가 0건이면 "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다." 만 출력.
 
-2) 시설 카드 목록 (상위 5건만, 6건 이상이면 끝에 "외 N건" 표기)
+2) 시설 카드 목록 (전달된 결과 전체를 상세 안내. "추가 미표시 건수"가 0보다 크면 카드 목록 끝에 "외 N건" 표기)
 
 3) 마무리 안내
    - 결과 중 service_status="접수중" 시설이 하나라도 있으면 아래 안내 문구를 그대로 포함:
@@ -66,6 +66,8 @@ _ANSWER_HUMAN = """\
 
 검색 결과:
 {results_json}
+
+추가 미표시 건수: {extra_count}
 """
 
 # ---------------------------------------------------------------------------
@@ -112,15 +114,25 @@ class AnswerAgent:
         )
         self._title_chain = title_prompt | llm.with_structured_output(_TitleOutput)
 
+    # 카드 상세 표시 상한. 이 값 초과분은 extra_count로만 LLM에 전달된다.
+    _DISPLAY_LIMIT: int = 5
+
     async def answer(self, state: AgentState) -> AgentState:
-        """검색 결과를 종합해 answer(+title)을 채운 AgentState를 반환한다."""
-        results = self._collect_results(state)
-        results_json = json.dumps(results, ensure_ascii=False, default=str)
+        """검색 결과를 종합해 answer(+title)을 채운 AgentState를 반환한다.
+
+        상위 `_DISPLAY_LIMIT`건만 LLM에 전달하고, 나머지 건수는 `extra_count`로
+        별도 전달한다. LLM 토큰 절약 + "외 N건" 비즈니스 규칙의 코드 수준 강제.
+        """
+        all_results = self._collect_results(state)
+        display = all_results[: self._DISPLAY_LIMIT]
+        extra_count = max(0, len(all_results) - self._DISPLAY_LIMIT)
+        results_json = json.dumps(display, ensure_ascii=False, default=str)
 
         answer_out: _AnswerOutput = await self._answer_chain.ainvoke(
             {
                 "message": state["message"],
                 "results_json": results_json,
+                "extra_count": extra_count,
             }
         )
 

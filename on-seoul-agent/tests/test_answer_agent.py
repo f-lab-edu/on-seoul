@@ -260,3 +260,66 @@ class TestAnswerAgentLangChainCompat:
         # 예외 없이 통과하면 OK
         result = await agent.answer(state)
         assert result["answer"] == "응답 내용"
+
+
+class TestAnswerAgentDisplaySlice:
+    """상위 5건 슬라이스 + extra_count 코드 수준 강제 테스트."""
+
+    def _make_rows(self, n: int) -> list[dict]:
+        return [
+            {"service_id": f"S{i:03d}", "service_name": f"시설{i}", "service_url": None}
+            for i in range(1, n + 1)
+        ]
+
+    async def test_five_or_fewer_results_no_extra(self):
+        """결과 5건 이하이면 extra_count=0으로 전달된다."""
+        agent = _make_agent()
+        state = _make_state(sql_results=self._make_rows(4))
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        import json
+
+        displayed = json.loads(call_kwargs["results_json"])
+        assert isinstance(displayed, list)
+        assert len(displayed) == 4
+        assert call_kwargs["extra_count"] == 0
+
+    async def test_six_results_sliced_to_five_with_extra_one(self):
+        """결과 6건이면 상위 5건만 results_json에, extra_count=1이 전달된다."""
+        agent = _make_agent()
+        state = _make_state(sql_results=self._make_rows(6))
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        import json
+
+        displayed = json.loads(call_kwargs["results_json"])
+        assert len(displayed) == 5
+        assert displayed[0]["service_id"] == "S001"  # RRF 순위 첫 번째 보존
+        assert call_kwargs["extra_count"] == 1
+
+    async def test_ten_results_sliced_to_five_with_extra_five(self):
+        """결과 10건이면 extra_count=5."""
+        agent = _make_agent()
+        state = _make_state(sql_results=self._make_rows(10))
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        import json
+
+        assert len(json.loads(call_kwargs["results_json"])) == 5
+        assert call_kwargs["extra_count"] == 5
+
+    async def test_empty_results_extra_count_zero(self):
+        """결과 0건이면 extra_count=0."""
+        agent = _make_agent()
+        state = _make_state(sql_results=[])
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        assert call_kwargs["extra_count"] == 0
