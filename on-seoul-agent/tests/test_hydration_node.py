@@ -222,6 +222,27 @@ class TestHydrationNodeCall:
         # 빈 dict 반환 → 기존 hydrated_services 그대로 유지
         assert update == {}
 
+    async def test_idempotent_when_hydrated_services_is_empty_list(self, data_session):
+        """hydrated_services=[] 빈 리스트도 '이미 처리됨' 으로 간주해 재실행하지 않는다.
+
+        [] 는 MAP/FALLBACK 경로나 hydration 실패 후 설정되는 값이다.
+        truthy 검사(`if state.get(...)`)는 [] 를 falsy 로 보아 재실행하는 버그가 있었다.
+        is not None 검사로 [] 포함 비-None 상태를 일관되게 skip 한다.
+        """
+        state = {
+            "intent": IntentType.VECTOR_SEARCH,
+            "vector_results": [{"service_id": "S1", "rrf_score": 0.5}],
+            "hydrated_services": [],  # MAP/FALLBACK 경로나 이전 hydration 실패 결과
+        }
+        node = HydrationNode()
+        with patch(
+            "agents.hydration_node.hydrate_services", new=AsyncMock()
+        ) as mock_hydrate:
+            update = await node(state, data_session)
+        # hydrate_services 미호출 + 빈 dict 반환
+        mock_hydrate.assert_not_awaited()
+        assert update == {}
+
     async def test_empty_results_returns_empty_list(self, data_session):
         """검색 결과가 비어 있으면 hydrated_services = [] (hydrate_services 호출 없음)."""
         state = {"intent": IntentType.VECTOR_SEARCH, "vector_results": []}

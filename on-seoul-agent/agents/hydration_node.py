@@ -100,7 +100,9 @@ class HydrationNode:
         - 기타 intent          → hydrated_services = [].
 
     재호출 안전(idempotent):
-        cache hit 경로 등으로 hydrated_services 가 이미 채워져 있으면 그대로 둔다.
+        hydrated_services 가 None 이 아닌 값(빈 리스트 포함)으로 이미 설정돼 있으면
+        재실행하지 않고 그대로 둔다. None 은 "미설정 또는 retry_prep_node 에 의한 리셋"을
+        의미하며, 이 경우만 hydration 을 재실행한다.
     """
 
     async def __call__(
@@ -108,8 +110,10 @@ class HydrationNode:
         state: AgentState,
         data_session: AsyncSession,
     ) -> dict[str, Any]:
-        # 재호출 안전 — cache hit envelope 복원 후 등.
-        if state.get("hydrated_services"):
+        # 재호출 안전 — None 이 아니면(빈 리스트 포함) 이미 처리된 상태이므로 skip.
+        # retry_prep_node 는 hydrated_services=None 으로 명시 리셋하므로
+        # retry 경로에서 [] 상태가 가드를 통과해 중복 실행되는 문제가 없다.
+        if state.get("hydrated_services") is not None:
             return {}
 
         intent = state.get("intent")
