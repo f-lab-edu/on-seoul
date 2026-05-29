@@ -234,6 +234,18 @@ class NotificationSchedulerTest {
         verify(saveBatchPort, org.mockito.Mockito.times(2)).update(any());
     }
 
+    @Test
+    @DisplayName("findStaleRunning 예외 발생 시 해당 tick은 계속 진행된다 (insertRunning 호출됨)")
+    void recoverStaleBatches_findStaleRunningThrows_tickContinues() {
+        when(loadBatchPort.findStaleRunning(any())).thenThrow(new RuntimeException("DB 다운"));
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
+
+        scheduler.processAllSubscriptions();
+
+        // stale 회수 실패해도 새 배치는 정상 삽입되어야 한다
+        verify(saveBatchPort).insertRunning(any());
+    }
+
     // ── per-subscription 흐름 ────────────────────────────────────────────
 
     @Test

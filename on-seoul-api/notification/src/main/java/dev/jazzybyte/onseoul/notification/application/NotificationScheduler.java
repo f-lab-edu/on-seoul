@@ -266,7 +266,13 @@ public class NotificationScheduler {
      * <p>회수된 batch의 sent_count/failed_count는 0으로 기록된다 — 크래시 시점 실제 값 미상.
      */
     private void recoverStaleBatches() {
-        recoverStaleBatches(Instant.now().minusMillis(staleThresholdMs));
+        try {
+            recoverStaleBatches(Instant.now().minusMillis(staleThresholdMs));
+        } catch (Exception e) {
+            // stale 회수 실패는 이번 tick 배치 INSERT를 막지 않는다.
+            // 다음 tick에서 재시도하므로 stale row는 일시적으로 남을 수 있다.
+            log.warn("[NotificationScheduler] stale batch 회수 실패 — 이번 tick 계속 진행: error={}", e.getMessage(), e);
+        }
     }
 
     /**
