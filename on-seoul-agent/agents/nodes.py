@@ -391,8 +391,12 @@ class GraphNodes:
           정상 흐름에서 UNIQUE 위반은 발생하지 않는다. 방어적 안전망으로만 사용된다.
 
         세션 공유:
-          self.ai_session 은 trace_node 와 공유한다. 이 노드는 항상 commit() 또는
-          rollback() 으로 트랜잭션을 닫으므로 trace_node 진입 시 세션은 항상 clean 상태다.
+          self.ai_session 은 trace_node 와 공유한다. 정상 흐름(commit 성공)과
+          INSERT 실패 후 rollback 성공 시에는 trace_node 진입 전 세션이 clean 상태다.
+          단, rollback 자체가 실패하면(커넥션 단절 등) 세션이 dirty인 채 trace_node 로
+          넘어가 trace 적재도 연쇄 실패할 수 있다. 두 노드 모두 best-effort이므로
+          워크플로우 결과에는 영향이 없으나, 두 관측 데이터가 동시 유실될 수 있다.
+          완전한 독립성이 필요해지면 trace_node 전용 세션 분리를 검토할 것.
         """
         assert self.ai_session is not None
         channels: dict[str, ChannelData] = state.get("search_channels") or {}
