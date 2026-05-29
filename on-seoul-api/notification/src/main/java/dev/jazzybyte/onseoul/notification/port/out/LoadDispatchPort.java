@@ -33,6 +33,11 @@ public interface LoadDispatchPort {
      * <p>메인 배치 스케줄러가 영구 실패 구독에 대해 매 tick마다 새 dispatch를 생성하는 것을
      * 방지하기 위해 TX A 진입 직후 호출된다. DEAD dispatch가 있으면 발송 전체를 건너뛴다.
      *
+     * <p><b>DEAD 상태의 불가역성:</b> 현재 구현에서 DEAD dispatch를 PENDING으로 되돌리는
+     * 관리 API는 없다. 영구 실패 구독에서 알림을 재개하려면 해당 구독을 삭제 후 재생성해야 한다.
+     * 이는 의도된 설계이며, 연락처 미등록 등 근본 원인이 해결되지 않은 상태에서의
+     * 무한 재시도를 방지한다.
+     *
      * @param subscriptionId 확인할 구독 ID
      */
     boolean existsDeadDispatchBySubscriptionId(Long subscriptionId);

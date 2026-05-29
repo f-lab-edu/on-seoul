@@ -56,7 +56,7 @@ public class NotificationTxHelper {
         // 재시도 스케줄러가 attempt_count >= MAX_ATTEMPTS 후 DEAD로 전환한 뒤에도
         // 메인 배치가 매 tick 새 dispatch를 생성하는 것을 방지한다.
         if (loadDispatchPort.existsDeadDispatchBySubscriptionId(sub.getId())) {
-            log.info("[txA] 구독 subscriptionId={} — DEAD dispatch 존재, 발송 건너뜀", sub.getId());
+            log.debug("[txA] 구독 subscriptionId={} — DEAD dispatch 존재, 발송 건너뜀", sub.getId());
             return new TxAResult(List.of(), Optional.empty());
         }
 

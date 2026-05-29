@@ -7,6 +7,7 @@ import dev.jazzybyte.onseoul.notification.port.out.SaveDispatchPort;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
@@ -103,8 +104,16 @@ class NotificationDispatchPersistenceAdapter
                 .toList();
     }
 
+    /**
+     * 해당 구독의 DEAD dispatch 존재 여부를 조회한다.
+     *
+     * <p>{@code propagation = REQUIRED} 로 호출자(txA의 REQUIRES_NEW TX)에 합류한다.
+     * 별도 스냅샷이 아닌 현재 TX 뷰를 공유하므로 TOCTOU 가능성이 이론적으로 존재하지만,
+     * 메인 배치 스케줄러의 Semaphore(4) + 구독별 단일 순회 구조상 동일 subscriptionId를
+     * 두 스레드가 동시에 처리하지 않아 실운영에서 레이스 컨디션은 발생하지 않는다.
+     */
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, propagation = Propagation.REQUIRED)
     public boolean existsDeadDispatchBySubscriptionId(Long subscriptionId) {
         return repository.existsBySubscriptionIdAndStatus(subscriptionId, DispatchStatus.DEAD);
     }

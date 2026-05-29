@@ -94,8 +94,20 @@ class NotificationTxHelperTest {
 
         assertThat(result.changes()).isEmpty();
         assertThat(result.dispatch()).isEmpty();
-        // DEAD 가드 발동 시 변경 조회와 saveIfAbsent를 호출하지 않는다
-        verifyNoInteractions(loadServiceChangePort, saveDispatchPort);
+        // DEAD 가드 발동 시 변경 조회, saveIfAbsent, filter 파싱을 모두 호출하지 않는다
+        verifyNoInteractions(loadServiceChangePort, saveDispatchPort, subscriptionFilterParserPort);
+    }
+
+    @Test
+    @DisplayName("TX A — DEAD 가드 발동 시 subscriptionFilterParserPort도 호출되지 않는다 (filter 파싱 생략 확인)")
+    void txA_deadDispatchExists_doesNotParseFilter() {
+        // filter JSON이 복잡한 경우에도 파싱 자체가 발생하지 않아야 한다
+        NotificationSubscription sub = subscription(null, "{\"statuses\":[\"RECEIVING\"],\"areaNames\":[\"강남구\"]}");
+        when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(true);
+
+        txHelper.txA(TEST_BATCH, sub);
+
+        verifyNoInteractions(subscriptionFilterParserPort);
     }
 
     @Test
@@ -122,6 +134,7 @@ class NotificationTxHelperTest {
         NotificationSubscription sub = subscriptionWithLastNotifiedAt(null);
         ServiceChange change = changeAt(Instant.now());
 
+        when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse("{}")).thenReturn(SubscriptionFilter.empty());
         when(loadServiceChangePort.loadFiltered("OA-2269", SubscriptionFilter.empty(), null, BATCH_STARTED))
                 .thenReturn(List.of(change));
@@ -143,6 +156,7 @@ class NotificationTxHelperTest {
     void txA_noChanges_skipsDispatchInsert() {
         NotificationSubscription sub = subscriptionWithLastNotifiedAt(null);
 
+        when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse(any())).thenReturn(SubscriptionFilter.empty());
         when(loadServiceChangePort.loadFiltered(any(), any(), any(), any())).thenReturn(List.of());
 
@@ -159,6 +173,7 @@ class NotificationTxHelperTest {
         NotificationSubscription sub = subscriptionWithLastNotifiedAt(null);
         ServiceChange change = changeAt(Instant.now());
 
+        when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse(any())).thenReturn(SubscriptionFilter.empty());
         when(loadServiceChangePort.loadFiltered(any(), any(), any(), any())).thenReturn(List.of(change));
         when(saveDispatchPort.saveIfAbsent(any())).thenReturn(Optional.empty());
@@ -175,6 +190,7 @@ class NotificationTxHelperTest {
         NotificationSubscription sub = subscription(null, "{\"statuses\":[\"RECEIVING\"]}");
         SubscriptionFilter parsed = new SubscriptionFilter(Set.of("RECEIVING"), Set.of(), Set.of());
 
+        when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse("{\"statuses\":[\"RECEIVING\"]}")).thenReturn(parsed);
         when(loadServiceChangePort.loadFiltered("OA-2269", parsed, null, BATCH_STARTED))
                 .thenReturn(List.of());
@@ -187,11 +203,12 @@ class NotificationTxHelperTest {
 
     @Test
     @DisplayName("TX A — loadFiltered에 batch.startedAt이 상한(changedAtBefore)으로 전달된다")
-    void txA_passesStartedAtAsChanedAtBefore() {
+    void txA_passesStartedAtAsChangedAtBefore() {
         Instant customStarted = Instant.parse("2026-06-01T10:00:00Z");
         NotificationBatch customBatch = new NotificationBatch(77L, customStarted, null, BatchStatus.RUNNING, null, null);
         NotificationSubscription sub = subscriptionWithLastNotifiedAt(null);
 
+        when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse(any())).thenReturn(SubscriptionFilter.empty());
         when(loadServiceChangePort.loadFiltered(any(), any(), any(), any())).thenReturn(List.of());
 

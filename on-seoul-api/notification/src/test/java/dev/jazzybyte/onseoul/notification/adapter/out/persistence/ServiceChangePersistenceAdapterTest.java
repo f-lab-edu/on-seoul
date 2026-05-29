@@ -237,4 +237,58 @@ class ServiceChangePersistenceAdapterTest {
 
         assertThat(result.get(0).changedAt()).isEqualTo(insertedAt.toInstant());
     }
+
+    // ── changedAtBefore 상한 추가 엣지케이스 (커밋 1 보완) ─────────────────
+
+    @Test
+    @DisplayName("changedAtBefore = lastNotifiedAt — 하한(exclusive)과 상한(inclusive)이 동일하면 결과 0건")
+    void loadFiltered_upperBoundEqualsLowerBound_returnsEmpty() {
+        insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사");
+        OffsetDateTime base = utc(2026, 5, 1, 12, 0);
+        insertChange("OA-2269", "UPDATED", "f1", null, null, base);
+
+        // lastNotifiedAt == changedAtBefore == base.toInstant()
+        // 하한은 exclusive(changed_at > since), 상한은 inclusive(changed_at <= before)
+        // changed_at = base, since = base → changed_at > since 는 false → 결과 없음
+        Instant pivot = base.toInstant();
+        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), pivot, pivot);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("changedAtBefore가 lastNotifiedAt보다 이전이면 결과 0건")
+    void loadFiltered_upperBoundBeforeLowerBound_returnsEmpty() {
+        insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사");
+        OffsetDateTime base = utc(2026, 5, 1, 12, 0);
+        insertChange("OA-2269", "UPDATED", "f1", null, null, base.plusHours(1));
+
+        Instant lastNotified = base.plusHours(2).toInstant(); // 하한이 상한보다 나중
+        Instant changedAtBefore = base.toInstant();           // 상한이 하한보다 이전
+
+        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(),
+                lastNotified, changedAtBefore);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("lastNotifiedAt과 changedAtBefore 양쪽 모두 지정 — 범위 내 row만 반환")
+    void loadFiltered_bothBoundsSpecified_returnsOnlyInRange() {
+        insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사");
+        OffsetDateTime base = utc(2026, 5, 1, 12, 0);
+        insertChange("OA-2269", "UPDATED", "before_lower", null, null, base.minusHours(1)); // 제외
+        insertChange("OA-2269", "UPDATED", "at_lower",    null, null, base);               // 제외 (exclusive)
+        insertChange("OA-2269", "UPDATED", "in_range",   null, null, base.plusHours(1));  // 포함
+        insertChange("OA-2269", "UPDATED", "at_upper",   null, null, base.plusHours(2));  // 포함 (inclusive)
+        insertChange("OA-2269", "UPDATED", "after_upper", null, null, base.plusHours(3)); // 제외
+
+        Instant lower = base.toInstant();
+        Instant upper = base.plusHours(2).toInstant();
+
+        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), lower, upper);
+
+        assertThat(result).hasSize(2);
+        assertThat(result).extracting(ServiceChange::fieldName).containsExactly("in_range", "at_upper");
+    }
 }

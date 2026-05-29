@@ -34,7 +34,8 @@ class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
     }
 
     /**
-     * service_change_log L JOIN public_service_reservations P ON L.service_id = P.service_id.
+     * service_change_log JOIN(INNER) public_service_reservations P ON L.service_id = P.service_id.
+     * public_service_reservations 에 매칭 row 가 없으면 결과에서 제외된다 (JOIN 실패).
      *
      * 동적 WHERE:
      *   - L.service_id = serviceId
