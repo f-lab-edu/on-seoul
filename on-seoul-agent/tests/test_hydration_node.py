@@ -1,13 +1,10 @@
 """HydrationNode 단위 테스트.
 
-Phase 2 동작:
+동작:
 - VECTOR_SEARCH: service_id 추출 → hydrate_services 호출 → 메타 머지 → hydrated_services
 - SQL_SEARCH:    sql_results 통과 (sql_search 가 이미 원본 반환)
 - 그 외 intent:  빈 리스트
 - 재호출 안전 (cache hit envelope 복원 후 등)
-
-별도 메서드(hydrate_by_service_ids):
-- service_id 리스트로 직접 hydrate + 메타 머지 + FINAL 채널
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,11 +13,9 @@ import pytest
 
 from agents.hydration_node import (
     HydrationNode,
-    _build_final_channel,
     _extract_service_ids,
     _merge_search_meta,
 )
-from schemas.search import SearchKind
 from schemas.state import IntentType
 
 
@@ -123,34 +118,7 @@ class TestMergeSearchMeta:
 
 
 # ---------------------------------------------------------------------------
-# _build_final_channel
-# ---------------------------------------------------------------------------
-
-
-class TestBuildFinalChannel:
-    def test_kind_is_final(self):
-        ch = _build_final_channel([])
-        assert ch["kind"] == SearchKind.FINAL
-
-    def test_hydration_applied_flag_in_parameters(self):
-        ch = _build_final_channel([])
-        assert ch["query"]["parameters"]["hydration_applied"] is True
-
-    def test_hits_built_from_hydrated_rows_with_rrf_score(self):
-        hydrated = [
-            {"service_id": "S1", "rrf_score": 0.7},
-            {"service_id": "S2", "rrf_score": 0.3},
-        ]
-        ch = _build_final_channel(hydrated)
-        hits = ch["hits"]
-        assert len(hits) == 2
-        assert hits[0]["service_id"] == "S1"
-        assert hits[0]["rank"] == 1
-        assert hits[0]["score"] == 0.7
-
-
-# ---------------------------------------------------------------------------
-# HydrationNode.__call__ (Phase 1: 통과 모드)
+# HydrationNode.__call__
 # ---------------------------------------------------------------------------
 
 
@@ -272,77 +240,3 @@ class TestHydrationNodeCall:
 # ---------------------------------------------------------------------------
 # HydrationNode.hydrate_by_service_ids (Phase 2 의 핵심 API — 미래 사용 + 단위 검증)
 # ---------------------------------------------------------------------------
-
-
-class TestHydrateByServiceIds:
-    @pytest.fixture
-    def data_session(self):
-        return MagicMock()
-
-    async def test_calls_hydrate_with_given_ids(self, data_session):
-        """service_id 리스트가 그대로 hydrate_services 에 전달된다."""
-        hydrated_rows = [
-            {"service_id": "S1", "service_name": "원본명1"},
-            {"service_id": "S2", "service_name": "원본명2"},
-        ]
-        with patch(
-            "agents.hydration_node.hydrate_services",
-            new=AsyncMock(return_value=hydrated_rows),
-        ) as mock_hydrate:
-            node = HydrationNode()
-            hydrated, final = await node.hydrate_by_service_ids(
-                ["S1", "S2"],
-                [
-                    {"service_id": "S1", "rrf_score": 0.9},
-                    {"service_id": "S2", "rrf_score": 0.5},
-                ],
-                data_session,
-            )
-
-        mock_hydrate.assert_awaited_once_with(data_session, ["S1", "S2"])
-        assert hydrated[0]["rrf_score"] == 0.9  # 메타 머지됨
-        assert hydrated[0]["service_name"] == "원본명1"  # 원본 보존
-        assert final is not None
-        assert final["kind"] == SearchKind.FINAL
-
-    async def test_empty_ids_returns_empty(self, data_session):
-        """빈 service_id 리스트 → hydrate 호출 없이 ([], None)."""
-        with patch(
-            "agents.hydration_node.hydrate_services", new=AsyncMock()
-        ) as mock_hydrate:
-            node = HydrationNode()
-            hydrated, final = await node.hydrate_by_service_ids([], [], data_session)
-        mock_hydrate.assert_not_awaited()
-        assert hydrated == []
-        assert final is None
-
-    async def test_hydrate_failure_returns_empty(self, data_session):
-        """hydrate_services 예외 시 ([], None) fallback (오류 전파 X)."""
-        with patch(
-            "agents.hydration_node.hydrate_services",
-            new=AsyncMock(side_effect=RuntimeError("DB 오류")),
-        ):
-            node = HydrationNode()
-            hydrated, final = await node.hydrate_by_service_ids(
-                ["S1"], [], data_session
-            )
-        assert hydrated == []
-        assert final is None
-
-    async def test_preserves_rank_order(self, data_session):
-        """hydrate_services 가 service_id 순서를 보존한다는 전제 하에 검색 랭킹 유지."""
-        hydrated_in_order = [
-            {"service_id": "rank1", "service_name": "1st"},
-            {"service_id": "rank2", "service_name": "2nd"},
-            {"service_id": "rank3", "service_name": "3rd"},
-        ]
-        with patch(
-            "agents.hydration_node.hydrate_services",
-            new=AsyncMock(return_value=hydrated_in_order),
-        ):
-            node = HydrationNode()
-            hydrated, _ = await node.hydrate_by_service_ids(
-                ["rank1", "rank2", "rank3"], [], data_session
-            )
-        sids = [r["service_id"] for r in hydrated]
-        assert sids == ["rank1", "rank2", "rank3"]
