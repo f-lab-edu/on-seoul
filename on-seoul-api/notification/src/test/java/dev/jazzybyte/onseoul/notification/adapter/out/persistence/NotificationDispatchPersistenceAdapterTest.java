@@ -315,6 +315,49 @@ class NotificationDispatchPersistenceAdapterTest {
     }
 
     @Test
+    @DisplayName("existsDeadDispatchBySubscriptionId() — DEAD dispatch 없으면 false")
+    void existsDeadDispatch_noDead_returnsFalse() {
+        assertThat(dispatchAdapter.existsDeadDispatchBySubscriptionId(subscriptionId)).isFalse();
+    }
+
+    @Test
+    @DisplayName("existsDeadDispatchBySubscriptionId() — DEAD dispatch 있으면 true")
+    void existsDeadDispatch_withDead_returnsTrue() {
+        NotificationDispatch d = dispatchAdapter
+                .saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId))
+                .orElseThrow();
+        d.markFailed("오류", "제목", "본문", TemplateSource.AI);
+        for (int i = 0; i < 5; i++) {
+            d.incrementAttemptCount();
+        }
+        d.markDead("한도 초과");
+        dispatchAdapter.save(d);
+
+        assertThat(dispatchAdapter.existsDeadDispatchBySubscriptionId(subscriptionId)).isTrue();
+    }
+
+    @Test
+    @DisplayName("existsDeadDispatchBySubscriptionId() — 다른 구독의 DEAD dispatch는 영향 없음")
+    void existsDeadDispatch_otherSubscription_returnsFalse() {
+        Long otherSubId = subscriptionAdapter.save(
+                dev.jazzybyte.onseoul.notification.domain.NotificationSubscription.create(
+                        999L, "SVC-OTHER", Set.of(NotificationChannel.EMAIL))).getId();
+
+        NotificationDispatch d = dispatchAdapter
+                .saveIfAbsent(NotificationDispatch.create(batchId, otherSubId))
+                .orElseThrow();
+        d.markFailed("오류", "제목", "본문", TemplateSource.AI);
+        for (int i = 0; i < 5; i++) {
+            d.incrementAttemptCount();
+        }
+        d.markDead("한도 초과");
+        dispatchAdapter.save(d);
+
+        // subscriptionId(setUp)에는 DEAD dispatch가 없으므로 false여야 함
+        assertThat(dispatchAdapter.existsDeadDispatchBySubscriptionId(subscriptionId)).isFalse();
+    }
+
+    @Test
     @DisplayName("saveIfAbsent() — EntityManager 직접 insert 후 saveIfAbsent → DataIntegrityViolationException 경로로 empty")
     void saveIfAbsent_directDuplicateInsert_returnsEmpty() {
         NotificationDispatchJpaEntity duplicate =

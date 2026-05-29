@@ -102,4 +102,10 @@ class NotificationDispatchPersistenceAdapter
                 .map(mapper::toDomain)
                 .toList();
     }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean existsDeadDispatchBySubscriptionId(Long subscriptionId) {
+        return repository.existsBySubscriptionIdAndStatus(subscriptionId, DispatchStatus.DEAD);
+    }
 }

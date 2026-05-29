@@ -16,6 +16,8 @@ public interface NotificationDispatchJpaRepository
     Optional<NotificationDispatchJpaEntity> findByBatchIdAndSubscriptionId(
             Long batchId, Long subscriptionId);
 
+    boolean existsBySubscriptionIdAndStatus(Long subscriptionId, DispatchStatus status);
+
     /**
      * 사용자 ID 기준으로 dispatch 를 최신순(id DESC) 페이지네이션 조회.
      * notification_subscriptions JOIN 으로 소유권 필터링.
