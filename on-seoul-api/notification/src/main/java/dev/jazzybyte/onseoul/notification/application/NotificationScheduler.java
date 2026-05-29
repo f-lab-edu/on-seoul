@@ -49,6 +49,15 @@ public class NotificationScheduler {
 
     private static final int CONCURRENCY = 4;
 
+    /**
+     * 한 번에 DB에서 읽어 올 구독 청크 크기.
+     * keyset 페이지네이션에서 각 청크는 {@code id > lastId ORDER BY id ASC LIMIT CHUNK_SIZE} 쿼리로 조회한다.
+     *
+     * <p>값을 크게 설정할수록 DB 왕복 횟수가 줄지만 청크당 메모리 사용이 늘어난다.
+     * 가상 스레드 풀(Semaphore(4))과의 백프레셔를 고려하면 100 수준이 적합하다.
+     */
+    static final int SUBSCRIPTION_CHUNK_SIZE = 100;
+
     private final LoadSubscriptionPort loadSubscriptionPort;
     private final LoadUserContactPort loadUserContactPort;
     private final TemplateGenerationPort templateGenerationPort;
@@ -96,27 +105,37 @@ public class NotificationScheduler {
             return;
         }
 
-        List<NotificationSubscription> subscriptions;
-        try {
-            subscriptions = loadSubscriptionPort.loadAll();
-        } catch (Exception e) {
-            log.error("[NotificationScheduler] 구독 조회 실패 — 배치 FAILED 처리: batchId={}, error={}",
-                    batch.getId(), e.getMessage(), e);
-            batch.fail(0, 0);
-            safeUpdateBatch(batch);
-            return;
-        }
-
         AtomicInteger sentCount = new AtomicInteger(0);
         AtomicInteger failedCount = new AtomicInteger(0);
         Semaphore semaphore = new Semaphore(CONCURRENCY);
+        boolean chunkLoadFailed = false;
 
         // 가상 스레드 ExecutorService는 try-with-resources로 닫으면 모든 작업 완료를 대기한다 (JEP 453 close()).
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            for (NotificationSubscription sub : subscriptions) {
-                executor.submit(() -> processSubscription(batch, sub, semaphore, sentCount, failedCount));
+            // keyset 기반 청크 순회: id > afterId 조건으로 CHUNK_SIZE씩 조회해 submit.
+            // 반환 크기 < CHUNK_SIZE이면 마지막 페이지 → 루프 종료.
+            // 청크 조회 실패 시 이미 제출된 작업은 완료까지 대기 후 배치 FAILED 처리.
+            long afterId = 0L;
+            while (true) {
+                List<NotificationSubscription> chunk;
+                try {
+                    chunk = loadSubscriptionPort.loadChunk(afterId, SUBSCRIPTION_CHUNK_SIZE);
+                } catch (Exception e) {
+                    log.error("[NotificationScheduler] 구독 청크 조회 실패 — 이미 제출된 작업 대기 후 FAILED 처리: "
+                                    + "batchId={}, afterId={}, error={}",
+                            batch.getId(), afterId, e.getMessage(), e);
+                    chunkLoadFailed = true;
+                    break;
+                }
+                for (NotificationSubscription sub : chunk) {
+                    executor.submit(() -> processSubscription(batch, sub, semaphore, sentCount, failedCount));
+                }
+                if (chunk.size() < SUBSCRIPTION_CHUNK_SIZE) {
+                    break; // 마지막 페이지
+                }
+                afterId = chunk.get(chunk.size() - 1).getId();
             }
-            // try-with-resources 종료 시 ExecutorService.close()가 awaitTermination 한다.
+            // try-with-resources 종료: ExecutorService.close()가 제출된 모든 작업의 완료를 대기.
         } catch (Exception e) {
             log.error("[NotificationScheduler] 배치 실행 중 예외 — FAILED 처리: batchId={}, error={}",
                     batch.getId(), e.getMessage(), e);
@@ -125,7 +144,11 @@ public class NotificationScheduler {
             return;
         }
 
-        batch.complete(sentCount.get(), failedCount.get());
+        if (chunkLoadFailed) {
+            batch.fail(sentCount.get(), failedCount.get());
+        } else {
+            batch.complete(sentCount.get(), failedCount.get());
+        }
         safeUpdateBatch(batch);
         log.info("[NotificationScheduler] 배치 완료: batchId={}, sent={}, failed={}",
                 batch.getId(), sentCount.get(), failedCount.get());

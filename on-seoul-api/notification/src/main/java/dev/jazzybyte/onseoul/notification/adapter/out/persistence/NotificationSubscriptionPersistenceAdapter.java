@@ -7,6 +7,7 @@ import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveSubscriptionPort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,11 +35,19 @@ class NotificationSubscriptionPersistenceAdapter
     }
 
     @Override
+    @Deprecated
     @Transactional(readOnly = true)
     public List<NotificationSubscription> loadAll() {
         return repository.findAll().stream()
                 .map(mapper::toDomain)
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<NotificationSubscription> loadChunk(Long afterId, int limit) {
+        return repository.findByIdGreaterThanOrderByIdAsc(afterId, PageRequest.of(0, limit))
+                .stream().map(mapper::toDomain).toList();
     }
 
     @Override
