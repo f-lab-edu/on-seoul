@@ -6,7 +6,8 @@
 --
 -- 운영 중 무중단 적용: CREATE INDEX CONCURRENTLY 사용.
 -- CONCURRENTLY는 트랜잭션 블록 안에서 실행할 수 없으므로
--- 이 파일은 psql 단독 세션에서 실행하거나 Flyway의 outOfOrder=true + runInTransaction=false로 실행한다.
+-- 이 파일은 psql 단독 세션에서 직접 실행한다.
+-- 예: psql -U on_ai_app -d on_ai -f scripts/ddl_indexes_on_ai.sql
 --
 -- 롤백:
 --   DROP INDEX CONCURRENTLY IF EXISTS idx_se_question_service_id;
