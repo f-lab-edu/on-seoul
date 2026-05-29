@@ -83,6 +83,10 @@ _TITLE_HUMAN = "사용자 질문: {message}"
 
 _FALLBACK_URL = "https://yeyak.seoul.go.kr"
 
+# 카드 상세 표시 상한. 이 값 초과분의 건수(extra_count)만 숫자로 LLM에 전달된다.
+# 클래스 밖 모듈 상수로 두어 인스턴스 오버라이드로 프롬프트와 불일치하는 사고를 방지한다.
+_DISPLAY_LIMIT: int = 5
+
 
 class _AnswerOutput(BaseModel):
     answer: str
@@ -114,9 +118,6 @@ class AnswerAgent:
         )
         self._title_chain = title_prompt | llm.with_structured_output(_TitleOutput)
 
-    # 카드 상세 표시 상한. 이 값 초과분은 extra_count로만 LLM에 전달된다.
-    _DISPLAY_LIMIT: int = 5
-
     async def answer(self, state: AgentState) -> AgentState:
         """검색 결과를 종합해 answer(+title)을 채운 AgentState를 반환한다.
 
@@ -124,8 +125,8 @@ class AnswerAgent:
         별도 전달한다. LLM 토큰 절약 + "외 N건" 비즈니스 규칙의 코드 수준 강제.
         """
         all_results = self._collect_results(state)
-        display = all_results[: self._DISPLAY_LIMIT]
-        extra_count = max(0, len(all_results) - self._DISPLAY_LIMIT)
+        display = all_results[:_DISPLAY_LIMIT]
+        extra_count = max(0, len(all_results) - _DISPLAY_LIMIT)
         results_json = json.dumps(display, ensure_ascii=False, default=str)
 
         answer_out: _AnswerOutput = await self._answer_chain.ainvoke(

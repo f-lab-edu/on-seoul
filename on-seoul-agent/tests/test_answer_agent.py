@@ -3,6 +3,7 @@
 답변 생성, 시설 카드 정규화, 제목 생성, fallback URL 처리를 검증한다.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 from tests.helpers import make_agent_state
@@ -60,7 +61,7 @@ class TestAnswerAgent:
         assert result["title"] == "수영장 안내"
 
     async def test_answer_chain_receives_message_and_results(self):
-        """answer_chain에 message와 results_json이 전달된다."""
+        """answer_chain에 message, results_json, extra_count가 전달된다."""
         agent = _make_agent()
         rows = [{"service_name": "수영장", "service_url": "https://example.com"}]
         state = _make_state(message="수영장", sql_results=rows)
@@ -70,6 +71,7 @@ class TestAnswerAgent:
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         assert call_kwargs["message"] == "수영장"
         assert "수영장" in call_kwargs["results_json"]
+        assert call_kwargs["extra_count"] == 0
 
     async def test_collect_results_merges_sql_and_vector(self):
         """sql_results와 vector_results가 모두 있으면 합쳐서 전달된다."""
@@ -131,8 +133,6 @@ class TestAnswerAgent:
         agent._answer_chain.ainvoke.assert_called_once()
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         # 빈 결과 목록 JSON이 전달되어야 한다
-        import json
-
         assert json.loads(call_kwargs["results_json"]) == []
         assert result["answer"] == "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다."
 
@@ -272,18 +272,28 @@ class TestAnswerAgentDisplaySlice:
         ]
 
     async def test_five_or_fewer_results_no_extra(self):
-        """결과 5건 이하이면 extra_count=0으로 전달된다."""
+        """결과 4건(DISPLAY_LIMIT 미만)이면 슬라이스 손실 없이 extra_count=0."""
         agent = _make_agent()
         state = _make_state(sql_results=self._make_rows(4))
 
         await agent.answer(state)
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
-        import json
-
         displayed = json.loads(call_kwargs["results_json"])
         assert isinstance(displayed, list)
         assert len(displayed) == 4
+        assert call_kwargs["extra_count"] == 0
+
+    async def test_exactly_display_limit_no_extra(self):
+        """결과가 정확히 DISPLAY_LIMIT(5)건이면 슬라이스 손실 없이 extra_count=0."""
+        agent = _make_agent()
+        state = _make_state(sql_results=self._make_rows(5))
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        displayed = json.loads(call_kwargs["results_json"])
+        assert len(displayed) == 5
         assert call_kwargs["extra_count"] == 0
 
     async def test_six_results_sliced_to_five_with_extra_one(self):
@@ -294,8 +304,6 @@ class TestAnswerAgentDisplaySlice:
         await agent.answer(state)
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
-        import json
-
         displayed = json.loads(call_kwargs["results_json"])
         assert len(displayed) == 5
         assert displayed[0]["service_id"] == "S001"  # RRF 순위 첫 번째 보존
@@ -309,8 +317,6 @@ class TestAnswerAgentDisplaySlice:
         await agent.answer(state)
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
-        import json
-
         assert len(json.loads(call_kwargs["results_json"])) == 5
         assert call_kwargs["extra_count"] == 5
 
@@ -322,4 +328,29 @@ class TestAnswerAgentDisplaySlice:
         await agent.answer(state)
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        assert call_kwargs["extra_count"] == 0
+
+    async def test_hydrated_services_empty_plus_map_results(self):
+        """hydrated_services=[]이고 map_results가 있으면 map features가 결과에 포함된다.
+
+        MAP intent 에서 HydrationNode 가 hydrated_services=[] 를 설정하므로
+        _collect_results 가 hydrated is not None 분기에서 [] 로 시작하되
+        map_results 언팩이 정상적으로 이어져야 한다.
+        """
+        agent = _make_agent()
+        map_results = {
+            "features": [
+                {"properties": {"service_id": "M001", "service_name": "근처체육관"}},
+                {"properties": {"service_id": "M002", "service_name": "근처수영장"}},
+            ]
+        }
+        state = _make_state(hydrated_services=[], map_results=map_results)
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        displayed = json.loads(call_kwargs["results_json"])
+        service_names = [r["service_name"] for r in displayed]
+        assert "근처체육관" in service_names
+        assert "근처수영장" in service_names
         assert call_kwargs["extra_count"] == 0
