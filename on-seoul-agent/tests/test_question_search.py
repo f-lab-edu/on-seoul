@@ -141,3 +141,40 @@ class TestQuestionSearch:
         assert len(result) == 2
         for row in result:
             assert set(row.keys()) == {"service_id", "embedding_text", "intent_label", "similarity"}
+
+    async def test_results_ordered_by_similarity_desc(self):
+        """DB가 similarity 내림차순으로 정렬된 결과를 반환하면 그대로 유지된다.
+
+        실제 SQL에는 outer ORDER BY similarity DESC 가 포함되어 있으므로
+        DB가 정렬된 결과를 반환할 것을 전제로 검증한다.
+        Mock은 이미 정렬된 rows를 반환하도록 설정한다.
+        """
+        rows_sorted = [
+            {"service_id": "S002", "embedding_text": "b", "intent_label": "detail", "similarity": 0.9},
+            {"service_id": "S003", "embedding_text": "c", "intent_label": "detail", "similarity": 0.8},
+            {"service_id": "S001", "embedding_text": "a", "intent_label": "detail", "similarity": 0.7},
+        ]
+        session = _make_session(rows_sorted)
+        result = await question_search(session, _SAMPLE_VECTOR)
+        similarities = [r["similarity"] for r in result]
+        assert similarities == [0.9, 0.8, 0.7], (
+            f"similarity 내림차순 정렬 아님: {similarities}"
+        )
+
+    async def test_empty_vector_raises_value_error(self):
+        """빈 벡터를 전달하면 ValueError가 발생한다."""
+        session = _make_session([])
+        try:
+            await question_search(session, [])
+            assert False, "ValueError가 발생해야 함"
+        except ValueError as e:
+            assert "query_vector" in str(e)
+
+    async def test_invalid_vector_element_raises_value_error(self):
+        """벡터 원소가 숫자가 아니면 ValueError가 발생한다."""
+        session = _make_session([])
+        try:
+            await question_search(session, [0.1, "bad", 0.3])  # type: ignore[list-item]
+            assert False, "ValueError가 발생해야 함"
+        except ValueError as e:
+            assert "query_vector" in str(e)

@@ -73,3 +73,24 @@ class TestQuestionSearchSqlStructure:
         sql = texts[0]
         assert "identity" not in sql
         assert "summary" not in sql
+
+    async def test_results_sorted_by_similarity_desc_not_service_id(self):
+        """service_id가 알파벳 역순이어도 similarity 높은 쪽이 먼저 반환된다."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        rows = [
+            {"service_id": "S003", "embedding_text": "a", "intent_label": "detail", "similarity": 0.95},
+            {"service_id": "S001", "embedding_text": "b", "intent_label": "detail", "similarity": 0.75},
+        ]
+        mock_result = MagicMock()
+        mock_result.keys.return_value = list(rows[0].keys())
+        mock_result.fetchall.return_value = [tuple(r.values()) for r in rows]
+        session = MagicMock()
+        session.execute = AsyncMock(return_value=mock_result)
+
+        result = await question_search(session, _SAMPLE_VECTOR)
+        assert len(result) == 2
+        assert result[0]["service_id"] == "S003"
+        assert result[0]["similarity"] == 0.95
+        assert result[1]["service_id"] == "S001"
+        assert result[1]["similarity"] == 0.75
