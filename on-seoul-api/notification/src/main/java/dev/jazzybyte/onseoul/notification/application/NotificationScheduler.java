@@ -7,6 +7,7 @@ import dev.jazzybyte.onseoul.notification.domain.NotificationTemplateRequest;
 import dev.jazzybyte.onseoul.notification.domain.ServiceChange;
 import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
+import dev.jazzybyte.onseoul.notification.port.out.LoadBatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
@@ -15,9 +16,11 @@ import dev.jazzybyte.onseoul.notification.port.out.TemplateGenerationPort;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -51,8 +54,10 @@ public class NotificationScheduler {
     private final TemplateGenerationPort templateGenerationPort;
     private final PushNotificationPort pushNotificationPort;
     private final SaveBatchPort saveBatchPort;
+    private final LoadBatchPort loadBatchPort;
     private final NotificationTxHelper txHelper;
     private final MeterRegistry meterRegistry;
+    private final long staleThresholdMs;
 
     public NotificationScheduler(
             final LoadSubscriptionPort loadSubscriptionPort,
@@ -60,20 +65,27 @@ public class NotificationScheduler {
             final TemplateGenerationPort templateGenerationPort,
             final PushNotificationPort pushNotificationPort,
             final SaveBatchPort saveBatchPort,
+            final LoadBatchPort loadBatchPort,
             final NotificationTxHelper txHelper,
-            final MeterRegistry meterRegistry) {
+            final MeterRegistry meterRegistry,
+            @Value("${notification.scheduler.stale-threshold-ms:600000}") final long staleThresholdMs) {
         this.loadSubscriptionPort = loadSubscriptionPort;
         this.loadUserContactPort = loadUserContactPort;
         this.templateGenerationPort = templateGenerationPort;
         this.pushNotificationPort = pushNotificationPort;
         this.saveBatchPort = saveBatchPort;
+        this.loadBatchPort = loadBatchPort;
         this.txHelper = txHelper;
         this.meterRegistry = meterRegistry;
+        this.staleThresholdMs = staleThresholdMs;
     }
 
     @Scheduled(fixedDelayString = "${notification.scheduler.fixed-delay-ms:300000}")
     public void processAllSubscriptions() {
         log.debug("[NotificationScheduler] 스케줄 실행 시작");
+
+        // 0. JVM 크래시로 complete()/fail() 호출 없이 종료된 stale RUNNING batch를 회수한다.
+        recoverStaleBatches();
 
         // 1. 배치 INSERT (RUNNING). 이 실패는 배치 전체 중단 — Batch row 자체가 없으므로 다음 tick에서 재시작.
         NotificationBatch batch;
@@ -219,6 +231,39 @@ public class NotificationScheduler {
                 .map(c -> new NotificationTemplateRequest.ChangeItem(
                         c.changeType(), c.fieldName(), c.oldValue(), c.newValue()))
                 .toList();
+    }
+
+    /**
+     * JVM 크래시 후 stale RUNNING batch를 FAILED로 회수한다.
+     * {@link #staleThresholdMs} 이상 경과한 RUNNING batch 대상.
+     *
+     * <p>stale-threshold-ms(기본 600,000 ms = 10분)는 fixed-delay-ms(기본 5분) × 2 이상으로
+     * 설정하는 것을 권장한다. 임계값 < fixed-delay 로 설정하면 정상 실행 중인 배치를 회수할 위험이 있다.
+     *
+     * <p>회수된 batch의 sent_count/failed_count는 0으로 기록된다 — 크래시 시점 실제 값 미상.
+     */
+    private void recoverStaleBatches() {
+        recoverStaleBatches(Instant.now().minusMillis(staleThresholdMs));
+    }
+
+    /**
+     * 테스트 및 오버라이드용: stale 기준 시각을 직접 지정하는 내부 메서드.
+     * 프로덕션에서는 {@link #recoverStaleBatches()} 사용.
+     *
+     * @param threshold 이 시각 이전에 startedAt인 RUNNING batch를 FAILED로 전환
+     */
+    void recoverStaleBatches(Instant threshold) {
+        List<NotificationBatch> staleBatches = loadBatchPort.findStaleRunning(threshold);
+        if (staleBatches.isEmpty()) {
+            return;
+        }
+        log.warn("[NotificationScheduler] stale RUNNING batch {}건 감지 — FAILED 처리", staleBatches.size());
+        for (NotificationBatch stale : staleBatches) {
+            stale.fail(0, 0);
+            safeUpdateBatch(stale);
+            log.warn("[NotificationScheduler] stale batch FAILED: batchId={}, startedAt={}",
+                    stale.getId(), stale.getStartedAt());
+        }
     }
 
     private void safeUpdateBatch(NotificationBatch batch) {

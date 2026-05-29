@@ -1,11 +1,14 @@
 package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 
+import dev.jazzybyte.onseoul.notification.domain.BatchStatus;
 import dev.jazzybyte.onseoul.notification.domain.NotificationBatch;
 import dev.jazzybyte.onseoul.notification.port.out.LoadBatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveBatchPort;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 @Component
@@ -41,6 +44,13 @@ class NotificationBatchPersistenceAdapter implements SaveBatchPort, LoadBatchPor
     @Transactional(readOnly = true)
     public Optional<NotificationBatch> loadById(Long batchId) {
         return repository.findById(batchId).map(this::toDomain);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<NotificationBatch> findStaleRunning(Instant staleBefore) {
+        return repository.findByStatusAndStartedAtBefore(BatchStatus.RUNNING, staleBefore)
+                .stream().map(this::toDomain).toList();
     }
 
     private NotificationBatch toDomain(NotificationBatchJpaEntity e) {

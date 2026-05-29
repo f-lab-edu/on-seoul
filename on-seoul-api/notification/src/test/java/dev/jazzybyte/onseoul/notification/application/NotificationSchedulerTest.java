@@ -10,6 +10,7 @@ import dev.jazzybyte.onseoul.notification.domain.ServiceChange;
 import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
+import dev.jazzybyte.onseoul.notification.port.out.LoadBatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
@@ -49,6 +50,7 @@ class NotificationSchedulerTest {
     @Mock private TemplateGenerationPort templateGenerationPort;
     @Mock private PushNotificationPort pushNotificationPort;
     @Mock private SaveBatchPort saveBatchPort;
+    @Mock private LoadBatchPort loadBatchPort;
     @Mock private NotificationTxHelper txHelper;
 
     private SimpleMeterRegistry meterRegistry;
@@ -65,10 +67,12 @@ class NotificationSchedulerTest {
         scheduler = new NotificationScheduler(
                 loadSubscriptionPort, loadUserContactPort,
                 templateGenerationPort, pushNotificationPort,
-                saveBatchPort, txHelper, meterRegistry);
+                saveBatchPort, loadBatchPort, txHelper, meterRegistry, 600_000L);
 
         lenient().when(loadUserContactPort.loadContact(anyLong()))
                 .thenReturn(Optional.of(TEST_CONTACT));
+        // 기본: stale RUNNING batch 없음
+        lenient().when(loadBatchPort.findStaleRunning(any())).thenReturn(List.of());
 
         // 기본: insertRunning은 id/startedAt이 채워진 배치를 반환
         lenient().when(saveBatchPort.insertRunning(any())).thenAnswer(inv -> {
@@ -139,6 +143,91 @@ class NotificationSchedulerTest {
         ArgumentCaptor<NotificationBatch> captor = ArgumentCaptor.forClass(NotificationBatch.class);
         verify(saveBatchPort).update(captor.capture());
         assertThat(captor.getValue().getStatus()).isEqualTo(BatchStatus.FAILED);
+    }
+
+    // ── stale RUNNING batch 회수 ──────────────────────────────────────────
+
+    @Test
+    @DisplayName("stale RUNNING batch가 있으면 FAILED로 UPDATE된다")
+    void recoverStaleBatches_staleExists_marksFailedAndUpdates() {
+        NotificationBatch stale = new NotificationBatch(
+                7L, Instant.now().minusSeconds(700), null, BatchStatus.RUNNING, null, null);
+        Instant threshold = Instant.now().minusSeconds(600);
+
+        when(loadBatchPort.findStaleRunning(threshold)).thenReturn(List.of(stale));
+
+        scheduler.recoverStaleBatches(threshold);
+
+        assertThat(stale.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(stale.getFinishedAt()).isNotNull();
+        ArgumentCaptor<NotificationBatch> captor = ArgumentCaptor.forClass(NotificationBatch.class);
+        verify(saveBatchPort).update(captor.capture());
+        assertThat(captor.getValue().getId()).isEqualTo(7L);
+        assertThat(captor.getValue().getStatus()).isEqualTo(BatchStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("stale RUNNING batch가 없으면 UPDATE를 호출하지 않는다")
+    void recoverStaleBatches_noneStale_skipsUpdate() {
+        Instant threshold = Instant.now().minusSeconds(600);
+        when(loadBatchPort.findStaleRunning(threshold)).thenReturn(List.of());
+
+        scheduler.recoverStaleBatches(threshold);
+
+        verify(saveBatchPort, never()).update(any());
+    }
+
+    @Test
+    @DisplayName("stale batch가 여러 건이면 모두 FAILED UPDATE된다")
+    void recoverStaleBatches_multiple_allMarkedFailed() {
+        NotificationBatch stale1 = new NotificationBatch(5L, Instant.now().minusSeconds(800),
+                null, BatchStatus.RUNNING, null, null);
+        NotificationBatch stale2 = new NotificationBatch(6L, Instant.now().minusSeconds(900),
+                null, BatchStatus.RUNNING, null, null);
+        Instant threshold = Instant.now().minusSeconds(600);
+
+        when(loadBatchPort.findStaleRunning(threshold)).thenReturn(List.of(stale1, stale2));
+
+        scheduler.recoverStaleBatches(threshold);
+
+        assertThat(stale1.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(stale2.getStatus()).isEqualTo(BatchStatus.FAILED);
+        verify(saveBatchPort, org.mockito.Mockito.times(2)).update(any());
+    }
+
+    @Test
+    @DisplayName("processAllSubscriptions 실행 시 stale 회수가 배치 INSERT 전에 수행된다")
+    void processAllSubscriptions_recoverCalledBeforeInsert() {
+        NotificationBatch stale = new NotificationBatch(
+                3L, Instant.now().minusSeconds(700), null, BatchStatus.RUNNING, null, null);
+        // 최소 1번 이상 findStaleRunning이 호출되면 stale batch 반환
+        when(loadBatchPort.findStaleRunning(any())).thenReturn(List.of(stale));
+        when(loadSubscriptionPort.loadAll()).thenReturn(List.of());
+
+        scheduler.processAllSubscriptions();
+
+        // stale batch UPDATE + 새 배치 INSERT + 새 배치 UPDATE — 총 update 2회
+        verify(saveBatchPort, org.mockito.Mockito.times(2)).update(any());
+        verify(saveBatchPort).insertRunning(any());
+    }
+
+    @Test
+    @DisplayName("stale UPDATE 실패(safeUpdate)는 삼켜지고 새 배치는 정상 실행된다")
+    void recoverStaleBatches_updateFails_isSwallowedAndContinues() {
+        NotificationBatch stale = new NotificationBatch(
+                8L, Instant.now().minusSeconds(700), null, BatchStatus.RUNNING, null, null);
+        when(loadBatchPort.findStaleRunning(any())).thenReturn(List.of(stale));
+        when(loadSubscriptionPort.loadAll()).thenReturn(List.of());
+        // stale UPDATE 실패, 새 배치 UPDATE 성공
+        doThrow(new RuntimeException("DB 오류")).doAnswer(inv -> inv.getArgument(0))
+                .when(saveBatchPort).update(any());
+
+        scheduler.processAllSubscriptions();
+
+        // 새 배치 insertRunning은 호출됨
+        verify(saveBatchPort).insertRunning(any());
+        // update는 2회 시도됨 (stale 1회 + 새 배치 1회)
+        verify(saveBatchPort, org.mockito.Mockito.times(2)).update(any());
     }
 
     // ── per-subscription 흐름 ────────────────────────────────────────────

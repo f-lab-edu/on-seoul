@@ -114,7 +114,8 @@ knock:
 
 notification:
   scheduler:
-    fixed-delay-ms: 300000   # 5분
+    fixed-delay-ms: 300000       # 5분
+    stale-threshold-ms: 600000   # 10분 (fixed-delay × 2) — stale RUNNING batch 회수 임계값
   retry-scheduler:
     fixed-delay-ms: 3600000  # 1시간
 
