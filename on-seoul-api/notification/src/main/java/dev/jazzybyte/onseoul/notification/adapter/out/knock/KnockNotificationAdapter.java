@@ -22,11 +22,24 @@ import java.util.concurrent.TimeoutException;
  * Knock REST API를 통해 알림을 발송한다.
  *
  * <p>recipients 필드에 email/phone_number를 포함한 인라인 식별 정보를 전달하므로
- * Knock에 수신자를 사전 등록하지 않아도 자동으로 upsert된다.</p>
+ * Knock에 수신자를 사전 등록하지 않아도 자동으로 upsert된다.
+ *
+ * <p><b>PII 보호:</b> 요청 본문 {@code recipients}에 email/phone_number가 평문으로 포함된다.
+ * {@link KnockClientConfig}에서 reactor-netty {@code wiretap=false}를 명시하여 HTTP body
+ * 로깅 경로를 차단하고 있다. 운영에서 아래 설정을 활성화하면 PII가 노출된다:
+ * <ul>
+ *   <li>{@code logging.level.reactor.netty=DEBUG} 또는 그 이하 레벨 설정</li>
+ *   <li>APM 에이전트의 HTTP body/header 캡처 옵션</li>
+ *   <li>{@link KnockClientConfig}의 {@code wiretap} 값을 {@code true}로 변경</li>
+ * </ul>
+ *
+ * <p><b>향후 마이그레이션:</b> 규모가 커지면 Knock User API({@code PUT /v1/users/{userId}})로
+ * 수신자를 사전 등록하고 워크플로우 트리거 시 {@code id}만 전달하는 방식으로 전환해
+ * 본문에서 PII를 완전히 제거하는 것을 권장한다.
  *
  * <p>EMAIL/SMS 각 채널은 별도 Knock 워크플로우로 트리거된다.
  * 하나 채널 실패 시 다른 채널 트리거를 계속 시도한다.
- * 모든 채널이 실패하면 RuntimeException을 던진다.</p>
+ * 모든 채널이 실패하면 RuntimeException을 던진다.
  */
 @Slf4j
 @Component("knockPrimary")

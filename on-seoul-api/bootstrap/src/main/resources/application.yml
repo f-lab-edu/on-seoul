@@ -122,3 +122,7 @@ notification:
 logging:
   level:
     dev.jazzybyte: debug
+    # [PII 보호] reactor.netty 이하를 DEBUG 이하로 설정하면 KnockNotificationAdapter의
+    # 요청 본문(recipients.email, phone_number)이 HTTP body 로그로 노출된다.
+    # 운영 환경에서는 reactor.netty 로그 레벨을 WARN 이상으로 유지해야 한다.
+    reactor.netty: warn
