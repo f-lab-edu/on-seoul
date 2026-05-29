@@ -403,7 +403,9 @@ class TestSearchPersistNodeBestEffort:
 
 class TestRetryPrepResetsSearchChannels:
     async def test_retry_prep_resets_search_channels(self):
-        """retry_prep_node 가 search_channels 리셋 시그널({}) 을 반환한다."""
+        """retry_prep_node 가 RESET_CHANNELS sentinel 을 반환한다."""
+        from schemas.search import RESET_CHANNELS
+
         nodes = GraphNodes(
             router=MagicMock(),
             sql_agent=MagicMock(),
@@ -420,17 +422,29 @@ class TestRetryPrepResetsSearchChannels:
         result = await nodes.retry_prep_node(state)
 
         assert "search_channels" in result
-        assert result["search_channels"] == {}
+        # sentinel 자체가 반환되어야 reducer 가 명시적 리셋으로 인식
+        assert result["search_channels"] is RESET_CHANNELS
 
-    async def test_search_channels_reducer_handles_reset(self):
-        """search_channels_reducer 가 {} 를 리셋 시그널로 처리한다."""
+    async def test_search_channels_reducer_handles_explicit_reset(self):
+        """reducer 가 RESET_CHANNELS sentinel 만 리셋 신호로 처리한다."""
+        from schemas.search import RESET_CHANNELS, search_channels_reducer
+
+        old = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
+        # 명시적 리셋: sentinel 전달 시 빈 dict 반환
+        assert search_channels_reducer(old, RESET_CHANNELS) == {}
+
+    async def test_search_channels_reducer_empty_dict_is_noop(self):
+        """빈 dict 와 None 은 더 이상 리셋이 아니라 no-op (기존 old 유지)."""
         from schemas.search import search_channels_reducer
 
         old = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
-        # 리셋: {} 전달 시 빈 dict 반환
-        assert search_channels_reducer(old, {}) == {}
-        # 리셋: None 전달 시 빈 dict 반환
-        assert search_channels_reducer(old, None) == {}
+        # 빈 dict → no-op
+        assert search_channels_reducer(old, {}) == old
+        # None → no-op
+        assert search_channels_reducer(old, None) == old
+        # old 가 None 일 때 빈 dict 반환 (안전한 기본값)
+        assert search_channels_reducer(None, {}) == {}
+        assert search_channels_reducer(None, None) == {}
 
     async def test_search_channels_reducer_merges_normally(self):
         """일반 채널 추가는 누적 병합된다."""

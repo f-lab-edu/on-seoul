@@ -109,29 +109,63 @@ _CHANNEL_TO_KIND: dict[str, str] = {
 }
 
 
+# =============================================================================
+# 리셋 sentinel — 명시적 채널 맵 초기화 신호
+# =============================================================================
+
+# Sentinel 설계: 평범한 dict 안에 예약 키(__reset__)를 두어 "전체 초기화" 의도를
+# 코드 상에서 자명하게 만든다. 이전 설계(빈 dict 가 리셋 신호) 는 노드가 실수로
+# 빈 dict 를 반환하면 누적 채널이 조용히 사라지는 함정이 있어 폐기.
+#
+# 예약 키는 SearchChannel/SearchKind 상수와 겹치지 않으므로 충돌 위험 없음.
+RESET_SENTINEL_KEY: Final[str] = "__reset__"
+
+# retry_prep_node 등 의도적 리셋 호출자가 사용할 신호. 외부에서는 이 상수만 쓴다.
+#
+# 사용 예:
+#     return {"search_channels": RESET_CHANNELS}
+RESET_CHANNELS: Final[dict[str, Any]] = {RESET_SENTINEL_KEY: True}
+
+
 def search_channels_reducer(
     old: "dict[str, ChannelData] | None",
     new: "dict[str, ChannelData] | None",
 ) -> "dict[str, ChannelData]":
     """LangGraph reducer for AgentState.search_channels.
 
-    리셋 시그널: new 가 None 이거나 빈 dict {} 이면 채널 맵을 완전 초기화한다.
-    retry_prep_node 가 self-correction 재시도 전에 `{"search_channels": {}}` 를 반환하여
-    이전 시도의 채널 데이터를 지우고 UNIQUE 제약 위반을 예방한다.
+    동작 매트릭스:
+        new = RESET_CHANNELS                  → {} (완전 초기화)
+        new = None                            → no-op (기존 old 유지)
+        new = {} (빈 dict)                    → no-op (기존 old 유지)
+        new = {"vec_a": ChannelData(...)}     → old 에 병합 (동일 키 덮어쓰기)
 
-    정상 merge: new 가 비어있지 않으면 기존 dict 에 or_ 병합한다.
-    각 노드는 자기 채널 키만 담은 부분 dict 를 반환하므로, 동일 채널 키가 재등장하면
-    최신 데이터로 덮어쓴다 (재시도 시 마지막 시도 데이터만 남음).
+    *no-op 정책* — 빈 dict / None 은 "이번 노드가 추가할 채널 없음" 으로 해석한다.
+    이전 설계(빈 dict = 리셋) 는 노드가 실수로 `{"search_channels": {}}` 를 반환하면
+    누적 채널이 조용히 지워지는 함정이 있어 폐기. 명시적 리셋은 RESET_CHANNELS sentinel
+    로만 가능하다.
 
-    CONTRACT (반드시 지킬 것):
-        노드가 채널을 추가할 게 없으면 반환 dict 에서 `search_channels` 키를 **생략** 해야 한다.
-        `{"search_channels": {}}` 를 반환하면 리셋으로 처리되어 기존 채널 데이터가 전부 지워진다.
-        의도적 리셋은 오직 `retry_prep_node` 만 수행한다.
+    CONTRACT (권장):
+        노드가 채널을 추가할 게 없으면 반환 dict 에서 `search_channels` 키를 생략하는 것이
+        가장 깔끔하다. 실수로 `{}` 를 반환해도 더 이상 데이터가 소실되지 않지만, 의도가
+        명확한 코드를 유지하기 위해 생략 패턴을 권장한다.
 
-    DANGER: `{}` (빈 dict) 또는 `None` 은 리셋 시그널이다. 실수로 반환하지 않도록 주의.
+    의도적 리셋:
+        `retry_prep_node` 가 self-correction 재시도 전에 RESET_CHANNELS 를 반환하여
+        이전 시도의 채널 데이터를 지우고 UNIQUE (message_id, channel) 제약 위반을 예방한다.
     """
-    if not new:  # {} 또는 None → 완전 리셋 (DANGER: 의도적인 경우만)
+    # 1) 명시적 리셋 sentinel — RESET_CHANNELS 또는 동등 dict 검사.
+    #    is 비교가 빠르나, 다른 import 경로로 별도 객체가 만들어졌을 가능성을 위해
+    #    예약 키 존재도 확인한다.
+    if new is RESET_CHANNELS or (
+        isinstance(new, dict) and new.get(RESET_SENTINEL_KEY) is True
+    ):
         return {}
+
+    # 2) 빈 dict / None — no-op (기존 old 유지).
+    if not new:
+        return old or {}
+
+    # 3) 정상 merge.
     return (old or {}) | new
 
 

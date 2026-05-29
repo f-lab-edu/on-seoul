@@ -46,7 +46,7 @@ agents/
                                           └─ trace_node    # chat_agent_traces 적재 (best-effort)
 ```
 
-검색 노드(sql/vector/map)는 `AgentState.search_channels: dict[str, ChannelData]` 에 채널별 입력(query)·출력(hits) 쌍을 채우고, 종단 `search_persist_node` 가 일괄 적재한다. `retry_prep_node` 가 재시도 시 `search_channels = {}` 리셋 시그널을 보내 UNIQUE 위반을 방지한다. 자세한 적재 정책은 `docs/chat-search-persistence.md` 참조.
+검색 노드(sql/vector/map)는 `AgentState.search_channels: dict[str, ChannelData]` 에 채널별 입력(query)·출력(hits) 쌍을 채우고, 종단 `search_persist_node` 가 일괄 적재한다. `retry_prep_node` 가 재시도 시 `search_channels = RESET_CHANNELS` sentinel 을 보내 UNIQUE 위반을 방지한다 (빈 dict 는 더 이상 리셋이 아니라 no-op). 자세한 적재 정책은 `docs/chat-search-persistence.md` 참조.
 
 세션 라우팅:
 
@@ -78,7 +78,7 @@ agents/
 | `sql_keyword` | `str \| None` | SqlAgent | SQL 키워드 (search_persist 의 sql 채널 query_text) |
 | `vector_results` | `list[dict] \| None` | VectorAgent | 유사도 검색 결과 |
 | `map_results` | `dict \| None` | map_node | 반경 검색 GeoJSON |
-| `search_channels` | `dict[str, ChannelData]` | sql/vector/map_node, retry_prep_node | 채널별 입력(query)+출력(hits). reducer 누적, `{}` 리셋. `search_persist_node` 가 일괄 적재 |
+| `search_channels` | `dict[str, ChannelData]` | sql/vector/map_node, retry_prep_node | 채널별 입력(query)+출력(hits). reducer 누적, 명시적 리셋은 `RESET_CHANNELS` sentinel (빈 dict 는 no-op). `search_persist_node` 가 일괄 적재 |
 | `answer` | `str \| None` | AnswerAgent | 최종 자연어 답변 |
 | `title` | `str \| None` | AnswerAgent | 대화 제목 (`title_needed=True`일 때) |
 | `cache_hit` | `bool \| None` | cache_check_node | Answer Cache hit 여부 |
@@ -120,7 +120,7 @@ graph = AgentGraph(router=mock_router, sql_agent=mock_sql)
 
 **오류 처리**: `_router_node` 예외 시 fallback answer를 state에 주입하고 Self-Correction 없이 종단 체인(cache_write → search_persist → trace)으로 진행합니다. trace / search_persist 적재는 모두 best-effort로 실행되어 저장 실패가 워크플로우 결과에 영향을 주지 않습니다.
 
-**Self-Correction**: answer가 비어 있고 `retry_count == 0`이면 `retry_prep_node` 를 거쳐 router_node로 재진입해 재검색을 시도합니다. `retry_prep_node` 는 `retry_count` 증가와 함께 `search_channels = {}` 리셋 시그널을 보내 이전 시도의 채널 데이터를 비웁니다. 최대 1회로 제한됩니다 (`recursion_limit=15`).
+**Self-Correction**: answer가 비어 있고 `retry_count == 0`이면 `retry_prep_node` 를 거쳐 router_node로 재진입해 재검색을 시도합니다. `retry_prep_node` 는 `retry_count` 증가와 함께 `search_channels = RESET_CHANNELS` sentinel 을 보내 이전 시도의 채널 데이터를 비웁니다. 최대 1회로 제한됩니다 (`recursion_limit=15`).
 
 ---
 

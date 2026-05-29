@@ -35,7 +35,14 @@ from agents.vector_agent import VectorAgent
 from core.cache import get_cached_answer, set_cached_answer
 from core.config import settings
 from agents._search_channel_utils import _to_hits
-from schemas.search import ChannelData, ChannelQuery, SearchChannel, SearchKind, kind_of
+from schemas.search import (
+    RESET_CHANNELS,
+    ChannelData,
+    ChannelQuery,
+    SearchChannel,
+    SearchKind,
+    kind_of,
+)
 from schemas.state import AgentState, IntentType
 from tools.map_search import DEFAULT_RADIUS_M as _MAP_DEFAULT_RADIUS_M
 from tools.map_search import TOP_K as _MAP_TOP_K
@@ -184,9 +191,10 @@ class GraphNodes:
             "max_class_name": None,
             "area_name": None,
             "service_status": None,
-            # search_channels_reducer 에서 {} 를 리셋 시그널로 처리한다.
-            # 이전 시도 채널 데이터를 지워 UNIQUE (message_id, channel) 위반을 방지.
-            "search_channels": {},
+            # RESET_CHANNELS sentinel — 이전 시도 채널 데이터를 지워
+            # UNIQUE (message_id, channel) 위반을 방지한다.
+            # 빈 dict({}) 는 더 이상 리셋 신호가 아니라 no-op 이므로 sentinel 필수.
+            "search_channels": RESET_CHANNELS,
         }
 
     async def sql_node(self, state: AgentState) -> dict[str, Any]:
