@@ -270,10 +270,12 @@ class AgentGraph:
         token = _ACTIVE_NODES.set(self._nodes)
         try:
             # recursion_limit=16:
-            # 1회 정상 흐름은 router → cache_check → (search) → hydration_node →
-            # answer → cache_write → search_persist → trace = 9 super-step.
-            # retry 1회 포함 시 router/retry_prep까지 추가되어 ~15.
-            # 여유 1을 더해 16으로 설정한다.
+            # 1회 정상 흐름:
+            #   router(1) → cache_check(2) → search(3) → hydration(4) →
+            #   answer(5) → cache_write(6) → search_persist(7) → trace(8) = 8 super-step.
+            # retry 1회 포함 시 retry_prep + router/cache_check/search/hydration/answer 재실행으로
+            #   +6 노드, 합계 14 super-step.
+            # 여유 2를 더해 16으로 설정한다.
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
                 config={"recursion_limit": 16},
@@ -326,7 +328,7 @@ class AgentGraph:
         try:
             async for chunk in AgentGraph._compiled_graph.astream(
                 state,
-                config={"recursion_limit": 16},
+                config={"recursion_limit": 16},  # 정상 8 + retry 최대 6 + 여유 2 = 16
             ):
                 node_name: str = next(iter(chunk))
                 node_updates: dict[str, Any] | None = chunk[node_name]
