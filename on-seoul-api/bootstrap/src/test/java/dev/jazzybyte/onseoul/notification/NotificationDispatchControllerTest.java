@@ -45,7 +45,7 @@ class NotificationDispatchControllerTest {
         NotificationDispatch d = new NotificationDispatch(
                 1234L, 1L, 12L, DispatchStatus.SUCCESS,
                 Instant.parse("2026-05-26T14:30:00Z"), "title", "body",
-                null, null, Instant.now(), Instant.now());
+                null, null, 0, Instant.now(), Instant.now());
         when(listDispatchesUseCase.list(eq(1L), eq(null), eq(20)))
                 .thenReturn(new DispatchPage(List.of(d), null));
 

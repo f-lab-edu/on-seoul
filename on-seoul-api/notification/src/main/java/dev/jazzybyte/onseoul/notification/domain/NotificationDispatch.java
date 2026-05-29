@@ -7,11 +7,13 @@ import java.time.Instant;
 /**
  * 배치 × 구독 단위 알림 발송 이력 (ADR-0004).
  *
- * <p>per-change 모델에서 제거된 필드: {@code changeLogId}, {@code attemptCount}.
- * 추가된 필드: {@code batchId}.
+ * <p>per-change 모델에서 제거된 필드: {@code changeLogId}.
+ * 추가된 필드: {@code batchId}, {@code attemptCount}.
  */
 @Getter
 public class NotificationDispatch {
+
+    public static final int MAX_ATTEMPTS = 5;
 
     private Long id;
     private Long batchId;
@@ -22,6 +24,7 @@ public class NotificationDispatch {
     private String generatedBody;
     private TemplateSource templateSource;
     private String lastError;
+    private int attemptCount;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -30,6 +33,7 @@ public class NotificationDispatch {
                                 DispatchStatus status,
                                 Instant sentAt, String generatedTitle, String generatedBody,
                                 TemplateSource templateSource, String lastError,
+                                int attemptCount,
                                 Instant createdAt, Instant updatedAt) {
         this.id = id;
         this.batchId = batchId;
@@ -40,6 +44,7 @@ public class NotificationDispatch {
         this.generatedBody = generatedBody;
         this.templateSource = templateSource;
         this.lastError = lastError;
+        this.attemptCount = attemptCount;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }
@@ -52,6 +57,7 @@ public class NotificationDispatch {
         d.batchId = batchId;
         d.subscriptionId = subscriptionId;
         d.status = DispatchStatus.PENDING;
+        d.attemptCount = 0;
         Instant now = Instant.now();
         d.createdAt = now;
         d.updatedAt = now;
@@ -71,13 +77,40 @@ public class NotificationDispatch {
     }
 
     /**
-     * 실패 기록. last_notified_at은 갱신되지 않으므로 다음 배치가 자동 재시도한다.
-     * DEAD 상태로 전환하지 않는다(ADR-0004).
+     * 실패 기록. title/body/source를 함께 저장하여 재시도 스케줄러가 재사용할 수 있게 한다.
+     * last_notified_at은 갱신되지 않으므로 다음 배치가 자동 재시도한다.
+     * DEAD 상태로 전환하지 않는다 — {@link #markDead(String)} 를 사용하라.
      */
-    public void markFailed(String error) {
+    public void markFailed(String error, String title, String body, TemplateSource source) {
         this.status = DispatchStatus.FAILED;
         this.lastError = error;
+        this.generatedTitle = title;
+        this.generatedBody = body;
+        this.templateSource = source;
         this.updatedAt = Instant.now();
+    }
+
+    /**
+     * 재시도 한도 초과 시 DEAD로 전환한다.
+     * last_notified_at은 갱신하지 않는다.
+     */
+    public void markDead(String error) {
+        this.status = DispatchStatus.DEAD;
+        this.lastError = error;
+        this.updatedAt = Instant.now();
+    }
+
+    /** attempt_count를 1 증가시킨다. */
+    public void incrementAttemptCount() {
+        this.attemptCount++;
+    }
+
+    /**
+     * attempt_count가 최대 재시도 횟수(5)에 도달했으면 true.
+     * {@link #incrementAttemptCount()} 호출 후 이 메서드로 DEAD 전환 여부를 판단한다.
+     */
+    public boolean isRetryExhausted() {
+        return this.attemptCount >= MAX_ATTEMPTS;
     }
 
     public boolean isPending() {

@@ -115,6 +115,8 @@ knock:
 notification:
   scheduler:
     fixed-delay-ms: 300000   # 5분
+  retry-scheduler:
+    fixed-delay-ms: 3600000  # 1시간
 
 logging:
   level:

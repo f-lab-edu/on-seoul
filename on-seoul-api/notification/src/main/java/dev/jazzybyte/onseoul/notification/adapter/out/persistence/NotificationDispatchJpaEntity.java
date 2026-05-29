@@ -46,6 +46,9 @@ public class NotificationDispatchJpaEntity {
     @Column(name = "last_error", columnDefinition = "TEXT")
     private String lastError;
 
+    @Column(name = "attempt_count", nullable = false)
+    private int attemptCount;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -57,6 +60,7 @@ public class NotificationDispatchJpaEntity {
         this.batchId = batchId;
         this.subscriptionId = subscriptionId;
         this.status = DispatchStatus.PENDING;
+        this.attemptCount = 0;
         this.updatedAt = Instant.now();
     }
 
@@ -67,13 +71,14 @@ public class NotificationDispatchJpaEntity {
 
     void applyDomain(DispatchStatus status,
                      Instant sentAt, String generatedTitle, String generatedBody,
-                     TemplateSource templateSource, String lastError) {
+                     TemplateSource templateSource, String lastError, int attemptCount) {
         this.status = status;
         this.sentAt = sentAt;
         this.generatedTitle = generatedTitle;
         this.generatedBody = generatedBody;
         this.templateSource = templateSource;
         this.lastError = lastError;
+        this.attemptCount = attemptCount;
         this.updatedAt = Instant.now();
     }
 }

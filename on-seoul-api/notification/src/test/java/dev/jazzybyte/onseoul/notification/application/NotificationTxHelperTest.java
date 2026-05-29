@@ -189,20 +189,109 @@ class NotificationTxHelperTest {
     // ── TX B 실패 ────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("TX B 실패 — dispatch FAILED + last_error만 갱신, subscription 미수정")
+    @DisplayName("TX B 실패 — dispatch FAILED + title/body/source/last_error 갱신, subscription 미수정")
     void txBFailure_marksFailedAndSkipsSubscriptionUpdate() {
         Instant original = Instant.parse("2026-05-10T09:00:00Z");
         NotificationSubscription sub = subscriptionWithLastNotifiedAt(original);
         NotificationDispatch dispatch = pendingDispatch();
         when(saveDispatchPort.save(any())).thenReturn(dispatch);
 
-        txHelper.txBFailure(dispatch, "발송 오류");
+        txHelper.txBFailure(dispatch, "재시도 제목", "재시도 본문", TemplateSource.AI, "발송 오류");
 
         assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.FAILED);
         assertThat(dispatch.getLastError()).isEqualTo("발송 오류");
+        assertThat(dispatch.getGeneratedTitle()).isEqualTo("재시도 제목");
+        assertThat(dispatch.getGeneratedBody()).isEqualTo("재시도 본문");
+        assertThat(dispatch.getTemplateSource()).isEqualTo(TemplateSource.AI);
         // subscription은 절대 저장되지 않음 — last_notified_at 미갱신 정책
         verifyNoInteractions(saveSubscriptionPort);
         assertThat(sub.getLastNotifiedAt()).isEqualTo(original);
         verify(saveDispatchPort).save(eq(dispatch));
+    }
+
+    // ── Retry TX 성공 ────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("txBRetrySuccess — dispatch SUCCESS 전환 + subscription.last_notified_at = now() 전진")
+    void txBRetrySuccess_marksSuccessAndAdvancesLastNotifiedAtToNow() {
+        Instant before = Instant.now().minusSeconds(60);
+        NotificationSubscription sub = subscriptionWithLastNotifiedAt(before);
+
+        // FAILED dispatch (id=99, generatedTitle/Body/Source 이미 저장된 상태)
+        NotificationDispatch dispatch = new NotificationDispatch(
+                99L, 1L, sub.getId(), DispatchStatus.FAILED,
+                null, "재시도 제목", "재시도 본문", TemplateSource.AI,
+                "이전 오류", 2,
+                Instant.now(), Instant.now());
+
+        when(saveDispatchPort.save(any())).thenReturn(dispatch);
+        when(saveSubscriptionPort.save(any())).thenReturn(sub);
+
+        Instant retryStartedAt = Instant.now();
+        txHelper.txBRetrySuccess(dispatch, sub, retryStartedAt);
+
+        // dispatch는 SUCCESS로 전환되고 generatedTitle/Body 유지
+        assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.SUCCESS);
+        assertThat(dispatch.getGeneratedTitle()).isEqualTo("재시도 제목");
+        assertThat(dispatch.getGeneratedBody()).isEqualTo("재시도 본문");
+        assertThat(dispatch.getSentAt()).isNotNull();
+
+        // last_notified_at은 retryStartedAt과 동일해야 함 (TX 내부 now() 아님)
+        assertThat(sub.getLastNotifiedAt()).isEqualTo(retryStartedAt);
+
+        verify(saveDispatchPort).save(dispatch);
+        verify(saveSubscriptionPort).save(sub);
+    }
+
+    // ── Retry TX 실패 ────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("txBRetryFailure — 도메인 상태(FAILED/DEAD)를 그대로 저장하고 subscription은 건드리지 않음")
+    void txBRetryFailure_savesDispatchAndSkipsSubscriptionUpdate() {
+        Instant original = Instant.parse("2026-05-10T09:00:00Z");
+        NotificationSubscription sub = subscriptionWithLastNotifiedAt(original);
+
+        NotificationDispatch dispatch = new NotificationDispatch(
+                99L, 1L, sub.getId(), DispatchStatus.FAILED,
+                null, "제목", "본문", TemplateSource.AI,
+                "오류", 3,
+                Instant.now(), Instant.now());
+
+        // 재시도 실패 — 도메인 메서드 먼저 호출한 후 txBRetryFailure
+        dispatch.incrementAttemptCount(); // attemptCount=4
+        dispatch.markFailed("재시도 오류", dispatch.getGeneratedTitle(), dispatch.getGeneratedBody(),
+                dispatch.getTemplateSource());
+
+        when(saveDispatchPort.save(any())).thenReturn(dispatch);
+
+        txHelper.txBRetryFailure(dispatch);
+
+        assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.FAILED);
+        assertThat(dispatch.getAttemptCount()).isEqualTo(4);
+        verify(saveDispatchPort).save(dispatch);
+        verifyNoInteractions(saveSubscriptionPort);
+        assertThat(sub.getLastNotifiedAt()).isEqualTo(original);
+    }
+
+    @Test
+    @DisplayName("txBRetryFailure — DEAD 상태 dispatch도 저장 가능")
+    void txBRetryFailure_withDeadDispatch_savesDeadStatus() {
+        NotificationDispatch dispatch = new NotificationDispatch(
+                99L, 1L, 1L, DispatchStatus.FAILED,
+                null, "제목", "본문", TemplateSource.AI,
+                "오류", 4,
+                Instant.now(), Instant.now());
+
+        dispatch.incrementAttemptCount(); // attemptCount=5
+        dispatch.markDead("최종 실패");
+
+        when(saveDispatchPort.save(any())).thenReturn(dispatch);
+
+        txHelper.txBRetryFailure(dispatch);
+
+        assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.DEAD);
+        assertThat(dispatch.getAttemptCount()).isEqualTo(5);
+        verify(saveDispatchPort).save(dispatch);
+        verifyNoInteractions(saveSubscriptionPort);
     }
 }

@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -72,11 +73,44 @@ public class NotificationTxHelper {
     }
 
     /**
-     * TX B 실패: dispatch FAILED + last_error 갱신. last_notified_at은 갱신하지 않음.
+     * TX B 실패: dispatch FAILED + title/body/source + last_error 갱신.
+     * title/body/source를 저장하여 {@link DispatchRetryScheduler}가 재사용할 수 있게 한다.
+     * last_notified_at은 갱신하지 않음.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void txBFailure(NotificationDispatch dispatch, String errorMessage) {
-        dispatch.markFailed(errorMessage);
+    public void txBFailure(NotificationDispatch dispatch,
+                           String generatedTitle, String generatedBody, TemplateSource templateSource,
+                           String errorMessage) {
+        dispatch.markFailed(errorMessage, generatedTitle, generatedBody, templateSource);
+        saveDispatchPort.save(dispatch);
+    }
+
+    /**
+     * Retry TX 성공: dispatch SUCCESS + last_notified_at = retryStartedAt 으로 전진.
+     *
+     * <p>메인 배치의 {@code batch.startedAt}과 동일한 방식으로, 처리 시작 시각을 커서로 사용한다.
+     * TX 내부에서 {@code Instant.now()}를 호출하면 커밋 시각에 따라 편차가 생기므로
+     * 호출자가 캡처한 시각을 인자로 받는다.
+     *
+     * @param retryStartedAt 재시도 루프 시작 시각 (호출자 캡처)
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void txBRetrySuccess(NotificationDispatch dispatch, NotificationSubscription sub,
+                                Instant retryStartedAt) {
+        dispatch.markSuccess(dispatch.getGeneratedTitle(), dispatch.getGeneratedBody(),
+                dispatch.getTemplateSource());
+        saveDispatchPort.save(dispatch);
+
+        sub.markNotified(retryStartedAt);
+        saveSubscriptionPort.save(sub);
+    }
+
+    /**
+     * Retry TX 실패: dispatch 상태(FAILED 또는 DEAD + attempt_count)를 저장.
+     * 호출 전에 도메인 메서드(markDead 또는 markFailed + incrementAttemptCount)를 호출해야 한다.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void txBRetryFailure(NotificationDispatch dispatch) {
         saveDispatchPort.save(dispatch);
     }
 

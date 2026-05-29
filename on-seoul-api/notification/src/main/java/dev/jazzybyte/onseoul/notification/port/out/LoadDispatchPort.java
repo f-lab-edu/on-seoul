@@ -19,4 +19,11 @@ public interface LoadDispatchPort {
      * @param limit  페이지 크기 (size)
      */
     List<NotificationDispatch> loadByUserId(Long userId, Long cursor, int limit);
+
+    /**
+     * 구독당 가장 최근 FAILED dispatch를 반환한다.
+     * generated_title IS NOT NULL (재시도 가능한 것만) AND attempt_count < 5.
+     * 각 subscription_id별 id MAX인 것 1건.
+     */
+    List<NotificationDispatch> findRetryable();
 }

@@ -129,6 +129,7 @@ class NotificationPersistenceMapper implements SubscriptionFilterParserPort {
                 e.getGeneratedBody(),
                 e.getTemplateSource(),
                 e.getLastError(),
+                e.getAttemptCount(),
                 e.getCreatedAt(),
                 e.getUpdatedAt());
     }

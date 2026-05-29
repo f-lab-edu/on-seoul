@@ -25,7 +25,7 @@ class NotificationDispatchServiceTest {
 
     private NotificationDispatch dispatch(long id) {
         return new NotificationDispatch(id, 1L, 10L, DispatchStatus.SUCCESS,
-                Instant.now(), "t", "b", null, null, Instant.now(), Instant.now());
+                Instant.now(), "t", "b", null, null, 0, Instant.now(), Instant.now());
     }
 
     @Test

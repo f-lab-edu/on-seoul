@@ -1,9 +1,11 @@
 package dev.jazzybyte.onseoul.notification.domain;
 
 /**
- * ADR-0004 per-batch 모델: PENDING/SUCCESS/FAILED 만 사용한다.
- * DEAD 상태는 last_notified_at 미갱신 정책으로 대체되어 제거되었다.
+ * ADR-0004 per-batch 모델.
+ * DEAD는 outbox retry 스케줄러가 attempt_count >= 5에서 전환하는 영구 중단 상태.
  */
 public enum DispatchStatus {
-    PENDING, SUCCESS, FAILED
+    PENDING, SUCCESS, FAILED,
+    /** 재시도 한도 초과로 영구 중단. */
+    DEAD
 }

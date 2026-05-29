@@ -214,7 +214,7 @@ class NotificationSchedulerTest {
 
         scheduler.processAllSubscriptions();
 
-        verify(txHelper).txBFailure(eq(d), eq("Knock 오류"));
+        verify(txHelper).txBFailure(eq(d), eq("제목"), eq("본문"), eq(TemplateSource.FALLBACK), eq("Knock 오류"));
 
         ArgumentCaptor<NotificationBatch> finalCaptor = ArgumentCaptor.forClass(NotificationBatch.class);
         verify(saveBatchPort).update(finalCaptor.capture());

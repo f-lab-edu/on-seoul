@@ -195,7 +195,9 @@ public class NotificationScheduler {
 
         } catch (RuntimeException pushEx) {
             try {
-                txHelper.txBFailure(dispatch, pushEx.getMessage());
+                txHelper.txBFailure(dispatch,
+                        template.title(), template.body(), template.source(),
+                        pushEx.getMessage());
             } catch (Exception e) {
                 log.error("[NotificationScheduler] TX B(실패) 실패: dispatchId={}, error={}",
                         dispatch.getId(), e.getMessage());
