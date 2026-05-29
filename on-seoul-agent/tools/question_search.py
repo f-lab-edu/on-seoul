@@ -11,8 +11,10 @@ DISTINCT ON (service_id) 패턴으로 중복을 제거한다.
 이전 설계와의 차이:
     구버전은 ROW_NUMBER() 윈도우 + scan_k LIMIT 조합이었으나,
     윈도우 함수가 HNSW ANN 최적화를 막고 WindowAgg + 중첩 Sort 구조로 실행됐다.
-    DISTINCT ON 으로 전환한 뒤 실측 결과 Execution Time 이 동등하고
+    DISTINCT ON 으로 전환한 뒤 실측 결과 Execution Time 이 소폭 개선되고
     실행 계획이 단순해졌다. scan_k 파라미터도 제거했다.
+    서브쿼리로 감싸 outer ORDER BY similarity DESC + LIMIT :top_k 를 적용함으로써
+    service_id 알파벳 순이 아닌 유사도 내림차순으로 최종 결과를 정렬한다.
     (EXPLAIN 분석: docs/question-search-query-analysis.md 참조)
 """
 
@@ -29,6 +31,8 @@ async def question_search(
     top_k: int = TOP_K,
     min_similarity: float = MIN_SIMILARITY,
 ) -> list[dict]:
+    if not query_vector or not all(isinstance(v, (int, float)) for v in query_vector):
+        raise ValueError("query_vector must be a non-empty list of floats")
     """service_embeddings WHERE row_kind='question' → service_id별 최고 유사도 1건 반환.
 
     Parameters
@@ -55,15 +59,18 @@ async def question_search(
     }
 
     sql = text("""
-        SELECT DISTINCT ON (service_id)
-            service_id,
-            embedding_text,
-            intent_label,
-            1 - (embedding <=> CAST(:query_vector AS vector)) AS similarity
-        FROM service_embeddings
-        WHERE row_kind = 'question'
-          AND 1 - (embedding <=> CAST(:query_vector AS vector)) >= :min_similarity
-        ORDER BY service_id, embedding <=> CAST(:query_vector AS vector)
+        SELECT * FROM (
+            SELECT DISTINCT ON (service_id)
+                service_id,
+                embedding_text,
+                intent_label,
+                1 - (embedding <=> CAST(:query_vector AS vector)) AS similarity
+            FROM service_embeddings
+            WHERE row_kind = 'question'
+              AND 1 - (embedding <=> CAST(:query_vector AS vector)) >= :min_similarity
+            ORDER BY service_id, embedding <=> CAST(:query_vector AS vector)
+        ) ranked
+        ORDER BY similarity DESC
         LIMIT :top_k
     """)
 
