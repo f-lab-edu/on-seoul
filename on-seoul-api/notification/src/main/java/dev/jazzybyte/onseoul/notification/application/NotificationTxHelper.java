@@ -6,11 +6,13 @@ import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
 import dev.jazzybyte.onseoul.notification.domain.ServiceChange;
 import dev.jazzybyte.onseoul.notification.domain.SubscriptionFilter;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
+import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadServiceChangePort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.SubscriptionFilterParserPort;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,35 +27,50 @@ import java.util.Optional;
  * <p>가상 스레드 풀에서 직접 {@link Transactional}이 동작하지 않으므로
  * Spring 프록시 빈으로 분리한다.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class NotificationTxHelper {
 
     private final LoadServiceChangePort loadServiceChangePort;
+    private final LoadDispatchPort loadDispatchPort;
     private final SaveDispatchPort saveDispatchPort;
     private final SaveSubscriptionPort saveSubscriptionPort;
     private final SubscriptionFilterParserPort subscriptionFilterParserPort;
 
     /**
-     * TX A: subscription.filter를 SubscriptionFilter로 역직렬화한 뒤 lastNotifiedAt 이후의 변경을 조회한다.
-     * 변경이 존재하면 (batch_id, subscription_id) UNIQUE 제약을 이용해 PENDING dispatch를 멱등 INSERT 한다.
+     * TX A: subscription.filter를 SubscriptionFilter로 역직렬화한 뒤
+     * (lastNotifiedAt, batch.startedAt] 범위의 변경을 조회한다.
+     *
+     * <p>상한({@code batch.startedAt})을 전달해 쿼리 시점까지의 변경이 이번 배치에 포함되는 것을 막는다.
+     * {@code txBSuccess}가 커서를 {@code batch.startedAt}으로 전진시키므로 상한과 커서가 항상 일치한다.
+     *
+     * <p>변경이 존재하면 (batch_id, subscription_id) UNIQUE 제약을 이용해 PENDING dispatch를 멱등 INSERT 한다.
      *
      * @return (변경 목록, 신규 INSERT된 dispatch). 변경이 없거나 dispatch가 이미 존재(중복 배치)면
      *         dispatch는 Optional.empty 이며 호출자는 발송을 건너뛰어야 한다.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public TxAResult txA(Long batchId, NotificationSubscription sub) {
+    public TxAResult txA(NotificationBatch batch, NotificationSubscription sub) {
+        // DEAD guard: 영구 실패로 판정된 구독은 이후 모든 배치에서도 건너뛴다.
+        // 재시도 스케줄러가 attempt_count >= MAX_ATTEMPTS 후 DEAD로 전환한 뒤에도
+        // 메인 배치가 매 tick 새 dispatch를 생성하는 것을 방지한다.
+        if (loadDispatchPort.existsDeadDispatchBySubscriptionId(sub.getId())) {
+            log.info("[txA] 구독 subscriptionId={} — DEAD dispatch 존재, 발송 건너뜀", sub.getId());
+            return new TxAResult(List.of(), Optional.empty());
+        }
+
         SubscriptionFilter filter = subscriptionFilterParserPort.parse(sub.getFilter());
 
         List<ServiceChange> changes = loadServiceChangePort.loadFiltered(
-                sub.getServiceId(), filter, sub.getLastNotifiedAt());
+                sub.getServiceId(), filter, sub.getLastNotifiedAt(), batch.getStartedAt());
 
         if (changes.isEmpty()) {
             return new TxAResult(List.of(), Optional.empty());
         }
 
         Optional<NotificationDispatch> dispatch = saveDispatchPort.saveIfAbsent(
-                NotificationDispatch.create(batchId, sub.getId()));
+                NotificationDispatch.create(batch.getId(), sub.getId()));
         return new TxAResult(changes, dispatch);
     }
 

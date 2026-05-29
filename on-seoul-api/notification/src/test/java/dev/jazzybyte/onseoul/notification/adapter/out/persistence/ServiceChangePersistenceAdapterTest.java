@@ -84,7 +84,7 @@ class ServiceChangePersistenceAdapterTest {
         insertChange("OA-2269", "UPDATED", "service_name", "구", "신", now.minusHours(1));
         insertChange("OA-2266", "NEW", null, null, null, now);
 
-        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), null);
+        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), null, null);
 
         assertThat(result).hasSize(2);
         assertThat(result).allMatch(c -> c.serviceId().equals("OA-2269"));
@@ -99,10 +99,27 @@ class ServiceChangePersistenceAdapterTest {
         insertChange("OA-2269", "UPDATED", "service_name", "구", "신", base.plusHours(1));
 
         Instant since = base.toInstant();
-        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), since);
+        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), since, null);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).fieldName()).isEqualTo("service_name");
+    }
+
+    @Test
+    @DisplayName("changedAtBefore(상한, inclusive) — 해당 시각 이후 변경은 제외된다")
+    void loadFiltered_withChanedAtBefore_excludesAfterUpperBound() {
+        insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사");
+        OffsetDateTime base = utc(2026, 5, 1, 12, 0);
+        insertChange("OA-2269", "UPDATED", "f1", null, null, base);
+        insertChange("OA-2269", "UPDATED", "f2", null, null, base.plusHours(1));
+        insertChange("OA-2269", "UPDATED", "f3", null, null, base.plusHours(2));
+
+        // 상한: base+1h (inclusive) → f1, f2만 포함되어야 한다
+        Instant before = base.plusHours(1).toInstant();
+        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), null, before);
+
+        assertThat(result).hasSize(2);
+        assertThat(result).extracting(ServiceChange::fieldName).containsExactly("f1", "f2");
     }
 
     @Test
@@ -111,7 +128,7 @@ class ServiceChangePersistenceAdapterTest {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
-        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), null);
+        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), null, null);
 
         assertThat(result).isEmpty();
     }
@@ -123,7 +140,7 @@ class ServiceChangePersistenceAdapterTest {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
-        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), null);
+        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), null, null);
 
         assertThat(result).isEmpty();
     }
@@ -139,7 +156,7 @@ class ServiceChangePersistenceAdapterTest {
         List<ServiceChange> filtered = adapter.loadFiltered(
                 "OA-2269",
                 new SubscriptionFilter(Set.of("RECEIVING"), Set.of(), Set.of()),
-                null);
+                null, null);
         assertThat(filtered).isEmpty();
 
         // RECEIVING으로 변경하면 매칭
@@ -150,7 +167,7 @@ class ServiceChangePersistenceAdapterTest {
         List<ServiceChange> matched = adapter.loadFiltered(
                 "OA-2269",
                 new SubscriptionFilter(Set.of("RECEIVING"), Set.of(), Set.of()),
-                null);
+                null, null);
         assertThat(matched).hasSize(1);
     }
 
@@ -164,13 +181,13 @@ class ServiceChangePersistenceAdapterTest {
         List<ServiceChange> miss = adapter.loadFiltered(
                 "OA-2269",
                 new SubscriptionFilter(Set.of(), Set.of("송파구"), Set.of()),
-                null);
+                null, null);
         assertThat(miss).isEmpty();
 
         List<ServiceChange> hit = adapter.loadFiltered(
                 "OA-2269",
                 new SubscriptionFilter(Set.of(), Set.of("강남구"), Set.of()),
-                null);
+                null, null);
         assertThat(hit).hasSize(1);
     }
 
@@ -184,13 +201,13 @@ class ServiceChangePersistenceAdapterTest {
         List<ServiceChange> miss = adapter.loadFiltered(
                 "OA-2269",
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of("체육시설")),
-                null);
+                null, null);
         assertThat(miss).isEmpty();
 
         List<ServiceChange> hit = adapter.loadFiltered(
                 "OA-2269",
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of("문화행사")),
-                null);
+                null, null);
         assertThat(hit).hasSize(1);
     }
 
@@ -203,7 +220,7 @@ class ServiceChangePersistenceAdapterTest {
         insertChange("OA-2269", "UPDATED", "f2", null, null, base.plusHours(1));
         insertChange("OA-2269", "UPDATED", "f3", null, null, base);
 
-        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), null);
+        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), null, null);
 
         assertThat(result).extracting(ServiceChange::fieldName)
                 .containsExactly("f3", "f2", "f1");
@@ -216,7 +233,7 @@ class ServiceChangePersistenceAdapterTest {
         OffsetDateTime insertedAt = utc(2026, 5, 1, 12, 0);
         insertChange("OA-2269", "NEW", "service_status", null, "RECEIVING", insertedAt);
 
-        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), null);
+        List<ServiceChange> result = adapter.loadFiltered("OA-2269", SubscriptionFilter.empty(), null, null);
 
         assertThat(result.get(0).changedAt()).isEqualTo(insertedAt.toInstant());
     }

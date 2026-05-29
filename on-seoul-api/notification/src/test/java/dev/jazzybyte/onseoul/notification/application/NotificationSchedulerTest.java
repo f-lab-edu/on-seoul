@@ -148,7 +148,7 @@ class NotificationSchedulerTest {
     void txAEmpty_skipsTemplateAndPush() {
         NotificationSubscription s = sub(1L, "OA-2269");
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s));
-        when(txHelper.txA(eq(BATCH_ID), eq(s)))
+        when(txHelper.txA(any(NotificationBatch.class), eq(s)))
                 .thenReturn(txAResult(List.of(), null));
 
         scheduler.processAllSubscriptions();
@@ -161,7 +161,7 @@ class NotificationSchedulerTest {
     void duplicateDispatch_skipsPush() {
         NotificationSubscription s = sub(1L, "OA-2269");
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s));
-        when(txHelper.txA(eq(BATCH_ID), eq(s)))
+        when(txHelper.txA(any(NotificationBatch.class), eq(s)))
                 .thenReturn(txAResult(List.of(change(100L, "OA-2269")), null));
 
         scheduler.processAllSubscriptions();
@@ -178,7 +178,7 @@ class NotificationSchedulerTest {
         TemplateResult template = new TemplateResult("제목", "본문", TemplateSource.AI);
 
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s));
-        when(txHelper.txA(eq(BATCH_ID), eq(s))).thenReturn(txAResult(List.of(c), d));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
         when(templateGenerationPort.generate(any())).thenReturn(template);
 
         scheduler.processAllSubscriptions();
@@ -207,7 +207,7 @@ class NotificationSchedulerTest {
         TemplateResult template = new TemplateResult("제목", "본문", TemplateSource.FALLBACK);
 
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s));
-        when(txHelper.txA(eq(BATCH_ID), eq(s))).thenReturn(txAResult(List.of(c), d));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
         when(templateGenerationPort.generate(any())).thenReturn(template);
         doThrow(new RuntimeException("Knock 오류")).when(pushNotificationPort)
                 .send(any(UserContact.class), anyString(), anyString(), any(), any());
@@ -233,8 +233,8 @@ class NotificationSchedulerTest {
         TemplateResult template = new TemplateResult("제목2", "본문2", TemplateSource.AI);
 
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s1, s2));
-        when(txHelper.txA(eq(BATCH_ID), eq(s1))).thenThrow(new RuntimeException("DB 오류"));
-        when(txHelper.txA(eq(BATCH_ID), eq(s2))).thenReturn(txAResult(List.of(c2), d2));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s1))).thenThrow(new RuntimeException("DB 오류"));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s2))).thenReturn(txAResult(List.of(c2), d2));
         when(templateGenerationPort.generate(any())).thenReturn(template);
 
         scheduler.processAllSubscriptions();
@@ -257,7 +257,7 @@ class NotificationSchedulerTest {
         NotificationDispatch d = dispatch(1L);
 
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s));
-        when(txHelper.txA(eq(BATCH_ID), eq(s))).thenReturn(txAResult(List.of(c), d));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
         when(templateGenerationPort.generate(any()))
                 .thenReturn(new TemplateResult("제목", "본문", TemplateSource.AI));
 
@@ -275,7 +275,7 @@ class NotificationSchedulerTest {
         NotificationDispatch d = dispatch(1L);
 
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s));
-        when(txHelper.txA(eq(BATCH_ID), eq(s))).thenReturn(txAResult(List.of(c), d));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
         when(templateGenerationPort.generate(any()))
                 .thenReturn(new TemplateResult("제목", "본문", TemplateSource.AI));
         doThrow(new RuntimeException("Knock 오류")).when(pushNotificationPort)
@@ -297,7 +297,7 @@ class NotificationSchedulerTest {
         NotificationDispatch d = dispatch(1L);
 
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s));
-        when(txHelper.txA(eq(BATCH_ID), eq(s))).thenReturn(txAResult(List.of(c), d));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
         when(templateGenerationPort.generate(any()))
                 .thenReturn(new TemplateResult("제목", "본문", TemplateSource.AI));
 
@@ -341,7 +341,7 @@ class NotificationSchedulerTest {
         NotificationDispatch d = dispatch(1L);
 
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s));
-        when(txHelper.txA(eq(BATCH_ID), eq(s))).thenReturn(txAResult(List.of(c), d));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
         when(templateGenerationPort.generate(any()))
                 .thenReturn(new TemplateResult("t", "b", TemplateSource.AI));
         doThrow(new RuntimeException("DB 오류")).when(txHelper)
@@ -364,7 +364,7 @@ class NotificationSchedulerTest {
         NotificationDispatch d = dispatch(1L);
 
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s));
-        when(txHelper.txA(eq(BATCH_ID), eq(s))).thenReturn(txAResult(List.of(c), d));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
         when(templateGenerationPort.generate(any()))
                 .thenReturn(new TemplateResult("t", "b", TemplateSource.AI));
         when(loadUserContactPort.loadContact(anyLong())).thenReturn(Optional.empty());
@@ -385,7 +385,7 @@ class NotificationSchedulerTest {
         for (long i = 1; i <= n; i++) {
             NotificationSubscription s = sub(i, "OA-" + i);
             subs.add(s);
-            when(txHelper.txA(eq(BATCH_ID), eq(s)))
+            when(txHelper.txA(any(NotificationBatch.class), eq(s)))
                     .thenReturn(txAResult(List.of(change(i + 1000, "OA-" + i)), dispatch(i)));
         }
         when(loadSubscriptionPort.loadAll()).thenReturn(subs);
@@ -415,7 +415,7 @@ class NotificationSchedulerTest {
         NotificationDispatch d = dispatch(1L);
 
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s));
-        when(txHelper.txA(eq(BATCH_ID), eq(s))).thenReturn(txAResult(List.of(c), d));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
         when(templateGenerationPort.generate(any()))
                 .thenReturn(new TemplateResult("t", "b", TemplateSource.AI));
         doThrow(new RuntimeException("Knock 오류")).when(pushNotificationPort)
@@ -440,7 +440,7 @@ class NotificationSchedulerTest {
         NotificationDispatch d = dispatch(1L);
 
         when(loadSubscriptionPort.loadAll()).thenReturn(List.of(s));
-        when(txHelper.txA(eq(BATCH_ID), eq(s))).thenReturn(txAResult(List.of(c1, c2), d));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c1, c2), d));
         when(templateGenerationPort.generate(any()))
                 .thenReturn(new TemplateResult("t", "b", TemplateSource.AI));
 

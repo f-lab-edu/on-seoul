@@ -38,7 +38,8 @@ class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
      *
      * 동적 WHERE:
      *   - L.service_id = serviceId
-     *   - lastNotifiedAt != null → L.changed_at > lastNotifiedAt
+     *   - lastNotifiedAt != null → L.changed_at > lastNotifiedAt   (하한, exclusive)
+     *   - changedAtBefore != null → L.changed_at <= changedAtBefore (상한, inclusive)
      *   - filter.statuses     비었으면 무시, 아니면 P.service_status   IN (statuses)
      *   - filter.areaNames    비었으면 무시, 아니면 P.area_name        IN (areaNames)
      *   - filter.maxClassNames 비었으면 무시, 아니면 P.max_class_name IN (maxClassNames)
@@ -47,7 +48,8 @@ class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
     @Override
     public List<ServiceChange> loadFiltered(String serviceId,
                                             SubscriptionFilter filter,
-                                            Instant lastNotifiedAt) {
+                                            Instant lastNotifiedAt,
+                                            Instant changedAtBefore) {
         SubscriptionFilter f = filter == null ? SubscriptionFilter.empty() : filter;
 
         Condition condition = SERVICE_CHANGE_LOG.SERVICE_ID.eq(serviceId)
@@ -56,6 +58,10 @@ class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
         if (lastNotifiedAt != null) {
             OffsetDateTime since = lastNotifiedAt.atOffset(ZoneOffset.UTC);
             condition = condition.and(SERVICE_CHANGE_LOG.CHANGED_AT.gt(since));
+        }
+        if (changedAtBefore != null) {
+            OffsetDateTime before = changedAtBefore.atOffset(ZoneOffset.UTC);
+            condition = condition.and(SERVICE_CHANGE_LOG.CHANGED_AT.le(before));
         }
         if (!f.statuses().isEmpty()) {
             condition = condition.and(PUBLIC_SERVICE_RESERVATIONS.SERVICE_STATUS.in(f.statuses()));

@@ -131,7 +131,7 @@ public class NotificationScheduler {
         try {
             NotificationTxHelper.TxAResult txA;
             try {
-                txA = txHelper.txA(batch.getId(), sub);
+                txA = txHelper.txA(batch, sub);
             } catch (Exception e) {
                 log.warn("[NotificationScheduler] TX A 실패: subscriptionId={}, error={}",
                         sub.getId(), e.getMessage());
