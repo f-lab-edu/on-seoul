@@ -62,9 +62,6 @@ class Settings(BaseSettings):
     rrf_scan_k_per_track: int = 50
     rrf_top_k_final: int = 10
 
-    # Track C 전용
-    question_scan_multiplier: int = 3
-
     # VectorSubIntent 활성화 단계
     # False(기본): 항상 vector_default_sub_intent 프로파일 사용.
     # True 전환 조건: Router의 sub_intent 분류 정확도 ≥ 80% 검증 후 수동 전환. (Phase 3)

@@ -198,7 +198,6 @@ async def _search_vector(
         c_rows = await question_search(
             ai_session,
             vec,
-            scan_k=_VEC_SCAN_K,
             top_k=_VEC_TOP_K,
             min_similarity=0.5,
         )
