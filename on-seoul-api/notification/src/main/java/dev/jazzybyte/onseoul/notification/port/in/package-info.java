@@ -1,2 +1,2 @@
-/** notification BC — inbound ports. CreateDefaultSubscriptionsUseCase 구현 완료. */
+/** notification BC — inbound ports. */
 package dev.jazzybyte.onseoul.notification.port.in;

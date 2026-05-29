@@ -1,6 +1,5 @@
 package dev.jazzybyte.onseoul.user.adapter.in.security;
 
-import dev.jazzybyte.onseoul.notification.port.in.CreateDefaultSubscriptionsUseCase;
 import dev.jazzybyte.onseoul.user.port.in.SocialLoginCommand;
 import dev.jazzybyte.onseoul.user.port.in.SocialLoginUseCase;
 import dev.jazzybyte.onseoul.user.port.in.TokenResponse;
@@ -29,18 +28,8 @@ import java.util.Map;
  * <p>성공: {@code {frontendBaseUrl}/oauth/callback?status=success}</p>
  * <p>SUSPENDED/DELETED 계정: {@code {frontendBaseUrl}/oauth/callback?error=forbidden}</p>
  *
- * <p><b>BC 의존 (ADR-0001):</b> 이 클래스는 {@code user} BC에서 {@code notification} BC의
- * {@link dev.jazzybyte.onseoul.notification.port.in.CreateDefaultSubscriptionsUseCase}를
- * 직접 호출한다. user → notification 방향의 컴파일 의존이며, ADR-0001이 허용하는 방향이다
- * (역방향 notification → user 만 금지).
- *
- * <p><b>의도적 결합:</b> 신규 사용자 등록 시점에 알림 구독 기본값을 동기 생성하는 것이
- * 단순하고 명시적인 해법이다. 실패 시 로그인 흐름을 차단하지 않도록 예외를 swallow한다.
- *
- * <p><b>향후 decoupling 경로:</b> 구독 수 또는 알림 BC의 배포 독립성 요구가 커지면
- * {@code UserRegistered} 도메인 이벤트({@code ApplicationEventPublisher})를 발행하고
- * notification BC가 {@code @EventListener}로 구독하는 방식으로 전환할 수 있다.
- * 이 경우 user BC의 notification 컴파일 의존을 완전히 제거할 수 있다.
+ * <p>이 핸들러의 책임은 소셜 로그인 처리 후 토큰 발급과 콜백 리다이렉트뿐이다.
+ * 알림 구독은 opt-in 모델이므로 신규 사용자에게 기본 구독을 생성하지 않는다.</p>
  */
 @Slf4j
 @Component
@@ -52,7 +41,6 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
     public static final String REFRESH_TOKEN_COOKIE = "refresh_token";
 
     private final SocialLoginUseCase socialLoginUseCase;
-    private final CreateDefaultSubscriptionsUseCase createDefaultSubscriptionsUseCase;
     private final String frontendBaseUrl;
     private final boolean cookieSecure;
     /** 쿠키 SameSite 속성. 기본값 Strict. */
@@ -69,14 +57,12 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
 
     public OAuth2LoginSuccessHandler(
             final SocialLoginUseCase socialLoginUseCase,
-            final CreateDefaultSubscriptionsUseCase createDefaultSubscriptionsUseCase,
             final TokenIssuerPort tokenIssuerPort,
             @Value("${app.frontend-base-url}") String frontendBaseUrl,
             @Value("${app.cookie-secure:true}") boolean cookieSecure,
             @Value("${app.cookie-same-site:Strict}") String cookieSameSite,
             @Value("${app.cookie-domain:}") String cookieDomain) {
         this.socialLoginUseCase = socialLoginUseCase;
-        this.createDefaultSubscriptionsUseCase = createDefaultSubscriptionsUseCase;
         this.frontendBaseUrl = frontendBaseUrl;
         this.cookieSecure = cookieSecure;
         this.cookieSameSite = cookieSameSite;
@@ -119,14 +105,6 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         try {
             SocialLoginCommand command = new SocialLoginCommand(provider, providerId, email, nickname);
             TokenResponse tokenResponse = socialLoginUseCase.socialLogin(command);
-
-            // 기본 구독 생성: 실패해도 로그인 흐름은 계속 (구독 없이도 서비스 이용 가능).
-            // user → notification 직접 호출은 ADR-0001 허용 의존. 향후 UserRegistered 이벤트로 전환 가능.
-            try {
-                createDefaultSubscriptionsUseCase.create(tokenResponse.userId());
-            } catch (Exception e) {
-                log.warn("[Notification] 기본 구독 생성 실패: userId={}, error={}", tokenResponse.userId(), e.getMessage());
-            }
 
             response.addHeader("Set-Cookie", buildAccessCookie(tokenResponse.accessToken()).toString());
             response.addHeader("Set-Cookie", buildRefreshCookie(tokenResponse.refreshToken()).toString());

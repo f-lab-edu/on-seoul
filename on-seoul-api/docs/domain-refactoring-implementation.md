@@ -52,21 +52,19 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 - [x] `NotificationSubscription` 애그리거트 — `channels`(Set\<NotificationChannel\>), `filter`, `lastNotifiedAt`
 - [x] `NotificationDispatch` 애그리거트 — `generated_title/body`, `template_source`, `markSuccess()`, `markFailed()`
 - [x] `NotificationChannel` enum — EMAIL, SMS
-- [x] Inbound Port — `CreateDefaultSubscriptionsUseCase` (ADR-0001 BC 간 동기 호출 인터페이스)
 - [x] Outbound Port — `LoadSubscriptionPort`, `SaveSubscriptionPort`, `SaveDispatchPort`, `LoadDispatchPort`, `PushNotificationPort`, `TemplateGenerationPort`
 - [x] JPA 엔티티 및 Repository
 
 ---
 
-## Phase 4. user BC — 기본 구독 생성 연결
+## Phase 4. user BC — 토큰 발급 (구독은 opt-in)
 
-> OAuth 로그인 성공 시 기본 구독을 동기 직접 호출로 생성한다.
-> 상세 결정은 `adr/0001-context-communication.md`, `adr/0002-domain-event-catalog.md` 참조.
+> OAuth 로그인 성공 시 토큰 발급 + 콜백 리다이렉트만 수행한다.
+> 알림 구독은 opt-in 모델로, 신규 사용자는 구독 0개로 시작하고 이후 직접 구독한다.
+> user BC는 더 이상 notification BC에 의존하지 않는다(기본 구독 자동 생성 제거).
 
-- [x] `OAuth2LoginSuccessHandler` → `CreateDefaultSubscriptionsUseCase.create(userId)` 직접 호출
-- [x] 호출은 JWT 발급 TX 밖(별도 TX 또는 TX 없음) — `adr/0003-consistency-and-transaction.md` 참조
-- [x] `CreateDefaultSubscriptionsUseCase` 구현체 — 5개 데이터셋(OA-2266~2270) 기본 구독 INSERT (채널 기본값: EMAIL)
-- [x] `TokenResponse`에 `userId` 추가 — 핸들러→구독 생성 연결 목적
+- [x] `OAuth2LoginSuccessHandler` — 소셜 로그인 처리 후 토큰 쿠키 발급 + 콜백 리다이렉트
+- [x] `TokenResponse`에 `userId` 포함
 
 ---
 
@@ -213,7 +211,6 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 - [ ] `NotificationSubscription` / `NotificationDispatch` 도메인 단위 테스트
 - [ ] `NotificationScheduler` — TX A / TX B 분리, `ON CONFLICT DO NOTHING` 멱등성, `last_notified_at` 갱신 시점, DEAD 전환
 - [ ] `TemplateAgentClient` — AI 호출 성공 / non-2xx / 타임아웃 / 빈 title·body → fallback
-- [ ] `CreateDefaultSubscriptionsUseCase` 연결 통합 테스트
 - [ ] ArchUnit — BC 간 직접 엔티티 참조 부재 검증
 - [ ] `./gradlew test` 전 구간 통과
 

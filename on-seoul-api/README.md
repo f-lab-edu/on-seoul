@@ -67,14 +67,14 @@ on-seoul-api/
 
 ```
 bootstrap
-  ├── user        ──▶ common, notification
+  ├── user        ──▶ common
   ├── chat        ──▶ common, collection
   ├── collection  ──▶ common
   └── notification──▶ common
 ```
 
 - **common**: 전역 예외·유틸. 프레임워크 의존 없음.
-- **user**: OAuth2·JWT 인증. notification에 의존 (기본 구독 생성 직접 호출, ADR-0001).
+- **user**: OAuth2·JWT 인증. 다른 BC에 의존하지 않음 (알림 구독은 opt-in 모델).
 - **chat**: 채팅 세션·메시지. AI 서비스 SSE 릴레이.
 - **collection**: 서울 Open API 수집·변경 감지. 다른 BC에 의존하지 않음.
 - **notification**: 구독·발송 스케줄링. user/collection을 ID로만 참조 (객체 참조 금지).

@@ -9,7 +9,7 @@
 
 | 역할 | 설명 |
 |---|---|
-| 기본 구독 생성 | OAuth2 로그인 성공 시 5개 데이터셋에 대한 기본 구독을 자동 생성 |
+| 구독 관리 | 사용자가 직접 구독을 생성·수정·삭제 (opt-in 모델). 신규 사용자는 구독 0개로 시작 |
 | 알림 스케줄링 | `ServiceChangeLog`를 주기적으로 조회해 구독 조건에 매칭된 변경에 대해 발송 처리 (Phase 6) |
 | 템플릿 생성 | AI 서비스(`POST /notification/template`)로 자연어 메시지를 생성하고, 실패 시 정형 fallback 사용 |
 | 알림 발송 | Knock을 통해 SMS/이메일 채널별 발송 |
@@ -33,7 +33,7 @@ notification/
 │
 ├── port/
 │   ├── in/
-│   │   └── CreateDefaultSubscriptionsUseCase.java  # 기본 구독 생성 (user BC → 직접 호출)
+│   │   └── (CreateSubscription/UpdateSubscription/DeleteSubscription/ListSubscriptions/ListDispatches)
 │   └── out/
 │       ├── LoadSubscriptionPort.java    # 구독 전체 조회 (스케줄러용)
 │       ├── SaveSubscriptionPort.java    # 구독 저장 + saveIfAbsent
@@ -46,7 +46,6 @@ notification/
 │   ├── NotificationScheduler.java              # 메인 발송 스케줄러 (fixedDelay 5분, 가상 스레드 풀)
 │   ├── DispatchRetryScheduler.java             # FAILED dispatch 재시도 스케줄러 (fixedDelay 1시간)
 │   ├── NotificationTxHelper.java               # 트랜잭션 분리 헬퍼 (TX A / TX B / Retry TX)
-│   ├── CreateDefaultSubscriptionsService.java  # 기본 구독 생성 구현체
 │   ├── NotificationSubscriptionService.java    # 구독 CRUD use case
 │   └── NotificationDispatchService.java        # 발송 이력 조회 use case
 │
@@ -244,9 +243,7 @@ notification:
 
 ```
 user BC
-  └─ OAuth2LoginSuccessHandler
-       └─ [동기 직접 호출] CreateDefaultSubscriptionsUseCase  ← notification BC
-                                                              (ADR-0001)
+  └─ OAuth2LoginSuccessHandler  (토큰 발급 + 콜백 리다이렉트만; notification 의존 없음)
 
 notification BC
   └─ adapter/out/agent  ──▶  FastAPI AI 서비스 (외부, ACL 적용)

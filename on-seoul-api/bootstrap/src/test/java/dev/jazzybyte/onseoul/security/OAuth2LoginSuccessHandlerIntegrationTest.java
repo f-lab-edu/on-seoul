@@ -1,6 +1,5 @@
 package dev.jazzybyte.onseoul.security;
 
-import dev.jazzybyte.onseoul.notification.port.in.CreateDefaultSubscriptionsUseCase;
 import dev.jazzybyte.onseoul.user.adapter.out.jwt.JwtTokenIssuer;
 import dev.jazzybyte.onseoul.user.adapter.in.security.OAuth2LoginSuccessHandler;
 import dev.jazzybyte.onseoul.user.port.in.SocialLoginCommand;
@@ -42,7 +41,6 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
     private static final String FRONTEND_BASE_URL = "http://localhost:3000";
 
     @Mock private SocialLoginUseCase socialLoginUseCase;
-    @Mock private CreateDefaultSubscriptionsUseCase createDefaultSubscriptionsUseCase;
 
     private OAuth2LoginSuccessHandler handler;
     private JwtTokenIssuer tokenIssuer;
@@ -50,7 +48,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
     @BeforeEach
     void setUp() {
         tokenIssuer = new JwtTokenIssuer(TEST_SECRET, 15L, 10080L);
-        handler = new OAuth2LoginSuccessHandler(socialLoginUseCase, createDefaultSubscriptionsUseCase, tokenIssuer, FRONTEND_BASE_URL, false, "Strict", "");
+        handler = new OAuth2LoginSuccessHandler(socialLoginUseCase, tokenIssuer, FRONTEND_BASE_URL, false, "Strict", "");
     }
 
     private OAuth2AuthenticationToken googleToken(Map<String, Object> attrs) {
@@ -244,34 +242,25 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
     }
 
     @Test
-    @DisplayName("로그인 성공 시 createDefaultSubscriptionsUseCase.create()가 올바른 userId로 호출된다")
-    void onAuthenticationSuccess_success_callsCreateDefaultSubscriptions() throws Exception {
-        long userId = 77L;
-        Map<String, Object> attrs = Map.of("id", "g-077", "email", "sub@test.com", "name", "구독테스트");
-        String accessToken = tokenIssuer.generateAccessToken(userId);
-        String refreshToken = tokenIssuer.generateRefreshToken(userId);
+    @DisplayName("opt-in 회귀 가드 — 로그인 성공 시 토큰 발급 외 부수효과(구독 자동 생성 등)가 없다")
+    void onAuthenticationSuccess_hasNoSideEffectsBeyondTokenIssuance() throws Exception {
+        // 기본 구독 자동 생성 제거(opt-in 전환) 이후, 핸들러의 협력자는 socialLoginUseCase 하나뿐이어야 한다.
+        // 향후 누군가 구독 생성 등 부수효과를 다시 끼워넣으면 이 가드가 깨진다.
+        Map<String, Object> attrs = Map.of("id", "g-optin", "email", "optin@test.com", "name", "옵트인");
+        String accessToken = tokenIssuer.generateAccessToken(99L);
+        String refreshToken = tokenIssuer.generateRefreshToken(99L);
         when(socialLoginUseCase.socialLogin(any(SocialLoginCommand.class)))
-                .thenReturn(new TokenResponse(userId, accessToken, refreshToken));
-
-        invoke(googleToken(attrs));
-
-        verify(createDefaultSubscriptionsUseCase).create(userId);
-    }
-
-    @Test
-    @DisplayName("createDefaultSubscriptionsUseCase가 예외를 던져도 리다이렉트 URL이 ?status=success 이다")
-    void onAuthenticationSuccess_subscriptionFails_stillRedirectsSuccess() throws Exception {
-        long userId = 88L;
-        Map<String, Object> attrs = Map.of("id", "g-088", "email", "sub2@test.com", "name", "구독실패테스트");
-        String accessToken = tokenIssuer.generateAccessToken(userId);
-        String refreshToken = tokenIssuer.generateRefreshToken(userId);
-        when(socialLoginUseCase.socialLogin(any(SocialLoginCommand.class)))
-                .thenReturn(new TokenResponse(userId, accessToken, refreshToken));
-        doThrow(new RuntimeException("구독 생성 오류")).when(createDefaultSubscriptionsUseCase).create(any());
+                .thenReturn(new TokenResponse(99L, accessToken, refreshToken));
 
         MockHttpServletResponse res = invoke(googleToken(attrs));
 
+        // 성공 경로는 토큰 쿠키 2개(access/refresh)만 발급한다.
         assertThat(res.getStatus()).isEqualTo(302);
         assertThat(res.getRedirectedUrl()).isEqualTo(FRONTEND_BASE_URL + "/oauth/callback?status=success");
+        assertThat(res.getHeaders("Set-Cookie")).hasSize(2);
+
+        // socialLogin 외에 어떤 협력자 호출도 없어야 한다.
+        verify(socialLoginUseCase).socialLogin(any(SocialLoginCommand.class));
+        verifyNoMoreInteractions(socialLoginUseCase);
     }
 }
