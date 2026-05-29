@@ -14,7 +14,7 @@ on-seoul은 다섯 개의 바운디드 컨텍스트로 구성된다.
 | 인증 (Auth) | on-seoul-api | User |
 | 수집 (Collection) | on-seoul-api | ApiSourceCatalog, PublicServiceReservation, CollectionHistory |
 | 채팅 (Chat) | on-seoul-api | ChatRoom, ChatMessage |
-| 알림 (Notification) | on-seoul-api | NotificationSubscription, NotificationTemplate, NotificationDispatch |
+| 알림 (Notification) | on-seoul-api | NotificationSubscription, NotificationBatch, NotificationDispatch |
 | AI 에이전트 (AI Agent) | on-seoul-agent (외부, on_ai DB) | AgentState, SearchResult, ChatAgentTrace |
 
 ```mermaid
@@ -43,7 +43,7 @@ graph LR
     subgraph NOTIFICATION["알림 도메인"]
         direction TB
         NotificationSubscription["NotificationSubscription\n(AR)"]
-        NotificationTemplate["NotificationTemplate\n(AR)"]
+        NotificationBatch["NotificationBatch\n(AR)"]
         NotificationDispatch["NotificationDispatch\n(AR)"]
     end
 
@@ -57,8 +57,6 @@ graph LR
     CollectionHistory -. "sourceId (ID 참조)" .-> ApiSourceCatalog
     ServiceChangeLog -. "serviceId (자연키 참조)" .-> PublicServiceReservation
     NotificationSubscription -. "userId" .-> User
-    NotificationDispatch -. "userId" .-> User
-    NotificationDispatch -. "serviceId (자연키)" .-> PublicServiceReservation
     COLLECTION -. "변경 이벤트" .-> NOTIFICATION
     NOTIFICATION -. "알림 템플릿 생성" .-> AI
     ChatAgentTrace -. "messageId\n(논리 참조, DB 다름)" .-> ChatMessage
@@ -70,7 +68,7 @@ graph LR
     style CollectionHistory fill:#90EE90,stroke:#228B22
     style ChatRoom fill:#90EE90,stroke:#228B22
     style NotificationSubscription fill:#90EE90,stroke:#228B22
-    style NotificationTemplate fill:#90EE90,stroke:#228B22
+    style NotificationBatch fill:#90EE90,stroke:#228B22
     style NotificationDispatch fill:#90EE90,stroke:#228B22
     style ChatAgentTrace fill:#90EE90,stroke:#228B22
 ```
@@ -271,7 +269,7 @@ classDiagram
 
 서비스 상태 변경을 감지하여 사용자에게 SMS 또는 이메일 알림을 발송한다.
 메시지 *생성*은 AI Service(`POST /notification/template`)가 담당하고, *발송*은 API Service가 Knock을 통해 담당한다.
-두 개의 애그리거트로 구성되며 각각 독립 생명주기를 가진다.
+세 개의 애그리거트로 구성되며 각각 독립 생명주기를 가진다(ADR-0004 per-batch 모델).
 
 ```mermaid
 classDiagram
@@ -291,29 +289,52 @@ classDiagram
         +markNotified(notifiedAt)
     }
 
+    class NotificationBatch {
+        <<AggregateRoot>>
+        +Long id
+        +Instant startedAt
+        +Instant finishedAt
+        +BatchStatus status
+        +int sentCount
+        +int failedCount
+        --
+        +start() NotificationBatch
+        +complete(sentCount, failedCount)
+        +fail(sentCount, failedCount)
+    }
+
     class NotificationDispatch {
         <<AggregateRoot>>
         +Long id
+        +Long batchId
         +Long subscriptionId
-        +Long changeLogId
         +DispatchStatus status
-        +short attemptCount
+        +int attemptCount
         +Instant sentAt
         +String generatedTitle
         +String generatedBody
         +TemplateSource templateSource
         +String lastError
         --
-        +create(subscriptionId, changeLogId) NotificationDispatch
+        +create(batchId, subscriptionId) NotificationDispatch
         +markSuccess(title, body, source)
-        +markFailed(error, maxAttempts)
-        +isRetryable(maxAttempts)
+        +markFailed(error, title, body, source)
+        +markDead(error)
+        +incrementAttemptCount()
+        +isRetryExhausted() bool
     }
 
     class NotificationChannel {
         <<Enumeration>>
         EMAIL
         SMS
+    }
+
+    class BatchStatus {
+        <<Enumeration>>
+        RUNNING
+        SUCCESS
+        FAILED
     }
 
     class DispatchStatus {
@@ -331,11 +352,12 @@ classDiagram
     }
 
     NotificationSubscription --> NotificationChannel
+    NotificationBatch --> BatchStatus
     NotificationDispatch --> DispatchStatus
     NotificationDispatch --> TemplateSource
+    NotificationDispatch ..> NotificationBatch : batchId (ID 참조)
     NotificationDispatch ..> NotificationSubscription : subscriptionId (ID 참조)
     NotificationSubscription ..> User : userId (ID 참조, 인증)
-    NotificationDispatch ..> ServiceChangeLog : changeLogId (ID 참조, 수집)
 ```
 
 **애그리거트별 역할:**
@@ -343,25 +365,49 @@ classDiagram
 | 애그리거트 | 생명주기 | 불변 조건 |
 |---|---|---|
 | `NotificationSubscription` | OAuth2 로그인 시 5개 기본 구독 자동 생성. 채널 선택(SMS/이메일) 가능 | `(user_id, service_id)` 조합 유일 |
-| `NotificationDispatch` | 구독 × 변경 이벤트 단위로 생성 (audit log). DEAD(5회 실패) 도달 시 재시도 중단 | `(subscription_id, change_log_id)` 조합 유일. 멱등 INSERT |
+| `NotificationBatch` | 스케줄러 tick마다 1건 생성, 모든 구독 처리 완료 후 집계 기록 | 상태 머신 RUNNING → SUCCESS\|FAILED |
+| `NotificationDispatch` | 배치 × 구독 단위 발송 시도 (per-batch 모델, ADR-0004). DEAD 도달 후 메인 배치도 발송 중단 | `UNIQUE(batch_id, subscription_id)` — 같은 배치 내 중복 발송 차단 |
 
 **메시지 생성 및 발송 흐름:**
 
 ```
-(알림 스케줄러 tick — 5분 주기, 가상 스레드 동시 4건)
+[메인 배치 — fixedDelay 5분, 가상 스레드 동시 4건]
 
-TX A: ServiceChangeLog WHERE changed_at > sub.last_notified_at
-      → Dispatch INSERT (PENDING) ON CONFLICT DO NOTHING
+  NotificationBatch INSERT (RUNNING)
 
-TX 밖: AI Service (POST /notification/template, 10초 타임아웃)
-       → 실패 시 NotificationTemplate.render() fallback
-       → Knock.send(userId, title, body, dispatchId, channels)  ← SMS/이메일
+  TX A (구독별):
+    DEAD 가드: subscriptionId에 DEAD dispatch 존재 시 → 발송 skip (row 무한 누적 방지)
+    변경 조회: changed_at ∈ (sub.last_notified_at, batch.startedAt]  (SubscriptionFilter 적용)
+    변경 없으면 skip
+    Dispatch INSERT (PENDING) UNIQUE(batch_id, subscription_id) — 중복 배치 멱등 처리
 
-TX B: 성공: Dispatch → SUCCESS, last_notified_at 갱신
-      실패: Dispatch → FAILED (attempt_count++ → 5회 시 DEAD)
+  TX 밖:
+    AI Service (POST /notification/template, 10초 타임아웃)
+    → 실패 시 NotificationTemplate.render() fallback
+    → Knock.send(channels)
+
+  TX B 성공: Dispatch → SUCCESS + generatedTitle/Body 저장, last_notified_at = batch.startedAt
+  TX B 실패: Dispatch → FAILED + generatedTitle/Body 저장 (재시도 스케줄러 재사용 목적)
+
+  NotificationBatch UPDATE (SUCCESS|FAILED, sentCount, failedCount)
+
+[재시도 배치 — fixedDelay 1시간]
+
+  FAILED dispatch WHERE attemptCount < 5 AND generatedTitle IS NOT NULL
+    → 구독별 최신 1건, updatedAt < now - 10분 (메인 배치 레이스 방지)
+    → Knock.send(기존 title/body, AI 호출 없음)
+    성공: Dispatch → SUCCESS, last_notified_at = retryStartedAt
+    실패: incrementAttemptCount()
+          attemptCount >= 5 → markDead() → 이후 메인 배치 DEAD 가드로 건너뜀
 ```
 
-> **핵심 보장:** `last_notified_at`은 발송 성공 시에만 전진. JVM 크래시 후에도 다음 tick에서 동일 변경 이벤트를 재매칭하지만, UNIQUE 제약이 중복 Dispatch INSERT를 차단해 기존 row로 재시도.
+> **핵심 보장:**
+> - `last_notified_at`은 발송 성공 시에만 전진 — JVM 크래시 후 자동 복구
+> - `changedAtBefore = batch.startedAt` — 쿼리 시점 이후 변경은 다음 배치로 미뤄 중복 발송 방지
+> - `UNIQUE(batch_id, subscription_id)` — 같은 배치 내 중복 발송 차단
+> - DEAD 가드 — `attemptCount ≥ 5` 이후 메인 배치도 발송 중단하여 row 누적 방지
+> - `generated_title/body`를 FAILED 시에도 저장 — 재시도 스케줄러가 AI 호출 없이 재사용
+>
 > 상세: [ADR-0004](../on-seoul-api/docs/adr/0004-notification-orchestration.md)
 
 ---
@@ -456,8 +502,7 @@ graph LR
     CollectionHistory["CollectionHistory\n(수집 도메인)"] -. "sourceId" .-> ApiSourceCatalog["ApiSourceCatalog\n(수집 도메인)"]
     ServiceChangeLog["ServiceChangeLog\n(수집 도메인)"] -. "serviceId (자연키)" .-> PublicServiceReservation["PublicServiceReservation\n(수집 도메인)"]
     NotificationSubscription["NotificationSubscription\n(알림 도메인)"] -. "userId" .-> User
-    NotificationDispatch["NotificationDispatch\n(알림 도메인)"] -. "userId" .-> User
-    NotificationDispatch -. "serviceId (자연키)" .-> PublicServiceReservation["PublicServiceReservation\n(수집 도메인)"]
+    NotificationDispatch["NotificationDispatch\n(알림 도메인)"] -. "subscriptionId" .-> NotificationSubscription
     ChatAgentTrace["ChatAgentTrace\n(AI 도메인)"] -. "messageId (논리)" .-> ChatMessage["ChatMessage\n(채팅 도메인)"]
 ```
 
@@ -467,8 +512,8 @@ graph LR
 | `CollectionHistory.sourceId` | `ApiSourceCatalog` | ID 참조 | 수집 이력이 소스 설정에 느슨하게 의존 |
 | `ServiceChangeLog.serviceId` | `PublicServiceReservation` | 자연키(String) | 서울 API의 고유 ID. 도메인 객체 없이 참조 가능 |
 | `NotificationSubscription.userId` | `User` | ID 참조 | 알림 ↔ 인증 도메인 경계 분리 |
-| `NotificationDispatch.userId` | `User` | ID 참조 | 발송 audit log의 수신자 식별 |
-| `NotificationDispatch.serviceId` | `PublicServiceReservation` | 자연키(String) | 알림 트리거가 된 서비스 추적 |
+| `NotificationDispatch.subscriptionId` | `NotificationSubscription` | ID 참조 | 발송 단위를 구독 애그리거트에 연결 (같은 BC 내부) |
+| `NotificationDispatch.batchId` | `NotificationBatch` | ID 참조 | 발송 단위를 배치 실행에 연결 (같은 BC 내부) |
 | `ChatAgentTrace.messageId` | `ChatMessage` | 논리 참조 (DB 다름) | on_ai ↔ on_data 크로스 DB. 물리 FK 불가, GIN 인덱스로 조회 |
 
 > **원칙:** 바운디드 컨텍스트 경계를 넘는 참조는 반드시 ID(또는 자연키)로만 한다. 객체 그래프를 경계 밖으로 노출하지 않는다.

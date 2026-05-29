@@ -136,6 +136,8 @@ curl http://localhost:8080/actuator/health
 
 ## API 엔드포인트
 
+**인증 / 사용자**
+
 | Method | Path | 설명 | 인증 |
 |---|---|---|---|
 | GET | `/oauth2/authorization/{provider}` | 소셜 로그인 시작 (Google 등) | X |
@@ -144,7 +146,27 @@ curl http://localhost:8080/actuator/health
 | POST | `/auth/logout` | 로그아웃 (Refresh Token 무효화) | O |
 | GET | `/auth/me` | 내 프로필 조회 | O |
 | PATCH | `/api/users/me/contact` | 연락처(전화번호) 등록/수정 | O |
+
+**챗봇**
+
+| Method | Path | 설명 | 인증 |
+|---|---|---|---|
 | POST | `/query` | 챗봇 질의 (AI 서비스 위임, SSE) | O |
+
+**알림 구독 / 발송 이력**
+
+| Method | Path | 설명 | 인증 |
+|---|---|---|---|
+| GET    | `/api/notifications/subscriptions` | 내 구독 목록 | O |
+| POST   | `/api/notifications/subscriptions` | 구독 생성 | O |
+| PATCH  | `/api/notifications/subscriptions/{id}` | 구독 수정 (filter/channels) | O |
+| DELETE | `/api/notifications/subscriptions/{id}` | 구독 해지 | O |
+| GET    | `/api/notifications/dispatches` | 발송 이력 (cursor 페이지네이션) | O |
+
+**관리자**
+
+| Method | Path | 설명 | 인증 |
+|---|---|---|---|
 | POST | `/admin/collection/trigger` | 수집 수동 트리거 | 관리자 |
 
 ---
@@ -154,3 +176,4 @@ curl http://localhost:8080/actuator/health
 - [프로젝트 전체 구조](../docs/architecture.md)
 - [API 서비스 구현 목록](./docs/api-service-implementation.md)
 - [AI 서비스 구현 목록](../on-seoul-agent/docs/ai-service-implementation.md)
+- [알림 BC 상세 문서](./notification/README.md)
