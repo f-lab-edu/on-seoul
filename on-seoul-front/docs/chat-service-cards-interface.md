@@ -17,6 +17,8 @@
 
 `answer` 텍스트와 `service_cards` 배열은 **동일한 결과 집합의 두 표현**이다. 답변 본문에 "외 N건" 표기가 들어 있으면 실제 결과는 5건보다 많고 (`service_cards.length === 5`), 그렇지 않으면 `service_cards.length` 가 전체 건수다.
 
+> **중요 — `answer` 본문 역할 축소 (2026-05-31)**: 시설 상세(분류·요금·접수 상태·바로가기 링크)는 이제 **`service_cards` 가 전담**한다. `answer` 본문은 도입문 + **시설명 목록(시설명 + 자치구만)** + 마무리 안내로 간소화됐다. 즉 답변 본문에서 카드 상세를 파싱하거나 다시 보여줄 필요가 없으며, 상세 표현은 전적으로 카드 UI 책임이다. (마무리 안내 중 "특정 자치구/요금 조건을 알려달라" 멘트는 **사용자 질문에 자치구가 명시되지 않았을 때만** 백엔드 프롬프트가 생성한다.)
+
 ---
 
 ## 2. `final` 이벤트 새 스키마
@@ -27,7 +29,7 @@
 type SseFinalEvent = {
   type: "final";
   message_id: number;
-  answer: string;            // 자연어 답변 (카드 텍스트 포함)
+  answer: string;            // 자연어 답변 (도입문 + 시설명 목록 + 마무리 안내, 카드 상세 미포함)
   intent: "SQL_SEARCH" | "VECTOR_SEARCH" | "MAP" | "FALLBACK" | null;
   title: string | null;      // 첫 메시지일 때만 채워짐
   cache_hit: boolean;        // 캐시 히트 여부 (UI 표시는 자유)
@@ -125,7 +127,7 @@ type ServiceStatus =
   const formatDate = (iso: string | null): string =>
     iso ? iso.slice(0, 10) : "";
   ```
-- 백엔드 LLM 프롬프트(`answer` 본문) 도 시간 부분 생략 규칙을 따른다.
+- 접수 날짜는 이제 `answer` 본문에 등장하지 않고 카드(`receipt_*_dt`)로만 노출된다. 위 변환 유틸은 카드 렌더링에 사용한다.
 
 **주의**: `service_open_start_dt` / `service_open_end_dt` (이용 기간) 는 **카드에 포함되지 않는다.** DB 에 비현실적 범위(예: 2021~2031) 가 다수 존재해 의도적으로 제외했다. 데이터 신뢰성 개선 시 재검토 예정 — 프론트에서 별도 요청 금지.
 
@@ -144,8 +146,8 @@ type ServiceStatus =
 | 시나리오 | `answer` | `service_cards` | UI 가이드 |
 |---|---|---|---|
 | 정상 결과 0건 | "조건에 맞는 시설을 찾지 못했습니다." | `[]` | 답변만 노출, 카드 영역 미노출 |
-| 정상 결과 1~5건 | 카드 텍스트 + 마무리 안내 | 1~5 길이 | 카드 + 답변 본문 동시 노출 |
-| 정상 결과 6+ 건 | 카드 텍스트 + "외 N건" + 마무리 안내 | 5 길이 | 카드 5개 + 답변 본문 |
+| 정상 결과 1~5건 | 도입문 + 시설명 목록 + 마무리 안내 | 1~5 길이 | 카드 + 답변 본문 동시 노출 |
+| 정상 결과 6+ 건 | 도입문 + 시설명 목록 + "외 N건" + 마무리 안내 | 5 길이 | 카드 5개 + 답변 본문 |
 | 캐시 히트 | (이전 답변) | (이전 카드) | `cache_hit=true` 활용은 자유 |
 | `workflow_error` 이벤트 | "서비스 처리 중 오류가 발생했습니다." | `[]` (백엔드 강제) | 에러 토스트 우선 |
 | `error` 이벤트 | (없음) | (없음) | 시스템 오류 토스트 |
@@ -225,7 +227,7 @@ export type SseTypedEvent =
 - [ ] `service_status` 칩 색상 매핑
 - [ ] `receipt_start_dt` / `receipt_end_dt` → `YYYY-MM-DD` 변환 유틸
 - [ ] `service_url` 외부 링크 처리 (`target="_blank"`, `rel="noopener noreferrer"`)
-- [ ] `answer` 본문은 카드와 별도 영역에 그대로 노출 (Markdown 미사용, 줄바꿈만 보존)
+- [ ] `answer` 본문은 카드와 별도 영역에 그대로 노출 (Markdown 미사용, 줄바꿈만 보존). 본문은 시설명 목록 수준이므로 카드와 내용이 중복되지 않음 — 파싱 불필요
 - [ ] `workflow_error` 분기에서 카드 렌더링 차단
 
 ---
@@ -235,7 +237,7 @@ export type SseTypedEvent =
 - 정본 PR: `AGENT-7-retrieval` 브랜치
 - 관련 파일:
   - `on-seoul-agent/schemas/state.py` — `AgentState.service_cards`
-  - `on-seoul-agent/agents/answer_agent.py` — `_normalize()`, `answer()`
+  - `on-seoul-agent/agents/answer_agent.py` — `_normalize()`, `answer()`, `_ANSWER_SYSTEM` (본문 시설명 목록 간소화)
   - `on-seoul-agent/agents/nodes.py` — `CacheWriteNode` / `CacheCheckNode` payload 일관성
   - `on-seoul-agent/routers/chat.py` — final 페이로드 직렬화
 
