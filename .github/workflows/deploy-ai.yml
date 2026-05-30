@@ -12,7 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-latest        # GitHub 호스팅 runner — 빌드 전용
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Log in to GHCR
         id: login_ghcr
@@ -27,7 +27,7 @@ jobs:
 
       - name: Build and push
         id: docker_push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./on-seoul-agent
           push: true
@@ -74,9 +74,9 @@ jobs:
 
       - name: Slack Notification on Build Failure
         if: failure()
-        uses: rtCamp/action-slack-notify@v2
+        run: bash .github/workflows/templates/notify-slack.sh
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_COLOR: '#ff0000'
           SLACK_TITLE: '배포 실패 (Build Job)'
           SLACK_MESSAGE: ${{ env.SLACK_MESSAGE }}
@@ -85,7 +85,7 @@ jobs:
     needs: build
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Deploy agent
         id: deploy_agent
@@ -128,9 +128,9 @@ jobs:
 
       - name: Slack Notification on Success
         if: success()
-        uses: rtCamp/action-slack-notify@v2
+        run: bash .github/workflows/templates/notify-slack.sh
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_COLOR: '#36a64f'
           SLACK_TITLE: '배포 결과'
           SLACK_MESSAGE: ${{ env.SLACK_MESSAGE }}
@@ -169,9 +169,9 @@ jobs:
 
       - name: Slack Notification on Deploy Failure
         if: failure()
-        uses: rtCamp/action-slack-notify@v2
+        run: bash .github/workflows/templates/notify-slack.sh
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_COLOR: '#ff0000'
           SLACK_TITLE: '배포 실패 (Deploy Job)'
           SLACK_MESSAGE: ${{ env.SLACK_MESSAGE }}
