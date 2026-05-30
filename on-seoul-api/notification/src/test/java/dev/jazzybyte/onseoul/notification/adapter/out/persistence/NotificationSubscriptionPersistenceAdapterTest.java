@@ -32,14 +32,13 @@ class NotificationSubscriptionPersistenceAdapterTest {
     @Test
     @DisplayName("save() 신규 구독 → insert 후 id 채번")
     void save_newSubscription_insertsAndAssignsId() {
-        NotificationSubscription sub = NotificationSubscription.create(1L, "SVC-001",
+        NotificationSubscription sub = NotificationSubscription.create(1L,
                 Set.of(NotificationChannel.EMAIL));
 
         NotificationSubscription saved = adapter.save(sub);
 
         assertThat(saved.getId()).isNotNull().isPositive();
         assertThat(saved.getUserId()).isEqualTo(1L);
-        assertThat(saved.getServiceId()).isEqualTo("SVC-001");
         assertThat(saved.getFilter()).isEqualTo("{}");
         assertThat(saved.getChannels()).containsExactly(NotificationChannel.EMAIL);
         assertThat(saved.getLastNotifiedAt()).isNull();
@@ -48,7 +47,7 @@ class NotificationSubscriptionPersistenceAdapterTest {
     @Test
     @DisplayName("save() EMAIL+SMS 복수 채널 → 저장 후 복원")
     void save_multipleChannels_persistsAndRestores() {
-        NotificationSubscription sub = NotificationSubscription.create(3L, "SVC-010",
+        NotificationSubscription sub = NotificationSubscription.create(3L,
                 Set.of(NotificationChannel.EMAIL, NotificationChannel.SMS));
 
         NotificationSubscription saved = adapter.save(sub);
@@ -60,8 +59,8 @@ class NotificationSubscriptionPersistenceAdapterTest {
     @Test
     @DisplayName("loadAll() — 저장된 구독 전체 반환")
     void loadAll_returnsAllSubscriptions() {
-        adapter.save(NotificationSubscription.create(1L, "SVC-001", Set.of(NotificationChannel.EMAIL)));
-        adapter.save(NotificationSubscription.create(1L, "SVC-002", Set.of(NotificationChannel.SMS)));
+        adapter.save(NotificationSubscription.create(1L, Set.of(NotificationChannel.EMAIL)));
+        adapter.save(NotificationSubscription.create(1L, Set.of(NotificationChannel.SMS)));
 
         List<NotificationSubscription> all = adapter.loadAll();
 
@@ -71,7 +70,7 @@ class NotificationSubscriptionPersistenceAdapterTest {
     @Test
     @DisplayName("save() 기존 구독 — lastNotifiedAt 갱신")
     void save_existingSubscription_updatesLastNotifiedAt() {
-        NotificationSubscription sub = NotificationSubscription.create(2L, "SVC-003",
+        NotificationSubscription sub = NotificationSubscription.create(2L,
                 Set.of(NotificationChannel.EMAIL));
         NotificationSubscription saved = adapter.save(sub);
 
@@ -85,16 +84,17 @@ class NotificationSubscriptionPersistenceAdapterTest {
     @Test
     @DisplayName("loadByUserId() — 해당 유저의 구독만 반환, id ASC 정렬")
     void loadByUserId_returnsOnlyOwnSubscriptions() {
-        adapter.save(NotificationSubscription.create(7L, "OA-A", Set.of(NotificationChannel.EMAIL)));
-        adapter.save(NotificationSubscription.create(7L, "OA-B", Set.of(NotificationChannel.EMAIL)));
-        adapter.save(NotificationSubscription.create(8L, "OA-C", Set.of(NotificationChannel.EMAIL)));
+        adapter.save(NotificationSubscription.create(7L, Set.of(NotificationChannel.EMAIL)));
+        adapter.save(NotificationSubscription.create(7L, Set.of(NotificationChannel.EMAIL)));
+        adapter.save(NotificationSubscription.create(8L, Set.of(NotificationChannel.EMAIL)));
 
         List<NotificationSubscription> user7 = adapter.loadByUserId(7L);
 
-        assertThat(user7).extracting(NotificationSubscription::getServiceId)
-                .containsExactly("OA-A", "OA-B");
+        assertThat(user7).hasSize(2);
         assertThat(user7).extracting(NotificationSubscription::getUserId)
                 .containsOnly(7L);
+        assertThat(user7).extracting(NotificationSubscription::getId)
+                .isSorted();
     }
 
     @Test
@@ -104,31 +104,32 @@ class NotificationSubscriptionPersistenceAdapterTest {
     }
 
     @Test
-    @DisplayName("insert() — uq_ns_user_service 위반 시 DataIntegrityViolationException")
-    void insert_duplicate_throwsDataIntegrityViolation() {
+    @DisplayName("insert() — 동일 user_id로 여러 조건 기반 구독을 INSERT할 수 있다 (중복 제약 없음)")
+    void insert_sameUserMultipleSubscriptions_allInserted() {
         NotificationSubscription first = NotificationSubscription.create(
-                20L, "OA-DUP", Set.of(NotificationChannel.EMAIL));
-        adapter.insert(first);
+                20L, Set.of(NotificationChannel.EMAIL));
+        NotificationSubscription second = NotificationSubscription.create(
+                20L, Set.of(NotificationChannel.SMS));
 
-        NotificationSubscription dup = NotificationSubscription.create(
-                20L, "OA-DUP", Set.of(NotificationChannel.EMAIL));
+        NotificationSubscription savedFirst = adapter.insert(first);
+        NotificationSubscription savedSecond = adapter.insert(second);
 
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> adapter.insert(dup))
-                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThat(savedFirst.getId()).isNotEqualTo(savedSecond.getId());
+        assertThat(adapter.loadByUserId(20L)).hasSize(2);
     }
 
     @Test
     @DisplayName("updatePartial() — filter 만 갱신, channels/lastNotifiedAt 보존")
     void updatePartial_filterOnly_preservesChannelsAndLastNotifiedAt() {
         NotificationSubscription created = adapter.save(NotificationSubscription.create(
-                30L, "OA-UP1", Set.of(NotificationChannel.EMAIL, NotificationChannel.SMS)));
+                30L, Set.of(NotificationChannel.EMAIL, NotificationChannel.SMS)));
         Instant when = Instant.parse("2026-05-20T10:00:00Z");
         created.markNotified(when);
         adapter.save(created);
 
         NotificationSubscription after = adapter.updatePartial(
                 created.getId(),
-                new SubscriptionFilter(Set.of("RECEIVING"), null, null),
+                new SubscriptionFilter(Set.of("RECEIVING"), null, null, null),
                 null);
 
         assertThat(after.getFilter()).contains("RECEIVING");
@@ -141,7 +142,7 @@ class NotificationSubscriptionPersistenceAdapterTest {
     @DisplayName("updatePartial() — channels 만 갱신, filter/lastNotifiedAt 보존")
     void updatePartial_channelsOnly_preservesFilterAndLastNotifiedAt() {
         NotificationSubscription created = adapter.save(NotificationSubscription.create(
-                31L, "OA-UP2", Set.of(NotificationChannel.EMAIL)));
+                31L, Set.of(NotificationChannel.EMAIL)));
         Instant when = Instant.parse("2026-05-21T10:00:00Z");
         created.markNotified(when);
         adapter.save(created);
@@ -158,7 +159,7 @@ class NotificationSubscriptionPersistenceAdapterTest {
     @DisplayName("deleteById() — row 삭제")
     void deleteById_removesRow() {
         NotificationSubscription created = adapter.save(NotificationSubscription.create(
-                40L, "OA-DEL", Set.of(NotificationChannel.EMAIL)));
+                40L, Set.of(NotificationChannel.EMAIL)));
 
         adapter.deleteById(created.getId());
 
@@ -166,17 +167,13 @@ class NotificationSubscriptionPersistenceAdapterTest {
     }
 
     @Test
-    @DisplayName("saveIfAbsent() — 동일 (userId, serviceId)로 두 번 호출해도 row가 1건이다")
-    void saveIfAbsent_idempotent_doesNotInsertDuplicate() {
-        NotificationSubscription sub = NotificationSubscription.create(99L, "OA-2269",
+    @DisplayName("saveIfAbsent() — 구독을 INSERT 한다 (제약 위반 없이 정상 저장)")
+    void saveIfAbsent_insertsRow() {
+        NotificationSubscription sub = NotificationSubscription.create(99L,
                 Set.of(NotificationChannel.EMAIL));
         adapter.saveIfAbsent(sub);
-        adapter.saveIfAbsent(sub);  // ON CONFLICT DO NOTHING — should not throw
 
-        List<NotificationSubscription> all = adapter.loadAll();
-        long count = all.stream()
-                .filter(s -> s.getUserId().equals(99L) && s.getServiceId().equals("OA-2269"))
-                .count();
-        assertThat(count).isEqualTo(1);
+        List<NotificationSubscription> user99 = adapter.loadByUserId(99L);
+        assertThat(user99).hasSize(1);
     }
 }

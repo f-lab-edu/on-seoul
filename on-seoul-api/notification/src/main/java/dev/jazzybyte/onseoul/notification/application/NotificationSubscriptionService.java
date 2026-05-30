@@ -25,7 +25,7 @@ import java.util.Set;
  * 알림 구독 관리 use case 집합 구현체.
  *
  * <p>권한 위반(다른 유저의 구독)은 {@code FORBIDDEN}, 미존재는 {@code SUBSCRIPTION_NOT_FOUND},
- * {@code (user_id, service_id)} 중복은 {@code SUBSCRIPTION_CONFLICT} 로 변환한다.
+ * 조건이 하나도 없는 빈 구독·키워드 한도 초과는 {@code INVALID_INPUT} 로 변환한다.
  *
  * <p>JSON 직렬화는 어댑터(persistence mapper) 책임이다. application 은 도메인 타입
  * ({@link SubscriptionFilter}, {@link NotificationChannel}) 만 다룬다.
@@ -54,19 +54,19 @@ public class NotificationSubscriptionService implements
     @Override
     @Transactional
     public SubscriptionView create(Long userId, CreateSubscriptionCommand cmd) {
-        requireServiceId(cmd.serviceId());
         Set<NotificationChannel> channels = requireNonEmptyChannels(cmd.channels());
         SubscriptionFilter filter = cmd.filter() != null ? cmd.filter() : SubscriptionFilter.empty();
+        requireAtLeastOneCondition(filter);
+        requireKeywordLimit(filter);
 
         NotificationSubscription subscription =
-                NotificationSubscription.create(userId, cmd.serviceId(), filter, channels);
+                NotificationSubscription.create(userId, filter, channels);
 
         try {
             NotificationSubscription saved = saveSubscriptionPort.insert(subscription);
             return toView(saved);
         } catch (DataIntegrityViolationException ex) {
-            log.debug("[NotificationSubscription] 중복 구독 INSERT 차단: userId={}, serviceId={}",
-                    userId, cmd.serviceId());
+            log.debug("[NotificationSubscription] 구독 INSERT 제약 위반: userId={}", userId);
             throw new OnSeoulApiException(ErrorCode.SUBSCRIPTION_CONFLICT);
         }
     }
@@ -75,6 +75,10 @@ public class NotificationSubscriptionService implements
     @Transactional
     public SubscriptionView update(Long userId, Long subscriptionId, UpdateSubscriptionCommand cmd) {
         requireAnyUpdate(cmd);
+        if (cmd.filter() != null) {
+            requireAtLeastOneCondition(cmd.filter());
+            requireKeywordLimit(cmd.filter());
+        }
         NotificationSubscription existing = loadOwned(userId, subscriptionId);
 
         Set<NotificationChannel> channels = cmd.channels();
@@ -99,7 +103,6 @@ public class NotificationSubscriptionService implements
         return new SubscriptionView(
                 s.getId(),
                 s.getUserId(),
-                s.getServiceId(),
                 filterParser.parse(s.getFilter()),
                 s.getChannels(),
                 s.getLastNotifiedAt(),
@@ -115,9 +118,19 @@ public class NotificationSubscriptionService implements
         return existing;
     }
 
-    private void requireServiceId(String serviceId) {
-        if (serviceId == null || serviceId.isBlank()) {
-            throw new OnSeoulApiException(ErrorCode.INVALID_INPUT, "serviceId 는 필수입니다.");
+    /** 빈 구독 가드: 필터 조건이 모두 비어 있으면 거부 (전체 변경 구독 방지). */
+    private void requireAtLeastOneCondition(SubscriptionFilter filter) {
+        if (filter == null || filter.isEmpty()) {
+            throw new OnSeoulApiException(ErrorCode.INVALID_INPUT,
+                    "필터 조건(상태/지역/카테고리/키워드) 중 최소 1개는 지정해야 합니다.");
+        }
+    }
+
+    /** 키워드 개수 제한 가드. */
+    private void requireKeywordLimit(SubscriptionFilter filter) {
+        if (filter != null && filter.keywords().size() > SubscriptionFilter.MAX_KEYWORDS) {
+            throw new OnSeoulApiException(ErrorCode.INVALID_INPUT,
+                    "키워드는 최대 " + SubscriptionFilter.MAX_KEYWORDS + "개까지 지정할 수 있습니다.");
         }
     }
 

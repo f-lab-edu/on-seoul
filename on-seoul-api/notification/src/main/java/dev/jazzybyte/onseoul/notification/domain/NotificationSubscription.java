@@ -10,11 +10,10 @@ public class NotificationSubscription {
 
     private Long id;
     private Long userId;
-    private String serviceId;
     /**
      * JSONB string representation of {@link SubscriptionFilter}.
      * Populated by adapters on load. {@code null} for instances produced by
-     * {@link #create(Long, String, SubscriptionFilter, Set)} until they are persisted —
+     * {@link #create(Long, SubscriptionFilter, Set)} until they are persisted —
      * adapters consult {@link #parsedFilter} and serialize via the persistence mapper.
      */
     private String filter;
@@ -30,12 +29,11 @@ public class NotificationSubscription {
 
     private NotificationSubscription() {}
 
-    private NotificationSubscription(Long id, Long userId, String serviceId, String filter,
+    private NotificationSubscription(Long id, Long userId, String filter,
                                      Set<NotificationChannel> channels,
                                      Instant lastNotifiedAt, Instant createdAt) {
         this.id = id;
         this.userId = userId;
-        this.serviceId = serviceId;
         this.filter = filter;
         this.channels = channels;
         this.lastNotifiedAt = lastNotifiedAt;
@@ -47,10 +45,10 @@ public class NotificationSubscription {
      * The reconstitute constructor is private so application/web layers cannot bypass the
      * domain factories.
      */
-    public static NotificationSubscription ofPersistence(Long id, Long userId, String serviceId, String filter,
+    public static NotificationSubscription ofPersistence(Long id, Long userId, String filter,
                                                          Set<NotificationChannel> channels,
                                                          Instant lastNotifiedAt, Instant createdAt) {
-        return new NotificationSubscription(id, userId, serviceId, filter, channels, lastNotifiedAt, createdAt);
+        return new NotificationSubscription(id, userId, filter, channels, lastNotifiedAt, createdAt);
     }
 
     /**
@@ -60,12 +58,11 @@ public class NotificationSubscription {
      * {@link #filter} (JSON 문자열) 은 빈 필터일 때 한해 표현이 명확한 {@code "{}"} 로 미리 채워둔다 —
      * 그 외 경우는 어댑터가 mapper 로 직렬화한 결과로 round-trip 후 도메인에 다시 채워진다.
      */
-    public static NotificationSubscription create(Long userId, String serviceId,
+    public static NotificationSubscription create(Long userId,
                                                   SubscriptionFilter filter,
                                                   Set<NotificationChannel> channels) {
         NotificationSubscription s = new NotificationSubscription();
         s.userId = userId;
-        s.serviceId = serviceId;
         SubscriptionFilter f = filter != null ? filter : SubscriptionFilter.empty();
         s.parsedFilter = f;
         if (f.isEmpty()) {
@@ -77,9 +74,9 @@ public class NotificationSubscription {
     }
 
     /** Convenience overload — creates a new subscription with an empty filter. */
-    public static NotificationSubscription create(Long userId, String serviceId,
+    public static NotificationSubscription create(Long userId,
                                                   Set<NotificationChannel> channels) {
-        return create(userId, serviceId, SubscriptionFilter.empty(), channels);
+        return create(userId, SubscriptionFilter.empty(), channels);
     }
 
     /** Updates lastNotifiedAt to the given instant. Called only on push success. */

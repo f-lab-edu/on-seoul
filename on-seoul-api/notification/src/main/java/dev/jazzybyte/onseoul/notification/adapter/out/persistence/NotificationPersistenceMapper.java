@@ -27,7 +27,6 @@ class NotificationPersistenceMapper implements SubscriptionFilterParserPort {
         return NotificationSubscription.ofPersistence(
                 e.getId(),
                 e.getUserId(),
-                e.getServiceId(),
                 e.getFilter(),
                 deserializeChannels(e.getChannels()),
                 e.getLastNotifiedAt(),
@@ -77,6 +76,7 @@ class NotificationPersistenceMapper implements SubscriptionFilterParserPort {
      *   <li>{@code statuses}        — string[] : service_status 화이트리스트</li>
      *   <li>{@code areaNames}       — string[] : area_name 화이트리스트</li>
      *   <li>{@code maxClassNames}   — string[] : max_class_name 화이트리스트 (카테고리)</li>
+     *   <li>{@code keywords}        — string[] : service_name/place_name 부분일치 키워드</li>
      * </ul>
      * 빈 객체 {@code {}}나 null이면 {@link SubscriptionFilter#empty()} 반환.
      * 파싱 실패 시 empty()로 fallback (안전한 기본값).
@@ -94,7 +94,8 @@ class NotificationPersistenceMapper implements SubscriptionFilterParserPort {
             return new SubscriptionFilter(
                     readStringSet(root, "statuses"),
                     readStringSet(root, "areaNames"),
-                    readStringSet(root, "maxClassNames"));
+                    readStringSet(root, "maxClassNames"),
+                    readStringSet(root, "keywords"));
         } catch (JsonProcessingException ex) {
             log.warn("[NotificationPersistenceMapper] filter JSON 파싱 실패 — empty filter로 폴백 "
                             + "(잘못된 filter 값은 ALL 변경에 알림 발송됨): jsonLength={}",

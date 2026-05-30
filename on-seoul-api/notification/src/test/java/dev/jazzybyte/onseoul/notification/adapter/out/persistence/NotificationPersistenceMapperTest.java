@@ -127,12 +127,13 @@ class NotificationPersistenceMapperTest {
     }
 
     @Test
-    @DisplayName("serialize → parse 라운드트립으로 동일 도메인 복원")
+    @DisplayName("serialize → parse 라운드트립으로 동일 도메인 복원 (키워드 포함)")
     void serialize_then_parse_roundTrip() {
         SubscriptionFilter original = new SubscriptionFilter(
                 java.util.Set.of("RECEIVING"),
                 java.util.Set.of("강남구"),
-                java.util.Set.of("문화행사"));
+                java.util.Set.of("문화행사"),
+                java.util.Set.of("수영"));
 
         String json = mapper.serialize(original);
         SubscriptionFilter parsed = mapper.parse(json);
@@ -140,5 +141,16 @@ class NotificationPersistenceMapperTest {
         assertThat(parsed.statuses()).containsExactly("RECEIVING");
         assertThat(parsed.areaNames()).containsExactly("강남구");
         assertThat(parsed.maxClassNames()).containsExactly("문화행사");
+        assertThat(parsed.keywords()).containsExactly("수영");
+    }
+
+    @Test
+    @DisplayName("keywords 키 단독 파싱")
+    void parse_keywordsOnly() {
+        SubscriptionFilter f = mapper.parse("{\"keywords\":[\"수영\",\"요가\"]}");
+
+        assertThat(f.keywords()).containsExactlyInAnyOrder("수영", "요가");
+        assertThat(f.statuses()).isEmpty();
+        assertThat(f.isEmpty()).isFalse();
     }
 }

@@ -21,9 +21,6 @@ public class NotificationSubscriptionJpaEntity {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(name = "service_id", nullable = false, length = 30)
-    private String serviceId;
-
     /**
      * JSONB in PostgreSQL; H2 test schema declares this as VARCHAR(2000).
      * Stored as a raw JSON string — VO mapping deferred to Phase 3.
@@ -45,9 +42,8 @@ public class NotificationSubscriptionJpaEntity {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    NotificationSubscriptionJpaEntity(Long userId, String serviceId, String filter, String channels) {
+    NotificationSubscriptionJpaEntity(Long userId, String filter, String channels) {
         this.userId = userId;
-        this.serviceId = serviceId;
         this.filter = filter;
         this.channels = channels;
     }
