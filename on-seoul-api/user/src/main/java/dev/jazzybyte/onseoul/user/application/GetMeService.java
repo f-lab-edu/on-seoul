@@ -28,6 +28,6 @@ public class GetMeService implements GetMeUseCase {
             throw new OnSeoulApiException(ErrorCode.FORBIDDEN);
         }
 
-        return new MeResult(user.getId(), user.getNickname(), user.getStatus());
+        return new MeResult(user.getId(), user.getNickname(), user.getPhoneNumber(), user.getStatus());
     }
 }
