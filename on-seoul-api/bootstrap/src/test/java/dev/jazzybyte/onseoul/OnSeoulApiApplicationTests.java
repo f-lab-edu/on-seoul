@@ -1,5 +1,7 @@
 package dev.jazzybyte.onseoul;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import dev.jazzybyte.onseoul.collection.port.out.GeocodingPort;
 import dev.jazzybyte.onseoul.collection.port.out.LoadApiSourceCatalogPort;
 import dev.jazzybyte.onseoul.chat.port.out.LoadChatRoomPort;
@@ -22,6 +24,8 @@ import dev.jazzybyte.onseoul.collection.port.out.SaveServiceChangeLogPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveSubscriptionPort;
 import dev.jazzybyte.onseoul.user.port.out.SaveUserPort;
 import dev.jazzybyte.onseoul.collection.port.out.SeoulDatasetFetchPort;
+import dev.jazzybyte.onseoul.crypto.AesGcmEncryptor;
+import dev.jazzybyte.onseoul.crypto.BlindIndexer;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -92,5 +96,21 @@ class OnSeoulApiApplicationTests {
             }
         }
         log.info("Total dev.jazzybyte.onseoul beans: {}", onSeoulBeans);
+    }
+
+    /**
+     * 회귀 가드: 배포 jar에서 user/notification 두 @Configuration이 aesGcmEncryptor를
+     * 중복 정의해 BeanDefinitionOverrideException으로 기동 실패했던 버그를 단위 레벨에서 잡는다.
+     * 암호화 빈은 common 모듈(CommonEncryptionConfig)에 단일 정의되어야 하므로
+     * 전체 컨텍스트에서 각 타입의 빈이 정확히 1개만 등록되는지 단언한다.
+     */
+    @Test
+    void encryptionBeansAreRegisteredExactlyOnce(ApplicationContext applicationContext) {
+        assertThat(applicationContext.getBeansOfType(AesGcmEncryptor.class))
+                .as("AesGcmEncryptor must be defined exactly once (common 모듈 일원화)")
+                .hasSize(1);
+        assertThat(applicationContext.getBeansOfType(BlindIndexer.class))
+                .as("BlindIndexer must be defined exactly once (common 모듈 일원화)")
+                .hasSize(1);
     }
 }
