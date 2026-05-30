@@ -37,3 +37,11 @@ out/
 .vscode/
 
 schema/
+.claude/
+docs/adr/
+docs/superpowers/
+
+# Secrets
+.env
+.env.*
+!.env.example

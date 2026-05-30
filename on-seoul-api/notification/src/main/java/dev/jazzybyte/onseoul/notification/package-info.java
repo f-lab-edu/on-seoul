@@ -1,2 +1,2 @@
-/** notification BC — application layer (Phase 2 이후 구현 예정). */
+/** notification BC — application layer. */
 package dev.jazzybyte.onseoul.notification.application;

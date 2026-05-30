@@ -47,12 +47,12 @@ class SocialLoginServiceTest {
 
     private User activeUser(long id, String provider, String providerId) {
         return new User(id, provider, providerId, "old@example.com", "구닉네임",
-                UserStatus.ACTIVE, OffsetDateTime.now(), OffsetDateTime.now());
+                null, UserStatus.ACTIVE, OffsetDateTime.now(), OffsetDateTime.now());
     }
 
     private User userWithStatus(long id, UserStatus status) {
         return new User(id, "google", "provider-123", "user@example.com", "홍길동",
-                status, OffsetDateTime.now(), OffsetDateTime.now());
+                null, status, OffsetDateTime.now(), OffsetDateTime.now());
     }
 
     @Test
@@ -70,6 +70,7 @@ class SocialLoginServiceTest {
 
         TokenResponse result = service.socialLogin(cmd);
 
+        assertThat(result.userId()).isEqualTo(10L);
         assertThat(result.accessToken()).isEqualTo("access-token");
         assertThat(result.refreshToken()).isEqualTo("refresh-token");
 

@@ -38,7 +38,7 @@ class RefreshTokenServiceTest {
 
     private User activeUser(long id) {
         return new User(id, "google", "provider-" + id, "test@test.com", "tester",
-                UserStatus.ACTIVE, OffsetDateTime.now(), OffsetDateTime.now());
+                null, UserStatus.ACTIVE, OffsetDateTime.now(), OffsetDateTime.now());
     }
 
     @Test
@@ -56,6 +56,7 @@ class RefreshTokenServiceTest {
 
         TokenResponse result = service.refresh(refreshToken);
 
+        assertThat(result.userId()).isEqualTo(userId);
         assertThat(result.accessToken()).isEqualTo("new-access-token");
         assertThat(result.refreshToken()).isEqualTo("new-refresh-token");
         verify(refreshTokenStorePort, never()).delete(userId);
@@ -96,7 +97,7 @@ class RefreshTokenServiceTest {
         String refreshToken = "valid-refresh-token";
         long userId = 42L;
         User suspended = new User(userId, "google", "p", "e", "n",
-                UserStatus.SUSPENDED, OffsetDateTime.now(), OffsetDateTime.now());
+                null, UserStatus.SUSPENDED, OffsetDateTime.now(), OffsetDateTime.now());
 
         doNothing().when(tokenIssuerPort).validateToken(refreshToken);
         when(tokenIssuerPort.extractUserId(refreshToken)).thenReturn(userId);
