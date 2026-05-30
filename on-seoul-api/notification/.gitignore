@@ -1,0 +1,2 @@
+# generated-sources는 JDBC codegen 후 커밋 대상이므로 gitignore에서 제외한다.
+# (CI가 DB 없이 커밋된 Q-클래스로 빌드할 수 있도록)

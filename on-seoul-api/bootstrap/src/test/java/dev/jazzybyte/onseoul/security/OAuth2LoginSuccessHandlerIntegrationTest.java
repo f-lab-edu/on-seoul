@@ -81,7 +81,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         String accessToken = tokenIssuer.generateAccessToken(1L);
         String refreshToken = tokenIssuer.generateRefreshToken(1L);
         when(socialLoginUseCase.socialLogin(any(SocialLoginCommand.class)))
-                .thenReturn(new TokenResponse(accessToken, refreshToken));
+                .thenReturn(new TokenResponse(1L, accessToken, refreshToken));
 
         MockHttpServletResponse res = invoke(googleToken(attrs));
 
@@ -123,7 +123,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         String accessToken = tokenIssuer.generateAccessToken(3L);
         String refreshToken = tokenIssuer.generateRefreshToken(3L);
         when(socialLoginUseCase.socialLogin(any()))
-                .thenReturn(new TokenResponse(accessToken, refreshToken));
+                .thenReturn(new TokenResponse(3L, accessToken, refreshToken));
 
         MockHttpServletResponse res = invoke(kakaoToken(attrs));
 
@@ -144,7 +144,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         String accessToken = tokenIssuer.generateAccessToken(4L);
         String refreshToken = tokenIssuer.generateRefreshToken(4L);
         when(socialLoginUseCase.socialLogin(any()))
-                .thenReturn(new TokenResponse(accessToken, refreshToken));
+                .thenReturn(new TokenResponse(4L, accessToken, refreshToken));
 
         MockHttpServletResponse res = invoke(kakaoToken(attrs));
 
@@ -161,7 +161,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         String accessToken = tokenIssuer.generateAccessToken(5L);
         String refreshToken = tokenIssuer.generateRefreshToken(5L);
         when(socialLoginUseCase.socialLogin(any()))
-                .thenReturn(new TokenResponse(accessToken, refreshToken));
+                .thenReturn(new TokenResponse(5L, accessToken, refreshToken));
 
         MockHttpServletResponse res = invoke(googleToken(attrs));
 
@@ -184,7 +184,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         String accessToken = tokenIssuer.generateAccessToken(6L);
         String refreshToken = tokenIssuer.generateRefreshToken(6L);
         when(socialLoginUseCase.socialLogin(any()))
-                .thenReturn(new TokenResponse(accessToken, refreshToken));
+                .thenReturn(new TokenResponse(6L, accessToken, refreshToken));
 
         MockHttpServletResponse res = invoke(googleToken(attrs));
 
@@ -239,5 +239,28 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
         assertThat(cookie).contains("refresh_token=");
         assertThat(cookie).containsIgnoringCase("Max-Age=0");
         assertThat(cookie).containsIgnoringCase("Path=/auth");
+    }
+
+    @Test
+    @DisplayName("opt-in 회귀 가드 — 로그인 성공 시 토큰 발급 외 부수효과(구독 자동 생성 등)가 없다")
+    void onAuthenticationSuccess_hasNoSideEffectsBeyondTokenIssuance() throws Exception {
+        // 기본 구독 자동 생성 제거(opt-in 전환) 이후, 핸들러의 협력자는 socialLoginUseCase 하나뿐이어야 한다.
+        // 향후 누군가 구독 생성 등 부수효과를 다시 끼워넣으면 이 가드가 깨진다.
+        Map<String, Object> attrs = Map.of("id", "g-optin", "email", "optin@test.com", "name", "옵트인");
+        String accessToken = tokenIssuer.generateAccessToken(99L);
+        String refreshToken = tokenIssuer.generateRefreshToken(99L);
+        when(socialLoginUseCase.socialLogin(any(SocialLoginCommand.class)))
+                .thenReturn(new TokenResponse(99L, accessToken, refreshToken));
+
+        MockHttpServletResponse res = invoke(googleToken(attrs));
+
+        // 성공 경로는 토큰 쿠키 2개(access/refresh)만 발급한다.
+        assertThat(res.getStatus()).isEqualTo(302);
+        assertThat(res.getRedirectedUrl()).isEqualTo(FRONTEND_BASE_URL + "/oauth/callback?status=success");
+        assertThat(res.getHeaders("Set-Cookie")).hasSize(2);
+
+        // socialLogin 외에 어떤 협력자 호출도 없어야 한다.
+        verify(socialLoginUseCase).socialLogin(any(SocialLoginCommand.class));
+        verifyNoMoreInteractions(socialLoginUseCase);
     }
 }

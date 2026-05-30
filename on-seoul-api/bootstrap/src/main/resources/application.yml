@@ -58,6 +58,9 @@ spring:
 
 app:
   frontend-base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
+  encryption:
+    aes-key: ${APP_AES_KEY}
+    blind-idx-key: ${APP_BLIND_IDX_KEY}
   # HTTPS 환경에서는 true(기본값). 로컬 HTTP 개발 시 COOKIE_SECURE=false 로 재정의.
   cookie-secure: ${COOKIE_SECURE:true}
   cookie-same-site: ${COOKIE_SAME_SITE:Strict} # Strict, Lax, None 중 선택. 로컬 개발 시 None으로 재정의 권장.
@@ -70,7 +73,6 @@ app:
     # 쉼표로 구분된 허용 Origin 목록. 와일드카드 패턴 지원 (예: https://*.example.com).
     # 로컬 개발 기본값: localhost 3000/5173 포트. 운영에서는 CORS_ALLOWED_ORIGINS 환경변수로 재정의.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
-
 jwt:
   secret: ${JWT_SECRET}
   access-token-minutes: 15
@@ -93,6 +95,7 @@ ai:
   service:
     url: ${AI_SERVICE_URL:http://localhost:8000}
     stream-timeout-seconds: 120
+    template-timeout-seconds: 10  # ADR-0004: AI 호출 timeout
 
 management:
   endpoints:
@@ -103,6 +106,23 @@ management:
     health:
       show-details: never
 
+knock:
+  api-key: ${KNOCK_API_KEY}    # Knock API 키. 필수 — 미설정 시 앱 시작 실패
+  email-workflow-key: "service-change-email"
+  sms-workflow-key: "service-change-sms"
+  timeout-seconds: 10
+
+notification:
+  scheduler:
+    fixed-delay-ms: 300000       # 5분
+    stale-threshold-ms: 600000   # 10분 (fixed-delay × 2) — stale RUNNING batch 회수 임계값
+  retry-scheduler:
+    fixed-delay-ms: 3600000  # 1시간
+
 logging:
   level:
     dev.jazzybyte: debug
+    # [PII 보호] reactor.netty 이하를 DEBUG 이하로 설정하면 KnockNotificationAdapter의
+    # 요청 본문(recipients.email, phone_number)이 HTTP body 로그로 노출된다.
+    # 운영 환경에서는 reactor.netty 로그 레벨을 WARN 이상으로 유지해야 한다.
+    reactor.netty: warn

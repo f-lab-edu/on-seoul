@@ -56,6 +56,6 @@ public class AuthController {
             throw new OnSeoulApiException(ErrorCode.UNAUTHORIZED);
         }
         MeResult result = getMeUseCase.getMe(userId);
-        return ResponseEntity.ok(new MeResponse(result.id(), result.nickname(), result.status()));
+        return ResponseEntity.ok(new MeResponse(result.id(), result.nickname(), result.phoneNumber(), result.status()));
     }
 }

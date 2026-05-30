@@ -1,8 +1,11 @@
 package dev.jazzybyte.onseoul.shared.adapter.in.web;
 
+import dev.jazzybyte.onseoul.crypto.CryptoException;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -14,6 +17,17 @@ import java.util.stream.Collectors;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(CryptoException.class)
+    public ResponseEntity<Map<String, String>> handleCryptoException(CryptoException ex) {
+        log.error("Crypto operation failed", ex);
+        return ResponseEntity
+                .internalServerError()
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("error", "internal_error"));
+    }
 
     @ExceptionHandler(OnSeoulApiException.class)
     public ResponseEntity<Map<String, String>> handleOnSeoulApiException(OnSeoulApiException ex) {

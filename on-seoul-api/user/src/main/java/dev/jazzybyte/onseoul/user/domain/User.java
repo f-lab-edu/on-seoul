@@ -13,18 +13,21 @@ public class User {
     private String providerId;
     private String email;
     private String nickname;
+    private String phoneNumber;
     private UserStatus status;
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;
 
     /** Reconstitute from persistence. */
     public User(Long id, String provider, String providerId, String email, String nickname,
-                UserStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {
+                String phoneNumber, UserStatus status,
+                OffsetDateTime createdAt, OffsetDateTime updatedAt) {
         this.id = id;
         this.provider = provider;
         this.providerId = providerId;
         this.email = email;
         this.nickname = nickname;
+        this.phoneNumber = phoneNumber;
         this.status = status;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
@@ -37,6 +40,7 @@ public class User {
         user.providerId = command.providerId();
         user.email = command.email();
         user.nickname = command.nickname();
+        user.phoneNumber = null;
         user.status = UserStatus.ACTIVE;
         user.createdAt = OffsetDateTime.now();
         user.updatedAt = OffsetDateTime.now();
@@ -48,6 +52,12 @@ public class User {
     public void updateProfile(String email, String nickname) {
         this.email = email;
         this.nickname = nickname;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
+    /** Updates phoneNumber. Email is managed by OAuth2 and is not changed here. */
+    public void updateContact(String phoneNumber) {
+        this.phoneNumber = phoneNumber;
         this.updatedAt = OffsetDateTime.now();
     }
 }
