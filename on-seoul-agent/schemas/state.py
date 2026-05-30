@@ -48,6 +48,10 @@ class AgentState(TypedDict):
     # (intent → vector_results/sql_results 의 service_id 키 추출).
     # 별도 슬롯을 두지 않는 이유는 State 단일 진실원 원칙을 위배하지 않기 위함.
     hydrated_services: list[dict[str, Any]] | None
+    # AnswerAgent 가 _normalize 통과 후 상위 _DISPLAY_LIMIT(5)건을 카드 형태로 노출.
+    # LLM 컨텍스트와 동일한 dict 리스트. 프론트 카드 UI 가 직접 사용한다.
+    # 빈 결과: []. 미설정: None (AnswerAgent 미실행 / cache miss 초기 상태).
+    service_cards: list[dict[str, Any]] | None
     answer: str | None  # Answer Agent가 생성한 최종 답변
     title: str | None  # Answer Agent가 생성한 대화 제목 (title_needed=True일 때)
     trace: dict[str, Any] | None  # LangGraph 실행 메타데이터

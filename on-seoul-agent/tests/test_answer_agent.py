@@ -330,6 +330,58 @@ class TestAnswerAgentDisplaySlice:
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         assert call_kwargs["extra_count"] == 0
 
+    async def test_service_cards_populated_in_state(self):
+        """answer() 호출 후 service_cards 슬롯에 LLM 컨텍스트와 동일한 dict 리스트가 담긴다."""
+        agent = _make_agent()
+        rows = self._make_rows(3)
+        state = _make_state(sql_results=rows)
+
+        result = await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        displayed = json.loads(call_kwargs["results_json"])
+
+        assert isinstance(result["service_cards"], list)
+        assert len(result["service_cards"]) == 3
+        # LLM 컨텍스트로 전달된 display 와 동일한 dict 리스트여야 한다
+        assert [c["service_id"] for c in result["service_cards"]] == [
+            r["service_id"] for r in displayed
+        ]
+
+    async def test_service_cards_respects_display_limit(self):
+        """10건 입력 → service_cards 5건 (extra_count=5 와 일관)."""
+        agent = _make_agent()
+        state = _make_state(sql_results=self._make_rows(10))
+
+        result = await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        assert len(result["service_cards"]) == 5
+        assert call_kwargs["extra_count"] == 5
+
+    async def test_service_cards_at_display_limit_boundary(self):
+        """경계 회귀: 입력이 정확히 _DISPLAY_LIMIT(5) 건 → service_cards 5건, extra_count=0.
+
+        off-by-one 회귀를 방지한다 (display 슬라이스 [:_DISPLAY_LIMIT]).
+        """
+        agent = _make_agent()
+        state = _make_state(sql_results=self._make_rows(5))
+
+        result = await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        assert len(result["service_cards"]) == 5
+        assert call_kwargs["extra_count"] == 0
+
+    async def test_service_cards_empty_when_no_results(self):
+        """검색 결과 0건 → service_cards == [] (None 이 아닌 빈 배열)."""
+        agent = _make_agent("죄송합니다, 조건에 맞는 시설을 찾지 못했습니다.")
+        state = _make_state(sql_results=None, vector_results=None, map_results=None)
+
+        result = await agent.answer(state)
+
+        assert result["service_cards"] == []
+
     async def test_hydrated_services_empty_plus_map_results(self):
         """hydrated_services=[]이고 map_results가 있으면 map features가 결과에 포함된다.
 

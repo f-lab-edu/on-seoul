@@ -627,6 +627,11 @@ class CacheCheckNode:
         return {
             "answer": payload.get("answer"),
             "title": payload.get("title"),
+            # service_cards 는 payload 에 저장된다 (답변 결과물, search snapshot 아님).
+            # 구버전 envelope (키 미존재) 는 None 폴백 —
+            # routers/chat.py final payload 직렬화 단의 `or []` 가
+            # 빈 배열로 안전하게 노출한다.
+            "service_cards": payload.get("service_cards"),
             "vector_results": snap.get("vector_results"),
             "sql_results": snap.get("sql_results"),
             # hydrated_services 도 envelope 에 포함되어 있으면 복원한다.
@@ -670,6 +675,10 @@ class CacheWriteNode:
             "answer": answer,
             "intent": intent.value,
             "title": state.get("title"),
+            # 답변 결과물 — cache hit 시 프론트 카드 UI 가 다시 사용할 수 있도록 보존.
+            # snap 이 아닌 payload 에 두는 이유: search snapshot 이 아니라 LLM 답변과 함께
+            # 같은 라이프사이클로 묶이는 결과물이기 때문.
+            "service_cards": state.get("service_cards"),
         }
         snap = {
             "refined_query": refined,

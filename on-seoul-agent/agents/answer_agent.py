@@ -123,6 +123,10 @@ class AnswerAgent:
 
         상위 `_DISPLAY_LIMIT`건만 LLM에 전달하고, 나머지 건수는 `extra_count`로
         별도 전달한다. LLM 토큰 절약 + "외 N건" 비즈니스 규칙의 코드 수준 강제.
+
+        상위 `_DISPLAY_LIMIT` 건을 `service_cards` 슬롯에도 노출한다 —
+        LLM 자연어 답변 파싱 없이 프론트 카드 UI 가 직접 구조화 결과를 사용한다.
+        빈 결과여도 `[]` 로 명시 설정하여 None(미실행) 과 구별한다.
         """
         all_results = self._collect_results(state)
         display = all_results[:_DISPLAY_LIMIT]
@@ -137,7 +141,15 @@ class AnswerAgent:
             }
         )
 
-        updates: dict = {"answer": answer_out.answer}
+        # service_cards 슬롯에는 shallow copy 로 분리한다.
+        # display 리스트는 LLM 입력(results_json) 직렬화에 이미 사용된 동일 참조이며,
+        # 향후 LLM 전처리 단계가 추가되어 inplace mutate 될 경우 외부 노출 경로
+        # (SSE final payload, cache envelope) 가 오염될 수 있다. 최대 5건 × 12 필드라
+        # 복사 비용은 무시 가능.
+        updates: dict = {
+            "answer": answer_out.answer,
+            "service_cards": [dict(card) for card in display],
+        }
 
         if state.get("title_needed"):
             title_out: _TitleOutput = await self._title_chain.ainvoke(
