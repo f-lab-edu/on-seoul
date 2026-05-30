@@ -88,6 +88,24 @@ _FALLBACK_URL = "https://yeyak.seoul.go.kr"
 _DISPLAY_LIMIT: int = 5
 
 
+def _iso_or_none(value):
+    """datetime/date 값을 ISO 8601 문자열로 변환한다.
+
+    프론트 계약(chat-service-cards-interface §5)은 receipt_*_dt 가
+    "2025-11-01T00:00:00" 형태 ISO 8601 로 직렬화되기를 요구한다.
+    sse_frame 의 json.dumps(default=str) 폴백은 str(datetime) → 공백 구분자
+    ("2025-11-01 00:00:00") 를 내므로, _normalize 단에서 명시적으로 isoformat()
+    하여 'T' 구분자를 보장한다. (default=str 은 다른 타입 방어용으로 유지)
+
+    이미 str 이거나 None 이면 그대로 통과한다.
+    """
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
 class _AnswerOutput(BaseModel):
     answer: str
 
@@ -213,7 +231,12 @@ class AnswerAgent:
           - 프롬프트(`_ANSWER_SYSTEM`)의 카드 형식 예시에도 이용 기간 줄이 **없다**.
           - 데이터 신뢰성이 개선되면(별도 작업) 다시 노출 검토.
         """
-        service_url = row.get("service_url") or _FALLBACK_URL
+        # service_url 스킴 가드: http(s):// 로 시작하지 않으면(빈 값/None 포함)
+        # fallback URL 로 강등한다. DB 원본을 무검증 통과시키면 프론트가 href 에
+        # 그대로 링크하므로 javascript:/data: 등 위험 스킴을 차단해야 한다.
+        url = row.get("service_url")
+        if not url or not str(url).startswith(("http://", "https://")):
+            url = _FALLBACK_URL
 
         return {
             "service_id": row.get("service_id"),
@@ -225,7 +248,7 @@ class AnswerAgent:
             "service_status": row.get("service_status"),
             "payment_type": row.get("payment_type"),
             "target_info": row.get("target_info"),
-            "receipt_start_dt": row.get("receipt_start_dt"),
-            "receipt_end_dt": row.get("receipt_end_dt"),
-            "service_url": service_url,
+            "receipt_start_dt": _iso_or_none(row.get("receipt_start_dt")),
+            "receipt_end_dt": _iso_or_none(row.get("receipt_end_dt")),
+            "service_url": url,
         }

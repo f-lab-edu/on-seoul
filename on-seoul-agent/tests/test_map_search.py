@@ -189,6 +189,27 @@ class TestMapSearchSqlContent:
         assert "coord_y <> ''" not in sql_text
 
 
+    async def test_min_class_and_payment_type_in_select(self):
+        """SELECT 컬럼에 min_class_name/payment_type 가 포함된다 (카드 필드 채움)."""
+        executed_sqls: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.keys.return_value = []
+            m.fetchall.return_value = []
+            return m
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await map_search(session, _CENTER_LAT, _CENTER_LNG)
+
+        sql_text = executed_sqls[0]
+        assert "min_class_name" in sql_text
+        assert "payment_type" in sql_text
+
+
 class TestToGeoJson:
     def test_feature_has_point_geometry(self):
         """각 Feature는 Point 타입의 geometry를 가진다."""
@@ -232,6 +253,22 @@ class TestToGeoJson:
         props = result["features"][0]["properties"]
         assert "coord_x" not in props
         assert "coord_y" not in props
+
+    def test_min_class_and_payment_type_in_properties(self):
+        """min_class_name/payment_type 가 properties 에 포함된다 (MAP 카드 정합성)."""
+        rows = [
+            {
+                "service_id": "M001",
+                "min_class_name": "테니스장",
+                "payment_type": "무료",
+                "coord_x": "126.9",
+                "coord_y": "37.5",
+                "distance_m": 100,
+            }
+        ]
+        props = _to_geojson(rows)["features"][0]["properties"]
+        assert props["min_class_name"] == "테니스장"
+        assert props["payment_type"] == "무료"
 
     def test_distance_m_in_properties(self):
         """distance_m은 properties에 포함된다."""

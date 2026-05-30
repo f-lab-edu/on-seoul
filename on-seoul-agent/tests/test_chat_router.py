@@ -811,6 +811,79 @@ class TestServiceCardsInFinalPayload:
         assert card["receipt_start_dt"].startswith("2025-11-01")
         assert card["receipt_end_dt"].startswith("2025-12-31")
 
+    async def test_sse_frame_serializes_decimal_and_date_in_service_cards(
+        self, client: AsyncClient, mock_graph
+    ):
+        """회귀: service_cards 에 Decimal / date 가 포함돼도 SSE 직렬화가 깨지지 않는다.
+
+        DB numeric 컬럼은 SQLAlchemy 가 Decimal 로, date 컬럼은 datetime.date 로
+        매핑한다. 둘 다 json 기본 직렬화 대상이 아니므로 default=str 폴백이 없으면
+        TypeError 로 SSE 스트림이 중단된다. datetime 만 커버하던 기존 회귀 테스트의
+        사각지대를 메운다.
+        """
+        import datetime as _dt
+        from decimal import Decimal
+
+        cards = [
+            {
+                "service_id": "S1",
+                "service_name": "수영장",
+                "fee": Decimal("3000.50"),
+                "open_date": _dt.date(2025, 12, 31),
+            }
+        ]
+        final_state = _make_final_state(service_cards=cards)
+        mock_graph.stream = _make_stream(final_state)
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        assert response.status_code == 200
+        events = _parse_sse_events(response.content)
+        final_events = [e for e in events if e["event"] == "final"]
+        assert len(final_events) == 1
+        card = final_events[0]["data"]["service_cards"][0]
+        # default=str 폴백으로 Decimal / date 가 문자열로 직렬화된다.
+        assert card["fee"] == "3000.50"
+        assert card["open_date"] == "2025-12-31"
+
+    async def test_existing_sse_events_unaffected_by_default_str(
+        self, client: AsyncClient, mock_graph
+    ):
+        """회귀: default=str 추가가 기존 SSE 이벤트(progress/final) 직렬화를 바꾸지 않는다.
+
+        progress payload 등 JSON-native 값만 담은 기존 이벤트는 default=str 폴백이
+        적용될 일이 없어야 하며, 값이 그대로 직렬화돼야 한다 (문자열 강제 변환 등
+        부작용 없음).
+        """
+        final_state = _make_final_state(service_cards=[])
+        mock_graph.stream = _make_stream(final_state)
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        events = _parse_sse_events(response.content)
+        progress_events = [e for e in events if e["event"] == "progress"]
+        assert len(progress_events) == 3
+        # step 문자열, message 문자열이 그대로 유지된다.
+        assert progress_events[0]["data"]["step"] == "routing"
+        # final 의 cache_hit 은 bool 그대로 (str 로 강제되지 않음).
+        final_data = [e for e in events if e["event"] == "final"][0]["data"]
+        assert final_data["cache_hit"] is False
+        assert isinstance(final_data["cache_hit"], bool)
+
     async def test_workflow_error_payload_handles_service_cards_safely(
         self, client: AsyncClient, mock_graph
     ):
@@ -852,6 +925,44 @@ class TestServiceCardsInFinalPayload:
         data = wf_error_events[0]["data"]
         assert data["service_cards"] == []
         assert data["error"] == "서비스 처리 중 오류가 발생했습니다."
+
+    async def test_workflow_error_forces_empty_cards_when_answer_absent(
+        self, client: AsyncClient, mock_graph
+    ):
+        """회귀: 'answer 없는 error' 경로에서도 service_cards 가 [] 로 강제된다.
+
+        기존 회귀 테스트는 answer 가 채워진 error 만 검증했다. answer=None 이고
+        service_cards 가 None 인(AnswerAgent 미실행) error 양쪽 분기에서도 동일하게
+        [] 가 노출되어야 한다.
+        """
+        final_state = _make_final_state(
+            error="라우팅 실패",
+            answer=None,
+            service_cards=None,
+        )
+
+        async def _error_stream(*args, **kwargs):
+            yield (
+                "progress",
+                {"step": "routing", "message": "질문을 분석하고 있습니다..."},
+            )
+            yield "result", final_state
+
+        mock_graph.stream = _error_stream
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "테스트"},
+            )
+
+        events = _parse_sse_events(response.content)
+        wf_error_events = [e for e in events if e["event"] == "workflow_error"]
+        assert len(wf_error_events) == 1
+        assert wf_error_events[0]["data"]["service_cards"] == []
 
 
 class TestMainEndpoints:

@@ -112,6 +112,76 @@ class TestAnswerAgent:
 
         assert normalized["service_url"] == "https://yeyak.seoul.go.kr/svc/001"
 
+    def test_normalize_converts_datetime_to_isoformat(self):
+        """receipt_*_dt datetime 객체는 ISO 8601('T' 구분자) 문자열로 변환된다.
+
+        프론트 계약(chat-service-cards-interface §5) 정합성 — sse_frame 의
+        default=str 폴백(공백 구분자)에 의존하지 않고 _normalize 단에서 보장한다.
+        """
+        from datetime import date, datetime
+
+        from agents.answer_agent import AnswerAgent
+
+        normalized = AnswerAgent._normalize(
+            {
+                "service_id": "S001",
+                "service_url": "https://example.com",
+                "receipt_start_dt": datetime(2025, 11, 1, 9, 0, 0),
+                "receipt_end_dt": date(2025, 12, 31),
+            }
+        )
+
+        assert normalized["receipt_start_dt"] == "2025-11-01T09:00:00"
+        assert "T" in normalized["receipt_start_dt"]
+        # date 객체도 isoformat (시간부 없음)
+        assert normalized["receipt_end_dt"] == "2025-12-31"
+
+    def test_normalize_keeps_str_dt_and_none(self):
+        """receipt_*_dt 가 이미 str 이면 그대로, None 이면 None 으로 통과한다."""
+        from agents.answer_agent import AnswerAgent
+
+        normalized = AnswerAgent._normalize(
+            {
+                "service_id": "S001",
+                "service_url": "https://example.com",
+                "receipt_start_dt": "2025-11-01T00:00:00",
+                "receipt_end_dt": None,
+            }
+        )
+
+        assert normalized["receipt_start_dt"] == "2025-11-01T00:00:00"
+        assert normalized["receipt_end_dt"] is None
+
+    def test_normalize_rejects_javascript_scheme_url(self):
+        """javascript: 스킴 service_url 은 fallback URL 로 강등된다 (XSS 방어)."""
+        from agents.answer_agent import _FALLBACK_URL, AnswerAgent
+
+        normalized = AnswerAgent._normalize(
+            {"service_id": "S001", "service_url": "javascript:alert(1)"}
+        )
+
+        assert normalized["service_url"] == _FALLBACK_URL
+
+    def test_normalize_rejects_non_http_scheme(self):
+        """http(s) 외 스킴(ftp 등) service_url 은 fallback URL 로 강등된다."""
+        from agents.answer_agent import _FALLBACK_URL, AnswerAgent
+
+        normalized = AnswerAgent._normalize(
+            {"service_id": "S001", "service_url": "ftp://files.example.com/a"}
+        )
+
+        assert normalized["service_url"] == _FALLBACK_URL
+
+    def test_normalize_keeps_valid_https_url(self):
+        """정상 https service_url 은 그대로 유지된다."""
+        from agents.answer_agent import AnswerAgent
+
+        normalized = AnswerAgent._normalize(
+            {"service_id": "S001", "service_url": "https://yeyak.seoul.go.kr/svc/1"}
+        )
+
+        assert normalized["service_url"] == "https://yeyak.seoul.go.kr/svc/1"
+
     async def test_answer_preserves_state_fields(self):
         """answer는 answer/title 외 나머지 state를 보존한다."""
         agent = _make_agent()
@@ -381,6 +451,55 @@ class TestAnswerAgentDisplaySlice:
         result = await agent.answer(state)
 
         assert result["service_cards"] == []
+
+    async def test_service_cards_are_shallow_copies_not_aliases(self):
+        """회귀: service_cards 의 dict 가 원본 검색 결과(sql_results) 와 다른 객체여야 한다.
+
+        구현은 `[dict(card) for card in display]` 로 top-level dict 를 복제한다.
+        cache envelope / SSE final payload 가 원본 state 결과와 같은 참조를 들고
+        있으면, 향후 LLM 전처리 단계가 display 를 inplace mutate 할 때 외부 노출
+        경로가 오염된다. 각 카드가 별개 객체임을 명시적으로 보장한다.
+        """
+        agent = _make_agent()
+        rows = self._make_rows(3)
+        state = _make_state(sql_results=rows)
+
+        result = await agent.answer(state)
+
+        cards = result["service_cards"]
+        # 컨테이너 리스트도, 각 dict 도 원본과 다른 객체여야 한다.
+        assert cards is not rows
+        for card, row in zip(cards, rows):
+            assert card is not row
+
+    async def test_mutating_service_card_does_not_pollute_source_results(self):
+        """회귀: service_cards top-level 키를 mutate 해도 원본 sql_results 가 오염되지 않는다."""
+        agent = _make_agent()
+        rows = self._make_rows(2)
+        original_first_name = rows[0]["service_name"]
+        state = _make_state(sql_results=rows)
+
+        result = await agent.answer(state)
+
+        result["service_cards"][0]["service_name"] = "오염된_이름"
+        # 원본 검색 결과는 그대로여야 한다 (shallow copy 분리).
+        assert rows[0]["service_name"] == original_first_name
+
+    async def test_mutating_source_result_does_not_pollute_service_card(self):
+        """회귀: 원본 sql_results top-level 키를 mutate 해도 service_cards 가 오염되지 않는다.
+
+        역방향 분리 검증 — display 원소가 이후 inplace mutate 되어도 이미 노출된
+        service_cards 스냅샷은 안전해야 한다.
+        """
+        agent = _make_agent()
+        rows = self._make_rows(2)
+        state = _make_state(sql_results=rows)
+
+        result = await agent.answer(state)
+        snapshot_name = result["service_cards"][0]["service_name"]
+
+        rows[0]["service_name"] = "원본_변경"
+        assert result["service_cards"][0]["service_name"] == snapshot_name
 
     async def test_hydrated_services_empty_plus_map_results(self):
         """hydrated_services=[]이고 map_results가 있으면 map features가 결과에 포함된다.
