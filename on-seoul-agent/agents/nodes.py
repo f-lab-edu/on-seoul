@@ -351,6 +351,7 @@ class GraphNodes:
             return {
                 "answer": new_state.get("answer"),
                 "title": new_state.get("title"),
+                "service_cards": new_state.get("service_cards"),
             }
         except Exception as exc:
             logger.exception("answer_node 실행 오류")
