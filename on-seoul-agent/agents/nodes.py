@@ -28,15 +28,47 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.answer_agent import AnswerAgent
+from agents.hydration_node import HydrationNode
 from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.vector_agent import VectorAgent
 from core.cache import get_cached_answer, set_cached_answer
 from core.config import settings
+from agents._search_channel_utils import _to_hits
+from schemas.search import (
+    RESET_CHANNELS,
+    ChannelData,
+    ChannelQuery,
+    SearchChannel,
+    SearchKind,
+    kind_of,
+)
 from schemas.state import AgentState, IntentType
+from tools.map_search import DEFAULT_RADIUS_M as _MAP_DEFAULT_RADIUS_M
+from tools.map_search import TOP_K as _MAP_TOP_K
 from tools.map_search import map_search
+from tools.sql_search import TOP_K as _SQL_TOP_K
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# search_persist INSERT SQL
+# ---------------------------------------------------------------------------
+# 두 상수는 GraphNodes.search_persist_node 에서만 사용한다.
+# ON CONFLICT DO NOTHING: 정상 흐름에서는 retry_prep_node 가 search_channels 를 리셋하므로
+# UNIQUE 위반이 발생하지 않는다. 방어적 안전망.
+
+_INSERT_SEARCH_QUERIES_SQL = """
+INSERT INTO chat_search_queries (message_id, kind, channel, query_text, parameters)
+VALUES (:message_id, :kind, :channel, :query_text, CAST(:parameters AS jsonb))
+ON CONFLICT (message_id, channel) DO NOTHING
+"""
+
+_INSERT_SEARCH_RESULTS_SQL = """
+INSERT INTO chat_search_results (message_id, kind, channel, rank, service_id, score, meta)
+VALUES (:message_id, :kind, :channel, :rank, :service_id, :score, CAST(:meta AS jsonb))
+ON CONFLICT (message_id, channel, rank) DO NOTHING
+"""
 
 
 class GraphNodes:
@@ -53,11 +85,13 @@ class GraphNodes:
         vector_agent: VectorAgent,
         answer_agent: AnswerAgent,
         redis: Any = None,
+        hydration: HydrationNode | None = None,
     ) -> None:
         self._router = router
         self._sql = sql_agent
         self._vector = vector_agent
         self._answer = answer_agent
+        self._hydration = hydration or HydrationNode()
         self._cache_check = CacheCheckNode(redis=redis)
         self._cache_write = CacheWriteNode(redis=redis)
 
@@ -111,6 +145,8 @@ class GraphNodes:
                 update["area_name"] = result.area_name
             if result.service_status is not None:
                 update["service_status"] = result.service_status
+            if result.vector_sub_intent is not None:
+                update["vector_sub_intent"] = result.vector_sub_intent
             logger.info(
                 "router.classify room=%s intent=%s refined=%r "
                 "max_class=%s area=%s status=%s",
@@ -138,7 +174,11 @@ class GraphNodes:
         이 노드에서 초기화가 완료되므로 router_node는 분류에만 집중한다.
         """
         new_retry_count = (state.get("retry_count") or 0) + 1
-        logger.info("retry.triggered room=%s retry_count=%d", state.get("room_id"), new_retry_count)
+        logger.info(
+            "retry.triggered room=%s retry_count=%d",
+            state.get("room_id"),
+            new_retry_count,
+        )
         self.node_path.append("retry_prep")
         return {
             "retry_count": new_retry_count,
@@ -146,38 +186,62 @@ class GraphNodes:
             "sql_results": None,
             "vector_results": None,
             "map_results": None,
+            "hydrated_services": None,
             "refined_query": None,
             "max_class_name": None,
             "area_name": None,
             "service_status": None,
+            # RESET_CHANNELS sentinel — 이전 시도 채널 데이터를 지워
+            # UNIQUE (message_id, channel) 위반을 방지한다.
+            # 빈 dict({}) 는 더 이상 리셋 신호가 아니라 no-op 이므로 sentinel 필수.
+            "search_channels": RESET_CHANNELS,
         }
 
     async def sql_node(self, state: AgentState) -> dict[str, Any]:
-        """SqlAgent.search() 호출 — sql_results 설정."""
+        """SqlAgent.search() 호출 — sql_results + search_channels 설정."""
         assert self.data_session is not None
         try:
             new_state = await self._sql.search(state, self.data_session)
             self.node_path.append("sql_node")
-            results = new_state.get("sql_results") or []
-            logger.info("sql.results room=%s count=%d", state.get("room_id"), len(results))
-            return {"sql_results": new_state.get("sql_results")}
+            sql_rows = new_state.get("sql_results") or []
+            keyword = new_state.get("sql_keyword")
+            logger.info(
+                "sql.results room=%s count=%d", state.get("room_id"), len(sql_rows)
+            )
+
+            channel_data = ChannelData(
+                kind=SearchKind.SQL,
+                query=ChannelQuery(
+                    query_text=keyword,
+                    parameters={
+                        "max_class_name": state.get("max_class_name"),
+                        "area_name": state.get("area_name"),
+                        "service_status": state.get("service_status"),
+                        "keyword": keyword,
+                        "top_k": _SQL_TOP_K,
+                    },
+                ),
+                hits=_to_hits(sql_rows, score_field=None),
+            )
+            return {
+                "sql_results": new_state.get("sql_results"),
+                "sql_keyword": keyword,
+                "search_channels": {SearchChannel.SQL: channel_data},
+            }
         except Exception as exc:
             logger.exception("sql_node 실행 오류")
             self.node_path.append("sql_error")
             return {"error": str(exc)}
 
     async def vector_node(self, state: AgentState) -> dict[str, Any]:
-        """VectorAgent.search() 호출 — vector_results, refined_query 설정.
+        """VectorAgent.search() 호출 — vector_results(메타데이터 only), refined_query 설정.
 
-        VectorAgent는 임베딩 검색(ai_session)과 원본 hydration(data_session)을
-        모두 수행하므로 두 세션을 모두 전달한다.
+        hydration(원본 조회)은 후속 hydration_node 가 담당하므로
+        ai_session 만 전달한다.
         """
         assert self.ai_session is not None
-        assert self.data_session is not None
         try:
-            new_state = await self._vector.search(
-                state, self.ai_session, self.data_session
-            )
+            new_state = await self._vector.search(state, self.ai_session)
             self.node_path.append("vector_node")
             results = new_state.get("vector_results") or []
             logger.info(
@@ -186,14 +250,46 @@ class GraphNodes:
                 len(results),
                 (new_state.get("refined_query") or "")[:40],
             )
-            return {
+            ret: dict[str, Any] = {
                 "vector_results": new_state.get("vector_results"),
                 "refined_query": new_state.get("refined_query"),
             }
+            # VectorAgent 가 search_channels 를 채웠으면 전파한다.
+            # 빈 dict 는 reducer 의 리셋 시그널이므로 포함하지 않는다.
+            if channels := new_state.get("search_channels"):
+                ret["search_channels"] = channels
+            return ret
         except Exception as exc:
             logger.exception("vector_node 실행 오류")
             self.node_path.append("vector_error")
             return {"error": str(exc)}
+
+    async def hydration_node(self, state: AgentState) -> dict[str, Any]:
+        """검색 결과 service_id → 원본 데이터 통합 슬롯 매핑.
+
+        sql_node / vector_node 직후, answer_node 직전에 실행된다.
+        검색 노드별 출력 형식(sql_results / vector_results)을
+        단일 슬롯 hydrated_services 로 통합하여 AnswerAgent 가 검색 경로에 의존하지
+        않도록 한다.
+
+        세션:
+            data_session — public_service_reservations 원본 조회 전용 (on_data_reader)
+        """
+        assert self.data_session is not None
+        try:
+            update = await self._hydration(state, self.data_session)
+            self.node_path.append("hydration_node")
+            hydrated = update.get("hydrated_services") or []
+            logger.info(
+                "hydration.done room=%s count=%d",
+                state.get("room_id"),
+                len(hydrated),
+            )
+            return update
+        except Exception:
+            logger.exception("hydration_node 실행 오류")
+            self.node_path.append("hydration_error")
+            return {"hydrated_services": []}
 
     async def map_node(self, state: AgentState) -> dict[str, Any]:
         """map_search 호출 — map_results 설정.
@@ -202,13 +298,34 @@ class GraphNodes:
         라우팅은 항상 이 노드를 거치므로 map 분기 처리는 내부에서 담당한다.
         """
         assert self.data_session is not None
-        lat = state.get("lat")
-        lng = state.get("lng")
+        lat = state.get("user_lat")
+        lng = state.get("user_lng")
         if lat is not None and lng is not None:
             try:
                 geojson = await map_search(self.data_session, lat, lng)
                 self.node_path.append("map_node")
-                return {"map_results": geojson}
+                features = (geojson or {}).get("features") or []
+                channel_data = ChannelData(
+                    kind=SearchKind.MAP,
+                    query=ChannelQuery(
+                        query_text=f"lat={lat},lng={lng},r={_MAP_DEFAULT_RADIUS_M}m",
+                        parameters={
+                            "lat": lat,
+                            "lng": lng,
+                            "radius_m": _MAP_DEFAULT_RADIUS_M,
+                            "top_k": _MAP_TOP_K,
+                        },
+                    ),
+                    hits=_to_hits(
+                        [f["properties"] for f in features if "properties" in f],
+                        score_field="distance_m",
+                        meta_fn=lambda f: {"distance_m": f.get("distance_m")},
+                    ),
+                )
+                return {
+                    "map_results": geojson,
+                    "search_channels": {SearchChannel.MAP: channel_data},
+                }
             except Exception as exc:
                 logger.exception("map_node 실행 오류")
                 self.node_path.append("map_error")
@@ -228,7 +345,9 @@ class GraphNodes:
             new_state = await self._answer.answer(state)
             self.node_path.append("answer_node")
             answer = new_state.get("answer") or ""
-            logger.info("answer.generated room=%s len=%d", state.get("room_id"), len(answer))
+            logger.info(
+                "answer.generated room=%s len=%d", state.get("room_id"), len(answer)
+            )
             return {
                 "answer": new_state.get("answer"),
                 "title": new_state.get("title"),
@@ -256,6 +375,106 @@ class GraphNodes:
         self.node_path.append("cache_write")
         return result
 
+    async def search_persist_node(self, state: AgentState) -> dict[str, Any]:
+        """chat_search_queries + chat_search_results 일괄 적재 (best-effort 종단 노드).
+
+        AgentState.search_channels 를 순회하여 두 테이블에 동일 트랜잭션으로 INSERT.
+
+        best-effort 정책:
+          - INSERT 실패는 그래프 결과에 영향 없음 (logger.warning + rollback + return {})
+          - 빈 채널 맵(search_channels={}) 이면 INSERT 없이 즉시 return {}
+          - hits 가 비어도 query 행은 기록 — "검색했는데 결과 없음" 도 분석 가치 있음
+          - 두 테이블은 같은 트랜잭션 — 한쪽만 커밋되는 불일관 방지
+
+        ON CONFLICT DO NOTHING:
+          self-correction 재시도 시 retry_prep_node 가 search_channels 를 {} 로 리셋하므로
+          정상 흐름에서 UNIQUE 위반은 발생하지 않는다. 방어적 안전망으로만 사용된다.
+
+        세션 공유:
+          self.ai_session 은 trace_node 와 공유한다. 정상 흐름(commit 성공)과
+          INSERT 실패 후 rollback 성공 시에는 trace_node 진입 전 세션이 clean 상태다.
+          단, rollback 자체가 실패하면(커넥션 단절 등) 세션이 dirty인 채 trace_node 로
+          넘어가 trace INSERT 도 실패할 수 있다. `_save_trace` 는 자체 except + rollback
+          핸들러를 보유하므로 워크플로우 결과에는 영향이 없으나, 두 관측 데이터가 동시
+          유실될 수 있다. 완전한 독립성이 필요해지면 trace_node 전용 세션 분리를 검토할 것.
+        """
+        assert self.ai_session is not None
+        channels: dict[str, ChannelData] = state.get("search_channels") or {}
+        if not channels:
+            self.node_path.append("search_persist_skip")
+            return {}
+
+        message_id = state["message_id"]
+        query_rows: list[dict] = []
+        result_rows: list[dict] = []
+
+        for channel_name, data in channels.items():
+            # 알려진 채널: kind_of() 로 정규 kind 를 결정 (ChannelData.kind 불일치 방지).
+            # 미등록 채널(freeform): ChannelData.kind 를 caller 책임으로 그대로 사용.
+            # DB CHECK 제약이 최종 안전망 역할을 하며, 위반 시 best-effort 핸들러에서 포착된다.
+            try:
+                kind = kind_of(channel_name)
+            except ValueError:
+                kind = data["kind"]
+            q = data["query"]
+            hits = data["hits"]  # ChannelData.hits 는 필수 키
+
+            query_rows.append(
+                {
+                    "message_id": message_id,
+                    "kind": kind,
+                    "channel": channel_name,
+                    "query_text": q[
+                        "query_text"
+                    ],  # ChannelQuery 필수 키 (값은 None 허용)
+                    "parameters": json.dumps(q["parameters"] or {}, default=str),
+                }
+            )
+
+            for hit in hits:
+                result_rows.append(
+                    {
+                        "message_id": message_id,
+                        "kind": kind,
+                        "channel": channel_name,
+                        "rank": hit["rank"],
+                        "service_id": hit["service_id"],
+                        "score": hit["score"],  # ChannelHit 필수 키 (값은 None 허용)
+                        "meta": json.dumps(hit["meta"] or {}, default=str),
+                    }
+                )
+
+        try:
+            if query_rows:
+                await self.ai_session.execute(
+                    text(_INSERT_SEARCH_QUERIES_SQL),
+                    query_rows,
+                )
+            if result_rows:
+                await self.ai_session.execute(
+                    text(_INSERT_SEARCH_RESULTS_SQL),
+                    result_rows,
+                )
+            await self.ai_session.commit()
+            self.node_path.append("search_persist")
+            logger.info(
+                "search_persist.done message_id=%s queries=%d results=%d",
+                message_id,
+                len(query_rows),
+                len(result_rows),
+            )
+        except Exception:
+            logger.warning(
+                "search_persist 적재 실패 (message_id=%s)", message_id, exc_info=True
+            )
+            try:
+                await self.ai_session.rollback()
+            except Exception:
+                pass
+            self.node_path.append("search_persist_error")
+
+        return {}
+
     async def trace_node(self, state: AgentState) -> dict[str, Any]:
         """chat_agent_traces 저장 (best-effort 종단 노드)."""
         assert self.ai_session is not None
@@ -274,9 +493,18 @@ class GraphNodes:
     # ------------------------------------------------------------------
 
     def post_cache_check(self, state: AgentState) -> str:
-        """cache_check 직후 라우팅 — hit 시 trace로 short-circuit, miss면 intent 분기."""
+        """cache_check 직후 라우팅 — hit 시 search_persist_node → trace 경로, miss면 intent 분기.
+
+        cache hit 시 검색이 수행되지 않으므로 search_channels 는 {} 상태다.
+        search_persist_node 는 빈 채널 맵에서 즉시 skip 하고 return {} 하므로
+        성능 오버헤드는 없다. 명시적으로 경유함으로써 종단 체인
+        (cache_write → search_persist → trace) 의 일관성을 유지한다.
+
+        NOTE: 직접 trace_node 로 라우팅하면 나중에 cache-hit 경로에서도 채널 데이터가
+        존재하는 케이스가 생길 때 search_persist 가 묵묵히 스킵되는 latent bug 가 된다.
+        """
         if state.get("cache_hit"):
-            return "trace_node"
+            return "search_persist_node"
         return self.route_by_intent(state)
 
     def route_by_intent(self, state: AgentState) -> str:
@@ -382,7 +610,9 @@ class CacheCheckNode:
         if envelope is None:
             logger.info(
                 "cache.miss room=%s intent=%s refined=%r",
-                state.get("room_id"), intent.value, refined[:40],
+                state.get("room_id"),
+                intent.value,
+                refined[:40],
             )
             return {"cache_hit": False}
 
@@ -390,13 +620,18 @@ class CacheCheckNode:
         snap = envelope.get("state", {}) or {}
         logger.info(
             "cache.hit room=%s intent=%s refined=%r",
-            state.get("room_id"), intent.value, refined[:40],
+            state.get("room_id"),
+            intent.value,
+            refined[:40],
         )
         return {
             "answer": payload.get("answer"),
             "title": payload.get("title"),
             "vector_results": snap.get("vector_results"),
             "sql_results": snap.get("sql_results"),
+            # hydrated_services 도 envelope 에 포함되어 있으면 복원한다.
+            # 미보유 envelope(구버전 캐시 엔트리) 인 경우 None — AnswerAgent 가 폴백 처리.
+            "hydrated_services": snap.get("hydrated_services"),
             "max_class_name": snap.get("max_class_name"),
             "area_name": snap.get("area_name"),
             "service_status": snap.get("service_status"),
@@ -443,6 +678,8 @@ class CacheWriteNode:
             "service_status": service_status,
             "vector_results": state.get("vector_results"),
             "sql_results": state.get("sql_results"),
+            # HydrationNode 가 채운 통합 슬롯 — cache hit 시 hydration 라운드트립 절감.
+            "hydrated_services": state.get("hydrated_services"),
         }
         await set_cached_answer(
             refined,

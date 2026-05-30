@@ -38,18 +38,42 @@ class TestHydrateOrderPreservation:
         """결과는 service_ids 입력 순서(=검색 순위)를 유지한다."""
         # DB는 임의 순서로 반환 — 정렬은 도구 책임
         db_rows = [
-            {"service_id": "S002", "service_name": "수영장", "max_class_name": "체육시설",
-             "min_class_name": None, "area_name": "강남구", "place_name": None,
-             "service_status": "접수중", "payment_type": None, "service_url": None,
-             "receipt_start_dt": None, "receipt_end_dt": None,
-             "service_open_start_dt": None, "service_open_end_dt": None,
-             "coord_x": None, "coord_y": None, "target_info": None},
-            {"service_id": "S001", "service_name": "테니스장", "max_class_name": "체육시설",
-             "min_class_name": None, "area_name": "마포구", "place_name": None,
-             "service_status": "접수중", "payment_type": None, "service_url": None,
-             "receipt_start_dt": None, "receipt_end_dt": None,
-             "service_open_start_dt": None, "service_open_end_dt": None,
-             "coord_x": None, "coord_y": None, "target_info": None},
+            {
+                "service_id": "S002",
+                "service_name": "수영장",
+                "max_class_name": "체육시설",
+                "min_class_name": None,
+                "area_name": "강남구",
+                "place_name": None,
+                "service_status": "접수중",
+                "payment_type": None,
+                "service_url": None,
+                "receipt_start_dt": None,
+                "receipt_end_dt": None,
+                "service_open_start_dt": None,
+                "service_open_end_dt": None,
+                "coord_x": None,
+                "coord_y": None,
+                "target_info": None,
+            },
+            {
+                "service_id": "S001",
+                "service_name": "테니스장",
+                "max_class_name": "체육시설",
+                "min_class_name": None,
+                "area_name": "마포구",
+                "place_name": None,
+                "service_status": "접수중",
+                "payment_type": None,
+                "service_url": None,
+                "receipt_start_dt": None,
+                "receipt_end_dt": None,
+                "service_open_start_dt": None,
+                "service_open_end_dt": None,
+                "coord_x": None,
+                "coord_y": None,
+                "target_info": None,
+            },
         ]
         session = _make_session(db_rows)
         result = await hydrate_services(session, ["S001", "S002"])
@@ -60,12 +84,24 @@ class TestHydrateMissingRows:
     async def test_missing_service_ids_excluded(self):
         """원본 테이블에 없거나 soft-delete된 service_id는 결과에서 제외된다."""
         db_rows = [
-            {"service_id": "S001", "service_name": "테니스장", "max_class_name": "체육시설",
-             "min_class_name": None, "area_name": "마포구", "place_name": None,
-             "service_status": "접수중", "payment_type": None, "service_url": None,
-             "receipt_start_dt": None, "receipt_end_dt": None,
-             "service_open_start_dt": None, "service_open_end_dt": None,
-             "coord_x": None, "coord_y": None, "target_info": None},
+            {
+                "service_id": "S001",
+                "service_name": "테니스장",
+                "max_class_name": "체육시설",
+                "min_class_name": None,
+                "area_name": "마포구",
+                "place_name": None,
+                "service_status": "접수중",
+                "payment_type": None,
+                "service_url": None,
+                "receipt_start_dt": None,
+                "receipt_end_dt": None,
+                "service_open_start_dt": None,
+                "service_open_end_dt": None,
+                "coord_x": None,
+                "coord_y": None,
+                "target_info": None,
+            },
         ]
         session = _make_session(db_rows)
         # S002는 임베딩엔 있지만 원본엔 없는 케이스

@@ -1,8 +1,12 @@
-"""시설 메타데이터 임베딩 배치 적재 스크립트.
+"""시설 메타데이터 Triple-Track 임베딩 배치 적재 스크립트.
 
 on_data.public_service_reservations 에서 시설 데이터를 읽어
-텍스트 문서로 변환한 뒤 Gemini 임베딩 벡터를 생성하고,
-on_ai.service_embeddings 에 upsert한다.
+Triple-Track(A/B/C)으로 임베딩 벡터를 생성하고 on_ai.service_embeddings에 적재한다.
+
+트랙 구성:
+  Track A (identity): 시설 식별 텍스트 임베딩. 항상 생성.
+  Track B (summary):  LLM 추출 요약 임베딩. LLM 성공 시 생성.
+  Track C (questions): HyQE 예상질문 임베딩. LLM 성공 시 생성.
 
 사용법
 ------
@@ -18,43 +22,37 @@ uv run python scripts/embed_metadata.py --limit 500
 # 증분 적재 (service_embeddings에 없는 service_id만)
 uv run python scripts/embed_metadata.py --incremental
 
-# 전량 + 증분 조합 (전체 조회 후 기존 제외)
-uv run python scripts/embed_metadata.py --all --incremental
+# 특정 트랙만 적재 (복수 지정 가능)
+uv run python scripts/embed_metadata.py --track A
+uv run python scripts/embed_metadata.py --track B
+uv run python scripts/embed_metadata.py --track A B  # A + B 동시
 
-임베딩 대상 vs 표시 컬럼 (Phase 18):
-    임베딩 입력에 포함되는 의미 컬럼이 변경된 경우에만 재임베딩한다.
-    표시 전용 컬럼은 매 답변마다 tools/hydrate_services가 원본에서 가져오므로
-    임베딩을 갱신할 필요가 없다.
+# extraction_failed.tsv 재처리
+uv run python scripts/embed_metadata.py --retry-failed
 
-    의미 컬럼 (변경 시 재임베딩 — _build_document() 입력):
-        service_name, max_class_name, min_class_name, area_name,
-        place_name, target_info, detail_content (앞 300자)
-
-    표시 전용 컬럼 (변경해도 재임베딩 불필요 — hydration이 최신값 보장):
-        service_status, receipt_start_dt, receipt_end_dt,
-        service_open_start_dt, service_open_end_dt, service_url,
-        payment_type, coord_x, coord_y
-
-    주의: 현재 --incremental은 service_change_log를 참조하지 않고
-    service_embeddings에 없는 신규 service_id만 적재한다.
-    의미 컬럼 변경 시 자동 재임베딩은 Phase 19 향후 과제다.
+# dry-run
+uv run python scripts/embed_metadata.py --dry-run --all
 """
 
 import argparse
 import asyncio
-import json
 import logging
 import sys
 from pathlib import Path
 
-# 프로젝트 루트를 sys.path에 추가 (scripts/ 에서 실행 시 패키지 임포트를 위해)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from core.config import settings
-from llm.client import get_embeddings
+from llm.client import get_chat_model, get_embeddings
+from llm.extractor import extract_metadata
+from scripts.cleaning.detail_content import clean_detail_content
+from scripts.tracks._shared import ServiceRecord, delete_rows_by_service_id
+from scripts.tracks.identity import embed_and_insert_identity
+from scripts.tracks.questions import embed_and_insert_questions
+from scripts.tracks.summary import embed_and_insert_summary
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,123 +60,184 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# 문서 구성 전략
-# 시설명 · 대분류 · 소분류 · 지역 · 대상 · 서비스 기간 · 상세 설명을 조합한다.
-# 검색 품질 향상을 위해 공백 필드는 제외하고 구분자(|)로 연결한다.
-# ---------------------------------------------------------------------------
-_DETAIL_MAX_CHARS = 300  # 상세 설명 최대 길이 (토큰 절약)
+_EXTRACTION_FAILED_FILE = Path(__file__).parent / "extraction_failed.tsv"
 
 
-def _build_document(row: dict) -> str:
-    """DB 행 → 임베딩용 텍스트 문서 변환."""
-    parts = [
-        row.get("service_name") or "",
-        row.get("max_class_name") or "",
-        row.get("min_class_name") or "",
-        row.get("area_name") or "",
-        row.get("place_name") or "",
-        row.get("target_info") or "",
-        (row.get("detail_content") or "")[:_DETAIL_MAX_CHARS],
-    ]
-    return " | ".join(p for p in parts if p.strip())
+async def process_service(
+    service: ServiceRecord,
+    *,
+    session: AsyncSession,
+    embedder,
+    llm_client,
+    tracks: set[str],
+    extraction_failed_path: Path | None = None,
+) -> None:
+    """단일 시설의 Triple-Track 임베딩 적재.
+
+    tracks: {"A"}, {"B"}, {"C"}, {"A","B","C"} 등 조합 가능.
+    extraction_failed_path: LLM 추출 실패 시 service_id를 append할 파일.
+    """
+    cleaned = clean_detail_content(service.get("detail_content"))
+
+    async with session.begin():
+        await delete_rows_by_service_id(session, service["service_id"], tracks=tracks)
+
+        extracted = None
+        if tracks & {"A", "B", "C"}:
+            extracted = await extract_metadata(
+                service_name=service["service_name"],
+                area_name=service.get("area_name"),
+                max_class_name=service.get("max_class_name"),
+                min_class_name=service.get("min_class_name"),
+                place_name=service.get("place_name"),
+                target_info=service.get("target_info"),
+                payment_type=service.get("payment_type"),
+                cleaned_detail=cleaned,
+                llm_client=llm_client,
+            )
+
+        if "A" in tracks:
+            await embed_and_insert_identity(
+                session, service, embedder=embedder, extracted=extracted
+            )
+
+        if extracted is None:
+            if extraction_failed_path:
+                with extraction_failed_path.open("a", encoding="utf-8") as f:
+                    f.write(f"{service['service_id']}\n")
+            return
+
+        if "B" in tracks:
+            await embed_and_insert_summary(
+                session, service, embedder=embedder, extracted=extracted
+            )
+
+        if "C" in tracks:
+            await embed_and_insert_questions(
+                session,
+                service,
+                embedder=embedder,
+                llm_client=llm_client,
+                cleaned_detail=cleaned,
+                extracted_summary=extracted.summary,
+            )
 
 
-def _build_metadata(row: dict) -> dict:
-    """검색 결과 카드 렌더링에 필요한 필드를 JSONB metadata로 구성한다."""
-    return {
-        "service_gubun": row.get("service_gubun"),
-        "max_class_name": row.get("max_class_name"),
-        "min_class_name": row.get("min_class_name"),
-        "area_name": row.get("area_name"),
-        "place_name": row.get("place_name"),
-        "service_status": row.get("service_status"),
-        "payment_type": row.get("payment_type"),
-        "target_info": row.get("target_info"),
-        "service_url": row.get("service_url"),
-        "receipt_start_dt": str(row["receipt_start_dt"]) if row.get("receipt_start_dt") else None,
-        "receipt_end_dt": str(row["receipt_end_dt"]) if row.get("receipt_end_dt") else None,
-        "service_open_start_dt": str(row["service_open_start_dt"]) if row.get("service_open_start_dt") else None,
-        "service_open_end_dt": str(row["service_open_end_dt"]) if row.get("service_open_end_dt") else None,
-        "coord_x": float(row["coord_x"]) if row.get("coord_x") is not None else None,
-        "coord_y": float(row["coord_y"]) if row.get("coord_y") is not None else None,
-    }
+async def run(
+    limit: int | None,
+    incremental: bool = False,
+    tracks: set[str] | None = None,
+    dry_run: bool = False,
+    retry_failed: bool = False,
+) -> None:
+    effective_tracks = tracks or {"A", "B", "C"}
 
-
-# ---------------------------------------------------------------------------
-# 메인 로직
-# ---------------------------------------------------------------------------
-
-_BATCH_SIZE = 20  # 배치 커밋 단위 (aembed_documents는 순차 처리)
-
-
-async def run(limit: int | None, incremental: bool = False) -> None:
     on_data_engine = create_async_engine(settings.on_data_database_url, echo=False)
     on_ai_engine = create_async_engine(
         settings.on_ai_database_url,
         echo=False,
-        connect_args={"statement_cache_size": 0},  # pgvector + asyncpg prepared statement 호환성
+        connect_args={"statement_cache_size": 0},
     )
     try:
         OnDataSession = async_sessionmaker(on_data_engine, expire_on_commit=False)
         OnAiSession = async_sessionmaker(on_ai_engine, expire_on_commit=False)
 
-        embeddings = get_embeddings()
+        embedder = get_embeddings()
+        llm_client = get_chat_model()
 
         async with OnDataSession() as data_session:
-            rows = await _fetch_rows(data_session, limit)
+            if retry_failed:
+                rows = await _fetch_failed_rows(data_session)
+            else:
+                rows = await _fetch_rows(data_session, limit)
 
         if not rows:
             logger.info("적재할 데이터가 없습니다.")
             return
 
-        if incremental:
+        if incremental and not retry_failed:
             async with OnAiSession() as ai_session:
-                existing_ids = await _fetch_existing_service_ids(ai_session)
-
+                existing_ids = await _fetch_existing_service_ids(
+                    ai_session, tracks=effective_tracks
+                )
             before_count = len(rows)
             rows = [r for r in rows if r["service_id"] not in existing_ids]
-            excluded_count = before_count - len(rows)
-            logger.info("기존 %d건 제외, %d건 신규 임베딩", excluded_count, len(rows))
-
+            logger.info(
+                "기존 %d건 제외, %d건 신규 임베딩", before_count - len(rows), len(rows)
+            )
             if not rows:
                 logger.info("신규 데이터가 없습니다.")
                 return
 
-        logger.info("총 %d건 처리 시작", len(rows))
+        if dry_run:
+            logger.info("[DRY-RUN] 총 %d건 처리 예정 (실제 적재 없음)", len(rows))
+            return
 
-        async with OnAiSession() as ai_session:
-            for batch_start in range(0, len(rows), _BATCH_SIZE):
-                batch = rows[batch_start : batch_start + _BATCH_SIZE]
-                batch_end = min(batch_start + _BATCH_SIZE, len(rows))
-                documents = [_build_document(r) for r in batch]
+        logger.info("총 %d건 처리 시작 (트랙: %s)", len(rows), sorted(effective_tracks))
+
+        failed_path = (
+            _EXTRACTION_FAILED_FILE
+            if "B" in effective_tracks or "C" in effective_tracks
+            else None
+        )
+
+        for i, row in enumerate(rows, start=1):
+            async with OnAiSession() as ai_session:
                 try:
-                    vectors = await embeddings.aembed_documents(documents)
-                    await _upsert_batch(ai_session, batch, vectors)
-                    await ai_session.commit()
-                except Exception:
-                    await ai_session.rollback()
-                    logger.exception(
-                        "배치 실패 (rows %d–%d), 롤백 후 중단",
-                        batch_start + 1,
-                        batch_end,
+                    await process_service(
+                        row,
+                        session=ai_session,
+                        embedder=embedder,
+                        llm_client=llm_client,
+                        tracks=effective_tracks,
+                        extraction_failed_path=failed_path,
                     )
-                    raise
+                except Exception:
+                    logger.exception("처리 실패: service_id=%s", row.get("service_id"))
+            if i % 20 == 0 or i == len(rows):
+                logger.info("진행: %d / %d", i, len(rows))
 
-                logger.info("진행: %d / %d", batch_end, len(rows))
-
-        logger.info("완료: %d건 적재", len(rows))
-    except Exception:
-        logger.exception("임베딩 적재 실패")
-        raise
+        logger.info("완료: %d건 처리", len(rows))
     finally:
         await on_data_engine.dispose()
         await on_ai_engine.dispose()
 
 
-async def _fetch_existing_service_ids(session: AsyncSession) -> set[str]:
-    """on_ai.service_embeddings에서 이미 적재된 service_id 집합을 조회한다."""
-    result = await session.execute(text("SELECT service_id FROM service_embeddings"))
+_TRACK_TO_ROW_KIND: dict[str, str] = {
+    "A": "identity",
+    "B": "summary",
+    "C": "question",
+}
+
+
+async def _fetch_existing_service_ids(
+    session: AsyncSession,
+    tracks: set[str] | None = None,
+) -> set[str]:
+    """on_ai.service_embeddings에서 이미 적재된 service_id 집합을 조회한다.
+
+    tracks가 지정되면 해당 트랙의 row_kind를 가진 행만 기존 적재로 판단한다.
+    예: tracks={"B"} → row_kind='summary' 가 있는 service_id만 반환.
+
+    tracks=None 또는 {"A","B","C"} 전체이면 row_kind 무관 전체 조회.
+    """
+    if tracks:
+        row_kinds = [_TRACK_TO_ROW_KIND[t] for t in tracks if t in _TRACK_TO_ROW_KIND]
+        if row_kinds and len(row_kinds) < 3:
+            placeholders = ", ".join(f":rk_{i}" for i in range(len(row_kinds)))
+            bind = {f"rk_{i}": rk for i, rk in enumerate(row_kinds)}
+            result = await session.execute(
+                text(
+                    f"SELECT DISTINCT service_id FROM service_embeddings"
+                    f" WHERE row_kind IN ({placeholders})"
+                ),
+                bind,
+            )
+            return {row[0] for row in result.fetchall()}
+
+    result = await session.execute(
+        text("SELECT DISTINCT service_id FROM service_embeddings")
+    )
     return {row[0] for row in result.fetchall()}
 
 
@@ -210,58 +269,70 @@ async def _fetch_rows(session: AsyncSession, limit: int | None) -> list[dict]:
     return [dict(zip(keys, row)) for row in result.fetchall()]
 
 
-async def _upsert_batch(
-    session: AsyncSession,
-    rows: list[dict],
-    vectors: list[list[float]],
-) -> None:
-    """service_embeddings에 ON CONFLICT(service_id) DO UPDATE upsert."""
-    for row, vector in zip(rows, vectors):
-        metadata = _build_metadata(row)
-        await session.execute(
-            text("""
-                INSERT INTO service_embeddings
-                    (service_id, service_name, metadata, embedding, updated_at)
-                VALUES
-                    (:service_id, :service_name, CAST(:metadata AS jsonb), CAST(:embedding AS vector), NOW())
-                ON CONFLICT (service_id) DO UPDATE SET
-                    service_name = EXCLUDED.service_name,
-                    metadata     = EXCLUDED.metadata,
-                    embedding    = EXCLUDED.embedding,
-                    updated_at   = EXCLUDED.updated_at
-            """),
-            {
-                "service_id": row["service_id"],
-                "service_name": row["service_name"],
-                "metadata": json.dumps(metadata, ensure_ascii=False),
-                "embedding": str(vector),
-            },
-        )
+async def _fetch_failed_rows(session: AsyncSession) -> list[dict]:
+    """extraction_failed.tsv에 기록된 service_id들을 재조회한다."""
+    if not _EXTRACTION_FAILED_FILE.exists():
+        logger.info("extraction_failed.tsv 파일이 없습니다.")
+        return []
 
+    service_ids = []
+    with _EXTRACTION_FAILED_FILE.open("r", encoding="utf-8") as f:
+        for line in f:
+            sid = line.strip()
+            if sid:
+                service_ids.append(sid)
 
-# ---------------------------------------------------------------------------
-# CLI 진입점
-# ---------------------------------------------------------------------------
+    if not service_ids:
+        return []
+
+    placeholders = ", ".join(f":sid_{i}" for i in range(len(service_ids)))
+    bind = {f"sid_{i}": sid for i, sid in enumerate(service_ids)}
+    sql = text(f"""
+        SELECT
+            service_id, service_name, service_gubun,
+            max_class_name, min_class_name,
+            area_name, place_name,
+            service_status, payment_type, target_info,
+            service_url, detail_content,
+            receipt_start_dt, receipt_end_dt,
+            service_open_start_dt, service_open_end_dt,
+            coord_x, coord_y
+        FROM public_service_reservations
+        WHERE service_id IN ({placeholders})
+          AND deleted_at IS NULL
+    """)
+    result = await session.execute(sql, bind)
+    keys = result.keys()
+    return [dict(zip(keys, row)) for row in result.fetchall()]
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="시설 메타데이터 임베딩 적재")
+    parser = argparse.ArgumentParser(
+        description="시설 메타데이터 Triple-Track 임베딩 적재"
+    )
+
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
-        "--all",
-        action="store_true",
-        help="전량 적재 (기본값: seed 100건)",
+        "--all", action="store_true", help="전량 적재 (기본값: seed 100건)"
     )
-    group.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="적재할 최대 건수",
+    group.add_argument("--limit", type=int, default=None, help="적재할 최대 건수")
+
+    parser.add_argument(
+        "--incremental", action="store_true", help="신규 service_id만 임베딩"
     )
     parser.add_argument(
-        "--incremental",
-        action="store_true",
-        help="service_embeddings에 없는 service_id만 임베딩 (신규 데이터 전용)",
+        "--track",
+        nargs="+",
+        choices=["A", "B", "C"],
+        default=["A", "B", "C"],
+        metavar="TRACK",
+        help="적재할 트랙 (A B C 중 하나 이상, 기본값: A B C). 예: --track A B",
+    )
+    parser.add_argument(
+        "--retry-failed", action="store_true", help="extraction_failed.tsv 재처리"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="실제 적재 없이 대상 건수만 확인"
     )
     return parser.parse_args()
 
@@ -269,16 +340,24 @@ def _parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = _parse_args()
 
-    if args.all:
+    if args.all or args.incremental or args.retry_failed:
         limit = None
     elif args.limit is not None:
         limit = args.limit
-    elif args.incremental:
-        limit = None  # 증분은 전체 조회 후 필터링해야 의미 있음
     else:
-        limit = 100  # seed 기본값
+        limit = 100
+
+    tracks: set[str] = set(args.track)
 
     try:
-        asyncio.run(run(limit, incremental=args.incremental))
+        asyncio.run(
+            run(
+                limit,
+                incremental=args.incremental,
+                tracks=tracks,
+                dry_run=args.dry_run,
+                retry_failed=args.retry_failed,
+            )
+        )
     except Exception:
         sys.exit(1)

@@ -66,7 +66,9 @@ class TestDomainTokenPreservation:
         예: "따릉이 대여소" → lindera가 ["따릉이", "대여소"]로 분리했을 때
         "따릉이"가 결과에 포함되어야 한다.
         """
-        with patch("tools.tokenizer._lindera_tokenize", return_value=["따릉이", "대여소"]):
+        with patch(
+            "tools.tokenizer._lindera_tokenize", return_value=["따릉이", "대여소"]
+        ):
             result = tokenize_query("따릉이 대여소")
         assert "따릉이" in result
 
@@ -87,7 +89,10 @@ class TestDomainTokenPreservation:
         예: "한강공원 근처 시설" → lindera가 ["한강", "공원", "근처", "시설"]로 분리 시
         "한강공원"이 결과 앞에 보존되어야 한다 (line 72 커버).
         """
-        with patch("tools.tokenizer._lindera_tokenize", return_value=["한강", "공원", "근처", "시설"]):
+        with patch(
+            "tools.tokenizer._lindera_tokenize",
+            return_value=["한강", "공원", "근처", "시설"],
+        ):
             result = tokenize_query("한강공원 근처 시설")
         assert result[0] == "한강공원"
         assert "한강" in result

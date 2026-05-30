@@ -16,10 +16,12 @@ from schemas.state import IntentType
 class ChatRequest(BaseModel):
     room_id: int = Field(ge=1)
     message_id: int = Field(ge=1)
-    message: str = Field(min_length=1, max_length=2000)  # 사용자 채팅 입력. on-seoul-api가 릴레이한다.
+    message: str = Field(
+        min_length=1, max_length=2000
+    )  # 사용자 채팅 입력. on-seoul-api가 릴레이한다.
     # 지도 검색(MAP intent)용 사용자 위치. 미전송 시 MAP을 FALLBACK으로 대체한다.
     # 범위 제한: 범위 외 값은 ll_to_earth()에서 DB 오류를 유발하므로 422로 차단한다.
-    lat: float | None = Field(default=None, ge=-90.0, le=90.0)    # 위도 (latitude)
+    lat: float | None = Field(default=None, ge=-90.0, le=90.0)  # 위도 (latitude)
     lng: float | None = Field(default=None, ge=-180.0, le=180.0)  # 경도 (longitude)
 
 

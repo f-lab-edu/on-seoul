@@ -11,14 +11,12 @@ pytestmark = pytest.mark.asyncio
 
 
 def _make_async_engine_mock() -> MagicMock:
-    """dispose()가 awaitable한 AsyncEngine 모의 객체."""
     engine = MagicMock()
     engine.dispose = AsyncMock()
     return engine
 
 
 def _make_session_factory_mock() -> MagicMock:
-    """async with 컨텍스트 매니저를 지원하는 세션 팩토리 모의 객체."""
     mock_session = MagicMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
@@ -51,116 +49,164 @@ def _make_row(service_id: str) -> dict:
     }
 
 
+def _common_patches(
+    all_rows: list[dict],
+    existing_ids: set,
+    processed_ids: list[str],
+    fetch_existing_mock: AsyncMock | None = None,
+) -> tuple:
+    """공통 patch 컨텍스트. process_service를 mock하여 service_id를 기록한다."""
+
+    async def fake_process_service(service, **kwargs):
+        processed_ids.append(service["service_id"])
+
+    return (
+        patch(
+            "scripts.embed_metadata.create_async_engine",
+            return_value=_make_async_engine_mock(),
+        ),
+        patch(
+            "scripts.embed_metadata.async_sessionmaker",
+            side_effect=lambda *a, **kw: _make_session_factory_mock(),
+        ),
+        patch(
+            "scripts.embed_metadata._fetch_rows", new=AsyncMock(return_value=all_rows)
+        ),
+        patch(
+            "scripts.embed_metadata._fetch_existing_service_ids",
+            new=fetch_existing_mock or AsyncMock(return_value=existing_ids),
+        ),
+        patch(
+            "scripts.embed_metadata.process_service",
+            new=AsyncMock(side_effect=fake_process_service),
+        ),
+        patch("scripts.embed_metadata.get_embeddings", return_value=MagicMock()),
+        patch("scripts.embed_metadata.get_chat_model", return_value=MagicMock()),
+    )
+
+
 class TestIncrementalFilterLogic:
-    """run() 함수의 incremental 필터 분기를 격리 테스트한다.
-
-    DB 엔진 생성 및 실제 네트워크 호출 없이,
-    _fetch_rows / _fetch_existing_service_ids / _upsert_batch 를 각각 mock하여
-    rows 필터링 경로만 검증한다.
-    """
-
-    def _common_patches(
-        self,
-        all_rows: list[dict],
-        existing_ids: set,
-        upserted_ids: list[str],
-        fetch_existing_mock: AsyncMock | None = None,
-    ) -> tuple:
-        """공통 patch 컨텍스트를 반환한다."""
-        async def fake_upsert(session, rows, vectors):
-            for r in rows:
-                upserted_ids.append(r["service_id"])
-
-        return (
-            patch("scripts.embed_metadata.create_async_engine", return_value=_make_async_engine_mock()),
-            patch("scripts.embed_metadata.async_sessionmaker", side_effect=lambda *a, **kw: _make_session_factory_mock()),
-            patch("scripts.embed_metadata._fetch_rows", new=AsyncMock(return_value=all_rows)),
-            patch(
-                "scripts.embed_metadata._fetch_existing_service_ids",
-                new=fetch_existing_mock or AsyncMock(return_value=existing_ids),
-            ),
-            patch("scripts.embed_metadata._upsert_batch", new=AsyncMock(side_effect=fake_upsert)),
-            patch(
-                "scripts.embed_metadata.get_embeddings",
-                return_value=MagicMock(
-                    aembed_documents=AsyncMock(side_effect=lambda docs: [[0.1] * 3 for _ in docs])
-                ),
-            ),
-        )
+    """run() 함수의 incremental 필터 분기를 격리 테스트한다."""
 
     async def test_incremental_empty_existing_ids_processes_all_rows(self):
-        """existing_ids가 비어 있으면(첫 실행) fetch한 모든 행을 임베딩한다."""
+        """existing_ids가 비어 있으면(첫 실행) fetch한 모든 행을 처리한다."""
         all_rows = [_make_row("S001"), _make_row("S002"), _make_row("S003")]
-        upserted_service_ids: list[str] = []
-        patches = self._common_patches(all_rows, set(), upserted_service_ids)
+        processed: list[str] = []
+        patches = _common_patches(all_rows, set(), processed)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+        ):
             from scripts.embed_metadata import run
+
             await run(limit=None, incremental=True)
 
-        assert sorted(upserted_service_ids) == ["S001", "S002", "S003"]
+        assert sorted(processed) == ["S001", "S002", "S003"]
 
     async def test_incremental_all_existing_processes_zero_rows(self):
         """existing_ids가 전체 데이터와 동일하면 0건을 처리하고 종료한다."""
         all_rows = [_make_row("S001"), _make_row("S002")]
         existing_ids = {"S001", "S002"}
-        upserted_service_ids: list[str] = []
-        patches = self._common_patches(all_rows, existing_ids, upserted_service_ids)
+        processed: list[str] = []
+        patches = _common_patches(all_rows, existing_ids, processed)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+        ):
             from scripts.embed_metadata import run
+
             await run(limit=None, incremental=True)
 
-        assert upserted_service_ids == [], "전부 기존 데이터이므로 upsert 호출이 없어야 함"
+        assert processed == []
 
     async def test_incremental_partial_existing_processes_only_new_rows(self):
-        """existing_ids가 일부이면 새로운 service_id만 임베딩한다."""
+        """existing_ids가 일부이면 새로운 service_id만 처리한다."""
         all_rows = [_make_row("S001"), _make_row("S002"), _make_row("S003")]
-        existing_ids = {"S001"}  # S002, S003만 신규
-        upserted_service_ids: list[str] = []
-        patches = self._common_patches(all_rows, existing_ids, upserted_service_ids)
+        existing_ids = {"S001"}
+        processed: list[str] = []
+        patches = _common_patches(all_rows, existing_ids, processed)
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+        ):
             from scripts.embed_metadata import run
+
             await run(limit=None, incremental=True)
 
-        assert sorted(upserted_service_ids) == ["S002", "S003"]
+        assert sorted(processed) == ["S002", "S003"]
 
     async def test_non_incremental_processes_all_rows_regardless_of_existing(self):
         """incremental=False이면 existing_ids 조회 없이 전체 행을 처리한다."""
         all_rows = [_make_row("S001"), _make_row("S002")]
-        upserted_service_ids: list[str] = []
+        processed: list[str] = []
         mock_fetch_existing = AsyncMock(return_value={"S001", "S002"})
-        patches = self._common_patches(
-            all_rows, set(), upserted_service_ids, fetch_existing_mock=mock_fetch_existing
+        patches = _common_patches(
+            all_rows, set(), processed, fetch_existing_mock=mock_fetch_existing
         )
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+        ):
             from scripts.embed_metadata import run
+
             await run(limit=None, incremental=False)
 
-        # incremental=False이므로 _fetch_existing_service_ids 호출 없어야 함
         mock_fetch_existing.assert_not_called()
-        assert sorted(upserted_service_ids) == ["S001", "S002"]
+        assert sorted(processed) == ["S001", "S002"]
 
     async def test_incremental_fetch_rows_returns_empty_exits_early(self):
         """fetch_rows가 빈 리스트를 반환하면 _fetch_existing_service_ids 호출 없이 종료한다."""
         mock_fetch_existing = AsyncMock(return_value=set())
-        mock_upsert = AsyncMock()
+        mock_process = AsyncMock()
 
         with (
-            patch("scripts.embed_metadata.create_async_engine", return_value=_make_async_engine_mock()),
-            patch("scripts.embed_metadata.async_sessionmaker", side_effect=lambda *a, **kw: _make_session_factory_mock()),
+            patch(
+                "scripts.embed_metadata.create_async_engine",
+                return_value=_make_async_engine_mock(),
+            ),
+            patch(
+                "scripts.embed_metadata.async_sessionmaker",
+                side_effect=lambda *a, **kw: _make_session_factory_mock(),
+            ),
             patch("scripts.embed_metadata._fetch_rows", new=AsyncMock(return_value=[])),
-            patch("scripts.embed_metadata._fetch_existing_service_ids", new=mock_fetch_existing),
-            patch("scripts.embed_metadata._upsert_batch", new=mock_upsert),
+            patch(
+                "scripts.embed_metadata._fetch_existing_service_ids",
+                new=mock_fetch_existing,
+            ),
+            patch("scripts.embed_metadata.process_service", new=mock_process),
             patch("scripts.embed_metadata.get_embeddings", return_value=MagicMock()),
+            patch("scripts.embed_metadata.get_chat_model", return_value=MagicMock()),
         ):
             from scripts.embed_metadata import run
+
             await run(limit=None, incremental=True)
 
         mock_fetch_existing.assert_not_called()
-        mock_upsert.assert_not_called()
+        mock_process.assert_not_called()
 
 
 class TestFetchExistingServiceIds:
@@ -174,6 +220,7 @@ class TestFetchExistingServiceIds:
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         from scripts.embed_metadata import _fetch_existing_service_ids
+
         result = await _fetch_existing_service_ids(mock_session)
 
         assert result == {"S001", "S002", "S003"}
@@ -186,6 +233,88 @@ class TestFetchExistingServiceIds:
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         from scripts.embed_metadata import _fetch_existing_service_ids
+
         result = await _fetch_existing_service_ids(mock_session)
 
         assert result == set()
+
+    async def test_track_b_filters_by_summary_row_kind(self):
+        """tracks={"B"} 이면 row_kind='summary' 조건이 SQL + bind에 포함된다."""
+        executed: list[tuple] = []  # (sql_str, params)
+
+        async def _capture(stmt, params=None):
+            executed.append((str(stmt), params or {}))
+            m = MagicMock()
+            m.fetchall.return_value = []
+            return m
+
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock(side_effect=_capture)
+
+        from scripts.embed_metadata import _fetch_existing_service_ids
+
+        await _fetch_existing_service_ids(mock_session, tracks={"B"})
+
+        assert executed, "execute가 호출되어야 한다"
+        sql_str, bind = executed[0]
+        assert "row_kind" in sql_str
+        assert "summary" in bind.values()
+
+    async def test_track_a_filters_by_identity_row_kind(self):
+        """tracks={"A"} 이면 row_kind='identity' 조건이 SQL + bind에 포함된다."""
+        executed: list[tuple] = []
+
+        async def _capture(stmt, params=None):
+            executed.append((str(stmt), params or {}))
+            m = MagicMock()
+            m.fetchall.return_value = []
+            return m
+
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock(side_effect=_capture)
+
+        from scripts.embed_metadata import _fetch_existing_service_ids
+
+        await _fetch_existing_service_ids(mock_session, tracks={"A"})
+
+        sql_str, bind = executed[0]
+        assert "row_kind" in sql_str
+        assert "identity" in bind.values()
+
+    async def test_all_tracks_no_row_kind_filter(self):
+        """tracks가 A/B/C 전체이면 row_kind 필터 없이 전체 조회한다."""
+        executed_sqls: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.fetchall.return_value = []
+            return m
+
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock(side_effect=_capture)
+
+        from scripts.embed_metadata import _fetch_existing_service_ids
+
+        await _fetch_existing_service_ids(mock_session, tracks={"A", "B", "C"})
+
+        assert "row_kind" not in executed_sqls[0]
+
+    async def test_tracks_none_no_row_kind_filter(self):
+        """tracks=None 이면 row_kind 필터 없이 전체 조회한다."""
+        executed_sqls: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.fetchall.return_value = []
+            return m
+
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock(side_effect=_capture)
+
+        from scripts.embed_metadata import _fetch_existing_service_ids
+
+        await _fetch_existing_service_ids(mock_session, tracks=None)
+
+        assert "row_kind" not in executed_sqls[0]

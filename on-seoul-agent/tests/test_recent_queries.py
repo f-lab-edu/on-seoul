@@ -107,10 +107,13 @@ class TestPushRecentQuery:
 
         await push_recent_query(room_id=42, message="q", redis=mock_redis)
 
-        names = [c[0] for c in manager.mock_calls if c[0] in {"lpush", "ltrim", "expire"}]
+        names = [
+            c[0] for c in manager.mock_calls if c[0] in {"lpush", "ltrim", "expire"}
+        ]
         assert names == ["lpush", "ltrim", "expire"]
         # LTRIM args (key, 0, max-1)
         from core.config import settings
+
         ltrim_args = mock_redis.ltrim.call_args.args
         assert ltrim_args[0] == "recent_queries:room:42"
         assert ltrim_args[1] == 0
@@ -131,6 +134,7 @@ class TestKeyFormat:
 
         await get_recent_queries(room_id=room_id, redis=mock_redis)
         from core.config import settings
+
         mock_redis.lrange.assert_called_once_with(
             f"recent_queries:room:{room_id}", 0, settings.recent_queries_max - 1
         )

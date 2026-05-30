@@ -17,7 +17,10 @@ def _make_session(rows: list[dict]) -> MagicMock:
         mock_result.fetchall.return_value = [tuple(r.values()) for r in rows]
     else:
         mock_result.keys.return_value = [
-            "service_id", "service_name", "area_name", "distance_m",
+            "service_id",
+            "service_name",
+            "area_name",
+            "distance_m",
         ]
         mock_result.fetchall.return_value = []
     mock_session = MagicMock()
@@ -189,21 +192,42 @@ class TestMapSearchSqlContent:
 class TestToGeoJson:
     def test_feature_has_point_geometry(self):
         """각 Feature는 Point 타입의 geometry를 가진다."""
-        rows = [{"service_id": "M001", "coord_x": "126.9", "coord_y": "37.5", "distance_m": 100}]
+        rows = [
+            {
+                "service_id": "M001",
+                "coord_x": "126.9",
+                "coord_y": "37.5",
+                "distance_m": 100,
+            }
+        ]
         result = _to_geojson(rows)
         feature = result["features"][0]
         assert feature["geometry"]["type"] == "Point"
 
     def test_coordinates_are_lng_lat_order(self):
         """GeoJSON 표준에 따라 coordinates는 [경도, 위도] 순서다."""
-        rows = [{"service_id": "M001", "coord_x": "126.9", "coord_y": "37.5", "distance_m": 100}]
+        rows = [
+            {
+                "service_id": "M001",
+                "coord_x": "126.9",
+                "coord_y": "37.5",
+                "distance_m": 100,
+            }
+        ]
         result = _to_geojson(rows)
         coords = result["features"][0]["geometry"]["coordinates"]
         assert coords == [126.9, 37.5]  # [lng, lat]
 
     def test_coord_fields_excluded_from_properties(self):
         """coord_x/coord_y는 geometry에 들어가므로 properties에서 제외된다."""
-        rows = [{"service_id": "M001", "coord_x": "126.9", "coord_y": "37.5", "distance_m": 100}]
+        rows = [
+            {
+                "service_id": "M001",
+                "coord_x": "126.9",
+                "coord_y": "37.5",
+                "distance_m": 100,
+            }
+        ]
         result = _to_geojson(rows)
         props = result["features"][0]["properties"]
         assert "coord_x" not in props
@@ -211,13 +235,22 @@ class TestToGeoJson:
 
     def test_distance_m_in_properties(self):
         """distance_m은 properties에 포함된다."""
-        rows = [{"service_id": "M001", "coord_x": "126.9", "coord_y": "37.5", "distance_m": 320}]
+        rows = [
+            {
+                "service_id": "M001",
+                "coord_x": "126.9",
+                "coord_y": "37.5",
+                "distance_m": 320,
+            }
+        ]
         result = _to_geojson(rows)
         assert result["features"][0]["properties"]["distance_m"] == 320
 
     def test_invalid_coord_yields_none_geometry(self):
         """coord_x/coord_y가 숫자로 변환 불가능하면 geometry=None이다."""
-        rows = [{"service_id": "M001", "coord_x": "N/A", "coord_y": None, "distance_m": 0}]
+        rows = [
+            {"service_id": "M001", "coord_x": "N/A", "coord_y": None, "distance_m": 0}
+        ]
         result = _to_geojson(rows)
         assert result["features"][0]["geometry"] is None
 
@@ -229,8 +262,18 @@ class TestToGeoJson:
     def test_multiple_rows(self):
         """여러 행이 각각 Feature로 변환된다."""
         rows = [
-            {"service_id": "M001", "coord_x": "126.9", "coord_y": "37.5", "distance_m": 100},
-            {"service_id": "M002", "coord_x": "126.8", "coord_y": "37.4", "distance_m": 500},
+            {
+                "service_id": "M001",
+                "coord_x": "126.9",
+                "coord_y": "37.5",
+                "distance_m": 100,
+            },
+            {
+                "service_id": "M002",
+                "coord_x": "126.8",
+                "coord_y": "37.4",
+                "distance_m": 500,
+            },
         ]
         result = _to_geojson(rows)
         assert len(result["features"]) == 2

@@ -25,14 +25,18 @@ class TestProcessTimeMiddleware:
     async def test_x_process_time_header_present(self):
         """일반 엔드포인트 응답에 X-Process-Time 헤더가 포함된다."""
         app = _make_app()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.get("/ping")
         assert "x-process-time" in response.headers
 
     async def test_x_process_time_is_float(self):
         """X-Process-Time 값이 소수점을 포함한 숫자 문자열이다."""
         app = _make_app()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.get("/ping")
         val = float(response.headers["x-process-time"])
         assert val >= 0.0
@@ -40,7 +44,9 @@ class TestProcessTimeMiddleware:
     async def test_x_process_time_three_decimal_places(self):
         """X-Process-Time 값이 소수점 3자리로 포맷된다."""
         app = _make_app()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.get("/ping")
         val_str = response.headers["x-process-time"]
         # 소수점 이하 자릿수 확인
@@ -51,7 +57,9 @@ class TestProcessTimeMiddleware:
     async def test_health_endpoint_skipped(self):
         """/health 경로는 X-Process-Time 헤더를 추가하지 않는다."""
         app = _make_app()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.get("/health")
         assert "x-process-time" not in response.headers
 
@@ -62,7 +70,9 @@ class TestProcessTimeMiddleware:
         app = FastAPI()
         app.add_middleware(ProcessTimeMiddleware)
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.get("/docs")
         assert "x-process-time" not in response.headers
 
@@ -73,6 +83,8 @@ class TestProcessTimeMiddleware:
         app = FastAPI()
         app.add_middleware(ProcessTimeMiddleware)
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.get("/openapi.json")
         assert "x-process-time" not in response.headers

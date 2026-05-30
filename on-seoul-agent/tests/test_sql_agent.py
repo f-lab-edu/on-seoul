@@ -3,7 +3,8 @@
 LLM 파라미터 추출과 SQL 쿼리 로직을 Mock으로 분리하여 검증한다.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from datetime import date
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 from tests.helpers import make_agent_state
 from agents.sql_agent import SqlAgent, _SqlParams
@@ -53,20 +54,61 @@ class TestSqlAgent:
         assert result["room_id"] == 7
         assert result["message"] == "수영장"
 
-    async def test_chain_receives_message(self):
-        """LLM 체인에 message가 전달된다."""
+    async def test_chain_receives_message_and_today(self):
+        """LLM 체인에 message와 today가 함께 전달된다."""
         agent, session = _make_agent(_SqlParams(), [])
         state = _make_state("강남구 체육시설")
 
         await agent.search(state, session)
 
-        agent._chain.ainvoke.assert_called_once_with({"message": "강남구 체육시설"})
+        agent._chain.ainvoke.assert_called_once_with(
+            {"message": "강남구 체육시설", "today": ANY}
+        )
+
+    async def test_chain_receives_today_as_iso_date(self):
+        """today는 YYYY-MM-DD ISO 형식 문자열로 전달된다."""
+        agent, session = _make_agent(_SqlParams(), [])
+        await agent.search(_make_state(), session)
+
+        call_kwargs = agent._chain.ainvoke.call_args[0][0]
+        today_value = call_kwargs["today"]
+        # ISO 형식 검증
+        date.fromisoformat(today_value)  # 파싱 실패 시 ValueError
+
+    async def test_chain_receives_refined_query_when_router_present(self):
+        """Router refined_query가 있으면 LLM에 refined_query가 전달된다."""
+        agent, session = _make_agent(_SqlParams(), [])
+        state = _make_state("마포구 수영장 알려줘")
+        state["refined_query"] = "마포구 수영장"
+
+        await agent.search(state, session)
+
+        call_kwargs = agent._chain.ainvoke.call_args[0][0]
+        assert call_kwargs["message"] == "마포구 수영장"
+
+    async def test_router_fields_override_llm_when_refined_query_present(self):
+        """refined_query가 있으면 max_class_name/area_name/service_status는 state 값을 사용한다."""
+        agent, session = _make_agent(
+            _SqlParams(max_class_name="교육", area_name="관악구"),
+            [],
+        )
+        state = _make_state("마포구 체육시설")
+        state["refined_query"] = "마포구 체육시설"
+        state["max_class_name"] = "체육시설"
+        state["area_name"] = "마포구"
+        state["service_status"] = "접수중"
+
+        await agent.search(state, session)
+
+        bind = session.execute.call_args[0][1]
+        # LLM 반환값(교육/관악구)이 아닌 state 값(체육시설/마포구)을 사용해야 한다
+        assert bind.get("max_class_name") == "체육시설"
+        assert bind.get("area_name") == "마포구"
+        assert bind.get("service_status") == "접수중"
 
     async def test_query_builds_category_filter(self):
         """max_class_name 파라미터가 있으면 WHERE에 포함된다."""
-        agent, session = _make_agent(
-            _SqlParams(max_class_name="체육시설"), []
-        )
+        agent, session = _make_agent(_SqlParams(max_class_name="체육시설"), [])
         await agent.search(_make_state(), session)
 
         call_args = session.execute.call_args
@@ -92,6 +134,23 @@ class TestSqlAgent:
         bind = session.execute.call_args[0][1]
         assert bind.get("keyword") == "%수영%"
 
+    async def test_query_builds_date_filters(self):
+        """receipt_date_from/to가 있으면 날짜 조건이 bind에 포함된다."""
+        d_from = date(2026, 5, 18)
+        d_to = date(2026, 5, 24)
+        agent, session = _make_agent(
+            _SqlParams(receipt_date_from=d_from, receipt_date_to=d_to), []
+        )
+        await agent.search(_make_state(), session)
+
+        sql_str = str(session.execute.call_args[0][0])
+        bind = session.execute.call_args[0][1]
+
+        assert "receipt_date_from" in sql_str
+        assert "receipt_date_to" in sql_str
+        assert bind.get("receipt_date_from") == d_from
+        assert bind.get("receipt_date_to") == d_to
+
     async def test_query_no_extra_filter_when_params_empty(self):
         """파라미터가 모두 None이면 deleted_at IS NULL 조건만 포함되고, top_k만 bind된다."""
         from tools.sql_search import TOP_K as _TOP_K
@@ -107,6 +166,8 @@ class TestSqlAgent:
         assert "max_class_name" not in bind
         assert "area_name" not in bind
         assert "keyword" not in bind
+        assert "receipt_date_from" not in bind
+        assert "receipt_date_to" not in bind
         # top_k는 상수 바인드로 항상 포함된다
         assert bind["top_k"] == _TOP_K
 
@@ -143,3 +204,61 @@ class TestSqlAgent:
         result = await agent.search(_make_state(), session)
 
         assert result["sql_results"] == []
+
+
+class TestSqlAgentCoT:
+    async def test_reasoning_field_not_passed_to_sql_search(self):
+        """reasoning 필드는 CoT 내부용이며 sql_search bind 파라미터에 전달되지 않는다."""
+        agent, session = _make_agent(
+            _SqlParams(
+                reasoning="오늘이 2026-05-22이므로 이번 주는 05-18~05-24.",
+                area_name="마포구",
+            ),
+            [],
+        )
+        await agent.search(_make_state(), session)
+
+        bind = session.execute.call_args[0][1]
+        assert "reasoning" not in bind
+
+    async def test_reasoning_preserved_in_params(self):
+        """reasoning이 있는 _SqlParams는 reasoning 값이 유지된다."""
+        p = _SqlParams(reasoning="5월 계산: 2026-05-01 ~ 2026-05-31.")
+        assert p.reasoning == "5월 계산: 2026-05-01 ~ 2026-05-31."
+
+    async def test_reasoning_defaults_to_none(self):
+        """reasoning 없이 생성하면 None이다."""
+        p = _SqlParams(max_class_name="체육시설")
+        assert p.reasoning is None
+
+
+class TestSqlParamsValidators:
+    def test_invalid_max_class_name_coerced_to_none(self):
+        """화이트리스트에 없는 max_class_name은 None으로 정규화된다."""
+        p = _SqlParams(max_class_name="운동시설")
+        assert p.max_class_name is None
+
+    def test_valid_max_class_name_preserved(self):
+        """화이트리스트에 있는 max_class_name은 그대로 반환된다."""
+        p = _SqlParams(max_class_name="체육시설")
+        assert p.max_class_name == "체육시설"
+
+    def test_invalid_area_name_coerced_to_none(self):
+        """25개 자치구가 아닌 area_name은 None으로 정규화된다."""
+        p = _SqlParams(area_name="강남")  # '강남구'가 아님
+        assert p.area_name is None
+
+    def test_valid_area_name_preserved(self):
+        """정확한 자치구명은 그대로 반환된다."""
+        p = _SqlParams(area_name="마포구")
+        assert p.area_name == "마포구"
+
+    def test_invalid_service_status_coerced_to_none(self):
+        """화이트리스트에 없는 service_status는 None으로 정규화된다."""
+        p = _SqlParams(service_status="진행중")
+        assert p.service_status is None
+
+    def test_valid_service_status_preserved(self):
+        """화이트리스트에 있는 service_status는 그대로 반환된다."""
+        p = _SqlParams(service_status="접수중")
+        assert p.service_status == "접수중"

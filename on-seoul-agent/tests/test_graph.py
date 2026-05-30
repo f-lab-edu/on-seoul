@@ -9,17 +9,22 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from tests.helpers import make_agent_state
 from agents.answer_agent import AnswerAgent, _AnswerOutput, _TitleOutput
 from agents.graph import AgentGraph
 from agents.router_agent import RouterAgent, _IntentOutput
-from agents.sql_agent import SqlAgent, _SqlParams
 from agents.vector_agent import VectorAgent, _RefinedQuery
 from schemas.state import AgentState, IntentType
+from tests.helpers import (
+    make_agent_state,
+    make_ai_session,
+    make_answer_agent,
+    make_router,
+    make_sql_agent,
+)
 
 
 # ---------------------------------------------------------------------------
-# 픽스처 헬퍼
+# 픽스처 헬퍼 — 이 파일 전용
 # ---------------------------------------------------------------------------
 
 
@@ -27,31 +32,15 @@ def _state(**kwargs) -> AgentState:
     return make_agent_state(**kwargs)
 
 
-def _router(intent: IntentType) -> RouterAgent:
-    agent = RouterAgent.__new__(RouterAgent)
-    structured = MagicMock()
-    structured.ainvoke = AsyncMock(return_value=_IntentOutput(intent=intent))
-    llm = MagicMock()
-    llm.with_structured_output = MagicMock(return_value=structured)
-    agent._llm = llm
-    return agent
-
-
-def _sql_agent(rows: list[dict]) -> tuple[SqlAgent, MagicMock]:
-    agent = SqlAgent.__new__(SqlAgent)
-    chain = MagicMock()
-    chain.ainvoke = AsyncMock(return_value=_SqlParams())
-    agent._chain = chain
-
-    mock_result = MagicMock()
-    mock_result.keys.return_value = list(rows[0].keys()) if rows else []
-    mock_result.fetchall.return_value = [tuple(r.values()) for r in rows]
-    session = MagicMock()
-    session.execute = AsyncMock(return_value=mock_result)
-    return agent, session
+# 공유 헬퍼 별칭 (가독성)
+_router = make_router
+_sql_agent = make_sql_agent
+_answer_agent = make_answer_agent
+_ai_session = make_ai_session
 
 
 def _vector_agent(rows: list[dict]) -> tuple[VectorAgent, MagicMock, AsyncMock]:
+    """rows 를 vector_search 결과로 반환하는 VectorAgent mock + ai_session + bm25 mock."""
     agent = VectorAgent.__new__(VectorAgent)
 
     refine_chain = MagicMock()
@@ -69,36 +58,8 @@ def _vector_agent(rows: list[dict]) -> tuple[VectorAgent, MagicMock, AsyncMock]:
     embeddings.aembed_query = AsyncMock(return_value=[0.1] * 3)
     agent._embeddings = embeddings
 
-    mock_result = MagicMock()
-    mock_result.keys.return_value = list(rows[0].keys()) if rows else []
-    mock_result.fetchall.return_value = [tuple(r.values()) for r in rows]
-    session = MagicMock()
-    session.execute = AsyncMock(return_value=mock_result)
-    session.commit = AsyncMock()
-
     mock_bm25 = AsyncMock(return_value=[])
-    return agent, session, mock_bm25
-
-
-def _answer_agent(answer: str = "답변입니다.", title: str | None = None) -> AnswerAgent:
-    agent = AnswerAgent.__new__(AnswerAgent)
-
-    answer_chain = MagicMock()
-    answer_chain.ainvoke = AsyncMock(return_value=_AnswerOutput(answer=answer))
-    agent._answer_chain = answer_chain
-
-    title_chain = MagicMock()
-    title_chain.ainvoke = AsyncMock(return_value=_TitleOutput(title=title or "수영장 안내"))
-    agent._title_chain = title_chain
-    return agent
-
-
-def _ai_session() -> MagicMock:
-    session = MagicMock()
-    session.execute = AsyncMock()
-    session.commit = AsyncMock()
-    session.rollback = AsyncMock()
-    return session
+    return agent, make_ai_session(), mock_bm25
 
 
 # ---------------------------------------------------------------------------
@@ -130,14 +91,20 @@ class TestConditionalEdgeRouting:
         assert result["error"] is None
 
     async def test_vector_search_route(self):
-        """VECTOR_SEARCH intent → vector_node 실행, vector_results 채워짐."""
+        """VECTOR_SEARCH intent → vector_node 실행, HydrationNode hydration, vector_results 채워짐."""
         rows = [{"service_id": "V001", "service_name": "체험관", "similarity": 0.9}]
         vector_agent, ai_session, mock_bm25 = _vector_agent(rows)
-        hydrated = [{"service_id": "V001", "service_name": "체험관", "service_status": "접수중"}]
+        hydrated = [
+            {"service_id": "V001", "service_name": "체험관", "service_status": "접수중"}
+        ]
 
         with (
+            patch("agents.vector_agent.vector_search", AsyncMock(return_value=rows)),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", mock_bm25),
-            patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated)),
+            patch(
+                "agents.hydration_node.hydrate_services", AsyncMock(return_value=hydrated)
+            ),
         ):
             graph = AgentGraph(
                 router=_router(IntentType.VECTOR_SEARCH),
@@ -167,7 +134,7 @@ class TestConditionalEdgeRouting:
                 answer_agent=_answer_agent("주변 시설입니다."),
             )
             result = await graph.run(
-                _state(lat=37.5665, lng=126.9780),
+                _state(user_lat=37.5665, user_lng=126.9780),
                 data_session=data_session,
                 ai_session=_ai_session(),
             )
@@ -184,7 +151,7 @@ class TestConditionalEdgeRouting:
             answer_agent=_answer_agent("위치 정보가 없습니다."),
         )
         result = await graph.run(
-            _state(lat=None, lng=None),
+            _state(user_lat=None, user_lng=None),
             data_session=data_session,
             ai_session=_ai_session(),
         )
@@ -284,7 +251,6 @@ class TestTraceNode:
         assert "elapsed_ms" in trace
         assert isinstance(trace["elapsed_ms"], int)
         assert trace["elapsed_ms"] >= 0
-
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +357,6 @@ class TestSelfCorrectionCycle:
         assert len(result["answer"]) > 0
 
 
-
 # ---------------------------------------------------------------------------
 # 4. AgentState 입출력 계약 (workflow.py와 동일)
 # ---------------------------------------------------------------------------
@@ -434,8 +399,8 @@ class TestAgentStateContract:
             "message",
             "title_needed",
             "intent",
-            "lat",
-            "lng",
+            "user_lat",
+            "user_lng",
             "refined_query",
             "sql_results",
             "vector_results",
@@ -445,6 +410,7 @@ class TestAgentStateContract:
             "trace",
             "error",
             "retry_count",
+            "sql_keyword",
         }
         assert expected_keys <= set(result.keys())
 
@@ -493,7 +459,6 @@ class TestAgentStateContract:
 
         assert result["title"] == "수영장 조회"
         answer_agent._title_chain.ainvoke.assert_called_once()
-
 
 
 # ---------------------------------------------------------------------------
@@ -558,7 +523,6 @@ class TestAgentGraphStream:
         assert "answering" in progress_steps
 
 
-
 # ---------------------------------------------------------------------------
 # 6. DB 세션 라우팅 검증 (SQL → data_session, Vector → ai_session)
 # ---------------------------------------------------------------------------
@@ -581,10 +545,11 @@ class TestSessionRouting:
             ai_session=ai_session,
         )
 
-        # ai_session.execute는 trace INSERT에만 1회 호출된다
-        assert ai_session.execute.call_count == 1
-        trace_sql = str(ai_session.execute.call_args[0][0])
-        assert "chat_agent_traces" in trace_sql
+        # ai_session.execute 는 search_persist + trace 에만 사용된다 (SQL 조회에는 미사용).
+        # 각 호출의 SQL 내용으로 data_session이 아닌 ai_session에 올바른 쿼리가 갔는지 확인.
+        all_sqls = [str(c[0][0]) for c in ai_session.execute.call_args_list]
+        assert any("chat_agent_traces" in sql for sql in all_sqls)
+        assert not any("public_service_reservations" in sql for sql in all_sqls)
 
     async def test_vector_uses_ai_session_not_data_session(self):
         """VECTOR_SEARCH에서 data_session.execute가 벡터 조회에 사용되지 않는다."""
@@ -619,6 +584,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
     False를 반환한다. recursion_limit=10으로 무한 루프를 차단하고, 예외 핸들러가 fallback answer를
     주입하여 _self_correction_edge의 `not answer.strip()` 조건을 False로 만들어 종료한다.
     """
+
     async def test_router_always_failing_terminates_without_recursion_error(self):
         """router 가 예외를 던지면 fallback answer 가 설정되어 1 cycle 만에 종료된다.
 
@@ -727,12 +693,13 @@ class TestSelfCorrectionInfiniteLoopRegression:
             "error": None,
             "retry_count": 0,
         }
-        assert graph._nodes.self_correction_edge(state_empty_answer) == "retry_prep_node"
+        assert (
+            graph._nodes.self_correction_edge(state_empty_answer) == "retry_prep_node"
+        )
 
         # retry_count >= 1 이면 항상 end_normal
         state_after_retry = {**state_empty_answer, "retry_count": 1}
         assert graph._nodes.self_correction_edge(state_after_retry) == "end_normal"
-
 
 
 # ---------------------------------------------------------------------------
@@ -834,78 +801,3 @@ class TestRouterRefinedQueryPropagation:
 
         assert update["intent"] == IntentType.FALLBACK
         assert "refined_query" not in update
-
-
-# ---------------------------------------------------------------------------
-# 8. VECTOR_SEARCH 경로 — Hydration E2E 검증
-# ---------------------------------------------------------------------------
-
-
-class TestGraphVectorHydrationE2E:
-    """VECTOR_SEARCH 인텐트가 hydrated 원본 값을 answer 입력으로 사용함을 E2E 검증.
-
-    임베딩 metadata 의 stale service_status('예약마감') 가 답변 컨텍스트에
-    노출되지 않고, hydrate_services 가 반환한 최신 원본 값('접수중') 만이
-    AnswerAgent._collect_results 의 출력에 포함되어야 한다.
-    """
-
-    async def test_vector_intent_uses_hydrated_results(self):
-        """VECTOR_SEARCH: hydrated '접수중' 만 answer 입력에 들어가고 stale '예약마감' 은 없다."""
-        # vector_search 가 반환할 stale 임베딩 metadata
-        vector_rows = [{
-            "service_id": "S001",
-            "service_name": "마포 수영장",
-            "metadata": {"service_status": "예약마감"},
-            "similarity": 0.9,
-        }]
-        # hydrate_services 가 반환할 fresh 원본 행
-        hydrated_rows = [{
-            "service_id": "S001",
-            "service_name": "마포 수영장",
-            "area_name": "마포구",
-            "service_status": "접수중",
-            "service_url": "https://example.com/s001",
-        }]
-
-        vector_agent, ai_session, mock_bm25 = _vector_agent(vector_rows)
-
-        # AnswerAgent.answer 가 받은 state 의 _collect_results 결과를 캡처한다.
-        captured: dict = {}
-
-        async def _capture_answer(state):
-            helper = AnswerAgent.__new__(AnswerAgent)
-            captured["results"] = helper._collect_results(state)
-            return {**state, "answer": "마포 수영장 접수 중입니다."}
-
-        answer_agent = AnswerAgent.__new__(AnswerAgent)
-        answer_agent.answer = _capture_answer  # type: ignore[method-assign]
-
-        data_session = MagicMock()
-        data_session.execute = AsyncMock()
-
-        with (
-            patch("agents.vector_agent.vector_search", AsyncMock(return_value=vector_rows)),
-            patch("agents.vector_agent.bm25_search", mock_bm25),
-            patch("agents.vector_agent.hydrate_services", AsyncMock(return_value=hydrated_rows)),
-        ):
-            graph = AgentGraph(
-                router=_router(IntentType.VECTOR_SEARCH),
-                vector_agent=vector_agent,
-                answer_agent=answer_agent,
-            )
-            result = await graph.run(
-                _state(message="마포 수영장"),
-                data_session=data_session,
-                ai_session=ai_session,
-            )
-
-        # answer 가 정상 생성되고 vector_results 가 hydrated 행으로 채워졌다
-        assert result["answer"] == "마포 수영장 접수 중입니다."
-        assert result["vector_results"] is not None
-        assert result["vector_results"][0]["service_status"] == "접수중"
-
-        # AnswerAgent 가 본 컨텍스트에는 hydrated '접수중' 만 들어가고 stale '예약마감' 은 없다.
-        assert "results" in captured, "_collect_results 가 호출되지 않았다"
-        statuses = [r["service_status"] for r in captured["results"]]
-        assert "접수중" in statuses
-        assert "예약마감" not in statuses
