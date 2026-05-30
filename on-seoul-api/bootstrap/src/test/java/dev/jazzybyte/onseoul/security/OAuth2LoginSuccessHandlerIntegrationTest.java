@@ -1,10 +1,10 @@
 package dev.jazzybyte.onseoul.security;
 
-import dev.jazzybyte.onseoul.adapter.in.security.JwtTokenIssuer;
-import dev.jazzybyte.onseoul.adapter.in.security.OAuth2LoginSuccessHandler;
-import dev.jazzybyte.onseoul.domain.port.in.SocialLoginCommand;
-import dev.jazzybyte.onseoul.domain.port.in.SocialLoginUseCase;
-import dev.jazzybyte.onseoul.domain.port.in.TokenResponse;
+import dev.jazzybyte.onseoul.user.adapter.out.jwt.JwtTokenIssuer;
+import dev.jazzybyte.onseoul.user.adapter.in.security.OAuth2LoginSuccessHandler;
+import dev.jazzybyte.onseoul.user.port.in.SocialLoginCommand;
+import dev.jazzybyte.onseoul.user.port.in.SocialLoginUseCase;
+import dev.jazzybyte.onseoul.user.port.in.TokenResponse;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import org.junit.jupiter.api.BeforeEach;

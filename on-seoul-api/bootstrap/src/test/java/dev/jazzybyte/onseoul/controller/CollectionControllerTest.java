@@ -1,7 +1,7 @@
 package dev.jazzybyte.onseoul.controller;
 
-import dev.jazzybyte.onseoul.adapter.in.web.CollectionController;
-import dev.jazzybyte.onseoul.domain.port.in.CollectDatasetUseCase;
+import dev.jazzybyte.onseoul.collection.adapter.in.web.CollectionController;
+import dev.jazzybyte.onseoul.collection.port.in.CollectDatasetUseCase;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
