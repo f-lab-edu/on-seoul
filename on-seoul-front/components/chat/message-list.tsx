@@ -4,14 +4,18 @@ import { useEffect, useRef } from "react";
 
 import { AgentTrace } from "@/components/chat/agent-trace";
 import { MessageBubble } from "@/components/chat/message-bubble";
+import { ServiceCardList } from "@/components/chat/service-card-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ChatStreamState } from "@/hooks/useChatStream";
 import type { MessageRole } from "@/types/chat";
+import type { ServiceCard } from "@/types/sse-events";
 
 export interface DisplayMessage {
   id: string;
   role: MessageRole;
   content: string;
+  /** ASSISTANT 메시지에만 채워짐. 빈 배열이면 카드 영역 미노출. */
+  serviceCards?: ServiceCard[];
 }
 
 interface MessageListProps {
@@ -48,7 +52,12 @@ export function MessageList({ messages, streamState }: MessageListProps) {
   return (
     <div className="flex flex-col gap-3 pb-4">
       {messages.map((m) => (
-        <MessageBubble key={m.id} role={m.role} content={m.content} />
+        <div key={m.id} className="flex flex-col gap-2">
+          <MessageBubble role={m.role} content={m.content} />
+          {m.role === "ASSISTANT" && m.serviceCards && m.serviceCards.length > 0 && (
+            <ServiceCardList cards={m.serviceCards} />
+          )}
+        </div>
       ))}
 
       {streamState.phase === "streaming" && trace.length > 0 && (

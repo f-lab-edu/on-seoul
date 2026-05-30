@@ -26,6 +26,7 @@ export default function ChatPage() {
 
   const doneMessageId = state.phase === "done" ? state.messageId : null;
   const doneContent = state.phase === "done" ? state.content : null;
+  const doneServiceCards = state.phase === "done" ? state.serviceCards : null;
   useEffect(() => {
     if (doneMessageId === null) return;
     if (lastCommittedDoneId.current === doneMessageId) return;
@@ -36,9 +37,10 @@ export default function ChatPage() {
         id: `assistant-${doneMessageId}`,
         role: "ASSISTANT",
         content: doneContent ?? "",
+        serviceCards: doneServiceCards ?? [],
       },
     ]);
-  }, [doneMessageId, doneContent]);
+  }, [doneMessageId, doneContent, doneServiceCards]);
 
   function handleSubmit(question: string) {
     setMessages((prev) => [
