@@ -505,6 +505,33 @@ class TestAgentGraphStream:
         _, result = result_events[0]
         assert result["answer"] == "스트림 답변"
 
+    async def test_result_carries_service_cards_through_graph(self):
+        """answer_node 가 AnswerAgent.service_cards 를 그래프 최종 state 로 전달한다.
+
+        회귀: answer_node 래퍼가 answer/title 만 추출하고 service_cards 를
+        누락하면, 단위 테스트(AnswerAgent.answer 직접 호출)는 통과해도 실제
+        그래프 경로의 final payload 는 빈 배열이 된다. 이 통합 경로를 봉인한다.
+        """
+        rows = [
+            {"service_id": "S001", "service_name": "수영장", "service_url": "https://x"},
+            {"service_id": "S002", "service_name": "테니스장", "service_url": "https://y"},
+        ]
+        sql_agent, data_session = _sql_agent(rows)
+        graph = AgentGraph(
+            router=_router(IntentType.SQL_SEARCH),
+            sql_agent=sql_agent,
+            answer_agent=_answer_agent("안내입니다."),
+        )
+        result = await graph.run(
+            _state(),
+            data_session=data_session,
+            ai_session=_ai_session(),
+        )
+
+        cards = result.get("service_cards")
+        assert cards, f"service_cards 가 그래프 최종 state 에 전달되지 않음: {cards!r}"
+        assert {c["service_id"] for c in cards} == {"S001", "S002"}
+
     async def test_stream_progress_steps_routing_searching_answering(self):
         """progress 이벤트의 step에 routing, searching, answering이 포함된다."""
         _, data_session = _sql_agent([])

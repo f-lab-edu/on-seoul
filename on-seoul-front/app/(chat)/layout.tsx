@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { AppHeader } from "@/components/layout/app-header";
 import { UnauthorizedError, serverGet } from "@/lib/server-api";
 import type { User } from "@/types/auth";
 
@@ -31,5 +32,10 @@ export default async function ChatLayout({
   children: React.ReactNode;
 }) {
   await requireUser();
-  return <>{children}</>;
+  return (
+    <div className="mx-auto flex h-dvh max-w-3xl flex-col">
+      <AppHeader />
+      <div className="flex flex-1 flex-col overflow-hidden">{children}</div>
+    </div>
+  );
 }

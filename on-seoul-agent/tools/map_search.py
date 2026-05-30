@@ -31,8 +31,9 @@ TOP_K: int = 20
 
 # 정적 컬럼 목록 — 사용자 입력 유래 값 없음. text() f-string 삽입 안전.
 _RESULT_COLUMNS = (
-    "service_id, service_name, max_class_name, area_name, place_name, "
-    "service_status, service_url, receipt_start_dt, receipt_end_dt, "
+    "service_id, service_name, max_class_name, min_class_name, "
+    "area_name, place_name, service_status, payment_type, "
+    "service_url, receipt_start_dt, receipt_end_dt, "
     "coord_x, coord_y, target_info"
 )
 

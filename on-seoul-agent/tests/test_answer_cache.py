@@ -152,6 +152,46 @@ class TestSetCachedAnswer:
             "q", sample_payload, sample_state, mock_redis
         )  # no raise
 
+    async def test_set_serializes_non_json_native_types_in_service_cards(
+        self, mock_redis, sample_state
+    ):
+        """회귀: payload.service_cards 가 datetime/date/Decimal 을 담아도 SET 이 깨지지 않는다.
+
+        set_cached_answer 는 json.dumps(default=str) 로 직렬화하므로, DB numeric
+        (Decimal) / timestamp (datetime) / date 컬럼이 service_cards 를 통해
+        흘러들어와도 TypeError 없이 문자열로 폴백되어야 한다. 폴백이 깨지면
+        캐시 쓰기가 조용히 실패(except 삼킴)해 cache hit 률이 0 이 된다.
+        """
+        import datetime as _dt
+        from decimal import Decimal
+
+        from core.cache import set_cached_answer
+
+        payload = {
+            "message_id": 7,
+            "answer": "안내",
+            "intent": "VECTOR_SEARCH",
+            "title": None,
+            "service_cards": [
+                {
+                    "service_id": "S1",
+                    "receipt_start_dt": _dt.datetime(2025, 11, 1, 9, 0, 0),
+                    "open_date": _dt.date(2025, 12, 31),
+                    "fee": Decimal("3000.50"),
+                }
+            ],
+        }
+
+        await set_cached_answer("q", payload, sample_state, mock_redis)
+
+        mock_redis.set.assert_called_once()
+        # 직렬화가 깨지지 않고 호출됐으며, 비-네이티브 타입은 문자열로 폴백된다.
+        body = json.loads(mock_redis.set.call_args.args[1])
+        card = body["payload"]["service_cards"][0]
+        assert card["receipt_start_dt"].startswith("2025-11-01")
+        assert card["open_date"] == "2025-12-31"
+        assert card["fee"] == "3000.50"
+
 
 class TestEmptyStateTTL:
     async def test_both_none_uses_empty_ttl(self, mock_redis, sample_payload):

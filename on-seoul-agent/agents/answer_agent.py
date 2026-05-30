@@ -23,41 +23,49 @@ _ANSWER_SYSTEM = """\
 당신은 서울시 공공서비스 예약 안내 챗봇입니다.
 검색 결과(JSON 배열)를 사용자에게 친절한 한국어로 안내하세요.
 
+상세 정보(분류·요금·접수 상태·바로가기 링크)는 답변과 별도로 제공되는
+시설 카드 UI 가 보여줍니다. 따라서 답변 본문에서는 상세를 반복하지 말고
+시설명만 간결히 나열하세요.
+
 # 출력 구조
 
 1) 도입문 (1~2 문장)
-   - 예: "테니스장 예약 관련해서 아래 시설을 찾아봤어요." 또는
-         "현재 예약 가능한 풋살장을 정리해드릴게요."
+   - 매번 똑같은 문장을 반복하지 말고, 질문 맥락(시설 종류·지역·요금 등)에
+     맞춰 자연스럽게 변형하세요. 아래는 톤 참고용 예시일 뿐 그대로 복사하지 마세요:
+       · "테니스장 예약 관련해서 아래 시설을 찾아봤어요."
+       · "광진구에서 이용할 수 있는 풋살장을 정리해드릴게요."
+       · "말씀하신 조건에 맞는 시설이 몇 곳 있네요. 아래에서 확인해보세요."
+       · "지금 접수 중인 수영장 위주로 골라봤어요."
    - 결과가 0건이면 "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다." 만 출력.
 
-2) 시설 카드 목록 (전달된 결과 전체를 상세 안내. "추가 미표시 건수"가 0보다 크면 카드 목록 끝에 "외 N건" 표기)
+2) 시설명 목록 (전달된 결과의 시설명만 한 줄씩 나열. 상세 줄은 출력 금지.
+   "추가 미표시 건수"가 0보다 크면 목록 끝에 "외 N건" 표기)
 
 3) 마무리 안내
    - 결과 중 service_status="접수중" 시설이 하나라도 있으면 아래 안내 문구를 그대로 포함:
-     "현재 접수중인 시설은 위 '바로가기' 링크에서 예약 내용을 확인하실 수 있습니다.
+     "현재 접수중인 시설은 카드의 '바로가기' 링크를 통해 예약 내용을 확인하실 수 있습니다.
       인터넷 예약의 경우 시설예약 최초 이용자는 서울시 통합회원 가입이 필요하고,
       가입 시 휴대폰 본인확인 서비스로 본인 인증을 진행해야 합니다."
-   - 자치구가 결과에 다양하게 섞여 있거나 사용자가 지역을 명시하지 않은 경우 추가:
-     "특정 자치구(예: 강남구, 마포구)나 요금 조건(무료/유료)을 함께 알려주시면 더 정확하게 찾아드릴 수 있어요."
+   - 아래 안내는 **사용자 질문에 자치구가 명시되지 않았을 때에만** 추가:
+     의미는 유지하되 매번 같은 문장이 되지 않게 자연스럽게 변형하세요. 톤 참고용 예시:
+       · "특정 자치구(예: 강남구, 마포구)나 요금 조건(무료/유료)을 함께 알려주시면 더 정확하게 찾아드릴 수 있어요."
+       · "원하시는 지역이나 무료/유료 여부를 알려주시면 더 좁혀서 찾아드릴게요."
+     사용자 질문에 이미 자치구(예: "광진구 풋살장")가 들어 있으면 이 문구를 출력하지 마세요.
 
-# 카드 형식 (실제 값으로 치환해서 출력, 중괄호 문법 금지)
+# 시설명 목록 형식 (실제 값으로 치환해서 출력, 중괄호 문법 금지)
 
-형식 예시 (값이 비어 있는 줄은 생략):
+형식 예시:
 
-  • 서남센터 테니스장2번 (강서구 서남물재생센터)
-      - 분류: 체육시설 > 테니스장
-      - 요금: 유료 / 대상: 어르신
-      - 접수 상태: 접수중 (2025-11-01 ~ 2025-12-31)
-      - 바로가기: https://yeyak.seoul.go.kr/web/reservation/selectReservView.do?rsv_svc_id=...
+  • 서남센터 테니스장2번 (강서구)
+  • 마포구민체육센터 테니스장 (마포구)
+
+   - 시설명 뒤 괄호에는 자치구(area_name)만 간단히 표기합니다.
+   - 분류·요금·대상·접수 상태·바로가기 줄은 출력하지 않습니다 (카드 UI 담당).
 
 # 출력 규칙
 
 - 답변에 중괄호 기호나 JSON 입력의 키 이름(예: service_name, area_name)을 그대로 노출하지 마세요.
   반드시 해당 필드의 실제 값으로 치환해서 출력합니다.
-- 각 카드의 바로가기 URL은 시설별 고유 service_url 값을 그대로 사용합니다.
-  service_url 이 비어 있는 시설만 https://yeyak.seoul.go.kr 로 표기합니다.
-  모든 시설을 yeyak.seoul.go.kr 로 일괄 안내하는 것은 금지입니다.
-- 날짜는 'YYYY-MM-DD' 형태로만 표시 (시간 부분 생략).
 - 마크다운 헤더(#, ##)나 코드 블록은 사용하지 말고, 자연스러운 줄바꿈으로 가독성을 유지하세요.
 """
 
@@ -86,6 +94,24 @@ _FALLBACK_URL = "https://yeyak.seoul.go.kr"
 # 카드 상세 표시 상한. 이 값 초과분의 건수(extra_count)만 숫자로 LLM에 전달된다.
 # 클래스 밖 모듈 상수로 두어 인스턴스 오버라이드로 프롬프트와 불일치하는 사고를 방지한다.
 _DISPLAY_LIMIT: int = 5
+
+
+def _iso_or_none(value):
+    """datetime/date 값을 ISO 8601 문자열로 변환한다.
+
+    프론트 계약(chat-service-cards-interface §5)은 receipt_*_dt 가
+    "2025-11-01T00:00:00" 형태 ISO 8601 로 직렬화되기를 요구한다.
+    sse_frame 의 json.dumps(default=str) 폴백은 str(datetime) → 공백 구분자
+    ("2025-11-01 00:00:00") 를 내므로, _normalize 단에서 명시적으로 isoformat()
+    하여 'T' 구분자를 보장한다. (default=str 은 다른 타입 방어용으로 유지)
+
+    이미 str 이거나 None 이면 그대로 통과한다.
+    """
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
 
 
 class _AnswerOutput(BaseModel):
@@ -123,6 +149,10 @@ class AnswerAgent:
 
         상위 `_DISPLAY_LIMIT`건만 LLM에 전달하고, 나머지 건수는 `extra_count`로
         별도 전달한다. LLM 토큰 절약 + "외 N건" 비즈니스 규칙의 코드 수준 강제.
+
+        상위 `_DISPLAY_LIMIT` 건을 `service_cards` 슬롯에도 노출한다 —
+        LLM 자연어 답변 파싱 없이 프론트 카드 UI 가 직접 구조화 결과를 사용한다.
+        빈 결과여도 `[]` 로 명시 설정하여 None(미실행) 과 구별한다.
         """
         all_results = self._collect_results(state)
         display = all_results[:_DISPLAY_LIMIT]
@@ -137,7 +167,15 @@ class AnswerAgent:
             }
         )
 
-        updates: dict = {"answer": answer_out.answer}
+        # service_cards 슬롯에는 shallow copy 로 분리한다.
+        # display 리스트는 LLM 입력(results_json) 직렬화에 이미 사용된 동일 참조이며,
+        # 향후 LLM 전처리 단계가 추가되어 inplace mutate 될 경우 외부 노출 경로
+        # (SSE final payload, cache envelope) 가 오염될 수 있다. 최대 5건 × 12 필드라
+        # 복사 비용은 무시 가능.
+        updates: dict = {
+            "answer": answer_out.answer,
+            "service_cards": [dict(card) for card in display],
+        }
 
         if state.get("title_needed"):
             title_out: _TitleOutput = await self._title_chain.ainvoke(
@@ -201,7 +239,12 @@ class AnswerAgent:
           - 프롬프트(`_ANSWER_SYSTEM`)의 카드 형식 예시에도 이용 기간 줄이 **없다**.
           - 데이터 신뢰성이 개선되면(별도 작업) 다시 노출 검토.
         """
-        service_url = row.get("service_url") or _FALLBACK_URL
+        # service_url 스킴 가드: http(s):// 로 시작하지 않으면(빈 값/None 포함)
+        # fallback URL 로 강등한다. DB 원본을 무검증 통과시키면 프론트가 href 에
+        # 그대로 링크하므로 javascript:/data: 등 위험 스킴을 차단해야 한다.
+        url = row.get("service_url")
+        if not url or not str(url).startswith(("http://", "https://")):
+            url = _FALLBACK_URL
 
         return {
             "service_id": row.get("service_id"),
@@ -213,7 +256,7 @@ class AnswerAgent:
             "service_status": row.get("service_status"),
             "payment_type": row.get("payment_type"),
             "target_info": row.get("target_info"),
-            "receipt_start_dt": row.get("receipt_start_dt"),
-            "receipt_end_dt": row.get("receipt_end_dt"),
-            "service_url": service_url,
+            "receipt_start_dt": _iso_or_none(row.get("receipt_start_dt")),
+            "receipt_end_dt": _iso_or_none(row.get("receipt_end_dt")),
+            "service_url": url,
         }
