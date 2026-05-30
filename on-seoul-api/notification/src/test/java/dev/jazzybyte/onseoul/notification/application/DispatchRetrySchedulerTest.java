@@ -67,7 +67,7 @@ class DispatchRetrySchedulerTest {
 
     private NotificationSubscription subscription() {
         return NotificationSubscription.ofPersistence(
-                SUB_ID, USER_ID, "OA-2269", "{}",
+                SUB_ID, USER_ID, "{}",
                 Set.of(NotificationChannel.EMAIL), null, Instant.now());
     }
 

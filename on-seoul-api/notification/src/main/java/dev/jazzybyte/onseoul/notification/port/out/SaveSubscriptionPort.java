@@ -13,9 +13,12 @@ public interface SaveSubscriptionPort {
     void saveIfAbsent(NotificationSubscription subscription);
 
     /**
-     * 새 구독을 INSERT 한다. {@code uq_ns_user_service} 위반 시
+     * 새 구독을 INSERT 한다. DB 제약 위반 시
      * {@link org.springframework.dao.DataIntegrityViolationException} 를 그대로 던진다.
      * 호출자(application service)가 이를 {@code SUBSCRIPTION_CONFLICT} 로 변환한다.
+     *
+     * <p>구독 중복 방지 제약(uq_ns_user_service)은 제거되었다 —
+     * 한 user_id가 여러 조건 기반 구독을 가질 수 있다.
      */
     NotificationSubscription insert(NotificationSubscription subscription);
 

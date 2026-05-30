@@ -67,13 +67,12 @@ class NotificationSubscriptionPersistenceAdapter
     @Override
     @Transactional
     public NotificationSubscription insert(NotificationSubscription subscription) {
-        // saveAndFlush 로 즉시 INSERT 하여 uq_ns_user_service 위반을 호출 시점에 노출시킨다.
-        // DataIntegrityViolationException 은 application service 에서 SUBSCRIPTION_CONFLICT 로 변환.
+        // 구독 중복 방지 제약은 제거되었다 — 한 user_id가 여러 조건 기반 구독을 가질 수 있다.
+        // saveAndFlush 로 즉시 INSERT 하여 DB 제약 위반(있다면)을 호출 시점에 노출시킨다.
         String channelsJson = mapper.serializeChannels(subscription.getChannels());
         String filterJson = resolveFilterJson(subscription);
         NotificationSubscriptionJpaEntity entity = new NotificationSubscriptionJpaEntity(
                 subscription.getUserId(),
-                subscription.getServiceId(),
                 filterJson,
                 channelsJson);
         return mapper.toDomain(repository.saveAndFlush(entity));
@@ -120,20 +119,18 @@ class NotificationSubscriptionPersistenceAdapter
     @Transactional
     public void saveIfAbsent(NotificationSubscription subscription) {
         // JdbcTemplate은 JPA 영속성 컨텍스트를 오염시키지 않으므로
-        // DataIntegrityViolationException(uq_ns_user_service 중복)을 catch해도 TX가 rollback-only로 마킹되지 않음.
+        // DataIntegrityViolationException을 catch해도 TX가 rollback-only로 마킹되지 않음.
         try {
             String channelsJson = mapper.serializeChannels(subscription.getChannels());
             String filterJson = resolveFilterJson(subscription);
             jdbcTemplate.update(
-                    "INSERT INTO notification_subscriptions (user_id, service_id, filter, channels, created_at) VALUES (?, ?, ?, ?, NOW())",
+                    "INSERT INTO notification_subscriptions (user_id, filter, channels, created_at) VALUES (?, ?, ?, NOW())",
                     subscription.getUserId(),
-                    subscription.getServiceId(),
                     filterJson,
                     channelsJson);
         } catch (DataIntegrityViolationException e) {
-            // uq_ns_user_service 중복 — 이미 존재하므로 무시
-            log.debug("[Notification] 구독 이미 존재 — skip: userId={}, serviceId={}",
-                    subscription.getUserId(), subscription.getServiceId());
+            log.debug("[Notification] 구독 INSERT 제약 위반 — skip: userId={}",
+                    subscription.getUserId());
         }
     }
 
@@ -146,14 +143,12 @@ class NotificationSubscriptionPersistenceAdapter
             entity = repository.findById(subscription.getId())
                     .orElseGet(() -> new NotificationSubscriptionJpaEntity(
                             subscription.getUserId(),
-                            subscription.getServiceId(),
                             filterJson,
                             channelsJson));
             entity.updateLastNotifiedAt(subscription.getLastNotifiedAt());
         } else {
             entity = new NotificationSubscriptionJpaEntity(
                     subscription.getUserId(),
-                    subscription.getServiceId(),
                     filterJson,
                     channelsJson);
         }

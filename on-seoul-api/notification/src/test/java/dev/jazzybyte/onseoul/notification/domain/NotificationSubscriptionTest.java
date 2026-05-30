@@ -11,13 +11,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 class NotificationSubscriptionTest {
 
     @Test
-    @DisplayName("create() — userId, serviceId, channels로 초기 구독 생성")
+    @DisplayName("create() — userId, channels로 초기 구독 생성 (serviceId 없음)")
     void create_initializesWithEmptyFilter() {
-        NotificationSubscription sub = NotificationSubscription.create(1L, "SVC-001",
+        NotificationSubscription sub = NotificationSubscription.create(1L,
                 Set.of(NotificationChannel.EMAIL));
 
         assertThat(sub.getUserId()).isEqualTo(1L);
-        assertThat(sub.getServiceId()).isEqualTo("SVC-001");
         assertThat(sub.getFilter()).isEqualTo("{}");
         assertThat(sub.getChannels()).containsExactly(NotificationChannel.EMAIL);
         assertThat(sub.getLastNotifiedAt()).isNull();
@@ -28,7 +27,7 @@ class NotificationSubscriptionTest {
     @Test
     @DisplayName("create() — EMAIL+SMS 복수 채널 설정 가능")
     void create_withMultipleChannels() {
-        NotificationSubscription sub = NotificationSubscription.create(2L, "SVC-002",
+        NotificationSubscription sub = NotificationSubscription.create(2L,
                 Set.of(NotificationChannel.EMAIL, NotificationChannel.SMS));
 
         assertThat(sub.getChannels()).containsExactlyInAnyOrder(
@@ -38,7 +37,7 @@ class NotificationSubscriptionTest {
     @Test
     @DisplayName("markNotified() — lastNotifiedAt 갱신")
     void markNotified_updatesLastNotifiedAt() {
-        NotificationSubscription sub = NotificationSubscription.create(1L, "SVC-001",
+        NotificationSubscription sub = NotificationSubscription.create(1L,
                 Set.of(NotificationChannel.EMAIL));
         Instant now = Instant.now();
 

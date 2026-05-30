@@ -189,8 +189,11 @@ public class NotificationScheduler {
                              List<ServiceChange> changes, NotificationDispatch dispatch,
                              AtomicInteger sentCount, AtomicInteger failedCount) {
         // TX 밖: 배치 템플릿 생성 (구독 1건 = AI 호출 1회)
+        // 구독은 더 이상 serviceId에 고정되지 않으므로, 템플릿 요청의 serviceId는
+        // 매칭된 변경의 대표 serviceId(첫 변경)에서 가져온다.
+        String serviceId = changes.get(0).serviceId();
         TemplateResult template = templateGenerationPort.generate(
-                new NotificationTemplateRequest(sub.getServiceId(), toChangeItems(changes)));
+                new NotificationTemplateRequest(serviceId, toChangeItems(changes)));
 
         Counter.builder("notification.template.source")
                 .tag("source", template.source().name())

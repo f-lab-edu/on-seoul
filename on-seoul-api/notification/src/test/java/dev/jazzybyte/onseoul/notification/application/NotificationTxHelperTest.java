@@ -61,12 +61,12 @@ class NotificationTxHelperTest {
 
     private NotificationSubscription subscription(Long lastNotifiedAtNullable, String filterJson) {
         Instant last = lastNotifiedAtNullable == null ? null : Instant.ofEpochSecond(0);
-        return NotificationSubscription.ofPersistence(1L, 100L, "OA-2269",
+        return NotificationSubscription.ofPersistence(1L, 100L,
                 filterJson, Set.of(NotificationChannel.EMAIL), last, Instant.now());
     }
 
     private NotificationSubscription subscriptionWithLastNotifiedAt(Instant lastNotifiedAt) {
-        return NotificationSubscription.ofPersistence(1L, 100L, "OA-2269",
+        return NotificationSubscription.ofPersistence(1L, 100L,
                 "{}", Set.of(NotificationChannel.EMAIL), lastNotifiedAt, Instant.now());
     }
 
@@ -118,7 +118,7 @@ class NotificationTxHelperTest {
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse("{}")).thenReturn(SubscriptionFilter.empty());
-        when(loadServiceChangePort.loadFiltered("OA-2269", SubscriptionFilter.empty(), null, BATCH_STARTED))
+        when(loadServiceChangePort.loadFiltered(SubscriptionFilter.empty(), null, BATCH_STARTED))
                 .thenReturn(List.of(change));
         when(saveDispatchPort.saveIfAbsent(any())).thenReturn(Optional.of(pendingDispatch()));
 
@@ -136,7 +136,7 @@ class NotificationTxHelperTest {
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse("{}")).thenReturn(SubscriptionFilter.empty());
-        when(loadServiceChangePort.loadFiltered("OA-2269", SubscriptionFilter.empty(), null, BATCH_STARTED))
+        when(loadServiceChangePort.loadFiltered(SubscriptionFilter.empty(), null, BATCH_STARTED))
                 .thenReturn(List.of(change));
         when(saveDispatchPort.saveIfAbsent(any())).thenReturn(Optional.of(pendingDispatch()));
 
@@ -158,7 +158,7 @@ class NotificationTxHelperTest {
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse(any())).thenReturn(SubscriptionFilter.empty());
-        when(loadServiceChangePort.loadFiltered(any(), any(), any(), any())).thenReturn(List.of());
+        when(loadServiceChangePort.loadFiltered(any(), any(), any())).thenReturn(List.of());
 
         NotificationTxHelper.TxAResult result = txHelper.txA(TEST_BATCH, sub);
 
@@ -175,7 +175,7 @@ class NotificationTxHelperTest {
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse(any())).thenReturn(SubscriptionFilter.empty());
-        when(loadServiceChangePort.loadFiltered(any(), any(), any(), any())).thenReturn(List.of(change));
+        when(loadServiceChangePort.loadFiltered(any(), any(), any())).thenReturn(List.of(change));
         when(saveDispatchPort.saveIfAbsent(any())).thenReturn(Optional.empty());
 
         NotificationTxHelper.TxAResult result = txHelper.txA(TEST_BATCH, sub);
@@ -188,17 +188,17 @@ class NotificationTxHelperTest {
     @DisplayName("TX A — subscriptionFilter 파서를 거쳐 loadFiltered에 전달된다")
     void txA_filterParsedAndPassed() {
         NotificationSubscription sub = subscription(null, "{\"statuses\":[\"RECEIVING\"]}");
-        SubscriptionFilter parsed = new SubscriptionFilter(Set.of("RECEIVING"), Set.of(), Set.of());
+        SubscriptionFilter parsed = new SubscriptionFilter(Set.of("RECEIVING"), Set.of(), Set.of(), Set.of());
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse("{\"statuses\":[\"RECEIVING\"]}")).thenReturn(parsed);
-        when(loadServiceChangePort.loadFiltered("OA-2269", parsed, null, BATCH_STARTED))
+        when(loadServiceChangePort.loadFiltered(parsed, null, BATCH_STARTED))
                 .thenReturn(List.of());
 
         txHelper.txA(TEST_BATCH, sub);
 
         verify(subscriptionFilterParserPort).parse("{\"statuses\":[\"RECEIVING\"]}");
-        verify(loadServiceChangePort).loadFiltered("OA-2269", parsed, null, BATCH_STARTED);
+        verify(loadServiceChangePort).loadFiltered(parsed, null, BATCH_STARTED);
     }
 
     @Test
@@ -210,11 +210,11 @@ class NotificationTxHelperTest {
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse(any())).thenReturn(SubscriptionFilter.empty());
-        when(loadServiceChangePort.loadFiltered(any(), any(), any(), any())).thenReturn(List.of());
+        when(loadServiceChangePort.loadFiltered(any(), any(), any())).thenReturn(List.of());
 
         txHelper.txA(customBatch, sub);
 
-        verify(loadServiceChangePort).loadFiltered(any(), any(), any(), eq(customStarted));
+        verify(loadServiceChangePort).loadFiltered(any(), any(), eq(customStarted));
     }
 
     // ── TX B 성공 ────────────────────────────────────────────────────────

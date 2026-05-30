@@ -11,7 +11,6 @@ public interface CreateSubscriptionUseCase {
     SubscriptionView create(Long userId, CreateSubscriptionCommand cmd);
 
     record CreateSubscriptionCommand(
-            String serviceId,
             SubscriptionFilter filter,
             Set<NotificationChannel> channels
     ) {}

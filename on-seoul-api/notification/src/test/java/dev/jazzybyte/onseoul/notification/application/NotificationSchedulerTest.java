@@ -87,8 +87,8 @@ class NotificationSchedulerTest {
         lenient().when(saveBatchPort.update(any())).thenAnswer(inv -> inv.getArgument(0));
     }
 
-    private NotificationSubscription sub(Long id, String serviceId) {
-        return NotificationSubscription.ofPersistence(id, 1L, serviceId, "{}",
+    private NotificationSubscription sub(Long id) {
+        return NotificationSubscription.ofPersistence(id, 1L, "{}",
                 Set.of(NotificationChannel.EMAIL), null, Instant.now());
     }
 
@@ -251,7 +251,7 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("TX A가 빈 changes를 반환하면 template/push를 호출하지 않는다")
     void txAEmpty_skipsTemplateAndPush() {
-        NotificationSubscription s = sub(1L, "OA-2269");
+        NotificationSubscription s = sub(1L);
         when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of(s));
         when(txHelper.txA(any(NotificationBatch.class), eq(s)))
                 .thenReturn(txAResult(List.of(), null));
@@ -264,7 +264,7 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("TX A에서 dispatch가 중복(empty)이면 push 미호출")
     void duplicateDispatch_skipsPush() {
-        NotificationSubscription s = sub(1L, "OA-2269");
+        NotificationSubscription s = sub(1L);
         when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of(s));
         when(txHelper.txA(any(NotificationBatch.class), eq(s)))
                 .thenReturn(txAResult(List.of(change(100L, "OA-2269")), null));
@@ -277,7 +277,7 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("정상 흐름: template/push 호출, txBSuccess 호출, sent_count=1")
     void successPath_callsTxBSuccessAndIncrementsSentCount() {
-        NotificationSubscription s = sub(1L, "OA-2269");
+        NotificationSubscription s = sub(1L);
         ServiceChange c = change(100L, "OA-2269");
         NotificationDispatch d = dispatch(1L);
         TemplateResult template = new TemplateResult("제목", "본문", TemplateSource.AI);
@@ -306,7 +306,7 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("push 실패 시 txBFailure 호출, failed_count 증가, last_notified_at 갱신 없음")
     void pushFails_callsTxBFailureAndIncrementsFailedCount() {
-        NotificationSubscription s = sub(1L, "OA-2269");
+        NotificationSubscription s = sub(1L);
         ServiceChange c = change(100L, "OA-2269");
         NotificationDispatch d = dispatch(1L);
         TemplateResult template = new TemplateResult("제목", "본문", TemplateSource.FALLBACK);
@@ -331,8 +331,8 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("TX A 실패 시 failed_count 증가 후 다음 구독 처리")
     void txAFails_incrementsFailedAndContinues() {
-        NotificationSubscription s1 = sub(1L, "OA-2269");
-        NotificationSubscription s2 = sub(2L, "OA-2266");
+        NotificationSubscription s1 = sub(1L);
+        NotificationSubscription s2 = sub(2L);
         ServiceChange c2 = change(200L, "OA-2266");
         NotificationDispatch d2 = dispatch(2L);
         TemplateResult template = new TemplateResult("제목2", "본문2", TemplateSource.AI);
@@ -357,7 +357,7 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("성공 시 notification.dispatch.attempts{result=success} 카운터가 증가")
     void successPath_incrementsSuccessCounter() {
-        NotificationSubscription s = sub(1L, "OA-2269");
+        NotificationSubscription s = sub(1L);
         ServiceChange c = change(100L, "OA-2269");
         NotificationDispatch d = dispatch(1L);
 
@@ -375,7 +375,7 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("실패 시 notification.dispatch.attempts{result=failed} + notification.dispatch.failed.total 카운터 증가")
     void pushFails_incrementsFailedCounters() {
-        NotificationSubscription s = sub(1L, "OA-2269");
+        NotificationSubscription s = sub(1L);
         ServiceChange c = change(100L, "OA-2269");
         NotificationDispatch d = dispatch(1L);
 
@@ -397,7 +397,7 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("template source=AI 일 때 notification.template.source{source=AI} 카운터 증가")
     void templateSourceAi_incrementsCounter() {
-        NotificationSubscription s = sub(1L, "OA-2269");
+        NotificationSubscription s = sub(1L);
         ServiceChange c = change(100L, "OA-2269");
         NotificationDispatch d = dispatch(1L);
 
@@ -441,7 +441,7 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("TX B(성공) 실패는 삼켜지고 sent_count는 증가한다 (push 성공 분기 유지)")
     void txBSuccessFails_isSwallowedButSentCountIncrements() {
-        NotificationSubscription s = sub(1L, "OA-2269");
+        NotificationSubscription s = sub(1L);
         ServiceChange c = change(100L, "OA-2269");
         NotificationDispatch d = dispatch(1L);
 
@@ -464,7 +464,7 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("연락처 미등록 시 fallback UserContact(userId만)으로 발송 시도")
     void contactNotFound_fallsBackToUserIdOnly() {
-        NotificationSubscription s = sub(1L, "OA-2269");
+        NotificationSubscription s = sub(1L);
         ServiceChange c = change(100L, "OA-2269");
         NotificationDispatch d = dispatch(1L);
 
@@ -489,12 +489,12 @@ class NotificationSchedulerTest {
         int firstPageSize = SUBSCRIPTION_CHUNK_SIZE;
         java.util.List<NotificationSubscription> firstPage = new java.util.ArrayList<>();
         for (long i = 1; i <= firstPageSize; i++) {
-            NotificationSubscription s = sub(i, "OA-" + i);
+            NotificationSubscription s = sub(i);
             firstPage.add(s);
             when(txHelper.txA(any(NotificationBatch.class), eq(s)))
                     .thenReturn(txAResult(List.of(change(i + 1000, "OA-" + i)), dispatch(i)));
         }
-        NotificationSubscription lastSub = sub((long) firstPageSize + 1, "OA-last");
+        NotificationSubscription lastSub = sub((long) firstPageSize + 1);
         when(txHelper.txA(any(NotificationBatch.class), eq(lastSub)))
                 .thenReturn(txAResult(List.of(change(9999L, "OA-last")), dispatch((long) firstPageSize + 1)));
 
@@ -520,7 +520,7 @@ class NotificationSchedulerTest {
         int n = 20;
         java.util.List<NotificationSubscription> subs = new java.util.ArrayList<>();
         for (long i = 1; i <= n; i++) {
-            NotificationSubscription s = sub(i, "OA-" + i);
+            NotificationSubscription s = sub(i);
             subs.add(s);
             when(txHelper.txA(any(NotificationBatch.class), eq(s)))
                     .thenReturn(txAResult(List.of(change(i + 1000, "OA-" + i)), dispatch(i)));
@@ -547,7 +547,7 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("notification.dispatch.dead 카운터는 등록되지 않는다 (DEAD 메트릭 제거 확인)")
     void deadMetric_isNotRegistered() {
-        NotificationSubscription s = sub(1L, "OA-2269");
+        NotificationSubscription s = sub(1L);
         ServiceChange c = change(100L, "OA-2269");
         NotificationDispatch d = dispatch(1L);
 
@@ -569,7 +569,7 @@ class NotificationSchedulerTest {
     @Test
     @DisplayName("templateGenerationPort에 변경 목록이 List<ChangeItem>으로 전달된다")
     void templateRequest_carriesBatchedChangeItems() {
-        NotificationSubscription s = sub(1L, "OA-2269");
+        NotificationSubscription s = sub(1L);
         ServiceChange c1 = new ServiceChange(100L, "OA-2269", "UPDATED",
                 "service_status", "RECEIVING", "CLOSED", Instant.now());
         ServiceChange c2 = new ServiceChange(101L, "OA-2269", "UPDATED",
