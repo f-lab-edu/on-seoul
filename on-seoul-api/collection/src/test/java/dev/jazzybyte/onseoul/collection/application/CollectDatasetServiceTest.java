@@ -45,6 +45,17 @@ class CollectDatasetServiceTest {
                 fetchPort, upsertService, geocodingService);
     }
 
+    /** 영속성 어댑터처럼 생성된 PK가 담긴 새 도메인 객체를 반환하도록 mock한다. */
+    private void stubHistorySaveReturnsWithId(Long id) {
+        when(historyPort.save(any(CollectionHistory.class))).thenAnswer(invocation -> {
+            CollectionHistory in = invocation.getArgument(0);
+            return new CollectionHistory(
+                    id, in.getSourceId(), in.getCollectedAt(), in.getStatus(),
+                    in.getTotalFetched(), in.getNewCount(), in.getUpdatedCount(),
+                    in.getDeletedCount(), in.getDurationMs(), in.getErrorMessage());
+        });
+    }
+
     private ApiSourceCatalog source(long id, String datasetId, String path) {
         return ApiSourceCatalog.builder()
                 .id(id)
@@ -82,6 +93,7 @@ class CollectDatasetServiceTest {
     @DisplayName("단일 소스 성공 시 history를 2회 저장하고 geocodingService를 호출한다")
     void collectAll_singleSourceSuccess_savesHistoryTwiceAndCallsGeocoding() {
         ApiSourceCatalog src = source(1L, "OA-2266", "/ListPublicReservationSports");
+        stubHistorySaveReturnsWithId(500L);
         when(catalogPort.findAllByActiveTrue()).thenReturn(List.of(src));
         when(fetchPort.fetchAll("/ListPublicReservationSports"))
                 .thenReturn(List.of(reservation("SVC-001"), reservation("SVC-002")));
@@ -98,6 +110,7 @@ class CollectDatasetServiceTest {
     @DisplayName("단일 소스 성공 시 history의 최종 상태는 SUCCESS다")
     void collectAll_singleSourceSuccess_historyStatusIsSuccess() {
         ApiSourceCatalog src = source(1L, "OA-2266", "/path");
+        stubHistorySaveReturnsWithId(500L);
         when(catalogPort.findAllByActiveTrue()).thenReturn(List.of(src));
         when(fetchPort.fetchAll(anyString())).thenReturn(List.of(reservation("SVC-001")));
         when(upsertService.upsert(anyList(), any())).thenReturn(emptyResult());
@@ -116,6 +129,7 @@ class CollectDatasetServiceTest {
     @DisplayName("fetchAll에서 예외 발생 시 history를 FAILED로 저장하고 예외를 전파하지 않는다")
     void collectAll_fetchAllThrows_historyFailedAndNoExceptionPropagation() {
         ApiSourceCatalog src = source(1L, "OA-2266", "/path");
+        stubHistorySaveReturnsWithId(500L);
         when(catalogPort.findAllByActiveTrue()).thenReturn(List.of(src));
         when(fetchPort.fetchAll(anyString())).thenThrow(new RuntimeException("서울시 API 응답 없음"));
 
@@ -126,6 +140,8 @@ class CollectDatasetServiceTest {
         CollectionHistory failHistory = historyCaptor.getAllValues().get(1);
         assertThat(failHistory.getStatus()).isEqualTo(CollectionStatus.FAILED);
         assertThat(failHistory.getErrorMessage()).contains("서울시 API 응답 없음");
+        // 실패 저장도 생성된 id를 유지해 RUNNING 행을 update해야 한다 (중복 INSERT 방지).
+        assertThat(failHistory.getId()).isEqualTo(500L);
     }
 
     @Test
@@ -135,6 +151,7 @@ class CollectDatasetServiceTest {
         ApiSourceCatalog src2 = source(2L, "OA-2267", "/path2");
         ApiSourceCatalog src3 = source(3L, "OA-2268", "/path3");
 
+        stubHistorySaveReturnsWithId(500L);
         when(catalogPort.findAllByActiveTrue()).thenReturn(List.of(src1, src2, src3));
         when(fetchPort.fetchAll("/path1")).thenReturn(List.of(reservation("SVC-A")));
         when(fetchPort.fetchAll("/path2")).thenThrow(new RuntimeException("타임아웃"));
@@ -156,6 +173,7 @@ class CollectDatasetServiceTest {
     @DisplayName("모든 소스 성공 시 deletion sweep을 실행한다")
     void collectAll_allSuccess_runsDeletionSweep() {
         ApiSourceCatalog src = source(1L, "OA-2266", "/path");
+        stubHistorySaveReturnsWithId(500L);
         when(catalogPort.findAllByActiveTrue()).thenReturn(List.of(src));
         when(fetchPort.fetchAll(anyString())).thenReturn(List.of(reservation("SVC-001")));
         when(upsertService.upsert(anyList(), any())).thenReturn(emptyResult());
@@ -173,6 +191,7 @@ class CollectDatasetServiceTest {
         PublicServiceReservation collected = reservation("SVC-SEEN");
         PublicServiceReservation orphan = reservation("SVC-ORPHAN");
 
+        stubHistorySaveReturnsWithId(500L);
         when(catalogPort.findAllByActiveTrue()).thenReturn(List.of(src));
         when(fetchPort.fetchAll(anyString())).thenReturn(List.of(collected));
         when(upsertService.upsert(anyList(), any())).thenReturn(emptyResult());
@@ -194,6 +213,7 @@ class CollectDatasetServiceTest {
         ApiSourceCatalog src = source(1L, "OA-2266", "/path");
         PublicServiceReservation collected = reservation("SVC-001");
 
+        stubHistorySaveReturnsWithId(500L);
         when(catalogPort.findAllByActiveTrue()).thenReturn(List.of(src));
         when(fetchPort.fetchAll(anyString())).thenReturn(List.of(collected));
         when(upsertService.upsert(anyList(), any())).thenReturn(emptyResult());
@@ -202,5 +222,31 @@ class CollectDatasetServiceTest {
         service.collectAll();
 
         verify(savePublicServicePort, never()).saveAll(anyList());
+    }
+
+    @Test
+    @DisplayName("save() 반환값의 id를 캡처해 upsert에 null이 아닌 id를 전달하고, 완료 저장은 동일 id로 이뤄진다")
+    void collectOne_capturesGeneratedIdAndPassesToUpsert() {
+        ApiSourceCatalog src = source(1L, "OA-2266", "/path");
+        long generatedId = 777L;
+        stubHistorySaveReturnsWithId(generatedId);
+        when(catalogPort.findAllByActiveTrue()).thenReturn(List.of(src));
+        when(fetchPort.fetchAll(anyString()))
+                .thenReturn(List.of(reservation("SVC-001"), reservation("SVC-002")));
+        when(upsertService.upsert(anyList(), any()))
+                .thenReturn(new UpsertService.UpsertResult(0, 2, 0));
+        when(loadPublicServicePort.findAllByDeletedAtIsNull()).thenReturn(List.of());
+
+        service.collectAll();
+
+        // upsert가 null이 아닌, 생성된 id로 호출되어야 한다 (NOT NULL 위반 방지).
+        verify(upsertService).upsert(anyList(), eq(generatedId));
+
+        // 완료 저장 시 history.id가 채워져 있어 어댑터가 신규 insert가 아닌 기존 행 update를 수행한다.
+        ArgumentCaptor<CollectionHistory> captor = ArgumentCaptor.forClass(CollectionHistory.class);
+        verify(historyPort, times(2)).save(captor.capture());
+        CollectionHistory completedSave = captor.getAllValues().get(1);
+        assertThat(completedSave.getId()).isEqualTo(generatedId);
+        assertThat(completedSave.getStatus()).isEqualTo(CollectionStatus.SUCCESS);
     }
 }
