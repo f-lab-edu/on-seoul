@@ -21,6 +21,7 @@ const SUBSCRIPTIONS_KEY = ["notifications", "subscriptions"] as const;
 /**
  * v1 제약: 모든 mutation 페이로드의 `channels`는 ["EMAIL"]로 강제.
  * channels 존재 여부와 무관하게 항상 EMAIL로 고정하여 SMS 통과를 차단한다.
+ * 명세 §1 Warning / §8.
  */
 function enforceEmailOnly<T extends { channels?: string[] }>(payload: T): T {
   return { ...payload, channels: ["EMAIL"] };
