@@ -6,7 +6,7 @@ import { AUTH_LOGOUT_EVENT } from "@/lib/api-client";
 import { assertNever } from "@/lib/assert-never";
 import { parseSseStream } from "@/lib/sse";
 import { isSseProgressEvent } from "@/types/sse-events";
-import type { SseEvent } from "@/types/sse-events";
+import type { ServiceCard, SseEvent } from "@/types/sse-events";
 
 export interface ChatStreamInput {
   question: string;
@@ -16,7 +16,13 @@ export interface ChatStreamInput {
 export type ChatStreamState =
   | { phase: "idle" }
   | { phase: "streaming"; content: string; trace: string[] }
-  | { phase: "done"; messageId: number; content: string; trace: string[] }
+  | {
+      phase: "done";
+      messageId: number;
+      content: string;
+      trace: string[];
+      serviceCards: ServiceCard[];
+    }
   | { phase: "error"; message: string; content: string; trace: string[] };
 
 export interface UseChatStreamResult {
@@ -129,11 +135,14 @@ export function useChatStream(): UseChatStreamResult {
             case "final":
               // 백엔드는 token 없이 final 단독으로 전체 답변을 전달한다.
               // token + final 혼용 시 누적 content가 폐기되므로 백엔드와 합의 유지 필요.
+              // service_cards는 백엔드가 항상 배열로 정규화하지만 shape inference 경로(lib/sse.ts)에서
+              // 필드가 누락될 수 있으므로 방어적 fallback.
               safeSetState({
                 phase: "done",
                 messageId: event.message_id,
                 content: event.answer,
                 trace: [...trace],
+                serviceCards: event.service_cards ?? [],
               });
               return;
             case "done":
@@ -142,6 +151,7 @@ export function useChatStream(): UseChatStreamResult {
                 messageId: event.messageId,
                 content,
                 trace: [...trace],
+                serviceCards: [],
               });
               return;
             case "workflow_error":
