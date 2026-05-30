@@ -78,12 +78,16 @@ class _GeminiEmbeddings(Embeddings):
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         # rate limiting 없이 실행됨 — 가능하면 aembed_documents를 사용할 것
-        logger.warning("embed_documents: sync 경로는 rate limiting이 적용되지 않습니다. aembed_documents 사용을 권장합니다.")
+        logger.warning(
+            "embed_documents: sync 경로는 rate limiting이 적용되지 않습니다. aembed_documents 사용을 권장합니다."
+        )
         return self._base.embed_documents(texts)
 
     def embed_query(self, text: str) -> list[float]:
         # rate limiting 없이 실행됨 — 가능하면 aembed_query를 사용할 것
-        logger.warning("embed_query: sync 경로는 rate limiting이 적용되지 않습니다. aembed_query 사용을 권장합니다.")
+        logger.warning(
+            "embed_query: sync 경로는 rate limiting이 적용되지 않습니다. aembed_query 사용을 권장합니다."
+        )
         return self._base.embed_query(text)
 
     async def _aembed_once(self, text: str) -> list[float]:
@@ -133,7 +137,9 @@ def get_chat_model(
 
     if selected_provider in ("gemini", "google"):
         if not settings.google_api_key:
-            raise ConfigurationException("GOOGLE_API_KEY is required for Gemini provider")
+            raise ConfigurationException(
+                "GOOGLE_API_KEY is required for Gemini provider"
+            )
         return ChatGoogleGenerativeAI(
             google_api_key=settings.google_api_key,
             model=model or settings.gemini_model,
@@ -143,7 +149,9 @@ def get_chat_model(
         )
     elif selected_provider == "openai":
         if not settings.openai_api_key:
-            raise ConfigurationException("OPENAI_API_KEY is required for OpenAI provider")
+            raise ConfigurationException(
+                "OPENAI_API_KEY is required for OpenAI provider"
+            )
         return ChatOpenAI(
             api_key=settings.openai_api_key,
             model=model or settings.gpt_model,

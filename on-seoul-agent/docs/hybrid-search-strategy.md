@@ -8,11 +8,13 @@
 
 ## 결론
 
-|검색 유형|담당 도구|역할|
+|검색 유형|담당 채널|역할|
 |---|---|---|
-|의미 기반, 부분 키워드, 동의어|pgvector + Gemini embedding|의미가 비슷한 시설 탐색|
-|정확한 키워드 매칭, 고유명사|pg_search BM25 + korean_lindera|정확한 명칭/희귀어 매칭|
-|최종 순위 결정|RRF (Reciprocal Rank Fusion)|두 결과 통합|
+|의미 기반, 식별 메타데이터 매칭 (Track A)|`vector_search(row_kind="identity")`|시설 신원 임베딩 (서울시 자치구 체육시설 테니스장...)|
+|의미 기반, 자연어 설명 매칭 (Track B)|`vector_search(row_kind="summary")`|시설 요약 임베딩 (자연어 설명 중심)|
+|HyQE 질문 매칭 (Track C)|`question_search()`|예상 질문 임베딩, service_id별 dedup|
+|정확 키워드 매칭|`bm25_search()`|고유명사·희귀어 BM25 매칭|
+|최종 순위 결합|`core/rrf.py` RRF|4채널 결과를 Reciprocal Rank Fusion으로 통합|
 
 ---
 
@@ -34,12 +36,14 @@ ParadeDB(`paradedb/paradedb:latest`) 단일 이미지에서 두 확장이 함께
 ```sql
 CREATE TABLE service_embeddings (
     id          BIGSERIAL PRIMARY KEY,
-    service_id  VARCHAR(255)  NOT NULL UNIQUE,
+    service_id  VARCHAR(255)  NOT NULL,
+    row_kind    VARCHAR(20)   NOT NULL DEFAULT 'identity', -- 'identity' | 'summary' | 'question'
     service_name TEXT          NOT NULL,
     metadata    JSONB,
     embedding   vector(768),
     created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    updated_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    UNIQUE (service_id, row_kind)
 );
 ```
 
@@ -216,12 +220,26 @@ embedding_text = f"{area_name} {category} {service_name}"
 |---|---|---|
 |상태/날짜 필터형|"지금 접수 중인 수영장 알려줘"|**SQL** — `status = 'OPEN'`|
 |지역 필터형|"강남구 체육시설 목록"|**SQL** — `area_nm = '강남구'`|
-|의미/맥락형|"어린이랑 같이 갈 만한 문화행사"|**벡터 검색** — 임베딩 유사도|
+|의미/맥락형|"어린이랑 같이 갈 만한 문화행사"|**벡터 검색** — 임베딩 유사도 → Track C 강조|
 |고유명사형|"따릉이 대여소"|**BM25** — 정확 매칭|
 |복합형|"미세먼지 심할 때 실내 시설 추천"|**벡터 → SQL 필터** 조합|
-|가이드 문의형|"예약 취소 어떻게 해?"|**벡터** — FAQ 문서 검색|
+|가이드 문의형|"예약 취소 어떻게 해?"|**벡터** — FAQ 문서 검색 → Track B/C 강조|
 
 벡터 검색이 필요한 모든 케이스에서 BM25를 함께 실행하여 RRF로 결합하는 것이 기본이다. 단, 고유명사형(따릉이 등)은 BM25가 명확히 우세하므로 시맨틱을 후보 확장 용도로만 활용한다.
+
+---
+
+## VectorSubIntent 가중치 프로파일
+
+Router Agent가 분류한 `vector_sub_intent`에 따라 4채널 가중치가 달라진다.
+Phase 1에서는 `rrf_unweighted_baseline=True`로 모든 채널 1.0을 사용한다.
+Phase 3에서 분류 정확도 ≥ 80% 검증 후 활성화 예정.
+
+| sub_intent | Track A (identity) | Track B (summary) | Track C (question) | BM25 |
+|---|---|---|---|---|
+| `identification` | 0.5 | 0.25 | 0.25 | 0.5 |
+| `detail` | 0.2 | 0.5 | 0.3 | 0.4 |
+| `semantic` | 0.15 | 0.35 | 0.5 | 0.3 |
 
 ---
 
@@ -325,15 +343,21 @@ pre-filter 대비 장점: HNSW 인덱스를 전체 데이터에 적용하므로 
 ```text
 VectorAgent.search()
   1. 질의 정제 + 임베딩
-  2. vector_search (ai_session)
-  3. bm25_search    (ai_session)
-  4. _rrf_merge → service_id 리스트
-  5. hydrate_services(data_session, service_ids)
+  2. vector_search(row_kind="identity")  → Track A
+  3. vector_search(row_kind="summary")   → Track B
+  4. question_search()                   → Track C (service_id별 dedup)
+  5. bm25_search()                       → BM25
+  6. reciprocal_rank_fusion → service_id 리스트
+  7. hydrate_services(data_session, service_ids)
      - public_service_reservations에서 WHERE service_id = ANY(:service_ids) AND deleted_at IS NULL
      - 입력 순서(RRF 순위) 유지
      - 원본 누락분 자동 제외
-  6. rrf_score 병합 후 vector_results에 할당
+  8. rrf_score 병합 후 vector_results에 할당
+  9. search_channels 에 vector_a/b/c / bm25 / rrf / final 6채널 ChannelData 노출
+     → 종단 search_persist_node 가 chat_search_queries + chat_search_results 일괄 적재
 ```
+
+> **검색 결과 적재 (Phase 19)**: 각 검색 노드가 채운 `state.search_channels` 는 그래프 종단부에서 `search_persist_node` 가 `chat_search_queries` (입력 — 무엇으로 검색했는가) + `chat_search_results` (출력 — 무엇이 반환됐는가) 두 테이블에 단일 트랜잭션으로 적재한다. RRF 채널은 `query_text=NULL` + `parameters` 에 source_channels/weights 기록, `final` 채널은 hydration 직후의 실제 사용자 노출 목록을 담는다. 자세한 스키마·분석 쿼리·운영 정책은 [`docs/chat-search-persistence.md`](chat-search-persistence.md) 참조.
 
 ### 임베딩 ↔ 원본 동기화 정책
 
@@ -406,37 +430,25 @@ LIMIT 50;
 
 ### 하이브리드 검색: RRF 결합
 
-두 결과의 순위를 합산하여 최종 순위를 결정한다. RRF는 점수 스케일이 다른 검색 결과를 결합할 때 표준적으로 쓰는 방식이다.
+4채널 결과의 순위를 합산하여 최종 순위를 결정한다. RRF는 점수 스케일이 다른 검색 결과를 결합할 때 표준적으로 쓰는 방식이다.
 
-```sql
--- $1 = 임베딩 벡터, $2 = 텍스트 쿼리
-WITH semantic AS (
-  SELECT
-    service_id,
-    ROW_NUMBER() OVER (ORDER BY embedding <=> $1::vector) AS rank
-  FROM service_embeddings
-  ORDER BY embedding <=> $1::vector
-  LIMIT 50
-),
-keyword AS (
-  SELECT
-    service_id,
-    ROW_NUMBER() OVER (ORDER BY paradedb.score(id) DESC) AS rank
-  FROM service_embeddings
-  WHERE service_name @@@ $2 OR metadata @@@ $2
-  LIMIT 50
+```python
+# core/rrf.py 활용 예시
+from core.rrf import reciprocal_rank_fusion
+
+merged = reciprocal_rank_fusion(
+    {
+        "track_a": [r["service_id"] for r in a_rows],  # identity
+        "track_b": [r["service_id"] for r in b_rows],  # summary
+        "track_c": [r["service_id"] for r in c_rows],  # question
+        "bm25":    [r["service_id"] for r in d_rows],
+    },
+    weights=None,  # Phase 1: 비가중치 baseline (rrf_unweighted_baseline=True)
+    k_constant=60,
 )
-SELECT
-  COALESCE(s.service_id, k.service_id) AS service_id,
-  COALESCE(1.0 / (60 + s.rank), 0) +
-  COALESCE(1.0 / (60 + k.rank), 0) AS rrf_score
-FROM semantic s
-FULL OUTER JOIN keyword k USING (service_id)
-ORDER BY rrf_score DESC
-LIMIT 10;
 ```
 
-`60`은 RRF 표준 상수(k)로, 상위 결과의 영향력을 조정한다. 이 값이 작으면 1위 가중치가 강해지고, 크면 결과가 평탄해진다. 60이 일반적인 기본값이다.
+`k_constant=60`은 RRF 표준 상수로, 상위 결과의 영향력을 조정한다. 이 값이 작으면 1위 가중치가 강해지고, 크면 결과가 평탄해진다. 60이 일반적인 기본값이다.
 
 ---
 

@@ -1,0 +1,21 @@
+query	intent	sub_intent	notes
+지금 접수 중인 체육시설 알려줘	SQL_SEARCH		service_status+category
+마포구에서 예약 가능한 시설 보여줘	SQL_SEARCH		area+status
+종로구에서 진행 중인 문화체험 프로그램 알려줘	SQL_SEARCH		area+category
+강동구 무료로 이용할 수 있는 시설 있어?	SQL_SEARCH		area+payment_type(keyword fallback)
+마포구 문화행사 이번 주 접수 중인 거	SQL_SEARCH		area+category+date
+응봉공원 테니스장은 어떻게 예약해?	VECTOR_SEARCH	identification	고유명사+예약방법
+서울역사박물관 야주개홀 대관 방법 알려줘	VECTOR_SEARCH	identification	고유명사+대관
+수영장 평일 이용료	VECTOR_SEARCH	detail	요금 세부정보
+테니스장 취소 규정	VECTOR_SEARCH	detail	취소 정책
+아이랑 함께 갈 수 있는 체험 프로그램 있어?	VECTOR_SEARCH	semantic	아동+체험
+주말에 가족이랑 갈 만한 곳 추천해줘	VECTOR_SEARCH	semantic	가족+주말
+자연 속에서 할 수 있는 활동 찾아줘	VECTOR_SEARCH	semantic	자연+활동
+실내에서 조용히 즐길 수 있는 프로그램 있어?	VECTOR_SEARCH	semantic	실내+정적활동
+한강에서 촬영할 수 있는 장소 알려줘	VECTOR_SEARCH	semantic	특수활동
+드론 날릴 수 있는 곳	VECTOR_SEARCH	semantic	특수활동
+노인 대상 무료 프로그램	VECTOR_SEARCH	semantic	대상+무료
+마포구에서 아이들이 참여할 수 있는 무료 프로그램 알려줘	VECTOR_SEARCH	semantic	area+아동+무료(post-filter)
+강서구에서 자연 관찰할 수 있는 프로그램 있어?	VECTOR_SEARCH	semantic	area+자연(post-filter)
+종로구에서 가족 단위로 갈 수 있는 박물관 프로그램	VECTOR_SEARCH	semantic	area+가족+박물관(post-filter)
+성동구에서 초등학생 대상 교육 프로그램 알려줘	VECTOR_SEARCH	semantic	area+초등+교육(post-filter)

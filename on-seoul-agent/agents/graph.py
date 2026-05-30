@@ -1,4 +1,4 @@
-"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 (Phase 17 + Answer Cache).
+"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 (Phase 17 + Answer Cache + SearchPersist).
 
 그래프 구조:
     START
@@ -6,12 +6,15 @@
     router_node          — RouterAgent.classify(), state.intent · refined_query 설정
       ↓
     cache_check_node     — refined_query 기반 전역 Answer Cache lookup
-      ├─ hit  → trace_node (sql/vector/map/answer 전체 우회)
+      ├─ hit  → search_persist_node(skip) → trace_node (sql/vector/map/answer 전체 우회)
       └─ miss → intent에 따라 분기
             ├─ SQL_SEARCH    → sql_node
             ├─ VECTOR_SEARCH → vector_node
             ├─ MAP           → map_node
             └─ FALLBACK      → answer_node (검색 없이 바로 답변)
+      ↓
+    sql_node / vector_node → hydration_node → answer_node
+    map_node               → answer_node (GeoJSON 구조라 hydration 건너뜀)
       ↓
     answer_node          — AnswerAgent.answer()
       ↓
@@ -20,7 +23,9 @@
     [retry_prep_node]    — retry_count 증가 + 이전 검색 결과 초기화 → router_node 재진입
     cache_write_node     — 정상 결과만(SQL_SEARCH / VECTOR_SEARCH) 캐시 저장
       ↓
-    trace_node           — chat_agent_traces 저장 (best-effort, 종단 노드)
+    search_persist_node  — chat_search_queries + chat_search_results 적재 (best-effort)
+      ↓
+    trace_node           — chat_agent_traces 저장 (best-effort, 최종 종단 노드)
       ↓
     END
 
@@ -100,8 +105,16 @@ async def _dispatch_map_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().map_node(state)
 
 
+async def _dispatch_hydration_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().hydration_node(state)
+
+
 async def _dispatch_answer_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().answer_node(state)
+
+
+async def _dispatch_search_persist_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().search_persist_node(state)
 
 
 async def _dispatch_trace_node(state: AgentState) -> dict[str, Any]:
@@ -136,7 +149,9 @@ def _build_shared_graph() -> Any:
     builder.add_node("sql_node", _dispatch_sql_node)
     builder.add_node("vector_node", _dispatch_vector_node)
     builder.add_node("map_node", _dispatch_map_node)
+    builder.add_node("hydration_node", _dispatch_hydration_node)
     builder.add_node("answer_node", _dispatch_answer_node)
+    builder.add_node("search_persist_node", _dispatch_search_persist_node)
     builder.add_node("trace_node", _dispatch_trace_node)
 
     builder.add_edge(START, "router_node")
@@ -154,7 +169,8 @@ def _build_shared_graph() -> Any:
         "cache_check_node",
         _dispatch_post_cache_check,
         {
-            "trace_node": "trace_node",
+            # cache hit: 검색 없이 search_persist_node(skip) → trace 로 종단 체인 유지
+            "search_persist_node": "search_persist_node",
             "sql_node": "sql_node",
             "vector_node": "vector_node",
             "map_node": "map_node",
@@ -162,8 +178,13 @@ def _build_shared_graph() -> Any:
         },
     )
 
-    builder.add_edge("sql_node", "answer_node")
-    builder.add_edge("vector_node", "answer_node")
+    # sql_node / vector_node → hydration_node → answer_node
+    # 검색 노드는 service_id 산출에 집중하고, hydration_node 가 단일 책임으로
+    # public_service_reservations 원본을 hydrated_services 슬롯에 통합한다.
+    # map_node 는 GeoJSON 구조이므로 hydration 을 건너뛰고 직접 answer_node 로 간다.
+    builder.add_edge("sql_node", "hydration_node")
+    builder.add_edge("vector_node", "hydration_node")
+    builder.add_edge("hydration_node", "answer_node")
     builder.add_edge("map_node", "answer_node")
 
     builder.add_conditional_edges(
@@ -179,15 +200,15 @@ def _build_shared_graph() -> Any:
 
     # 재시도 준비 완료 후 router_node로 재진입
     builder.add_edge("retry_prep_node", "router_node")
-    builder.add_edge("cache_write_node", "trace_node")
+    builder.add_edge("cache_write_node", "search_persist_node")
+    builder.add_edge("search_persist_node", "trace_node")
     builder.add_edge("trace_node", END)
 
     return builder.compile()
 
 
 _StreamEvent = (
-    tuple[Literal["progress"], dict[str, str]]
-    | tuple[Literal["result"], AgentState]
+    tuple[Literal["progress"], dict[str, str]] | tuple[Literal["result"], AgentState]
 )
 
 
@@ -248,13 +269,16 @@ class AgentGraph:
 
         token = _ACTIVE_NODES.set(self._nodes)
         try:
-            # recursion_limit=15:
-            # 1회 정상 흐름은 router → cache_check → (search) → answer → cache_write → trace
-            # = 6 super-step. retry 1회 포함 시 router/retry_prep까지 추가되어 ~12.
-            # 여유 3을 더해 15로 설정한다.
+            # recursion_limit=16:
+            # 1회 정상 흐름:
+            #   router(1) → cache_check(2) → search(3) → hydration(4) →
+            #   answer(5) → cache_write(6) → search_persist(7) → trace(8) = 8 super-step.
+            # retry 1회 포함 시 retry_prep + router/cache_check/search/hydration/answer 재실행으로
+            #   +6 노드, 합계 14 super-step.
+            # 여유 2를 더해 16으로 설정한다.
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
-                config={"recursion_limit": 15},
+                config={"recursion_limit": 16},
             )  # type: ignore[arg-type]
         finally:
             _ACTIVE_NODES.reset(token)
@@ -297,13 +321,14 @@ class AgentGraph:
         _search_progress_emitted = False
         _answer_progress_emitted = False
 
+        # hydration_node 완료 후 answering 이벤트로 이동 고려 (별도 이슈)
         _SEARCH_NODES = frozenset({"sql_node", "vector_node", "map_node"})
 
         token = _ACTIVE_NODES.set(self._nodes)
         try:
             async for chunk in AgentGraph._compiled_graph.astream(
                 state,
-                config={"recursion_limit": 15},
+                config={"recursion_limit": 16},  # 정상 8 + retry 최대 6 + 여유 2 = 16
             ):
                 node_name: str = next(iter(chunk))
                 node_updates: dict[str, Any] | None = chunk[node_name]
@@ -314,15 +339,34 @@ class AgentGraph:
                     _search_progress_emitted = True
                     intent = accumulated.get("intent")
                     # FALLBACK이거나 router_node 에러 시 검색 없이 바로 답변 단계로 간다.
-                    if intent in (IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH, IntentType.MAP):
-                        yield "progress", {"step": "searching", "message": "관련 정보를 검색하고 있습니다..."}
+                    if intent in (
+                        IntentType.SQL_SEARCH,
+                        IntentType.VECTOR_SEARCH,
+                        IntentType.MAP,
+                    ):
+                        yield (
+                            "progress",
+                            {
+                                "step": "searching",
+                                "message": "관련 정보를 검색하고 있습니다...",
+                            },
+                        )
                     else:
                         _answer_progress_emitted = True
-                        yield "progress", {"step": "answering", "message": "답변을 생성하고 있습니다..."}
+                        yield (
+                            "progress",
+                            {
+                                "step": "answering",
+                                "message": "답변을 생성하고 있습니다...",
+                            },
+                        )
 
                 elif node_name in _SEARCH_NODES and not _answer_progress_emitted:
                     _answer_progress_emitted = True
-                    yield "progress", {"step": "answering", "message": "답변을 생성하고 있습니다..."}
+                    yield (
+                        "progress",
+                        {"step": "answering", "message": "답변을 생성하고 있습니다..."},
+                    )
         finally:
             _ACTIVE_NODES.reset(token)
 

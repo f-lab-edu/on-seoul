@@ -31,23 +31,32 @@ agents/
 
 ```
 사용자 메시지
-  └─ RouterAgent.classify()        # 의도 분류
-       ├─ SQL_SEARCH  → SqlAgent.search()     → on_data DB
-       ├─ VECTOR_SEARCH → VectorAgent.search() → on_ai DB (BM25 + vector 하이브리드)
-       ├─ MAP         → map_search()          → on_data DB (earthdistance)
-       └─ FALLBACK    → (검색 생략)
-            └─ AnswerAgent.answer()            # 자연어 답변 생성
-                 └─ Self-Correction 엣지       # answer가 비면 Router로 재진입 (최대 1회)
-                      └─ _save_trace()        # chat_agent_traces 적재 (best-effort)
+  └─ RouterAgent.classify()              # 의도 + refined_query + post-filter 산출
+       └─ cache_check_node               # Answer Cache lookup
+            ├─ hit  → search_persist_node (빈 채널 skip) → trace_node
+            └─ miss → intent 분기
+                 ├─ SQL_SEARCH  → SqlAgent.search()        → on_data DB
+                 ├─ VECTOR_SEARCH → VectorAgent.search()   → on_ai DB (BM25 + vector RRF)
+                 ├─ MAP         → map_search()             → on_data DB (earthdistance)
+                 └─ FALLBACK    → (검색 생략)
+                      └─ AnswerAgent.answer()              # 자연어 답변 생성
+                           └─ Self-Correction 엣지         # answer 빈 + retry=0 시 retry_prep → Router 재진입 (최대 1회)
+                                └─ cache_write_node       # Answer Cache 저장 (정상 결과만)
+                                     └─ search_persist_node # chat_search_queries + chat_search_results 일괄 적재 (best-effort)
+                                          └─ trace_node    # chat_agent_traces 적재 (best-effort)
 ```
+
+검색 노드(sql/vector/map)는 `AgentState.search_channels: dict[str, ChannelData]` 에 채널별 입력(query)·출력(hits) 쌍을 채우고, 종단 `search_persist_node` 가 일괄 적재한다. `retry_prep_node` 가 재시도 시 `search_channels = RESET_CHANNELS` sentinel 을 보내 UNIQUE 위반을 방지한다 (빈 dict 는 더 이상 리셋이 아니라 no-op). 자세한 적재 정책은 `docs/chat-search-persistence.md` 참조.
 
 세션 라우팅:
 
-| 에이전트 | DB | 이유 |
+| 에이전트 / 노드 | DB | 이유 |
 |---|---|---|
 | `SqlAgent` | `on_data` (`data_session`) | `public_service_reservations` 정형 데이터 |
-| `VectorAgent` | `on_ai` (`ai_session`) | `service_embeddings` 벡터 인덱스 |
-| `_save_trace` | `on_ai` (`ai_session`) | `chat_agent_traces` 실행 메타데이터 |
+| `VectorAgent` 검색 | `on_ai` (`ai_session`) | `service_embeddings` 벡터 인덱스 |
+| `VectorAgent` hydration | `on_data` (`data_session`) | `public_service_reservations` 최신 원본 |
+| `search_persist_node` | `on_ai` (`ai_session`) | `chat_search_queries` + `chat_search_results` |
+| `trace_node` | `on_ai` (`ai_session`) | `chat_agent_traces` 실행 메타데이터 |
 
 ---
 
@@ -61,16 +70,21 @@ agents/
 | `message_id` | `int` | 호출자 | 메시지 ID (trace 참조용) |
 | `message` | `str` | 호출자 | 사용자 원본 질문 |
 | `title_needed` | `bool` | 호출자 | 대화 제목 생성 필요 여부 (첫 메시지) |
+| `lat`, `lng` | `float \| None` | 호출자 | MAP intent 용 위치 좌표 |
 | `intent` | `IntentType \| None` | RouterAgent | 분류된 의도 |
-| `refined_query` | `str \| None` | VectorAgent | 벡터 검색용으로 정제된 질의 |
+| `refined_query` | `str \| None` | RouterAgent / VectorAgent | 벡터 검색용 정제 질의 (Router 1차, 미산출 시 VectorAgent fallback) |
+| `max_class_name`, `area_name`, `service_status` | `str \| None` | RouterAgent | post-filter 메타데이터 |
 | `sql_results` | `list[dict] \| None` | SqlAgent | SQL 조회 결과 |
+| `sql_keyword` | `str \| None` | SqlAgent | SQL 키워드 (search_persist 의 sql 채널 query_text) |
 | `vector_results` | `list[dict] \| None` | VectorAgent | 유사도 검색 결과 |
-| `map_results` | `dict \| None` | (Phase 11) | 반경 검색 GeoJSON |
+| `map_results` | `dict \| None` | map_node | 반경 검색 GeoJSON |
+| `search_channels` | `dict[str, ChannelData]` | sql/vector/map_node, retry_prep_node | 채널별 입력(query)+출력(hits). reducer 누적, 명시적 리셋은 `RESET_CHANNELS` sentinel (빈 dict 는 no-op). `search_persist_node` 가 일괄 적재 |
 | `answer` | `str \| None` | AnswerAgent | 최종 자연어 답변 |
 | `title` | `str \| None` | AnswerAgent | 대화 제목 (`title_needed=True`일 때) |
-| `trace` | `dict \| None` | AgentGraph | 실행 메타데이터 (intent, node_path, elapsed_ms) |
-| `error` | `str \| None` | AgentGraph | 오류 메시지 |
-| `retry_count` | `int` | AgentGraph | 자기 교정 재시도 횟수 (0 = 아직 재시도 없음, 최대 1) |
+| `cache_hit` | `bool \| None` | cache_check_node | Answer Cache hit 여부 |
+| `trace` | `dict \| None` | trace_node | 실행 메타데이터 (intent, node_path, elapsed_ms) |
+| `error` | `str \| None` | 각 노드 | 오류 메시지 |
+| `retry_count` | `int` | retry_prep_node | 자기 교정 재시도 횟수 (0 = 아직 재시도 없음, 최대 1) |
 
 ---
 
@@ -104,9 +118,9 @@ result = await graph.run(
 graph = AgentGraph(router=mock_router, sql_agent=mock_sql)
 ```
 
-**오류 처리**: `_router_node` 예외 시 fallback answer를 state에 주입하고 Self-Correction 없이 trace_node로 종료합니다. trace 적재는 best-effort로 실행되어 저장 실패가 워크플로우 결과에 영향을 주지 않습니다.
+**오류 처리**: `_router_node` 예외 시 fallback answer를 state에 주입하고 Self-Correction 없이 종단 체인(cache_write → search_persist → trace)으로 진행합니다. trace / search_persist 적재는 모두 best-effort로 실행되어 저장 실패가 워크플로우 결과에 영향을 주지 않습니다.
 
-**Self-Correction**: answer가 비어 있고 `retry_count == 0`이면 router_node로 재진입해 재검색을 시도합니다. 최대 1회로 제한됩니다 (`recursion_limit=10`).
+**Self-Correction**: answer가 비어 있고 `retry_count == 0`이면 `retry_prep_node` 를 거쳐 router_node로 재진입해 재검색을 시도합니다. `retry_prep_node` 는 `retry_count` 증가와 함께 `search_channels = RESET_CHANNELS` sentinel 을 보내 이전 시도의 채널 데이터를 비웁니다. 최대 1회로 제한됩니다 (`recursion_limit=15`).
 
 ---
 
@@ -159,6 +173,19 @@ LLM이 SQL을 직접 생성하지 않습니다. 사용자 메시지에서 필터
 - `service_url` 이 없으면 `https://yeyak.seoul.go.kr` 으로 fallback합니다.
 - `vector_results`의 `metadata` JSONB가 중첩된 경우 자동으로 언팩합니다.
 - `title_needed=True` 이면 대화 제목(10자 이내)을 별도 LLM 호출로 생성합니다.
+
+---
+
+## Search Persistence (Phase 19)
+
+`search_persist_node` 가 그래프 종단부에서 `search_channels` 를 두 테이블에 일괄 적재합니다.
+
+- `chat_search_queries` — 채널 1개당 1행. `query_text` + `parameters(JSONB)` 로 "무엇으로 검색했는가" 기록.
+- `chat_search_results` — 채널 1개당 N행. `rank` + `service_id` + `score` + `meta(JSONB)` 로 "무엇이 반환됐는가" 기록.
+
+두 테이블은 `(message_id, channel)` 키로 묶이고 `kind` 는 양쪽에 denormalize 됩니다(`sql`/`vector`/`bm25`/`rrf`/`map`/`final` CHECK 화이트리스트). 채널 추가는 마이그레이션 없이 가능합니다.
+
+각 검색 노드는 `schemas.search.ChannelData(kind, query, hits)` 한 묶음으로 자기 채널을 채우고, 적재는 종단 노드가 단일 트랜잭션으로 처리합니다. 0건 결과여도 query 행은 기록됩니다 (recall 진단 신호). 운영 가이드 + 분석 쿼리 예시 6종은 `docs/chat-search-persistence.md` 참조.
 
 ---
 

@@ -68,8 +68,10 @@ async def test_authorized_flush_returns_count():
     """정확한 토큰 + flush mock → 200, {"deleted": N}."""
     app = _build_app()
     flush_mock = AsyncMock(return_value=42)
-    with patch("routers.admin.settings") as s, \
-         patch("routers.admin.flush_answer_cache", flush_mock):
+    with (
+        patch("routers.admin.settings") as s,
+        patch("routers.admin.flush_answer_cache", flush_mock),
+    ):
         s.admin_internal_token = "secret-token"
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
@@ -128,8 +130,10 @@ async def test_flush_zero_when_no_keys():
     """삭제할 키가 없을 때 deleted=0을 그대로 반환한다 (fail-open 회귀)."""
     app = _build_app()
     flush_mock = AsyncMock(return_value=0)
-    with patch("routers.admin.settings") as s, \
-         patch("routers.admin.flush_answer_cache", flush_mock):
+    with (
+        patch("routers.admin.settings") as s,
+        patch("routers.admin.flush_answer_cache", flush_mock),
+    ):
         s.admin_internal_token = "tok"
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"

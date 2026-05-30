@@ -10,8 +10,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 단위 테스트 폴백 — 실제 DB 없이도 Settings() 초기화가 통과되도록
-os.environ.setdefault("ON_AI_DATABASE_URL", "postgresql+asyncpg://test:test@localhost/on_ai")
-os.environ.setdefault("ON_DATA_DATABASE_URL", "postgresql+asyncpg://test:test@localhost/on_data")
+os.environ.setdefault(
+    "ON_AI_DATABASE_URL", "postgresql+asyncpg://test:test@localhost/on_ai"
+)
+os.environ.setdefault(
+    "ON_DATA_DATABASE_URL", "postgresql+asyncpg://test:test@localhost/on_data"
+)
 
 
 @pytest.fixture()

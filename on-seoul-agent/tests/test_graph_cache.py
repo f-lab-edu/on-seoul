@@ -22,8 +22,8 @@ def base_state() -> AgentState:
         message="테니스장",
         title_needed=True,
         intent=None,
-        lat=None,
-        lng=None,
+        user_lat=None,
+        user_lng=None,
         refined_query="서울 테니스장",
         max_class_name=None,
         area_name=None,
@@ -101,9 +101,7 @@ class TestCacheCheckNode:
         from agents.nodes import CacheCheckNode
 
         base_state["intent"] = IntentType.MAP
-        with patch(
-            "agents.nodes.get_cached_answer", AsyncMock()
-        ) as mock_get:
+        with patch("agents.nodes.get_cached_answer", AsyncMock()) as mock_get:
             node = CacheCheckNode(redis=AsyncMock())
             result = await node(base_state)
 
@@ -122,9 +120,7 @@ class TestCacheCheckNode:
         cached_key = _cache_key("서울 테니스장", area_name="강남구")
 
         # fake redis: cached_key 에만 envelope를 보관
-        envelope_raw = (
-            '{"payload": {"answer": "강남 답변"}, "state": {"refined_query": "서울 테니스장"}}'
-        )
+        envelope_raw = '{"payload": {"answer": "강남 답변"}, "state": {"refined_query": "서울 테니스장"}}'
 
         fake_redis = AsyncMock()
 
@@ -152,9 +148,7 @@ class TestCacheCheckNode:
 
         base_state["intent"] = IntentType.VECTOR_SEARCH
         base_state["refined_query"] = None
-        with patch(
-            "agents.nodes.get_cached_answer", AsyncMock()
-        ) as mock_get:
+        with patch("agents.nodes.get_cached_answer", AsyncMock()) as mock_get:
             node = CacheCheckNode(redis=AsyncMock())
             result = await node(base_state)
 
@@ -174,9 +168,7 @@ class TestCacheWriteNode:
         base_state["intent"] = IntentType.VECTOR_SEARCH
         base_state["answer"] = "신규 답변"
         base_state["vector_results"] = [{"service_id": "S1"}]
-        with patch(
-            "agents.nodes.set_cached_answer", AsyncMock()
-        ) as mock_set:
+        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -193,9 +185,7 @@ class TestCacheWriteNode:
         base_state["intent"] = IntentType.VECTOR_SEARCH
         base_state["answer"] = "x"
         base_state["error"] = "boom"
-        with patch(
-            "agents.nodes.set_cached_answer", AsyncMock()
-        ) as mock_set:
+        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -207,9 +197,7 @@ class TestCacheWriteNode:
         base_state["intent"] = IntentType.VECTOR_SEARCH
         base_state["cache_hit"] = True
         base_state["answer"] = "x"
-        with patch(
-            "agents.nodes.set_cached_answer", AsyncMock()
-        ) as mock_set:
+        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -220,9 +208,7 @@ class TestCacheWriteNode:
 
         base_state["intent"] = IntentType.MAP
         base_state["answer"] = "x"
-        with patch(
-            "agents.nodes.set_cached_answer", AsyncMock()
-        ) as mock_set:
+        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
