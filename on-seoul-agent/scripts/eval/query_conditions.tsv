@@ -1,0 +1,21 @@
+query	intent	sub_intent	refined_query	reasoning	extracted_max_class_name	extracted_area_name	extracted_service_status	sql_keyword	candidate_count
+지금 접수 중인 체육시설 알려줘	SQL_SEARCH		접수중 체육시설	정형 조건 2개(카테고리·상태)가 명시되어 SQL_SEARCH. '체육시설'은 enum '체육시설'로 매핑. '지금 접수 중'은 '접수중'에 해당.	체육시설		접수중		20
+마포구에서 예약 가능한 시설 보여줘	SQL_SEARCH		마포구 접수중 시설	지역·상태 조건이 명시되어 SQL_SEARCH. '마포구'는 area_name. '예약 가능'은 '접수중'에 해당. 카테고리 미언급으로 max_class_name은 null.		마포구	접수중		20
+종로구에서 진행 중인 문화체험 프로그램 알려줘	SQL_SEARCH		종로구 접수중 문화체험	구체 조건 3종(지역·카테고리·상태)이 모두 명시되어 SQL_SEARCH. '종로구'는 정확한 자치구명. '문화체험'은 enum '문화체험'으로 매핑. '진행 중'은 '접수중'에 해당.	문화체험	종로구	접수중		20
+강동구 무료로 이용할 수 있는 시설 있어?	SQL_SEARCH	detail	강동구 무료 시설	'무료'가 주요 탐색 조건(가격 속성)이므로 VECTOR_SEARCH/detail. 활동·체험·맥락이 아닌 가격 기반 필터링이 핵심. '강동구'는 area_name 추출.		강동구			20
+마포구 문화행사 이번 주 접수 중인 거	SQL_SEARCH		마포구 접수중 문화체험	'마포구 이번 주 문화행사 접수중' → 정형 조건 3개 명시이므로 SQL_SEARCH. '문화행사'는 enum '문화체험'으로 매핑. '이번 주'는 라우터에서 처리하지 않음.	문화체험	마포구	접수중		20
+응봉공원 테니스장은 어떻게 예약해?	VECTOR_SEARCH	identification	응봉공원 테니스장 예약 방법	사용자가 특정 시설명('응봉공원 테니스장')을 언급하며 예약 방법을 묻고 있으므로, 이는 시설명 기반의 식별 검색에 해당합니다. 따라서 intent는 VECTOR_SEARCH이고, vector_sub_intent는 identification입니다. 예약 방법 문의는 세부 정보 조회에 해당하므로 vector_sub_intent는 detail로도 볼 수 있으나, 시설명 자체를 식별하는 것이 우선이므로 identification으로 분류합니다. refined_query는 시설명을 포함합니다.					20
+서울역사박물관 야주개홀 대관 방법 알려줘	VECTOR_SEARCH	identification	서울역사박물관 야주개홀 대관	사용자가 '서울역사박물관 야주개홀'이라는 특정 시설명을 언급하며 대관 방법을 묻고 있으므로, 시설명 기반 식별 검색인 VECTOR_SEARCH/identification으로 분류합니다. '대관'은 공간시설의 하위 맥락으로 볼 수 있으나, 핵심은 시설명 식별입니다.					20
+수영장 평일 이용료	VECTOR_SEARCH	detail	수영장 평일 이용료	사용자가 '수영장'이라는 시설 종류와 '평일 이용료'라는 구체적인 정보 조회를 요청했으므로 VECTOR_SEARCH/detail. '수영장'은 '체육시설'에 해당하지만, 사용자가 명시적으로 카테고리를 지정하지 않았고, '평일 이용료'라는 세부 정보 탐색이 주 목적이므로 max_class_name은 null.					20
+테니스장 취소 규정	VECTOR_SEARCH	detail	테니스장 취소 규정	시설 카테고리 '체육시설'은 명시되지 않았으나, '테니스장'은 시설 종류로 식별 가능. '취소 규정'은 세부 정보 조회에 해당하므로 VECTOR_SEARCH/detail. 지역은 미언급.					20
+아이랑 함께 갈 수 있는 체험 프로그램 있어?	VECTOR_SEARCH	semantic	아동 체험 프로그램	사용자의 '아이랑 함께 갈 수 있는 체험 프로그램'이라는 요청은 활동·대상·맥락 기반의 의미 탐색이므로 VECTOR_SEARCH/semantic으로 분류. 정형화된 조건이 없어 max_class_name, area_name, service_status는 null.					20
+주말에 가족이랑 갈 만한 곳 추천해줘	VECTOR_SEARCH	semantic	주말 가족 나들이 장소	주말, 가족과 함께라는 맥락과 '갈 만한 곳 추천'이라는 표현으로 보아 활동·맥락 기반의 의미 탐색이 필요하므로 VECTOR_SEARCH/semantic. 정형 조건은 없음.					20
+자연 속에서 할 수 있는 활동 찾아줘	VECTOR_SEARCH	semantic	자연 속 활동	사용자의 '자연 속 활동'이라는 맥락 기반의 탐색 요청이므로 VECTOR_SEARCH/semantic. 정형화된 조건이 없으므로 SQL_SEARCH/MAP은 부적합.					20
+실내에서 조용히 즐길 수 있는 프로그램 있어?	VECTOR_SEARCH	semantic	실내 조용한 프로그램	사용자의 '실내', '조용히 즐길 수 있는'이라는 맥락과 활동 기반 탐색 요청이므로 VECTOR_SEARCH/semantic. 정형화된 조건이 없어 SQL_SEARCH로 분류하기 어려움.					20
+한강에서 촬영할 수 있는 장소 알려줘	VECTOR_SEARCH	semantic	한강에서 촬영할 수 있는 장소 알려줘	사용자가 '한강'이라는 특정 장소를 언급하며 촬영 장소를 묻고 있으므로 MAP 의도로 분류. '한강'은 서울시 내 특정 지역을 지칭하므로 area_name으로 추출. 촬영 장소는 구체적인 시설명이 아니므로 refined_query는 null.					20
+드론 날릴 수 있는 곳	VECTOR_SEARCH	semantic	드론 비행 장소	사용자가 '드론 날릴 수 있는 곳'이라고 활동 맥락을 기반으로 검색을 요청했으므로 VECTOR_SEARCH/semantic. 정형화된 조건이 없으므로 max_class_name, area_name, service_status는 null.					20
+노인 대상 무료 프로그램	VECTOR_SEARCH	semantic	노원구 노인 무료 프로그램	사용자의 '무료 프로그램' 요청은 가격 속성이 주요 탐색 조건이므로 VECTOR_SEARCH/detail로 분류. '노인 대상'은 부수적인 수식어이므로 vector_sub_intent는 detail로 결정. '노원구'는 area_name으로 추출.		노원구			20
+마포구에서 아이들이 참여할 수 있는 무료 프로그램 알려줘	VECTOR_SEARCH	semantic	마포구 아동 참여 무료 프로그램	사용자는 '마포구'라는 지역과 '아이들이 참여할 수 있는 무료 프로그램'이라는 맥락 기반의 탐색을 요청했습니다. 이는 정형화된 조건보다는 의미 기반 검색이 적합하므로 VECTOR_SEARCH로 분류합니다. '아이들이 참여할 수 있는'은 대상과 활동을 나타내고, '무료 프로그램'은 가격 속성을 포함하지만, 전체적인 맥락에서 '아이와 함께 즐길 수 있는 체험'이라는 의미가 더 강하므로 vector_sub_intent는 'semantic'으로 분류합니다. '마포구'는 area_name으로 추출합니다.		마포구			20
+강서구에서 자연 관찰할 수 있는 프로그램 있어?	VECTOR_SEARCH	semantic	강서구 자연 관찰 프로그램	지역·카테고리·맥락 기반 탐색이므로 VECTOR_SEARCH/semantic. '자연 관찰'은 '문화체험'의 하위 맥락으로 볼 수 있으나, 사용자가 명시한 '문화체험' enum 값은 아니므로 max_class_name은 null. '강서구'는 area_name 추출.		강서구			20
+종로구에서 가족 단위로 갈 수 있는 박물관 프로그램	VECTOR_SEARCH	semantic	종로구 가족 단위 박물관 문화체험	지역·카테고리·대상 기반의 의미 탐색이므로 VECTOR_SEARCH/semantic. '종로구'는 area_name 추출. '박물관 프로그램'은 '문화체험'으로 매핑 가능하나, '가족 단위'라는 맥락이 더 중요하므로 VECTOR_SEARCH로 분류.		종로구			20
+성동구에서 초등학생 대상 교육 프로그램 알려줘	VECTOR_SEARCH	semantic	성동구 교육강좌	사용자는 '성동구'라는 지역과 '초등학생 대상 교육 프로그램'이라는 구체적인 검색 조건을 제시했으므로 SQL_SEARCH로 분류. '교육 프로그램'은 '교육강좌'로 매핑. '초등학생 대상'은 SQL_SEARCH의 정형 조건으로 처리되지 않으므로 refined_query에 포함시키지 않음.	교육강좌	성동구			20

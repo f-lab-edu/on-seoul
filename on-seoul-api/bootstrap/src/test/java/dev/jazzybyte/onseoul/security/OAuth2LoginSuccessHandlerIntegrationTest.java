@@ -1,10 +1,10 @@
 package dev.jazzybyte.onseoul.security;
 
-import dev.jazzybyte.onseoul.adapter.in.security.JwtTokenIssuer;
-import dev.jazzybyte.onseoul.adapter.in.security.OAuth2LoginSuccessHandler;
-import dev.jazzybyte.onseoul.domain.port.in.SocialLoginCommand;
-import dev.jazzybyte.onseoul.domain.port.in.SocialLoginUseCase;
-import dev.jazzybyte.onseoul.domain.port.in.TokenResponse;
+import dev.jazzybyte.onseoul.user.adapter.out.jwt.JwtTokenIssuer;
+import dev.jazzybyte.onseoul.user.adapter.in.security.OAuth2LoginSuccessHandler;
+import dev.jazzybyte.onseoul.user.port.in.SocialLoginCommand;
+import dev.jazzybyte.onseoul.user.port.in.SocialLoginUseCase;
+import dev.jazzybyte.onseoul.user.port.in.TokenResponse;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,7 +48,7 @@ class OAuth2LoginSuccessHandlerIntegrationTest {
     @BeforeEach
     void setUp() {
         tokenIssuer = new JwtTokenIssuer(TEST_SECRET, 15L, 10080L);
-        handler = new OAuth2LoginSuccessHandler(socialLoginUseCase, tokenIssuer, FRONTEND_BASE_URL, false);
+        handler = new OAuth2LoginSuccessHandler(socialLoginUseCase, tokenIssuer, FRONTEND_BASE_URL, false, "Strict", "");
     }
 
     private OAuth2AuthenticationToken googleToken(Map<String, Object> attrs) {

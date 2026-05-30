@@ -19,6 +19,7 @@ ai-service/
 ├── tools/
 │   ├── sql_search.py              # PostgreSQL 정형 조회 (카테고리, 상태, 지역, 날짜 필터)
 │   ├── vector_search.py           # pgvector 임베딩 유사도 검색
+│   ├── question_search.py         # 예상 질문 임베딩 검색, service_id별 dedup (Track C)
 │   └── map_search.py              # earthdistance + cube 반경 검색, GeoJSON 반환
 ├── llm/
 │   ├── client.py                  # LLM API 호출 추상화 (Gemini / GPT)
@@ -29,7 +30,8 @@ ai-service/
 │   └── chat.py                    # ChatRequest / ChatResponse
 ├── core/
 │   ├── config.py                  # 환경변수, DB 접속 정보, LLM API 키
-│   └── database.py                # async SQLAlchemy 세션 (PostgreSQL 접속)
+│   ├── database.py                # async SQLAlchemy 세션 (PostgreSQL 접속)
+│   └── rrf.py                     # 가중 RRF (reciprocal_rank_fusion)
 ├── scripts/
 │   └── embed_metadata.py          # 시설 메타데이터 → 임베딩 → pgvector 적재 (배치)
 └── middleware/
@@ -42,6 +44,8 @@ ai-service/
 **tool 3종 분리**: `sql_search`, `vector_search`, `map_search`는 각각 입력 파라미터와 반환 형태가 다르므로 별도 tool로 분리한다. Router Agent가 의도에 따라 적절한 tool을 선택하고, 결과는 Answer Agent에서 통합 가공한다.
 
 **fallback_link를 별도 tool에서 제거**: URL 미존재 시 서울시 공공예약 메인 링크로 대체하는 로직은 Answer Agent 내부에서 조건 분기로 처리한다. 별도 tool로 분리할 만큼 복잡하지 않다.
+
+**Triple-Track 임베딩 + RRF**: `service_embeddings` 통합 테이블에 Track A(identity) / Track B(summary) / Track C(question) 세 종류 임베딩을 적재하고, 4채널(Track A/B/C + BM25) RRF(Reciprocal Rank Fusion)로 결합한다. Phase 1은 비가중치 baseline. Phase 3에서 `vector_sub_intent` 분류 정확도 ≥ 80% 검증 후 가중치 활성화 예정.
 
 ---
 

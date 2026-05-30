@@ -353,12 +353,14 @@ classDiagram
 **메시지 생성 흐름:**
 
 ```
-수집 도메인 변경 감지 (서비스 개시 / D-1 / 마감 임박)
-  → NotificationSubscription 매칭 (필터: 카테고리·자치구·키워드)
-  → AI Service (POST /notification/template) — 알림 템플릿 생성 에이전트가 자연어 메시지 생성
-  → NotificationTemplate.render() — 정형 변수 치환 (fallback)
-  → 브라우저 웹 푸시 발송 (단일 클라이언트)
-  → NotificationDispatch 기록
+(알림 스케줄러 실행)
+→ NotificationSubscription 전체 순회
+→ 각 구독 조건(카테고리·자치구·키워드)으로 service_change_log 조회 (changed_after = last_notified_at)
+→ 매칭된 변경 이력이 있으면 AI Service (POST /notification/template) — 알림 템플릿 생성 에이전트가 자연어 메시지(서비스 개시 / D-1 / 마감 임박) 생성
+→ NotificationTemplate.render() — 정형 변수 치환 (fallback)
+→ 브라우저 웹 푸시 발송 (단일 클라이언트)
+→ NotificationDispatch 기록
+→ NotificationSubscription.last_notified_at 갱신
 ```
 
 > **AI Service의 역할:** 단순 템플릿 치환을 넘어 시설 정보·예약 URL 등을 조합한 자연어 메시지를 생성한다. AI 호출 실패 시 `NotificationTemplate.render()` 결과로 폴백한다.

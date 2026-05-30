@@ -1,6 +1,6 @@
 # on-seoul-agent
 
-서울시 공공서비스 예약 정보에 대한 자연어 질의를 처리하는 AI 서비스입니다. FastAPI + LangChain 기반의 멀티에이전트 오케스트레이션으로 사용자 의도를 분류하고, 적절한 도구를 호출하여 답변을 생성합니다. (MVP는 LangChain 으로 구축하며, 안정화 이후 LangGraph 로 전환합니다.)
+서울시 공공서비스 예약 정보에 대한 자연어 질의를 처리하는 AI 서비스입니다. FastAPI + LangGraph 기반의 멀티에이전트 오케스트레이션으로 사용자 의도를 분류하고, 적절한 도구를 호출하여 답변을 생성합니다.
 
 ---
 
@@ -53,25 +53,35 @@ flowchart LR
 flowchart TD
     START(["사용자 질문"])
     ROUTER["Router Agent\nLLM 의도 분류"]
+    CACHE_CHECK["Answer Cache\nlookup"]
     SQL["SQL Agent"]
-    VECTOR["Vector Agent"]
+    VECTOR["Vector Agent\nTrack A(identity)+B(summary)+C(question)+BM25\nRRF 결합 → Hydration"]
     MAP["map_search\n도구"]
     FALLBACK["Fallback"]
     ANSWER["Answer Agent\n자연어 답변 + 시설 카드 생성"]
-    END(["SSE 스트리밍 응답"])
+    SELF_CORR{{"Self-Correction\n답변 비어있고\nretry_count=0?"}}
+    CACHE_WRITE["Answer Cache\n저장"]
+    SEARCH_PERSIST(["search_persist\nchat_search_queries +\nchat_search_results"])
+    TRACE(["Trace 저장 → SSE 스트리밍 응답"])
 
     START --> ROUTER
-    ROUTER -- "SQL_SEARCH" --> SQL
-    ROUTER -- "VECTOR_SEARCH" --> VECTOR
-    ROUTER -- "MAP" --> MAP
-    ROUTER -- "FALLBACK" --> FALLBACK
+    ROUTER --> CACHE_CHECK
+    CACHE_CHECK -- "hit" --> SEARCH_PERSIST
+    CACHE_CHECK -- "miss · SQL_SEARCH" --> SQL
+    CACHE_CHECK -- "miss · VECTOR_SEARCH" --> VECTOR
+    CACHE_CHECK -- "miss · MAP" --> MAP
+    CACHE_CHECK -- "miss · FALLBACK" --> FALLBACK
 
     SQL --> ANSWER
     VECTOR --> ANSWER
     MAP --> ANSWER
     FALLBACK --> ANSWER
 
-    ANSWER --> END
+    ANSWER --> SELF_CORR
+    SELF_CORR -- "Yes (최대 1회)" --> ROUTER
+    SELF_CORR -- "No" --> CACHE_WRITE
+    CACHE_WRITE --> SEARCH_PERSIST
+    SEARCH_PERSIST --> TRACE
 ```
 
 ### 에이전트 (LLM 추론)
@@ -89,6 +99,7 @@ flowchart TD
 |---|---|
 | sql_search | PostgreSQL 정형 조회 (카테고리, 상태, 지역, 날짜 필터) |
 | vector_search | pgvector 임베딩 유사도 검색 |
+| question_search | `on_ai.service_embeddings WHERE row_kind='question'` — 예상 질문 임베딩 검색, service_id별 dedup |
 | map_search | earthdistance + cube 반경 검색, GeoJSON 반환 |
 
 ---
@@ -102,27 +113,35 @@ on-seoul-agent/
 ├── routers/
 │   └── chat.py              # POST /chat/stream — SSE 스트리밍 엔드포인트
 ├── agents/
-│   ├── workflow.py          # LangChain(LCEL) 워크플로우 조립 — 이후 LangGraph(graph.py)로 전환 예정
+│   ├── graph.py             # LangGraph StateGraph 워크플로우 (Router→Search→Answer→Self-Correction)
+│   ├── workflow.py          # LangChain(LCEL) 워크플로우 — graph.py 전환 전 레거시
 │   ├── router_agent.py      # 의도 분류
 │   ├── sql_agent.py         # SQL 조회 에이전트
-│   ├── vector_agent.py      # 벡터 검색 에이전트
+│   ├── vector_agent.py      # 벡터 검색 에이전트 (BM25 + vector 하이브리드)
 │   └── answer_agent.py      # 답변 생성 에이전트
 ├── tools/
 │   ├── sql_search.py        # PostgreSQL 정형 조회
-│   ├── vector_search.py     # pgvector 유사도 검색
+│   ├── vector_search.py     # pgvector 유사도 검색 (post-filter)
+│   ├── question_search.py   # 예상 질문 임베딩 검색, service_id별 dedup (Track C)
+│   ├── bm25_search.py       # ParadeDB BM25 전문 검색
 │   └── map_search.py        # 반경 검색 + GeoJSON 반환
 ├── llm/
 │   ├── client.py            # LLM API 호출 추상화 (Gemini / GPT)
-│   └── embedder.py          # 텍스트 → 벡터 변환
+│   ├── embedder.py          # 텍스트 → 벡터 변환
+│   └── tokenizer.py         # Lindera KoDic 형태소 분석기 (BM25 쿼리 토크나이징)
 ├── schemas/
-│   ├── state.py             # AgentState (LangChain 워크플로우 공유 상태, LangGraph 전환 대비 규약 유지)
+│   ├── state.py             # AgentState (LangGraph StateGraph 공유 상태)
+│   ├── search.py            # ChannelData / SearchKind / SearchChannel 상수, search_channels_reducer
 │   ├── events.py            # SSE 이벤트 타입
 │   └── chat.py              # ChatRequest / ChatResponse
 ├── core/
 │   ├── config.py            # pydantic-settings 환경변수 관리
-│   └── database.py          # async SQLAlchemy 세션
+│   ├── database.py          # async SQLAlchemy 세션
+│   └── rrf.py               # 가중 RRF (reciprocal_rank_fusion)
 ├── scripts/
-│   └── embed_metadata.py    # 시설 메타데이터 임베딩 배치 적재
+│   ├── embed_metadata.py    # 시설 메타데이터 임베딩 배치 적재
+│   ├── ddl/                 # 테이블 DDL — service_embeddings, chat_search 등
+│   └── ddl_chat_entities.sql # chat_agent_traces / chat_search_* include 진입점
 └── middleware/
     └── metrics.py           # 응답시간 측정
 ```
@@ -134,7 +153,7 @@ on-seoul-agent/
 | 영역 | 기술 |
 |---|---|
 | 프레임워크 | FastAPI |
-| 에이전트 오케스트레이션 | LangChain (MVP) → LangGraph (Post-MVP 전환 예정) |
+| 에이전트 오케스트레이션 | LangGraph (StateGraph) |
 | LLM | Gemini 2.0 Flash (기본) / GPT-4o-mini (폴백) |
 | DB | PostgreSQL + pgvector (async SQLAlchemy) |
 | 캐시 | Redis |

@@ -4,6 +4,7 @@ Mock DB 세션으로 SQL 실행 경로와 bind 파라미터를 검증한다.
 실제 DB에 접근하지 않는다.
 """
 
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
 from tools.sql_search import TOP_K, sql_search
@@ -191,6 +192,72 @@ class TestSqlSearchAllFilters:
         assert "area_name" in sql_text
         assert "service_status" in sql_text
         assert "ILIKE" in sql_text
+
+
+class TestSqlSearchDateFilters:
+    async def test_receipt_date_from_in_bind(self):
+        """receipt_date_from이 있으면 bind에 포함된다."""
+        session = _make_session([])
+        d = date(2026, 5, 18)
+        await sql_search(session, receipt_date_from=d)
+        bind = session.execute.call_args[0][1]
+        assert bind["receipt_date_from"] == d
+
+    async def test_receipt_date_to_in_bind(self):
+        """receipt_date_to가 있으면 bind에 포함된다."""
+        session = _make_session([])
+        d = date(2026, 5, 24)
+        await sql_search(session, receipt_date_to=d)
+        bind = session.execute.call_args[0][1]
+        assert bind["receipt_date_to"] == d
+
+    async def test_receipt_date_overlap_conditions_in_sql(self):
+        """날짜 필터가 구간 겹침 조건(receipt_end_dt >=, receipt_start_dt <=)으로 생성된다."""
+        executed_sqls: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.keys.return_value = []
+            m.fetchall.return_value = []
+            return m
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await sql_search(
+            session,
+            receipt_date_from=date(2026, 5, 18),
+            receipt_date_to=date(2026, 5, 24),
+        )
+
+        sql_text = executed_sqls[0]
+        assert "receipt_end_dt >= :receipt_date_from" in sql_text
+        assert "receipt_start_dt <= :receipt_date_to" in sql_text
+
+    async def test_no_date_filter_excludes_date_keys(self):
+        """날짜 파라미터 없이 호출하면 bind에 날짜 키가 없다."""
+        session = _make_session([])
+        await sql_search(session)
+        bind = session.execute.call_args[0][1]
+        assert "receipt_date_from" not in bind
+        assert "receipt_date_to" not in bind
+
+    async def test_date_filters_combined_with_other_filters(self):
+        """날짜 필터와 다른 필터를 동시에 사용할 수 있다."""
+        session = _make_session([])
+        await sql_search(
+            session,
+            max_class_name="문화행사",
+            area_name="마포구",
+            receipt_date_from=date(2026, 5, 1),
+            receipt_date_to=date(2026, 5, 31),
+        )
+        bind = session.execute.call_args[0][1]
+        assert bind["max_class_name"] == "문화행사"
+        assert bind["area_name"] == "마포구"
+        assert bind["receipt_date_from"] == date(2026, 5, 1)
+        assert bind["receipt_date_to"] == date(2026, 5, 31)
 
 
 class TestSqlSearchSqlInjection:

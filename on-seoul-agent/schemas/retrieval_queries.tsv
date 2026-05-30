@@ -1,0 +1,101 @@
+번호	질문	의도유형	활용필드	대상데이터
+1	지금 접수 중인 공간시설 보여줘	상태필터	service_status=접수중, max_class_name=공간시설	공간시설 전체
+2	서울역사박물관 야주개홀 예약 어떻게 해?	시설안내	service_name LIKE 야주개홀	강당(야주개홀)
+3	종로구에 지금 예약 가능한 시설 있어?	지역+상태필터	area_name=종로구, service_status=접수중	종로구 전체
+4	강당 대관하고 싶은데 뭐가 있어?	소분류필터	min_class_name=강당	강당 전체
+5	이번 달 접수 마감 임박한 시설 알려줘	날짜필터	receipt_end_dt 기준 정렬	전체
+6	무료로 쓸 수 있는 체육시설 있어?	요금필터	payment_type=무료, max_class_name=체육시설	체육시설 전체
+7	마포구 풋살장 예약 가능해?	지역+소분류	area_name=마포구, min_class_name=풋살장	풋살장
+8	아이랑 갈 수 있는 무료 체험 프로그램 있어?	대상+요금	target_info LIKE 어린이, payment_type=무료	교육강좌/문화체험
+9	테니스장 평일 이용료가 얼마야?	시설정보	service_name LIKE 테니스, detail_content	테니스장
+10	응봉공원 다목적구장 예약하려면 어떻게 해?	예약방법	service_name LIKE 응봉공원, service_url	다목적경기장
+11	드론 날릴 수 있는 곳 있어?	의미검색	service_name LIKE 드론	드론장
+12	광나루한강공원에서 뭘 할 수 있어?	장소탐색	place_name LIKE 광나루한강공원	광나루 전체
+13	강동구 무료 시설 알려줘	지역+요금	area_name=강동구, payment_type=무료	강동구 전체
+14	5월에 접수하는 문화체험 뭐 있어?	기간+대분류	max_class_name=문화체험, receipt_start_dt 5월	문화체험
+15	청계천박물관 교육 프로그램 있어?	시설+대분류	place_name LIKE 청계천박물관	교육강좌/문화체험
+16	초등학생 대상 무료 프로그램 알려줘	대상+요금	target_info LIKE 초등, payment_type=무료	교육강좌 전체
+17	성동구에 체육시설 뭐가 있어?	지역+대분류	area_name=성동구, max_class_name=체육시설	성동구 체육
+18	잠실 풋살장은 왜 접수종료야?	상태문의	service_name LIKE 잠실, service_status	잠실풋살장
+19	어린이병원 진료예약 어떻게 해?	진료복지	min_class_name=어린이병원	진료복지
+20	장애인 버스 예약할 수 있어?	진료복지	min_class_name=장애인버스	장애인버스
+21	지금 당장 예약 가능한 축구장 있어?	상태+소분류	service_status=접수중, min_class_name=축구장	축구장
+22	남산골한옥마을 주말 체험 프로그램 알려줘	장소+기간	place_name LIKE 남산골한옥마을	문화체험
+23	토요일에 할 수 있는 전통문화 체험 있어?	의미검색	detail_content LIKE 전통	문화체험
+24	서초구에 진료 받을 수 있는 곳 있어?	지역+대분류	area_name=서초구, max_class_name=진료복지	진료복지
+25	은평구 병원 예약 방법 알려줘	지역+예약방법	area_name=은평구, service_url	서북병원
+26	풋살장 취소 규정이 어떻게 돼?	취소정보	cancel_std_type, cancel_std_days, detail_content	풋살장
+27	5월 31일까지 접수 가능한 시설 보여줘	날짜필터	receipt_end_dt >= 2026-05-31	전체
+28	가족이랑 같이 갈 수 있는 교육 프로그램 있어?	대상필터	target_info LIKE 가족	교육강좌
+29	청소년 대상 프로그램 뭐 있어?	대상필터	target_info LIKE 청소년	전체
+30	공연이나 행사 할 수 있는 강당 있어?	의미검색	min_class_name=강당, service_status=접수중	강당
+31	반딧불이 체험 어디서 해?	의미검색	service_name LIKE 반딧불	교육강좌
+32	누에 체험 프로그램 어디야?	의미검색	service_name LIKE 누에	교육강좌
+33	짚공예 배울 수 있는 곳 있어?	의미검색	service_name LIKE 짚공예	문화체험
+34	드론 레이싱 할 수 있는 곳 알려줘	의미검색	service_name LIKE 드론 레이싱	드론장
+35	한강에서 영화 촬영하려면 어떻게 해?	의미검색	service_name LIKE 영화촬영	녹화장소
+36	웨딩 촬영 장소 예약 가능해?	의미검색	detail_content LIKE 웨딩촬영	녹화장소
+37	박물관 무료 해설 프로그램 있어?	의미검색	service_name LIKE 해설	문화체험
+38	중학생이 참여할 수 있는 프로그램 뭐야?	대상필터	target_info LIKE 중학생	교육강좌
+39	마포구 축구장 이용료 얼마야?	요금정보	area_name=마포구, min_class_name=축구장, detail_content	난지천축구장
+40	난지천 풋살장 예약 시작일이 언제야?	날짜문의	service_name LIKE 난지천, receipt_start_dt	풋살장
+41	6월 이용할 수 있는 강당 예약 가능해?	기간+소분류	service_open_end_dt >= 2026-06-01, min_class_name=강당	강당
+42	장승 만들기 체험 어디서 해?	의미검색	service_name LIKE 장승	문화체험
+43	솟대 만들기 프로그램 있어?	의미검색	service_name LIKE 솟대	문화체험
+44	유아 대상 숲 체험 프로그램 있어?	대상+의미	target_info LIKE 유아, service_name LIKE 숲	교육강좌
+45	월드컵공원에서 할 수 있는 거 뭐야?	장소탐색	place_name LIKE 월드컵공원	전체
+46	수시 접수하는 프로그램 있어?	의미검색	service_name LIKE 수시	교육강좌
+47	어린이집 단체 예약 가능한 프로그램 알려줘	대상필터	target_info LIKE 어린이집	교육강좌
+48	서울역사박물관에서 뭘 예약할 수 있어?	장소탐색	place_name LIKE 서울역사박물관	전체
+49	온라인으로 할 수 있는 교육 프로그램 있어?	의미검색	service_name LIKE 온라인	교육강좌
+50	테니스장 주말 이용료랑 평일 이용료 차이 알려줘	요금비교	service_name LIKE 테니스, detail_content	테니스장
+51	취소는 며칠 전까지 가능해?	취소정보	cancel_std_type, cancel_std_days	전체
+52	응봉공원 테니스장 좌표 알려줘	위치정보	place_name=응봉공원, coord_x, coord_y	테니스장
+53	내 주변 가까운 공간시설 어디야?	반경탐색	coord_x, coord_y, earthdistance	공간시설
+54	지도에서 체육시설 보여줘	지도탐색	max_class_name=체육시설, coord_x, coord_y	체육시설 전체
+55	접수중인 시설만 지도에 표시해줘	지도+상태	service_status=접수중, coord_x, coord_y	전체
+56	강서구 생태 프로그램 뭐 있어?	지역+의미	area_name=강서구, service_name LIKE 생태	교육강좌
+57	청계천박물관 가족 교육 신청하려면?	예약방법	service_name LIKE 청계천, target_info LIKE 가족, service_url	문화체험
+58	5~7세 아이 데려갈 수 있는 프로그램 있어?	대상필터	target_info LIKE 유아	교육강좌
+59	백인제가옥 해설 예약 가능해?	시설안내	service_name LIKE 백인제가옥	문화체험
+60	접수 대기 중인 시설 있어?	상태필터	service_status=대기중	전체
+61	예약마감된 테니스장 다음 접수는 언제야?	상태+날짜	service_status=예약마감, service_name LIKE 테니스	테니스장
+62	주말에 아이 데리고 갈 수 있는 무료 체험 알려줘	대상+요금+기간	target_info LIKE 어린이, payment_type=무료	문화체험/교육강좌
+63	탐조 프로그램 있어?	의미검색	service_name LIKE 탐조	교육강좌
+64	강서습지 프로그램 뭐 있어?	장소탐색	place_name LIKE 강서습지	교육강좌
+65	박물관 관련 교육 뭐가 있어?	의미검색	service_name LIKE 박물관	교육강좌/문화체험
+66	소아청소년과 진료 예약 어떻게 해?	진료안내	service_name LIKE 소아청소년, service_url	진료복지
+67	치과 예약 가능한 병원 있어?	진료필터	service_name LIKE 치과	진료복지
+68	영유아 검진 어디서 받아?	진료필터	service_name LIKE 영유아검진	진료복지
+69	결핵 진료 예약할 수 있는 곳 알려줘	진료필터	service_name LIKE 결핵	진료복지
+70	재활의학과 예약 가능해?	진료필터	service_name LIKE 재활의학과	진료복지
+71	광진구 공원에서 체험 프로그램 있어?	지역+의미	area_name=광진구	교육강좌
+72	5월에 끝나는 프로그램 뭐야?	날짜필터	receipt_end_dt LIKE 2026-05	전체
+73	접수 안내 중인 프로그램 있어?	상태필터	service_status=안내중	전체
+74	접수종료됐는데 비슷한 프로그램 있어?	유사검색	벡터검색	전체
+75	역사 관련 교육 프로그램 추천해줘	의미검색	min_class_name=역사	교육강좌
+76	자연 생태 체험 프로그램 뭐 있어?	의미검색	min_class_name=자연/과학	교육강좌
+77	잠실 근처 체육시설 보여줘	반경탐색	place_name LIKE 잠실, coord_x, coord_y	체육시설
+78	공원에서 촬영할 수 있는 장소 예약하려면?	의미검색	service_name LIKE 녹화, min_class_name=녹화장소	녹화장소
+79	한강 공원 드론 비행 가능한 곳 어디야?	의미검색	service_name LIKE 드론장, place_name LIKE 한강	드론장
+80	고정익 드론 날릴 수 있는 구역 있어?	의미검색	service_name LIKE 고정익	드론장
+81	FPV 드론 레이싱 구역 예약 방법 알려줘	예약방법	service_name LIKE FPV, service_url	드론장
+82	유아 숲 체험원 5월 접수 남아 있어?	상태+날짜	service_name LIKE 유아숲, service_status	교육강좌
+83	청계천 탐방 프로그램 있어?	의미검색	service_name LIKE 청계천 탐험	문화체험
+84	초등 특수학급 대상 교육 있어?	대상필터	target_info LIKE 특수학급	문화체험
+85	지역아동센터 신청 가능한 온라인 교육 있어?	대상+의미	target_info LIKE 지역아동센터	문화체험
+86	가족이랑 주말에 역사 공부할 수 있는 프로그램?	의미검색	min_class_name=역사, target_info LIKE 가족	교육강좌
+87	조류 관찰 프로그램 있어?	의미검색	service_name LIKE 새, min_class_name=자연/과학	교육강좌
+88	목공예 체험 할 수 있는 곳 있어?	의미검색	service_name LIKE 목편	문화체험
+89	6월 예약 가능한 공간시설 알려줘	기간+대분류	service_open_end_dt >= 2026-06-01, max_class_name=공간시설	공간시설
+90	내과 진료 예약 가능한 병원 있어?	진료필터	service_name LIKE 내과	진료복지
+91	휠체어 탈 수 있는 장애인 버스 어떻게 예약해?	진료복지	service_name LIKE 장애인버스, service_url	진료복지
+92	5월 15일 이후 접수 시작하는 프로그램 뭐야?	날짜필터	receipt_start_dt >= 2026-05-15	전체
+93	카카오 지도로 서울역사박물관 위치 보여줘	위치링크	coord_x=126.97, coord_y=37.57	서울역사박물관
+94	네이버 지도에서 응봉공원 찾아줘	위치링크	coord_x, coord_y → 네이버지도 링크	응봉공원
+95	문의 전화번호 알려줘 청계천박물관	연락처	tel_no, place_name LIKE 청계천박물관	청계천박물관
+96	이용 시간이 가장 긴 시설 어디야?	이용시간	use_time_start, use_time_end 차이 계산	전체
+97	오전에만 이용 가능한 프로그램 있어?	이용시간	use_time_end <= 13:00	전체
+98	접수중이면서 무료이고 아이 데려갈 수 있는 거 다 보여줘	복합필터	service_status=접수중, payment_type=무료, target_info LIKE 어린이	전체
+99	서울역사박물관 7월 강당 예약 링크 줘	링크제공	service_name LIKE 야주개홀 7월, service_url	강당
+100	예약마감이랑 접수종료 차이가 뭐야?	서비스안내	service_status 값 설명	전체

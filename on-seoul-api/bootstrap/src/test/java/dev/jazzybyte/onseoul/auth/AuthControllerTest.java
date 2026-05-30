@@ -1,14 +1,14 @@
 package dev.jazzybyte.onseoul.auth;
 
-import dev.jazzybyte.onseoul.adapter.in.security.OAuth2LoginSuccessHandler;
-import dev.jazzybyte.onseoul.adapter.in.web.AuthController;
-import dev.jazzybyte.onseoul.adapter.in.web.GlobalExceptionHandler;
-import dev.jazzybyte.onseoul.domain.model.UserStatus;
-import dev.jazzybyte.onseoul.domain.port.in.GetMeUseCase;
-import dev.jazzybyte.onseoul.domain.port.in.LogoutUseCase;
-import dev.jazzybyte.onseoul.domain.port.in.MeResult;
-import dev.jazzybyte.onseoul.domain.port.in.RefreshTokenUseCase;
-import dev.jazzybyte.onseoul.domain.port.in.TokenResponse;
+import dev.jazzybyte.onseoul.user.adapter.in.security.OAuth2LoginSuccessHandler;
+import dev.jazzybyte.onseoul.user.adapter.in.web.AuthController;
+import dev.jazzybyte.onseoul.shared.adapter.in.web.GlobalExceptionHandler;
+import dev.jazzybyte.onseoul.user.domain.UserStatus;
+import dev.jazzybyte.onseoul.user.port.in.GetMeUseCase;
+import dev.jazzybyte.onseoul.user.port.in.LogoutUseCase;
+import dev.jazzybyte.onseoul.user.port.in.MeResult;
+import dev.jazzybyte.onseoul.user.port.in.RefreshTokenUseCase;
+import dev.jazzybyte.onseoul.user.port.in.TokenResponse;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import jakarta.servlet.http.Cookie;
