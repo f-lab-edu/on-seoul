@@ -64,21 +64,18 @@ export function useChatStream(): UseChatStreamResult {
       safeSetState({ phase: "streaming", content, trace: [...trace] });
 
       try {
-        // const res = await fetch("/api/query", {   // Route Handler 경유 (리버스프록시 구성 시 사용)
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? ""}/query`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "text/event-stream",
-            },
-            credentials: "include",
-            body: JSON.stringify(input),
-            signal: ctrl.signal,
-            cache: "no-store",
+        // Route Handler 경유 필수 — 직접 백엔드 호출 금지 (CLAUDE.md A.2)
+        const res = await fetch("/api/query", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
           },
-        );
+          credentials: "include",
+          body: JSON.stringify(input),
+          signal: ctrl.signal,
+          cache: "no-store",
+        });
 
         if (res.status === 401) {
           if (typeof window !== "undefined") {

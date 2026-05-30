@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChatInput } from "@/components/chat/chat-input";
 import { MessageList, type DisplayMessage } from "@/components/chat/message-list";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
 import { useChatStream } from "@/hooks/useChatStream";
 
@@ -57,7 +58,14 @@ export default function ChatPage() {
         <h1 className="text-base font-medium">온 에이전트</h1>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {loading ? (
-            <span>불러오는 중…</span>
+            <div
+              role="status"
+              aria-label="사용자 정보 불러오는 중"
+              className="flex items-center gap-2"
+            >
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-7 w-16" />
+            </div>
           ) : user ? (
             <>
               <span>{user.nickname}</span>
