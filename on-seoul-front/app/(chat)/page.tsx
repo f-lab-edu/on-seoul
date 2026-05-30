@@ -5,7 +5,6 @@ import { useEffect, useRef, useState } from "react";
 import { ChatInput } from "@/components/chat/chat-input";
 import { MessageList, type DisplayMessage } from "@/components/chat/message-list";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
 import { useChatStream } from "@/hooks/useChatStream";
 
@@ -19,7 +18,7 @@ import { useChatStream } from "@/hooks/useChatStream";
  * - 스트림 중 단절(error 또는 비정상 종료): 사용자에게 에러 + 재시도 버튼 노출 (절대규칙 B.4).
  */
 export default function ChatPage() {
-  const { user, loading, error: authError, logout } = useAuth();
+  const { loading, error: authError } = useAuth();
   const { state, send, cancel, retry } = useChatStream();
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   // done 이벤트를 한 번만 messages에 반영하기 위한 가드.
@@ -53,30 +52,7 @@ export default function ChatPage() {
   const errored = state.phase === "error";
 
   return (
-    <main className="mx-auto flex h-dvh max-w-3xl flex-col">
-      <header className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h1 className="text-base font-medium">온 에이전트</h1>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          {loading ? (
-            <div
-              role="status"
-              aria-label="사용자 정보 불러오는 중"
-              className="flex items-center gap-2"
-            >
-              <Skeleton className="h-4 w-20" />
-              <Skeleton className="h-7 w-16" />
-            </div>
-          ) : user ? (
-            <>
-              <span>{user.nickname}</span>
-              <Button variant="outline" size="sm" onClick={() => void logout()}>
-                로그아웃
-              </Button>
-            </>
-          ) : null}
-        </div>
-      </header>
-
+    <>
       {authError && (
         <p
           role="alert"
@@ -110,6 +86,6 @@ export default function ChatPage() {
         streaming={streaming}
         disabled={loading}
       />
-    </main>
+    </>
   );
 }
