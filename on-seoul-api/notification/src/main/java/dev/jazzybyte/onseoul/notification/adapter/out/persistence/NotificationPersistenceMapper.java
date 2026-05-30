@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.jazzybyte.onseoul.notification.domain.KeywordTarget;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
@@ -77,6 +78,9 @@ class NotificationPersistenceMapper implements SubscriptionFilterParserPort {
      *   <li>{@code areaNames}       — string[] : area_name 화이트리스트</li>
      *   <li>{@code maxClassNames}   — string[] : max_class_name 화이트리스트 (카테고리)</li>
      *   <li>{@code keywords}        — string[] : service_name/place_name 부분일치 키워드</li>
+     *   <li>{@code keywordTargets}  — string[] : 키워드 매칭 대상({@link KeywordTarget} name).
+     *       키 부재 시 {@link KeywordTarget#serverDefaults()}(둘 다)로 fallback — 구버전 구독 동작 보존.
+     *       미인식 토큰은 graceful skip 한다.</li>
      * </ul>
      * 빈 객체 {@code {}}나 null이면 {@link SubscriptionFilter#empty()} 반환.
      * 파싱 실패 시 empty()로 fallback (안전한 기본값).
@@ -95,7 +99,8 @@ class NotificationPersistenceMapper implements SubscriptionFilterParserPort {
                     readStringSet(root, "statuses"),
                     readStringSet(root, "areaNames"),
                     readStringSet(root, "maxClassNames"),
-                    readStringSet(root, "keywords"));
+                    readStringSet(root, "keywords"),
+                    readKeywordTargets(root));
         } catch (JsonProcessingException ex) {
             log.warn("[NotificationPersistenceMapper] filter JSON 파싱 실패 — empty filter로 폴백 "
                             + "(잘못된 filter 값은 ALL 변경에 알림 발송됨): jsonLength={}",
@@ -114,6 +119,38 @@ class NotificationPersistenceMapper implements SubscriptionFilterParserPort {
             if (n.isTextual()) {
                 String v = n.asText();
                 if (v != null && !v.isBlank()) out.add(v);
+            }
+        });
+        return out;
+    }
+
+    /**
+     * keywordTargets 키를 {@link KeywordTarget} 집합으로 역직렬화한다.
+     *
+     * <p>키 부재 시 → {@link KeywordTarget#serverDefaults()}(둘 다)로 fallback (구버전 구독 보존).
+     * 키가 빈 배열이거나 모든 토큰이 미인식이면 빈 Set 을 반환한다 — 어댑터가 매칭 시
+     * 빈 대상을 serverDefaults() 로 다시 fallback 하므로 안전하다.
+     * 미인식 enum 토큰은 {@link #readStringSet} 의 방어 패턴을 따라 graceful skip 한다.
+     */
+    private Set<KeywordTarget> readKeywordTargets(JsonNode root) {
+        JsonNode node = root.get("keywordTargets");
+        if (node == null) {
+            return KeywordTarget.serverDefaults();
+        }
+        if (!node.isArray() || node.isEmpty()) {
+            return Set.of();
+        }
+        Set<KeywordTarget> out = new LinkedHashSet<>();
+        node.forEach(n -> {
+            if (n.isTextual()) {
+                String v = n.asText();
+                if (v != null && !v.isBlank()) {
+                    try {
+                        out.add(KeywordTarget.valueOf(v));
+                    } catch (IllegalArgumentException ignored) {
+                        // 미인식 대상 토큰 graceful skip (DB 하위호환/오염 방어)
+                    }
+                }
             }
         });
         return out;

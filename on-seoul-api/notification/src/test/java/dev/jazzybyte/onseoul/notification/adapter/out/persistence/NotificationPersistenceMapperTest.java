@@ -144,6 +144,61 @@ class NotificationPersistenceMapperTest {
         assertThat(parsed.keywords()).containsExactly("수영");
     }
 
+    // ── keywordTargets ────────────────────────────────────────
+
+    @Test
+    @DisplayName("keywordTargets 키 부재 → serverDefaults(둘 다)로 fallback (구버전 구독 하위호환)")
+    void parse_keywordTargetsAbsent_fallsBackToServerDefaults() {
+        SubscriptionFilter f = mapper.parse("{\"keywords\":[\"수영\"]}");
+
+        assertThat(f.keywordTargets()).containsExactlyInAnyOrder(
+                dev.jazzybyte.onseoul.notification.domain.KeywordTarget.SERVICE_NAME,
+                dev.jazzybyte.onseoul.notification.domain.KeywordTarget.PLACE_NAME);
+    }
+
+    @Test
+    @DisplayName("keywordTargets 명시 → 그대로 파싱(부분집합 보존)")
+    void parse_keywordTargetsExplicit_preserved() {
+        SubscriptionFilter f = mapper.parse(
+                "{\"keywords\":[\"수영\"],\"keywordTargets\":[\"PLACE_NAME\"]}");
+
+        assertThat(f.keywordTargets()).containsExactly(
+                dev.jazzybyte.onseoul.notification.domain.KeywordTarget.PLACE_NAME);
+    }
+
+    @Test
+    @DisplayName("keywordTargets 미인식 토큰은 graceful skip 된다")
+    void parse_keywordTargetsUnknownToken_skipped() {
+        SubscriptionFilter f = mapper.parse(
+                "{\"keywords\":[\"수영\"],\"keywordTargets\":[\"PLACE_NAME\",\"BOGUS\",null,\"\"]}");
+
+        assertThat(f.keywordTargets()).containsExactly(
+                dev.jazzybyte.onseoul.notification.domain.KeywordTarget.PLACE_NAME);
+    }
+
+    @Test
+    @DisplayName("keywordTargets 빈 배열 → 빈 Set (어댑터가 매칭 시 serverDefaults로 fallback)")
+    void parse_keywordTargetsEmptyArray_emptySet() {
+        SubscriptionFilter f = mapper.parse(
+                "{\"keywords\":[\"수영\"],\"keywordTargets\":[]}");
+
+        assertThat(f.keywordTargets()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("serialize → parse 라운드트립으로 keywordTargets 복원")
+    void serialize_then_parse_roundTripKeywordTargets() {
+        SubscriptionFilter original = new SubscriptionFilter(
+                java.util.Set.of(), java.util.Set.of(), java.util.Set.of(),
+                java.util.Set.of("수영"),
+                java.util.Set.of(dev.jazzybyte.onseoul.notification.domain.KeywordTarget.PLACE_NAME));
+
+        SubscriptionFilter parsed = mapper.parse(mapper.serialize(original));
+
+        assertThat(parsed.keywordTargets()).containsExactly(
+                dev.jazzybyte.onseoul.notification.domain.KeywordTarget.PLACE_NAME);
+    }
+
     @Test
     @DisplayName("keywords 키 단독 파싱")
     void parse_keywordsOnly() {

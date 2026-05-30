@@ -80,7 +80,7 @@ class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
             condition = condition.and(PUBLIC_SERVICE_RESERVATIONS.MAX_CLASS_NAME.in(f.maxClassNames()));
         }
         if (!f.keywords().isEmpty()) {
-            condition = condition.and(keywordCondition(f.keywords()));
+            condition = condition.and(keywordCondition(f));
         }
 
         return dsl.select(
@@ -116,17 +116,23 @@ class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
     }
 
     /**
-     * 키워드 OR 절을 구성한다: (각 키워드 × 각 {@link KeywordTarget} 대상 컬럼) 모두를 OR 로 결합.
+     * 키워드 OR 절을 구성한다: (각 키워드 × 각 선택된 {@link KeywordTarget} 대상 컬럼) 모두를 OR 로 결합.
      * 하나라도 부분일치(ILIKE)하면 매칭된다.
      *
-     * <p>대상 컬럼은 {@link KeywordTarget#serverDefaults()} 를 순회해 결정한다 —
-     * 새 대상 추가 시 enum 값과 {@link #columnFor(KeywordTarget)} 매핑만 추가하면 된다.
+     * <p>대상 컬럼은 {@code filter.keywordTargets()}(사용자가 선택)를 순회해 결정한다.
+     * 비어 있으면 {@link KeywordTarget#serverDefaults()}(둘 다)로 fallback — 구버전 구독 보존.
+     * 대상이 부분집합(예: {@code {PLACE_NAME}})이면 해당 컬럼에 대해서만 ILIKE 절이 생성된다.
+     *
+     * <p>새 대상 추가 시 enum 값과 {@link #columnFor(KeywordTarget)} 매핑만 추가하면 된다.
      */
-    private Condition keywordCondition(java.util.Set<String> keywords) {
+    private Condition keywordCondition(SubscriptionFilter filter) {
+        java.util.Set<KeywordTarget> targets = filter.keywordTargets().isEmpty()
+                ? KeywordTarget.serverDefaults()
+                : filter.keywordTargets();
         Condition or = DSL.noCondition();
-        for (String raw : keywords) {
+        for (String raw : filter.keywords()) {
             String pattern = "%" + escapeLike(raw) + "%";
-            for (KeywordTarget target : KeywordTarget.serverDefaults()) {
+            for (KeywordTarget target : targets) {
                 or = or.or(columnFor(target).likeIgnoreCase(pattern, LIKE_ESCAPE));
             }
         }

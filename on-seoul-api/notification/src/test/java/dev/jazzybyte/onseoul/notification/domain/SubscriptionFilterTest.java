@@ -55,6 +55,17 @@ class SubscriptionFilterTest {
     }
 
     @Test
+    @DisplayName("isEmpty() — keywordTargets만 채워도 여전히 빈 구독(대상은 조건이 아니다)")
+    void isEmpty_trueWhenOnlyKeywordTargetsPopulated() {
+        SubscriptionFilter onlyTargets = new SubscriptionFilter(
+                Set.of(), Set.of(), Set.of(), Set.of(),
+                Set.of(KeywordTarget.SERVICE_NAME, KeywordTarget.PLACE_NAME));
+
+        assertThat(onlyTargets.keywordTargets()).isNotEmpty();
+        assertThat(onlyTargets.isEmpty()).isTrue();
+    }
+
+    @Test
     @DisplayName("compact constructor — 결과 Set은 변경 불가능(immutable)")
     void normalizedSets_areUnmodifiable() {
         SubscriptionFilter f = new SubscriptionFilter(

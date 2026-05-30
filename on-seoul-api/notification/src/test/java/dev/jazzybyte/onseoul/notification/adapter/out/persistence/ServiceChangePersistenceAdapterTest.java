@@ -388,6 +388,58 @@ class ServiceChangePersistenceAdapterTest {
     }
 
     @Test
+    @DisplayName("keywordTargets={PLACE_NAME} — service_name에만 키워드 있으면 매칭 안됨(대상 부분집합)")
+    void loadFiltered_keywordTargetPlaceNameOnly_doesNotMatchServiceName() {
+        insertReservationWithNames("OA-1", "여름 수영 강습", "강남센터");   // service_name에만 "수영"
+        insertReservationWithNames("OA-2", "요가 클래스", "송파수영장");     // place_name에만 "수영"
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        insertChange("OA-1", "UPDATED", "f", null, null, now);
+        insertChange("OA-2", "UPDATED", "f", null, null, now);
+
+        List<ServiceChange> result = adapter.loadFiltered(
+                new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("수영"),
+                        Set.of(dev.jazzybyte.onseoul.notification.domain.KeywordTarget.PLACE_NAME)),
+                null, null);
+
+        assertThat(result).extracting(ServiceChange::serviceId).containsExactly("OA-2");
+    }
+
+    @Test
+    @DisplayName("keywordTargets={SERVICE_NAME} — place_name에만 키워드 있으면 매칭 안됨")
+    void loadFiltered_keywordTargetServiceNameOnly_doesNotMatchPlaceName() {
+        insertReservationWithNames("OA-1", "여름 수영 강습", "강남센터");
+        insertReservationWithNames("OA-2", "요가 클래스", "송파수영장");
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        insertChange("OA-1", "UPDATED", "f", null, null, now);
+        insertChange("OA-2", "UPDATED", "f", null, null, now);
+
+        List<ServiceChange> result = adapter.loadFiltered(
+                new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("수영"),
+                        Set.of(dev.jazzybyte.onseoul.notification.domain.KeywordTarget.SERVICE_NAME)),
+                null, null);
+
+        assertThat(result).extracting(ServiceChange::serviceId).containsExactly("OA-1");
+    }
+
+    @Test
+    @DisplayName("keywordTargets 비면 serverDefaults(둘 다)로 fallback — 어느 컬럼이든 매칭")
+    void loadFiltered_emptyTargets_fallsBackToBoth() {
+        insertReservationWithNames("OA-1", "여름 수영 강습", "강남센터");
+        insertReservationWithNames("OA-2", "요가 클래스", "송파수영장");
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        insertChange("OA-1", "UPDATED", "f", null, null, now);
+        insertChange("OA-2", "UPDATED", "f", null, null, now);
+
+        // 4-인자 생성자 → keywordTargets 빈 집합 → 어댑터가 serverDefaults로 fallback
+        List<ServiceChange> result = adapter.loadFiltered(
+                new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("수영")),
+                null, null);
+
+        assertThat(result).extracting(ServiceChange::serviceId)
+                .containsExactlyInAnyOrder("OA-1", "OA-2");
+    }
+
+    @Test
     @DisplayName("결과는 changed_at ASC 순으로 정렬된다")
     void loadFiltered_orderedByChangedAtAsc() {
         insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사");

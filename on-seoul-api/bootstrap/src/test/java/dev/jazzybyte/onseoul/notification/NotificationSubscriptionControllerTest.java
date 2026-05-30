@@ -131,6 +131,42 @@ class NotificationSubscriptionControllerTest {
     }
 
     @Test
+    @DisplayName("POST /api/notifications/subscriptions — 잘못된 keywordTargets 값(FOO) → 400, useCase 미호출")
+    void create_invalidKeywordTarget_returns400() throws Exception {
+        mockMvc.perform(post("/api/notifications/subscriptions")
+                        .requestAttr("userId", 1L)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"filter\":{\"keywords\":[\"수영\"],\"keywordTargets\":[\"FOO\"]},\"channels\":[\"EMAIL\"]}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(createUseCase);
+    }
+
+    @Test
+    @DisplayName("POST /api/notifications/subscriptions — 소문자 keywordTargets(service_name) → 400")
+    void create_lowercaseKeywordTarget_returns400() throws Exception {
+        mockMvc.perform(post("/api/notifications/subscriptions")
+                        .requestAttr("userId", 1L)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"filter\":{\"keywords\":[\"수영\"],\"keywordTargets\":[\"service_name\"]},\"channels\":[\"EMAIL\"]}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(createUseCase);
+    }
+
+    @Test
+    @DisplayName("POST /api/notifications/subscriptions — 유효 keywordTargets(SERVICE_NAME) happy path → 201")
+    void create_validKeywordTarget_returns201() throws Exception {
+        when(createUseCase.create(eq(1L), any(CreateSubscriptionCommand.class)))
+                .thenReturn(sampleView(12L, 1L));
+
+        mockMvc.perform(post("/api/notifications/subscriptions")
+                        .requestAttr("userId", 1L)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"filter\":{\"keywords\":[\"수영\"],\"keywordTargets\":[\"SERVICE_NAME\"]},\"channels\":[\"EMAIL\"]}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(12));
+    }
+
+    @Test
     @DisplayName("POST /api/notifications/subscriptions — 중복 → 409")
     void create_duplicate_returns409() throws Exception {
         when(createUseCase.create(eq(1L), any()))

@@ -155,6 +155,63 @@ class NotificationSubscriptionServiceTest {
     }
 
     @Test
+    @DisplayName("create() — 키워드 있고 keywordTargets 비면 serverDefaults(둘 다)로 정규화된다")
+    void create_keywordsWithoutTargets_normalizedToServerDefaults() {
+        SubscriptionFilter kw = new SubscriptionFilter(null, null, null, Set.of("수영"));
+        CreateSubscriptionCommand cmd = new CreateSubscriptionCommand(
+                kw, Set.of(NotificationChannel.EMAIL));
+        NotificationSubscription saved = NotificationSubscription.ofPersistence(
+                103L, 1L, "{\"keywords\":[\"수영\"]}",
+                Set.of(NotificationChannel.EMAIL), null, Instant.now());
+        when(savePort.insert(any())).thenReturn(saved);
+
+        service.create(1L, cmd);
+
+        org.mockito.ArgumentCaptor<NotificationSubscription> captor =
+                org.mockito.ArgumentCaptor.forClass(NotificationSubscription.class);
+        verify(savePort).insert(captor.capture());
+        assertThat(captor.getValue().getParsedFilter().keywordTargets())
+                .containsExactlyInAnyOrder(
+                        dev.jazzybyte.onseoul.notification.domain.KeywordTarget.SERVICE_NAME,
+                        dev.jazzybyte.onseoul.notification.domain.KeywordTarget.PLACE_NAME);
+    }
+
+    @Test
+    @DisplayName("create() — 사용자가 고른 keywordTargets(부분집합)는 그대로 보존된다")
+    void create_userSelectedTargets_preserved() {
+        SubscriptionFilter kw = new SubscriptionFilter(null, null, null, Set.of("수영"),
+                Set.of(dev.jazzybyte.onseoul.notification.domain.KeywordTarget.PLACE_NAME));
+        CreateSubscriptionCommand cmd = new CreateSubscriptionCommand(
+                kw, Set.of(NotificationChannel.EMAIL));
+        NotificationSubscription saved = NotificationSubscription.ofPersistence(
+                104L, 1L, "{\"keywords\":[\"수영\"]}",
+                Set.of(NotificationChannel.EMAIL), null, Instant.now());
+        when(savePort.insert(any())).thenReturn(saved);
+
+        service.create(1L, cmd);
+
+        org.mockito.ArgumentCaptor<NotificationSubscription> captor =
+                org.mockito.ArgumentCaptor.forClass(NotificationSubscription.class);
+        verify(savePort).insert(captor.capture());
+        assertThat(captor.getValue().getParsedFilter().keywordTargets())
+                .containsExactly(dev.jazzybyte.onseoul.notification.domain.KeywordTarget.PLACE_NAME);
+    }
+
+    @Test
+    @DisplayName("create() — keywordTargets만 채우고 다른 조건 다 비면 빈 구독으로 거부(INVALID_INPUT)")
+    void create_onlyKeywordTargets_throws400() {
+        SubscriptionFilter onlyTargets = new SubscriptionFilter(null, null, null, null,
+                Set.of(dev.jazzybyte.onseoul.notification.domain.KeywordTarget.SERVICE_NAME));
+        CreateSubscriptionCommand cmd = new CreateSubscriptionCommand(
+                onlyTargets, Set.of(NotificationChannel.EMAIL));
+
+        assertThatThrownBy(() -> service.create(1L, cmd))
+                .isInstanceOf(OnSeoulApiException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.INVALID_INPUT);
+        verify(savePort, never()).insert(any());
+    }
+
+    @Test
     @DisplayName("create() — DataIntegrityViolation → SUBSCRIPTION_CONFLICT")
     void create_duplicate_throwsConflict() {
         CreateSubscriptionCommand cmd = new CreateSubscriptionCommand(

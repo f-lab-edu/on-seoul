@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.notification.application;
 
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
+import dev.jazzybyte.onseoul.notification.domain.KeywordTarget;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
 import dev.jazzybyte.onseoul.notification.domain.SubscriptionFilter;
@@ -58,6 +59,7 @@ public class NotificationSubscriptionService implements
         SubscriptionFilter filter = cmd.filter() != null ? cmd.filter() : SubscriptionFilter.empty();
         requireAtLeastOneCondition(filter);
         requireKeywordLimit(filter);
+        filter = normalizeKeywordTargets(filter);
 
         NotificationSubscription subscription =
                 NotificationSubscription.create(userId, filter, channels);
@@ -75,9 +77,11 @@ public class NotificationSubscriptionService implements
     @Transactional
     public SubscriptionView update(Long userId, Long subscriptionId, UpdateSubscriptionCommand cmd) {
         requireAnyUpdate(cmd);
-        if (cmd.filter() != null) {
-            requireAtLeastOneCondition(cmd.filter());
-            requireKeywordLimit(cmd.filter());
+        SubscriptionFilter filter = cmd.filter();
+        if (filter != null) {
+            requireAtLeastOneCondition(filter);
+            requireKeywordLimit(filter);
+            filter = normalizeKeywordTargets(filter);
         }
         NotificationSubscription existing = loadOwned(userId, subscriptionId);
 
@@ -86,7 +90,7 @@ public class NotificationSubscriptionService implements
             channels = requireNonEmptyChannels(channels);
         }
         NotificationSubscription updated =
-                saveSubscriptionPort.updatePartial(existing.getId(), cmd.filter(), channels);
+                saveSubscriptionPort.updatePartial(existing.getId(), filter, channels);
         return toView(updated);
     }
 
@@ -124,6 +128,20 @@ public class NotificationSubscriptionService implements
             throw new OnSeoulApiException(ErrorCode.INVALID_INPUT,
                     "필터 조건(상태/지역/카테고리/키워드) 중 최소 1개는 지정해야 합니다.");
         }
+    }
+
+    /**
+     * 키워드 대상 정규화: 키워드가 있는데 keywordTargets 가 비어 있으면
+     * {@link KeywordTarget#serverDefaults()}(둘 다)로 채운다 — 기존 동작 보존 + 하위호환.
+     * 키워드 자체가 없으면 대상은 무의미하므로 그대로 둔다.
+     */
+    private SubscriptionFilter normalizeKeywordTargets(SubscriptionFilter filter) {
+        if (filter.keywords().isEmpty() || !filter.keywordTargets().isEmpty()) {
+            return filter;
+        }
+        return new SubscriptionFilter(
+                filter.statuses(), filter.areaNames(), filter.maxClassNames(),
+                filter.keywords(), KeywordTarget.serverDefaults());
     }
 
     /** 키워드 개수 제한 가드. */
