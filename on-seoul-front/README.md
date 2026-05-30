@@ -161,6 +161,20 @@ pnpm build
 
 ---
 
+## 배포
+
+| 항목 | 값 |
+|---|---|
+| 플랫폼 | Vercel |
+| 서비스 URL | `https://on-seoul.jazzz.dev` |
+| Production 브랜치 | `main` |
+| Preview 브랜치 | `on-seoul-front` |
+| DNS | Cloudflare → `on-seoul` CNAME → `cname.vercel-dns.com` |
+
+상세 설정은 [`docs/deployment-strategy.md`](./docs/deployment-strategy.md) 참조.
+
+---
+
 ## 바이브코딩 규약
 
 `CLAUDE.md`에 다음을 고정해두고 작업한다.

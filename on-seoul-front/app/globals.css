@@ -128,3 +128,17 @@
     @apply font-sans;
   }
 }
+
+/* 접근성: prefers-reduced-motion=reduce 사용자에게는 모든 모션을 거의 제거한다.
+   Tailwind의 motion-safe: 접두사가 적용되지 않은 서드파티/shadcn 유틸리티(예: animate-pulse,
+   animate-spin, data-open:animate-in)까지 일괄 처리하기 위한 안전망. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

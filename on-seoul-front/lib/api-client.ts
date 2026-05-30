@@ -139,6 +139,13 @@ export const apiClient = {
   ): Promise<T> {
     return request<T>(path, { ...options, method: "POST", json });
   },
+  patch<T>(
+    path: string,
+    json?: unknown,
+    options?: Omit<RequestOptions, "json" | "_retry">,
+  ): Promise<T> {
+    return request<T>(path, { ...options, method: "PATCH", json });
+  },
   delete<T = void>(
     path: string,
     options?: Omit<RequestOptions, "json" | "_retry">,

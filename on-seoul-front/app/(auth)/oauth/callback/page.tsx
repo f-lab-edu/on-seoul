@@ -20,7 +20,7 @@ function CallbackSpinner() {
       >
         <span
           aria-hidden="true"
-          className="size-6 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground"
+          className="size-6 rounded-full border-2 border-muted-foreground/30 border-t-foreground motion-safe:animate-spin"
         />
         로그인 처리 중…
       </div>
