@@ -10,7 +10,6 @@ import dev.jazzybyte.onseoul.collection.port.out.LoadPublicServicePort;
 import dev.jazzybyte.onseoul.collection.port.out.SaveCollectionHistoryPort;
 import dev.jazzybyte.onseoul.collection.port.out.SavePublicServicePort;
 import dev.jazzybyte.onseoul.collection.port.out.SeoulDatasetFetchPort;
-import dev.jazzybyte.onseoul.collection.application.GeocodingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -64,8 +63,8 @@ public class CollectDatasetService implements CollectDatasetUseCase {
     }
 
     private boolean collectOne(ApiSourceCatalog source, Set<String> allSeenServiceIds) {
-        CollectionHistory history = CollectionHistory.create(source.getId());
-        historyPort.save(history);
+        // save()는 생성된 PK가 담긴 새 도메인 객체를 반환하므로 반환값을 재할당해 id를 캡처한다.
+        CollectionHistory history = historyPort.save(CollectionHistory.create(source.getId()));
 
         long startMs = System.currentTimeMillis();
         try {
@@ -78,8 +77,9 @@ public class CollectDatasetService implements CollectDatasetUseCase {
             UpsertResult result = upsertService.upsert(entities, history.getId());
             int durationMs = (int) (System.currentTimeMillis() - startMs);
 
+            // complete()는 in-place 변경 → 같은 id를 가진 history를 다시 저장해 기존 행을 update.
             history.complete(entities.size(), result.newCount(), result.updatedCount(), 0, durationMs);
-            historyPort.save(history);
+            history = historyPort.save(history);
 
             log.info("소스 수집 완료 — datasetId={}, total={}, new={}, updated={}, unchanged={}",
                     source.getDatasetId(), entities.size(),
@@ -88,8 +88,9 @@ public class CollectDatasetService implements CollectDatasetUseCase {
 
         } catch (Exception e) {
             int durationMs = (int) (System.currentTimeMillis() - startMs);
+            // 일관성을 위해 반환값을 재할당(기존 행 update). 이후 history는 사용되지 않는다.
             history.fail(e.getMessage(), durationMs);
-            historyPort.save(history);
+            history = historyPort.save(history);
             log.error("소스 수집 실패 — datasetId={}, error={}", source.getDatasetId(), e.getMessage(), e);
             return false;
         }

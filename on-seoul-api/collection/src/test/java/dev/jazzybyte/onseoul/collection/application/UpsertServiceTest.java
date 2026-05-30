@@ -17,6 +17,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
 
@@ -244,5 +245,18 @@ class UpsertServiceTest {
         ArgumentCaptor<List<ServiceChangeLog>> logCaptor = ArgumentCaptor.forClass(List.class);
         verify(saveServiceChangeLogPort).saveAll(logCaptor.capture());
         assertThat(logCaptor.getValue().get(0).getCollectionId()).isEqualTo(42L);
+    }
+
+    @Test
+    @DisplayName("collectionId가 null이면 NOT NULL 제약 위반 전에 NPE로 빠르게 실패한다")
+    void upsert_nullCollectionId_failsFast() {
+        List<PublicServiceReservation> incoming = List.of(reservation("SVC-001"));
+
+        assertThatNullPointerException()
+                .isThrownBy(() -> service.upsert(incoming, null))
+                .withMessageContaining("collectionId must not be null");
+
+        // 가드가 DB 접근 이전에 동작해야 한다 (부분 저장 후 롤백 방지).
+        verifyNoInteractions(loadPublicServicePort, savePublicServicePort, saveServiceChangeLogPort);
     }
 }

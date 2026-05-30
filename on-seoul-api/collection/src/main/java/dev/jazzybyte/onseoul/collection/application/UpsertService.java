@@ -33,6 +33,9 @@ public class UpsertService {
             return UpsertResult.empty();
         }
 
+        Objects.requireNonNull(collectionId,
+                "collectionId must not be null — CollectionHistory 저장 후 생성된 ID를 전달해야 함");
+
         List<String> incomingIds = incoming.stream()
                 .map(PublicServiceReservation::getServiceId)
                 .toList();
