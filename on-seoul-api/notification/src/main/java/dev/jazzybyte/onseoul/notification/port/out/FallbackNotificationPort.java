@@ -17,7 +17,6 @@ import java.util.Set;
  * <h3>구현체 후보</h3>
  * <ul>
  *   <li>{@code SmtpFallbackNotificationAdapter} — JavaMailSender 직접 SMTP 발송 (EMAIL 채널)</li>
- *   <li>{@code InAppFallbackNotificationAdapter} — DB {@code notification_outbox} 테이블 저장 (채널 무관)</li>
  *   <li>{@code LogOnlyFallbackNotificationAdapter} — 로그·메트릭만 기록 (현재 기본값, 스텁)</li>
  * </ul>
  *

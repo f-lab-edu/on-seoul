@@ -157,24 +157,54 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 - [x] `ResilientPushNotificationAdapter` — `@Primary` 데코레이터. Knock 호출 → `RuntimeException` catch → `FallbackNotificationPort` 라우팅. `notification.push.fallback{reason}` metric 기록
 - [x] `LogOnlyFallbackNotificationAdapter` — `@ConditionalOnMissingBean` 기본 스텁. 로그·메트릭만 기록, 실 발송 없음. 실 구현체 등록 시 자동 교체
 
-**미구현 (Phase 6-2 본 작업)**
+**구현 완료**
 
-- [ ] `FallbackReason` 분류 고도화 — `classifyReason()`에서 예외 타입·HTTP 상태코드로 세분화
+- [x] `FallbackReason` 분류 고도화 — `KnockNotificationAdapter.classifyException()`에서 `TimeoutException` → `KNOCK_TIMEOUT`, 5xx → `KNOCK_SERVER_ERROR`, 그 외 → `KNOCK_UNAVAILABLE` 분류. `KnockDispatchException`이 `FallbackReason`을 구조화 필드로 보유하여 `ResilientPushNotificationAdapter`가 문자열 매칭 없이 추출
+- [x] `ResilientPushNotificationAdapter` 테스트 — 성공/실패→fallback 호출/KNOCK_TIMEOUT·KNOCK_SERVER_ERROR 분류/KNOCK_UNAVAILABLE 폴백/metric 등록 6개 시나리오
+
+**잔여 구현**
+
+- [ ] **`ResilientPushNotificationAdapter` 예외 삼킴 버그 수정** — 현재 `LogOnly.sendFallback()`이 예외를 삼켜 스케줄러가 발송 성공으로 오인 → `txBSuccess()` 호출 → dispatch `SUCCESS` + `last_notified_at` 전진. Knock 실패 후 fallback 호출 완료 시 rethrow 추가 필요 (retry 정상 동작 보장)
 - [ ] Resilience4j `CircuitBreaker` 적용 — Knock 연속 실패 시 fast-fail + `KNOCK_CIRCUIT_OPEN` 트리거
   - 의존성 추가: `resilience4j-spring-boot3`
   - `CircuitBreakerConfig`: `slidingWindowSize=10`, `failureRateThreshold=50`, `waitDurationInOpenState=60s`
-- [ ] `SmtpFallbackNotificationAdapter` — JavaMailSender 직접 SMTP 발송 (EMAIL 채널 전용)
-  - `FallbackNotificationPort` 구현, `@ConditionalOnProperty(name="notification.fallback.smtp.enabled")`
-  - `dispatchId`를 `X-Dispatch-Id` 헤더 또는 제목에 포함 (idempotency)
-  - SMS 채널은 로그만 (Twilio 직접 연동은 별도 검토)
-- [ ] `InAppFallbackNotificationAdapter` (선택) — `notification_outbox` 테이블에 미발송 알림 저장
-  - 프론트엔드가 폴링 또는 SSE로 읽어가는 구조 (별도 API 설계 필요)
-- [ ] `ResilientPushNotificationAdapter` 테스트 — Knock 성공/실패/timeout 시나리오, fallback 호출 여부, metric 등록
-- [ ] `LogOnlyFallbackNotificationAdapter` 교체 후 기존 Knock 테스트 와이어링 재확인
+  - `ResilientPushNotificationAdapter`에 `@CircuitBreaker` 적용, open 상태에서 `CallNotPermittedException` → `KNOCK_CIRCUIT_OPEN` 분류
+- [ ] `OneSignalFallbackNotificationAdapter` — `FallbackNotificationPort` OneSignal REST API 구현체
+  - `@ConditionalOnProperty(name="notification.fallback.onesignal.enabled")`
+  - OneSignal `POST /api/v1/notifications` 호출 (EMAIL/SMS 채널 모두 커버)
+  - `dispatchId`를 `external_id`로 전달 (멱등성 보장)
+  - `LogOnlyFallbackNotificationAdapter` 교체 대상
+- [ ] `OneSignalFallbackNotificationAdapter` 구현 후 `LogOnlyFallbackNotificationAdapter` 와이어링 재확인 및 테스트 추가
 
 **설계 원칙**
-- `FallbackNotificationPort`는 **절대 예외를 던지지 않는다** — 발송 실패 시 로그·metric에 기록하고 종료. Scheduler는 `last_notified_at` 미갱신으로 다음 배치에서 재시도.
-- SMTP fallback도 실패하면 `notification_dispatch.status = FAILED`로 기록 (TxHelper가 처리).
+- `FallbackNotificationPort`는 **예외를 던지지 않는다** — 발송 실패 시 로그·metric에 기록하고 종료. Knock 실패 시 rethrow는 `ResilientPushNotificationAdapter`가 담당하며, fallback 자체 실패는 `DispatchRetryScheduler`(1시간 주기, 최대 5회)의 재시도가 커버한다.
+- fallback이 `LogOnly`인 동안은 Knock 실패 후 rethrow → `txBFailure` → retry 경로가 유일한 복원 수단이다.
+
+---
+
+## Phase 6-3. notification BC — 구독 모델 개선 및 트리거 전환
+
+> serviceId 고정 구독을 조건 기반 구독으로 전환하고, 알림 발송 트리거를 이벤트 구동 방식으로 교체한다.
+
+**구독 모델 개선**
+
+- [x] `notification_subscriptions.service_id` 컬럼 제거 — `UNIQUE(user_id, service_id)` 제약 삭제, 데이터 초기화
+- [x] `SubscriptionFilter` record에 `keywordTargets: Set<KeywordTarget>` 추가 (5번째 컴포넌트)
+- [x] `KeywordTarget` enum 신설 — `SERVICE_NAME`, `PLACE_NAME`. `serverDefaults()`는 기존 동작 보존 + 하위호환 fallback 역할
+- [x] `ServiceChangePersistenceAdapter` — `keywordTargets`를 통해 매칭 대상 컬럼을 동적으로 선택. `serverDefaults()` 직접 사용 제거
+- [x] `SubscriptionFilter.isEmpty()` — `keywordTargets`를 조건 판정에서 의도적 제외 (대상만으로는 빈 구독)
+- [x] `FilterDto` — `keywordTargets: Set<String>` 와이어 타입, `toDomain()`에서 `KeywordTarget.valueOf()` 변환 (미인식 값 → 400)
+- [x] `NotificationPersistenceMapper` — `keywordTargets` 키 부재(구 JSONB) → `serverDefaults()` fallback, 미인식 토큰 graceful skip
+- [x] `NotificationSubscriptionService.normalizeKeywordTargets()` — 키워드 있는데 targets 비어있으면 `serverDefaults()` 주입
+- [x] `NotificationSubscriptionJpaEntity` — `filter`·`channels` 필드에 `@JdbcTypeCode(SqlTypes.JSON)` 추가 (Hibernate 6 JSONB 바인딩 오류 수정)
+- [x] `CreateSubscriptionRequest` — `@AssertTrue` 빈 구독 가드 추가 (DTO 레이어 1차 방어)
+
+**알림 발송 트리거 전환**
+
+- [x] `common.event.CollectionCompletedEvent` record 신설 — collection↔notification 직접 의존 없이 이벤트 공유
+- [x] `CollectionScheduler` — `collectAll()` 완료 후 `finally` 블록에서 이벤트 발행 (예외 발생 시에도 발행)
+- [x] `NotificationScheduler` — `@Scheduled(fixedDelayString)` 제거 → `@Async @EventListener(CollectionCompletedEvent)` 전환. `AtomicBoolean`으로 중복 실행 방지
+- [x] `OnSeoulApiApplication` — `@EnableAsync` 추가
 
 ---
 
