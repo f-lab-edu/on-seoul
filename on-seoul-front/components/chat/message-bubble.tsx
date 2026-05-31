@@ -35,7 +35,7 @@ export function MessageBubble({ role, content, streaming = false }: MessageBubbl
         {streaming && !isUser && (
           <span
             aria-hidden="true"
-            className="ml-0.5 inline-block h-4 w-[2px] translate-y-0.5 animate-pulse bg-current align-middle"
+            className="ml-0.5 inline-block h-4 w-[2px] translate-y-0.5 bg-current align-middle motion-safe:animate-pulse"
           />
         )}
       </div>

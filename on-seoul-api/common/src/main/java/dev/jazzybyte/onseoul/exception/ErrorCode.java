@@ -34,6 +34,10 @@ public enum ErrorCode {
     // ── 채팅 (CHAT_*) ──────────────────────────────────────────────────────
     CHAT_ROOM_NOT_FOUND(404, "CHAT_ROOM_NOT_FOUND", "대화방을 찾을 수 없습니다."),
 
+    // ── 알림 (NOTIFICATION_*) ──────────────────────────────────────────────
+    SUBSCRIPTION_NOT_FOUND(404, "SUBSCRIPTION_NOT_FOUND", "구독을 찾을 수 없습니다."),
+    SUBSCRIPTION_CONFLICT(409, "SUBSCRIPTION_CONFLICT", "이미 동일한 서비스에 대한 구독이 존재합니다."),
+
     // ── 공통 서버 오류 (SERVER_*) ──────────────────────────────────────────
     SERVER_ERROR(500, "SERVER_ERROR", "서버 내부 오류가 발생했습니다."),
     INVALID_INPUT(400, "INVALID_INPUT", "입력값이 올바르지 않습니다.");

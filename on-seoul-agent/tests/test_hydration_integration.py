@@ -221,11 +221,11 @@ class TestCollectResultsHydratedServicesPriority:
     """hydrated_services 가 있으면 sql/vector_results 는 무시된다."""
 
     def _make_agent(self, answer_text: str = "답변") -> AnswerAgent:
-        from agents.answer_agent import _AnswerOutput, _TitleOutput
+        from agents.answer_agent import _TitleOutput
 
         agent = AnswerAgent.__new__(AnswerAgent)
         answer_chain = MagicMock()
-        answer_chain.ainvoke = AsyncMock(return_value=_AnswerOutput(answer=answer_text))
+        answer_chain.ainvoke = AsyncMock(return_value=answer_text)
         agent._answer_chain = answer_chain
         title_chain = MagicMock()
         title_chain.ainvoke = AsyncMock(return_value=_TitleOutput(title="제목"))

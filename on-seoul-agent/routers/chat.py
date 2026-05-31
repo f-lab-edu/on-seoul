@@ -54,7 +54,10 @@ def sse_frame(event: str, data: dict) -> bytes:
         data: <json>
         (빈 줄)
     """
-    body = json.dumps(data, ensure_ascii=False)
+    # default=str — service_cards 가 datetime 등 비-JSON-기본 타입을 포함할 수 있으므로
+    # ISO 8601 문자열로 폴백 직렬화한다. answer_agent.py / nodes.py 의 다른 직렬화 지점과
+    # 동일한 컨벤션을 적용해 SSE 스트림 중단(TypeError)을 방지한다.
+    body = json.dumps(data, ensure_ascii=False, default=str)
     return f"id: {uuid.uuid4()}\nevent: {event}\ndata: {body}\n\n".encode()
 
 
@@ -109,6 +112,7 @@ async def _stream(
         sql_results=None,
         vector_results=None,
         map_results=None,
+        service_cards=None,
         answer=None,
         title=None,
         trace=None,
@@ -138,6 +142,7 @@ async def _stream(
                         "intent": intent.value if intent is not None else None,
                         "title": result.get("title"),
                         "cache_hit": bool(result.get("cache_hit")),
+                        "service_cards": result.get("service_cards") or [],
                     }
                     if result.get("error"):
                         logger.error(
@@ -147,6 +152,9 @@ async def _stream(
                             result["error"],
                         )
                         payload["error"] = "서비스 처리 중 오류가 발생했습니다."
+                        # 에러 시 부분 결과 카드는 노출하지 않는다 —
+                        # 에러 메시지 + 정상 카드 조합으로 인한 UI 혼란 방지.
+                        payload["service_cards"] = []
                         yield sse_frame("workflow_error", payload)
                     else:
                         logger.info(

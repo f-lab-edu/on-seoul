@@ -1,14 +1,14 @@
 package dev.jazzybyte.onseoul.auth;
 
-import dev.jazzybyte.onseoul.adapter.in.security.OAuth2LoginSuccessHandler;
-import dev.jazzybyte.onseoul.adapter.in.web.AuthController;
-import dev.jazzybyte.onseoul.adapter.in.web.GlobalExceptionHandler;
-import dev.jazzybyte.onseoul.domain.model.UserStatus;
-import dev.jazzybyte.onseoul.domain.port.in.GetMeUseCase;
-import dev.jazzybyte.onseoul.domain.port.in.LogoutUseCase;
-import dev.jazzybyte.onseoul.domain.port.in.MeResult;
-import dev.jazzybyte.onseoul.domain.port.in.RefreshTokenUseCase;
-import dev.jazzybyte.onseoul.domain.port.in.TokenResponse;
+import dev.jazzybyte.onseoul.user.adapter.in.security.OAuth2LoginSuccessHandler;
+import dev.jazzybyte.onseoul.user.adapter.in.web.AuthController;
+import dev.jazzybyte.onseoul.shared.adapter.in.web.GlobalExceptionHandler;
+import dev.jazzybyte.onseoul.user.domain.UserStatus;
+import dev.jazzybyte.onseoul.user.port.in.GetMeUseCase;
+import dev.jazzybyte.onseoul.user.port.in.LogoutUseCase;
+import dev.jazzybyte.onseoul.user.port.in.MeResult;
+import dev.jazzybyte.onseoul.user.port.in.RefreshTokenUseCase;
+import dev.jazzybyte.onseoul.user.port.in.TokenResponse;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import jakarta.servlet.http.Cookie;
@@ -60,7 +60,7 @@ class AuthControllerTest {
     @DisplayName("POST /auth/token/refresh - 유효한 refresh_token 쿠키로 새 토큰을 Set-Cookie로 반환한다")
     void refresh_validCookie_returnsNewTokensAsSetCookie() throws Exception {
         when(refreshTokenUseCase.refresh("valid-refresh-token"))
-                .thenReturn(new TokenResponse("new-access", "new-refresh"));
+                .thenReturn(new TokenResponse(42L, "new-access", "new-refresh"));
         when(cookieHelper.buildAccessCookie("new-access"))
                 .thenReturn(org.springframework.http.ResponseCookie
                         .from("access_token", "new-access").path("/").maxAge(900).build());
@@ -139,7 +139,7 @@ class AuthControllerTest {
     @Test
     @DisplayName("GET /auth/me - 유효한 토큰으로 사용자 정보를 반환한다")
     void me_validToken_returnsUserInfo() throws Exception {
-        when(getMeUseCase.getMe(1L)).thenReturn(new MeResult(1L, "홍길동", UserStatus.ACTIVE));
+        when(getMeUseCase.getMe(1L)).thenReturn(new MeResult(1L, "홍길동", null, UserStatus.ACTIVE));
 
         mockMvc.perform(get("/auth/me")
                         .requestAttr("userId", 1L))

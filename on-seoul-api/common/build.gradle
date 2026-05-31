@@ -3,4 +3,8 @@ dependencies {
     api 'org.slf4j:slf4j-api'
 
     api 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+
+    // EncryptionProperties @ConfigurationProperties 메타데이터 생성
+    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
 }

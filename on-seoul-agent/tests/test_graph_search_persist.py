@@ -10,7 +10,7 @@ test_search_persist_node.py 의 단위 테스트에서 커버한다.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agents.answer_agent import AnswerAgent, _AnswerOutput, _TitleOutput
+from agents.answer_agent import AnswerAgent, _TitleOutput
 from agents.graph import AgentGraph
 from schemas.search import SearchChannel
 from schemas.state import IntentType
@@ -279,8 +279,8 @@ class TestSelfCorrectionPersistOnlyLastAttempt:
         answer_chain = MagicMock()
         answer_chain.ainvoke = AsyncMock(
             side_effect=[
-                _AnswerOutput(answer=""),
-                _AnswerOutput(answer="수영장 안내입니다."),
+                "",
+                "수영장 안내입니다.",
             ]
         )
         agent._answer_chain = answer_chain

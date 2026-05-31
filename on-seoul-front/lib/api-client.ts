@@ -1,7 +1,7 @@
 /**
  * 모든 브라우저 측 API 호출의 단일 진입점.
  * - httpOnly 쿠키 기반 인증이므로 항상 `credentials: 'include'`.
- * - 401 응답은 `/auth/refresh`를 single-flight로 1회 시도 후 원요청을 재시도한다.
+ * - 401 응답은 `/auth/token/refresh`를 single-flight로 1회 시도 후 원요청을 재시도한다.
  * - refresh 자체가 401이면 `auth:logout` 이벤트를 발행하고 즉시 실패.
  *
  * CLAUDE.md A-2/A-4 규칙을 만족한다.
@@ -50,7 +50,7 @@ function refreshOnce(): Promise<void> {
   if (refreshInFlight) return refreshInFlight;
 
   refreshInFlight = (async () => {
-    const res = await fetch(`${getBaseUrl()}/auth/refresh`, {
+    const res = await fetch(`${getBaseUrl()}/auth/token/refresh`, {
       method: "POST",
       credentials: "include",
     });
@@ -104,7 +104,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   if (res.status === 401) {
     // refresh 요청 자체가 401이거나 이미 재시도한 요청이면 즉시 실패.
-    if (_retry || path === "/auth/refresh") {
+    if (_retry || path === "/auth/token/refresh") {
       throw new ApiError(401, "Unauthorized", await safeBody(res));
     }
     await refreshOnce();
@@ -138,6 +138,13 @@ export const apiClient = {
     options?: Omit<RequestOptions, "json" | "_retry">,
   ): Promise<T> {
     return request<T>(path, { ...options, method: "POST", json });
+  },
+  patch<T>(
+    path: string,
+    json?: unknown,
+    options?: Omit<RequestOptions, "json" | "_retry">,
+  ): Promise<T> {
+    return request<T>(path, { ...options, method: "PATCH", json });
   },
   delete<T = void>(
     path: string,

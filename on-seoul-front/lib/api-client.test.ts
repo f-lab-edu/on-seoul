@@ -61,7 +61,7 @@ describe("apiClient", () => {
           }
           return jsonResponse(200, { id: 1 });
         }
-        if (url.endsWith("/auth/refresh")) {
+        if (url.endsWith("/auth/token/refresh")) {
           return new Response(null, { status: 204 });
         }
         return new Response(null, { status: 500 });
@@ -71,7 +71,7 @@ describe("apiClient", () => {
     const data = await apiClient.get<{ id: number }>("/auth/me");
 
     expect(data).toEqual({ id: 1 });
-    const refreshCalls = calls.filter((c) => c.url.endsWith("/auth/refresh"));
+    const refreshCalls = calls.filter((c) => c.url.endsWith("/auth/token/refresh"));
     expect(refreshCalls).toHaveLength(1);
     const meCalls = calls.filter((c) => c.url.endsWith("/auth/me"));
     expect(meCalls).toHaveLength(2);
@@ -85,7 +85,7 @@ describe("apiClient", () => {
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         calls.push({ url, init });
-        if (url.endsWith("/auth/refresh")) {
+        if (url.endsWith("/auth/token/refresh")) {
           refreshCount += 1;
           // refresh를 약간 지연시켜 single-flight를 검증.
           await new Promise((r) => setTimeout(r, 10));
@@ -116,7 +116,7 @@ describe("apiClient", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.endsWith("/auth/refresh")) {
+        if (url.endsWith("/auth/token/refresh")) {
           return new Response(null, { status: 401 });
         }
         return new Response(null, { status: 401 });
@@ -137,7 +137,7 @@ describe("apiClient", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.endsWith("/auth/refresh")) {
+        if (url.endsWith("/auth/token/refresh")) {
           refreshCount += 1;
           return new Response(null, { status: 401 });
         }
@@ -145,7 +145,7 @@ describe("apiClient", () => {
       }),
     );
 
-    await expect(apiClient.post("/auth/refresh")).rejects.toBeInstanceOf(ApiError);
+    await expect(apiClient.post("/auth/token/refresh")).rejects.toBeInstanceOf(ApiError);
     expect(refreshCount).toBe(1);
   });
 

@@ -203,6 +203,77 @@ class TestCacheWriteNode:
 
         mock_set.assert_not_called()
 
+    async def test_cache_write_includes_service_cards(self, base_state):
+        """write 시 payload 에 service_cards 가 포함된다 (snap 이 아닌 payload)."""
+        from agents.nodes import CacheWriteNode
+
+        base_state["intent"] = IntentType.VECTOR_SEARCH
+        base_state["answer"] = "신규 답변"
+        base_state["service_cards"] = [
+            {"service_id": "S1", "service_name": "수영장"},
+            {"service_id": "S2", "service_name": "체육관"},
+        ]
+        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
+            node = CacheWriteNode(redis=AsyncMock())
+            await node(base_state)
+
+        mock_set.assert_called_once()
+        args = mock_set.call_args.args
+        payload, snap = args[1], args[2]
+        assert payload["service_cards"] == [
+            {"service_id": "S1", "service_name": "수영장"},
+            {"service_id": "S2", "service_name": "체육관"},
+        ]
+        # search snapshot 이 아니므로 snap 에 들어가서는 안 된다
+        assert "service_cards" not in snap
+
+    async def test_cache_check_restores_service_cards(self, base_state):
+        """hit 시 envelope payload 의 service_cards 가 state 로 복원된다."""
+        from agents.nodes import CacheCheckNode
+
+        base_state["intent"] = IntentType.VECTOR_SEARCH
+        envelope = {
+            "payload": {
+                "answer": "캐시 답변",
+                "title": None,
+                "message_id": 1,
+                "service_cards": [{"service_id": "S1", "service_name": "수영장"}],
+            },
+            "state": {"refined_query": "서울 테니스장"},
+        }
+        with patch(
+            "agents.nodes.get_cached_answer",
+            AsyncMock(return_value=envelope),
+        ):
+            node = CacheCheckNode(redis=AsyncMock())
+            result = await node(base_state)
+
+        assert result["cache_hit"] is True
+        assert result["service_cards"] == [
+            {"service_id": "S1", "service_name": "수영장"}
+        ]
+
+    async def test_cache_check_legacy_envelope_without_service_cards(self, base_state):
+        """구버전 envelope (payload 에 service_cards 없음) → None 으로 안전 복원."""
+        from agents.nodes import CacheCheckNode
+
+        base_state["intent"] = IntentType.VECTOR_SEARCH
+        envelope = {
+            "payload": {"answer": "구버전 캐시", "title": None, "message_id": 1},
+            "state": {"refined_query": "서울 테니스장"},
+        }
+        with patch(
+            "agents.nodes.get_cached_answer",
+            AsyncMock(return_value=envelope),
+        ):
+            node = CacheCheckNode(redis=AsyncMock())
+            result = await node(base_state)
+
+        assert result["cache_hit"] is True
+        # 키는 존재하되 None — 라우터의 `or []` 가 빈 배열로 노출함
+        assert "service_cards" in result
+        assert result["service_cards"] is None
+
     async def test_skips_non_eligible_intent(self, base_state):
         from agents.nodes import CacheWriteNode
 

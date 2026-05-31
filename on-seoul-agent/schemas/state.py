@@ -8,6 +8,7 @@ class IntentType(str, Enum):
     SQL_SEARCH = "SQL_SEARCH"
     VECTOR_SEARCH = "VECTOR_SEARCH"
     MAP = "MAP"
+    ANALYTICS = "ANALYTICS"
     FALLBACK = "FALLBACK"
 
 
@@ -16,7 +17,7 @@ class AgentState(TypedDict):
     message_id: int
     message: str  # 사용자 원본 질문
     title_needed: bool  # 제목 생성 필요 여부
-    intent: IntentType | None  # SQL_SEARCH / VECTOR_SEARCH / MAP / FALLBACK
+    intent: IntentType | None  # SQL_SEARCH / VECTOR_SEARCH / MAP / ANALYTICS / FALLBACK
     # MAP intent 반경 검색용 좌표 (ChatRequest.lat/lng 로부터 주입).
     # None이면 MAP intent를 FALLBACK으로 대체한다.
     user_lat: float | None  # 클라이언트 위도 (latitude)
@@ -35,6 +36,14 @@ class AgentState(TypedDict):
     )  # Router가 분류한 벡터 검색 세부 의도 (VECTOR_SEARCH 전용)
     vector_results: list[dict[str, Any]] | None  # Vector Agent 결과
     map_results: dict[str, Any] | None  # map_search GeoJSON FeatureCollection 결과
+    # ─── ANALYTICS (집계/분포 질의) ───
+    # analytics_node 가 analytics_search 결과를 직접 채우는 슬롯 (hydration 없음).
+    # 각 행은 {"group_value": ..., "count": ...} 형태 (distinct 는 count 생략/None).
+    # 빈 결과: []. 미설정: None (다른 intent 경로 또는 미실행).
+    analytics_results: list[dict[str, Any]] | None  # 집계 결과 행 (group_value/count)
+    analytics_group_by: str | None  # 집계 차원 (area_name/max_class_name/min_class_name/service_status)
+    analytics_metric: str | None  # 집계 metric (count / distinct)
+    analytics_keyword: str | None  # AnalyticsAgent가 LLM으로 추출한 키워드 (trace 관측용)
     # ─── Hydration (service_id → public_service_reservations 원본) ───
     # HydrationNode 가 검색 노드(sql/vector) 직후에 채우는 통합 슬롯.
     # AnswerAgent 등 후속 단계는 이 슬롯을 사용하여 검색 경로에 의존하지 않는다.
@@ -48,6 +57,10 @@ class AgentState(TypedDict):
     # (intent → vector_results/sql_results 의 service_id 키 추출).
     # 별도 슬롯을 두지 않는 이유는 State 단일 진실원 원칙을 위배하지 않기 위함.
     hydrated_services: list[dict[str, Any]] | None
+    # AnswerAgent 가 _normalize 통과 후 상위 _DISPLAY_LIMIT(5)건을 카드 형태로 노출.
+    # LLM 컨텍스트와 동일한 dict 리스트. 프론트 카드 UI 가 직접 사용한다.
+    # 빈 결과: []. 미설정: None (AnswerAgent 미실행 / cache miss 초기 상태).
+    service_cards: list[dict[str, Any]] | None
     answer: str | None  # Answer Agent가 생성한 최종 답변
     title: str | None  # Answer Agent가 생성한 대화 제목 (title_needed=True일 때)
     trace: dict[str, Any] | None  # LangGraph 실행 메타데이터

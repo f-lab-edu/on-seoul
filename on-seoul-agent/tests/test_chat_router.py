@@ -691,6 +691,325 @@ class TestCacheAndContextIntegration:
         push_mock.assert_not_awaited()
 
 
+class TestServiceCardsInFinalPayload:
+    """SSE final 이벤트의 service_cards 구조화 배열 검증."""
+
+    async def test_final_payload_includes_service_cards(
+        self, client: AsyncClient, mock_graph
+    ):
+        """AnswerAgent 가 채운 service_cards 가 SSE final payload 에 그대로 노출된다."""
+        cards = [
+            {"service_id": "S1", "service_name": "수영장", "area_name": "강남구"},
+            {"service_id": "S2", "service_name": "체육관", "area_name": "마포구"},
+        ]
+        final_state = _make_final_state(service_cards=cards)
+        mock_graph.stream = _make_stream(final_state)
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        events = _parse_sse_events(response.content)
+        final_events = [e for e in events if e["event"] == "final"]
+        assert final_events[0]["data"]["service_cards"] == cards
+
+    async def test_final_payload_service_cards_empty_when_unset(
+        self, client: AsyncClient, mock_graph
+    ):
+        """service_cards 가 None (예: 구버전 cache hit) 이어도 [] 로 안전 노출된다."""
+        final_state = _make_final_state(service_cards=None)
+        mock_graph.stream = _make_stream(final_state)
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        events = _parse_sse_events(response.content)
+        final_events = [e for e in events if e["event"] == "final"]
+        assert final_events[0]["data"]["service_cards"] == []
+
+    async def test_final_payload_preserves_existing_keys_alongside_service_cards(
+        self, client: AsyncClient, mock_graph
+    ):
+        """회귀: service_cards 추가 후에도 기존 final payload 키가 모두 유지된다.
+
+        message_id / answer / intent / title / cache_hit 5개 키가 모두 그대로
+        존재해야 한다. service_cards 도입으로 인한 누락 회귀를 방지한다.
+        """
+        cards = [{"service_id": "S1", "service_name": "수영장"}]
+        final_state = _make_final_state(
+            service_cards=cards,
+            title="수영장 안내",
+            cache_hit=False,
+        )
+        mock_graph.stream = _make_stream(final_state)
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        events = _parse_sse_events(response.content)
+        final_events = [e for e in events if e["event"] == "final"]
+        data = final_events[0]["data"]
+        expected_keys = {
+            "message_id",
+            "answer",
+            "intent",
+            "title",
+            "cache_hit",
+            "service_cards",
+        }
+        assert expected_keys.issubset(set(data.keys()))
+        assert data["title"] == "수영장 안내"
+        assert data["cache_hit"] is False
+        assert data["intent"] == IntentType.SQL_SEARCH.value
+        assert data["answer"] == "강남구 수영장 목록입니다."
+
+    async def test_cache_hit_final_payload_carries_restored_service_cards(
+        self, client: AsyncClient, mock_graph
+    ):
+        """회귀: cache_hit=True 경로에서도 service_cards 가 final payload 에 실린다.
+
+        실제 CacheCheckNode 가 envelope payload 에서 service_cards 를 복원해
+        state 에 채운 상황을 모사한다. AnswerAgent 미실행 경로에서도 동일하게
+        프론트 카드 UI 가 데이터를 받을 수 있어야 한다.
+        """
+        cards = [
+            {"service_id": "S1", "service_name": "캐시된 수영장"},
+            {"service_id": "S2", "service_name": "캐시된 체육관"},
+        ]
+        final_state = _make_final_state(cache_hit=True, service_cards=cards)
+        mock_graph.stream = _make_stream(final_state)
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장"},
+            )
+
+        events = _parse_sse_events(response.content)
+        final_events = [e for e in events if e["event"] == "final"]
+        data = final_events[0]["data"]
+        assert data["cache_hit"] is True
+        assert data["service_cards"] == cards
+
+    async def test_sse_frame_serializes_datetime_in_service_cards(
+        self, client: AsyncClient, mock_graph
+    ):
+        """회귀: service_cards 에 datetime 객체가 포함되어도 SSE 직렬화가 깨지지 않는다.
+
+        public_service_reservations 의 receipt_*_dt 컬럼은 timestamp 타입이라
+        SQLAlchemy 가 datetime 객체로 매핑한다. sse_frame() 의 json.dumps 가
+        default=str 폴백을 적용해 ISO 8601 문자열로 직렬화해야 하며, 그렇지
+        않으면 TypeError 로 SSE 스트림이 중단된다.
+        """
+        import datetime as _dt
+
+        cards = [
+            {
+                "service_id": "S1",
+                "service_name": "수영장",
+                "receipt_start_dt": _dt.datetime(2025, 11, 1, 9, 0, 0),
+                "receipt_end_dt": _dt.datetime(2025, 12, 31, 18, 0, 0),
+            }
+        ]
+        final_state = _make_final_state(service_cards=cards)
+        mock_graph.stream = _make_stream(final_state)
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        # TypeError 가 발생하지 않고 정상 SSE 응답이 흘러야 한다.
+        assert response.status_code == 200
+        events = _parse_sse_events(response.content)
+        final_events = [e for e in events if e["event"] == "final"]
+        assert len(final_events) == 1
+        data = final_events[0]["data"]
+        # default=str 폴백에 의해 datetime 이 문자열로 직렬화된다.
+        card = data["service_cards"][0]
+        assert isinstance(card["receipt_start_dt"], str)
+        assert isinstance(card["receipt_end_dt"], str)
+        assert card["receipt_start_dt"].startswith("2025-11-01")
+        assert card["receipt_end_dt"].startswith("2025-12-31")
+
+    async def test_sse_frame_serializes_decimal_and_date_in_service_cards(
+        self, client: AsyncClient, mock_graph
+    ):
+        """회귀: service_cards 에 Decimal / date 가 포함돼도 SSE 직렬화가 깨지지 않는다.
+
+        DB numeric 컬럼은 SQLAlchemy 가 Decimal 로, date 컬럼은 datetime.date 로
+        매핑한다. 둘 다 json 기본 직렬화 대상이 아니므로 default=str 폴백이 없으면
+        TypeError 로 SSE 스트림이 중단된다. datetime 만 커버하던 기존 회귀 테스트의
+        사각지대를 메운다.
+        """
+        import datetime as _dt
+        from decimal import Decimal
+
+        cards = [
+            {
+                "service_id": "S1",
+                "service_name": "수영장",
+                "fee": Decimal("3000.50"),
+                "open_date": _dt.date(2025, 12, 31),
+            }
+        ]
+        final_state = _make_final_state(service_cards=cards)
+        mock_graph.stream = _make_stream(final_state)
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        assert response.status_code == 200
+        events = _parse_sse_events(response.content)
+        final_events = [e for e in events if e["event"] == "final"]
+        assert len(final_events) == 1
+        card = final_events[0]["data"]["service_cards"][0]
+        # default=str 폴백으로 Decimal / date 가 문자열로 직렬화된다.
+        assert card["fee"] == "3000.50"
+        assert card["open_date"] == "2025-12-31"
+
+    async def test_existing_sse_events_unaffected_by_default_str(
+        self, client: AsyncClient, mock_graph
+    ):
+        """회귀: default=str 추가가 기존 SSE 이벤트(progress/final) 직렬화를 바꾸지 않는다.
+
+        progress payload 등 JSON-native 값만 담은 기존 이벤트는 default=str 폴백이
+        적용될 일이 없어야 하며, 값이 그대로 직렬화돼야 한다 (문자열 강제 변환 등
+        부작용 없음).
+        """
+        final_state = _make_final_state(service_cards=[])
+        mock_graph.stream = _make_stream(final_state)
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        events = _parse_sse_events(response.content)
+        progress_events = [e for e in events if e["event"] == "progress"]
+        assert len(progress_events) == 3
+        # step 문자열, message 문자열이 그대로 유지된다.
+        assert progress_events[0]["data"]["step"] == "routing"
+        # final 의 cache_hit 은 bool 그대로 (str 로 강제되지 않음).
+        final_data = [e for e in events if e["event"] == "final"][0]["data"]
+        assert final_data["cache_hit"] is False
+        assert isinstance(final_data["cache_hit"], bool)
+
+    async def test_workflow_error_payload_handles_service_cards_safely(
+        self, client: AsyncClient, mock_graph
+    ):
+        """회귀: workflow_error 경로에서는 service_cards 가 항상 빈 배열로 강제된다.
+
+        에러 메시지 + 부분 결과 카드 동시 노출은 사용자 UI 혼란을 유발하므로,
+        라우터가 workflow_error 분기에서 명시적으로 [] 로 덮어쓰는 정책이다.
+        state.service_cards 가 None 이든 부분 결과를 담고 있든 동일하게 [] 가 노출된다.
+        """
+        # 부분 결과가 state 에 남아 있어도 에러 분기에서는 노출되지 않아야 한다.
+        partial_cards = [{"service_id": "S1", "service_name": "부분 결과"}]
+        final_state = _make_final_state(
+            error="LLM 오류",
+            answer="죄송합니다, 일시적인 오류가 발생했습니다.",
+            service_cards=partial_cards,
+        )
+
+        async def _error_stream(*args, **kwargs):
+            yield (
+                "progress",
+                {"step": "routing", "message": "질문을 분석하고 있습니다..."},
+            )
+            yield "result", final_state
+
+        mock_graph.stream = _error_stream
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "테스트"},
+            )
+
+        events = _parse_sse_events(response.content)
+        wf_error_events = [e for e in events if e["event"] == "workflow_error"]
+        assert len(wf_error_events) == 1
+        data = wf_error_events[0]["data"]
+        assert data["service_cards"] == []
+        assert data["error"] == "서비스 처리 중 오류가 발생했습니다."
+
+    async def test_workflow_error_forces_empty_cards_when_answer_absent(
+        self, client: AsyncClient, mock_graph
+    ):
+        """회귀: 'answer 없는 error' 경로에서도 service_cards 가 [] 로 강제된다.
+
+        기존 회귀 테스트는 answer 가 채워진 error 만 검증했다. answer=None 이고
+        service_cards 가 None 인(AnswerAgent 미실행) error 양쪽 분기에서도 동일하게
+        [] 가 노출되어야 한다.
+        """
+        final_state = _make_final_state(
+            error="라우팅 실패",
+            answer=None,
+            service_cards=None,
+        )
+
+        async def _error_stream(*args, **kwargs):
+            yield (
+                "progress",
+                {"step": "routing", "message": "질문을 분석하고 있습니다..."},
+            )
+            yield "result", final_state
+
+        mock_graph.stream = _error_stream
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "테스트"},
+            )
+
+        events = _parse_sse_events(response.content)
+        wf_error_events = [e for e in events if e["event"] == "workflow_error"]
+        assert len(wf_error_events) == 1
+        assert wf_error_events[0]["data"]["service_cards"] == []
+
+
 class TestMainEndpoints:
     """main.py 전역 핸들러 및 헬스체크 테스트."""
 

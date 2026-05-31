@@ -138,24 +138,24 @@ Next.js 15 App Router 기반 웹 프론트엔드 구현 순서.
 
 > **범위 고정**: Vitest는 코어 2개 파일(`api-client`, `useChatStream`)만 관리한다. 컴포넌트·페이지 스냅샷/인터랙션 테스트는 도입하지 않는다.
 
-- [ ] `lib/api-client.ts` 테스트 보완 (Phase 4에서 작성한 케이스 최종 점검)
-- [ ] `useChatStream` 테스트 보완 (Phase 9에서 작성한 케이스 최종 점검)
-- [ ] `pnpm test` CI 연결 확인
+- [x] `lib/api-client.ts` 테스트 보완 — 6건 (single-flight / 무한루프 / refresh 401 logout 등) `pnpm test` 전통과 ✅
+- [x] `useChatStream` 테스트 보완 — 5건 (토큰 누적 / 에러 / 취소 / HTTP 500 등) `pnpm test` 전통과 ✅
+- [ ] `pnpm test` CI 연결 — `.github/workflows/` 미생성
 - [ ] Playwright E2E (선택) — 로그인 → 채팅 → 로그아웃 시나리오, 백엔드는 모킹
 
 ### Phase 12. 접근성·UX 마감
 
-- [ ] 키보드 내비게이션 — 입력창 / 버튼 / 사이드바 항목
-- [ ] `prefers-reduced-motion` 대응
-- [ ] 에러 / 로딩 상태 일관성 (`Skeleton`, `Toast`)
+- [x] 키보드 내비게이션 — 입력창 `aria-label` / Enter·Shift+Enter / `focus-visible:ring` / `disabled` 상태 처리
+- [ ] `prefers-reduced-motion` 대응 — 스트리밍 커서 펄스 애니메이션 등 미적용
+- [ ] 에러 / 로딩 상태 일관성 (`Skeleton`, `Toast`) — 미구현
 - [ ] 모바일 우선 레이아웃 점검 (PC 반응형은 POST-MVP)
 
 ### Phase 13. 배포 (Vercel)
 
 - [ ] Vercel 프로젝트 연동 — `NEXT_PUBLIC_API_BASE_URL` / `API_BASE_URL` / `NEXT_PUBLIC_OAUTH_LOGIN_URL` 환경변수 등록
-- [ ] 백엔드와 same-site 또는 reverse proxy 구성 합의(SameSite=Strict 쿠키 전송 보장)
+- [ ] 백엔드와 same-site 구성 합의 — `*.jazzz.dev` 서브도메인 구성 시 SameSite=Strict 정상 동작, `credentials: 'include'` + CORS `allowCredentials` 확인
 - [ ] Preview / Production 분리, PR Preview에서 OAuth 콜백 동작 확인
-- [ ] `pnpm build` 사이즈·LCP 점검
+- [x] `pnpm build` 통과 — First Load JS 130 kB (`/`), 빌드 오류 없음 ✅
 
 검증: Production URL에서 로그인 → 채팅 → 로그아웃 플로우 완전 동작, 토큰이 URL / 스토리지 / 응답 본문에 노출되지 않음
 

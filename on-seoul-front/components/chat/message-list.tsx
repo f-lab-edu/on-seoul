@@ -4,13 +4,18 @@ import { useEffect, useRef } from "react";
 
 import { AgentTrace } from "@/components/chat/agent-trace";
 import { MessageBubble } from "@/components/chat/message-bubble";
+import { ServiceCardList } from "@/components/chat/service-card-list";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { ChatStreamState } from "@/hooks/useChatStream";
 import type { MessageRole } from "@/types/chat";
+import type { ServiceCard } from "@/types/sse-events";
 
 export interface DisplayMessage {
   id: string;
   role: MessageRole;
   content: string;
+  /** ASSISTANT 메시지에만 채워짐. 빈 배열이면 카드 영역 미노출. */
+  serviceCards?: ServiceCard[];
 }
 
 interface MessageListProps {
@@ -40,11 +45,19 @@ export function MessageList({ messages, streamState }: MessageListProps) {
     streamState.phase === "streaming" && streamingContent.length > 0;
   const trace =
     streamState.phase === "streaming" ? streamState.trace : [];
+  // 스트림은 시작했지만 첫 토큰/trace 도착 전 — 빈 화면 대신 응답 자리표시자 노출.
+  const showStreamPlaceholder =
+    streamState.phase === "streaming" && trace.length === 0 && streamingContent.length === 0;
 
   return (
     <div className="flex flex-col gap-3 pb-4">
       {messages.map((m) => (
-        <MessageBubble key={m.id} role={m.role} content={m.content} />
+        <div key={m.id} className="flex flex-col gap-2">
+          <MessageBubble role={m.role} content={m.content} />
+          {m.role === "ASSISTANT" && m.serviceCards && m.serviceCards.length > 0 && (
+            <ServiceCardList cards={m.serviceCards} />
+          )}
+        </div>
       ))}
 
       {streamState.phase === "streaming" && trace.length > 0 && (
@@ -53,6 +66,21 @@ export function MessageList({ messages, streamState }: MessageListProps) {
 
       {showStreamBubble && (
         <MessageBubble role="ASSISTANT" content={streamingContent} streaming />
+      )}
+
+      {showStreamPlaceholder && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-label="응답 준비 중"
+          className="flex w-full justify-start"
+        >
+          <div className="flex max-w-[80%] flex-col gap-2 rounded-2xl rounded-bl-sm bg-muted px-4 py-3">
+            <Skeleton className="h-3 w-40" />
+            <Skeleton className="h-3 w-56" />
+            <Skeleton className="h-3 w-32" />
+          </div>
+        </div>
       )}
 
       <div ref={bottomRef} />
