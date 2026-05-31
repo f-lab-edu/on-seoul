@@ -6,6 +6,8 @@
 
 검색은 **4채널**로 구성된다. `service_embeddings` 테이블에 `row_kind` 디스크리미네이터로 트랙을 분리하고, `VectorAgent`가 4채널을 순차 실행한 뒤 가중 RRF(Reciprocal Rank Fusion)로 결합한다.
 
+> **ANALYTICS intent 제외**: ANALYTICS intent는 RRF/벡터 검색 경로와 무관한 별도 정형 집계 경로다 — `analytics_search` 도구가 GROUP BY COUNT / DISTINCT 쿼리를 직접 실행하며 임베딩·RRF 가중치·hydration 단계를 거치지 않는다.
+
 ---
 
 ## 결론
