@@ -1,8 +1,9 @@
 """Router Agent — 사용자 의도 분류.
 
-LCEL 체인으로 사용자 메시지를 분석해 IntentType 4종 중 하나로 분류한다.
+LCEL 체인으로 사용자 메시지를 분석해 IntentType 5종 중 하나로 분류한다.
   - SQL_SEARCH  : 카테고리·지역·날짜·상태 등 정형 조건 기반 조회
   - VECTOR_SEARCH: 의미 기반(유사도) 검색
+  - ANALYTICS : 집계·분포·종류 요약 ("몇 개", "어디에 많아", "어떤 유형")
   - MAP         : 지도·위치·반경 탐색
   - FALLBACK    : 위 세 가지에 해당하지 않는 일반 안내
 
