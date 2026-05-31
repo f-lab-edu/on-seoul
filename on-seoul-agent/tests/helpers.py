@@ -13,7 +13,7 @@ AgentState에 필드가 추가될 때 make_agent_state만 수정하면 된다.
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from agents.answer_agent import AnswerAgent, _AnswerOutput, _TitleOutput
+from agents.answer_agent import AnswerAgent, _TitleOutput
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.sql_agent import SqlAgent, _SqlParams
 from schemas.state import AgentState, IntentType
@@ -95,7 +95,7 @@ def make_answer_agent(
     agent = AnswerAgent.__new__(AnswerAgent)
 
     answer_chain = MagicMock()
-    answer_chain.ainvoke = AsyncMock(return_value=_AnswerOutput(answer=answer))
+    answer_chain.ainvoke = AsyncMock(return_value=answer)
     agent._answer_chain = answer_chain
 
     title_chain = MagicMock()

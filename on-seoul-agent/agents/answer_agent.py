@@ -9,6 +9,7 @@ title_needed=True 인 경우(첫 메시지) 대화 제목도 함께 생성한다
 import json
 
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
@@ -114,10 +115,6 @@ def _iso_or_none(value):
     return value
 
 
-class _AnswerOutput(BaseModel):
-    answer: str
-
-
 class _TitleOutput(BaseModel):
     title: str
 
@@ -134,7 +131,10 @@ class AnswerAgent:
                 ("human", _ANSWER_HUMAN),
             ]
         )
-        self._answer_chain = answer_prompt | llm.with_structured_output(_AnswerOutput)
+        # answer는 자유형 장문 텍스트다. 구조화 출력(JSON {"answer": ...})으로 감싸면
+        # 모델이 평문을 그대로 반환할 때 JSON 파서가 실패한다(OutputParserException).
+        # 단일 문자열이므로 StrOutputParser로 직접 받아 이 실패 모드를 제거한다.
+        self._answer_chain = answer_prompt | llm | StrOutputParser()
 
         title_prompt = ChatPromptTemplate.from_messages(
             [
@@ -159,7 +159,7 @@ class AnswerAgent:
         extra_count = max(0, len(all_results) - _DISPLAY_LIMIT)
         results_json = json.dumps(display, ensure_ascii=False, default=str)
 
-        answer_out: _AnswerOutput = await self._answer_chain.ainvoke(
+        answer_text: str = await self._answer_chain.ainvoke(
             {
                 "message": state["message"],
                 "results_json": results_json,
@@ -173,7 +173,7 @@ class AnswerAgent:
         # (SSE final payload, cache envelope) 가 오염될 수 있다. 최대 5건 × 12 필드라
         # 복사 비용은 무시 가능.
         updates: dict = {
-            "answer": answer_out.answer,
+            "answer": answer_text,
             "service_cards": [dict(card) for card in display],
         }
 

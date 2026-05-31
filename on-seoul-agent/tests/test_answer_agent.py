@@ -7,7 +7,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 from tests.helpers import make_agent_state
-from agents.answer_agent import AnswerAgent, _AnswerOutput, _TitleOutput
+from agents.answer_agent import AnswerAgent, _TitleOutput
 from schemas.state import AgentState, IntentType
 
 
@@ -22,9 +22,7 @@ def _make_agent(
     agent = AnswerAgent.__new__(AnswerAgent)
 
     mock_answer_chain = MagicMock()
-    mock_answer_chain.ainvoke = AsyncMock(
-        return_value=_AnswerOutput(answer=answer_text)
-    )
+    mock_answer_chain.ainvoke = AsyncMock(return_value=answer_text)
     agent._answer_chain = mock_answer_chain
 
     mock_title_chain = MagicMock()

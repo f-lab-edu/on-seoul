@@ -9,7 +9,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agents.answer_agent import AnswerAgent, _AnswerOutput, _TitleOutput
+from agents.answer_agent import AnswerAgent, _TitleOutput
 from agents.graph import AgentGraph
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.vector_agent import VectorAgent, _RefinedQuery
@@ -269,8 +269,8 @@ class TestSelfCorrectionCycle:
         answer_chain = MagicMock()
         answer_chain.ainvoke = AsyncMock(
             side_effect=[
-                _AnswerOutput(answer=""),  # 첫 번째: 빈 답변 → 재시도 트리거
-                _AnswerOutput(answer="재검색 후 답변"),  # 두 번째: 정상 답변
+                "",  # 첫 번째: 빈 답변 → 재시도 트리거
+                "재검색 후 답변",  # 두 번째: 정상 답변
             ]
         )
         agent._answer_chain = answer_chain
@@ -300,7 +300,7 @@ class TestSelfCorrectionCycle:
         agent = AnswerAgent.__new__(AnswerAgent)
         answer_chain = MagicMock()
         # 두 번 모두 빈 답변 반환 — 두 번째는 trace로 진행해야 한다
-        answer_chain.ainvoke = AsyncMock(return_value=_AnswerOutput(answer=""))
+        answer_chain.ainvoke = AsyncMock(return_value="")
         agent._answer_chain = answer_chain
         title_chain = MagicMock()
         title_chain.ainvoke = AsyncMock(return_value=_TitleOutput(title=""))
