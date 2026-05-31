@@ -593,4 +593,80 @@ class NotificationSchedulerTest {
         assertThat(req.changes().get(0).fieldName()).isEqualTo("service_status");
         assertThat(req.changes().get(1).fieldName()).isEqualTo("receipt_end_dt");
     }
+
+    // ── 이벤트 트리거 + 중복 실행 방지 (QA 회귀 테스트) ──────────────────────
+
+    @Test
+    @DisplayName("이벤트 수신 시 알림 배치가 1회 실행된다 (onCollectionCompleted → processAllSubscriptions)")
+    void onCollectionCompleted_runsBatchOnce() {
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
+
+        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
+
+        verify(saveBatchPort).insertRunning(any());
+        verify(saveBatchPort).update(any());
+    }
+
+    @Test
+    @DisplayName("배치 실행이 끝나면 running 플래그가 해제되어 다음 이벤트도 정상 실행된다")
+    void onCollectionCompleted_releasesFlagAfterRun_allowingNextEvent() {
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
+
+        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
+        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
+
+        // 두 번의 순차 이벤트 → 두 번 실행 (flag가 finally에서 해제됨)
+        verify(saveBatchPort, org.mockito.Mockito.times(2)).insertRunning(any());
+    }
+
+    @Test
+    @DisplayName("배치 실행 중 예외가 나도 running 플래그가 해제된다 (finally)")
+    void onCollectionCompleted_resetsFlagEvenWhenBatchThrows() {
+        // stale 회수가 정상 종료 후, recoverStaleBatches 단계에서 던진 예외는 내부에서 삼켜진다.
+        // 대신 update가 던지게 하여 processAllSubscriptions 종료 경로의 안정성과 flag 해제를 함께 검증한다.
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
+        // 1회차에서 update가 예외를 던져도 safeUpdateBatch가 삼키고 정상 종료 → flag 해제
+        when(saveBatchPort.update(any()))
+                .thenThrow(new RuntimeException("update fail"))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        // 1회차: update 예외를 내부에서 삼키고 종료 (flag 해제 기대)
+        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
+        // 2회차: flag가 해제되었으므로 다시 실행되어야 한다
+        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
+
+        // flag가 매번 해제됨을 증명 — insertRunning이 2회 호출됨
+        verify(saveBatchPort, org.mockito.Mockito.times(2)).insertRunning(any());
+    }
+
+    @Test
+    @DisplayName("이미 실행 중(running=true)이면 동시 이벤트는 무시된다 (CAS 중복 방지)")
+    void onCollectionCompleted_concurrentEvent_isIgnoredWhileRunning() throws Exception {
+        java.util.concurrent.CountDownLatch insideBatch = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch releaseBatch = new java.util.concurrent.CountDownLatch(1);
+
+        // loadChunk에서 블로킹시켜 첫 이벤트가 "실행 중(running=true)" 상태를 유지하게 한다.
+        // (insertRunning 기본 stub은 setUp의 lenient 답변을 그대로 사용)
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenAnswer(inv -> {
+            insideBatch.countDown();
+            releaseBatch.await();
+            return List.of();
+        });
+
+        Thread first = new Thread(() ->
+                scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent()));
+        first.start();
+
+        // 첫 이벤트가 배치 내부(running=true)에 진입할 때까지 대기
+        assertThat(insideBatch.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+        // 두 번째 이벤트: running=true이므로 즉시 무시되어야 한다 (insertRunning 추가 호출 없음)
+        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
+
+        releaseBatch.countDown();
+        first.join(5_000);
+
+        // insertRunning은 첫 이벤트에 의해 정확히 1회만 호출됨
+        verify(saveBatchPort, org.mockito.Mockito.times(1)).insertRunning(any());
+    }
 }

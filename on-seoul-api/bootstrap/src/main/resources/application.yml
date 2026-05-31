@@ -126,6 +126,9 @@ resilience4j:
       knock:
         sliding-window-type: COUNT_BASED
         sliding-window-size: 10
+        # minimum-number-of-calls 기본값은 100 → 윈도우(10)보다 커서 실패율이 평가되지 않아
+        # 서킷이 절대 열리지 않는다. 윈도우 크기에 맞춰 10으로 명시해야 실제로 동작한다.
+        minimum-number-of-calls: 10
         failure-rate-threshold: 50          # 10회 중 5회 실패 시 OPEN
         wait-duration-in-open-state: 60s    # OPEN → HALF_OPEN 전환 대기
         permitted-number-of-calls-in-half-open-state: 3

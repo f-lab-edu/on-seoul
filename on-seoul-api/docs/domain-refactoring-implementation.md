@@ -167,7 +167,7 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 - [ ] **`ResilientPushNotificationAdapter` 예외 삼킴 버그 수정** — 현재 `LogOnly.sendFallback()`이 예외를 삼켜 스케줄러가 발송 성공으로 오인 → `txBSuccess()` 호출 → dispatch `SUCCESS` + `last_notified_at` 전진. Knock 실패 후 fallback 호출 완료 시 rethrow 추가 필요 (retry 정상 동작 보장)
 - [ ] Resilience4j `CircuitBreaker` 적용 — Knock 연속 실패 시 fast-fail + `KNOCK_CIRCUIT_OPEN` 트리거
   - 의존성 추가: `resilience4j-spring-boot3`
-  - `CircuitBreakerConfig`: `slidingWindowSize=10`, `failureRateThreshold=50`, `waitDurationInOpenState=60s`
+  - `CircuitBreakerConfig`: `slidingWindowSize=10`, `minimumNumberOfCalls=10`(기본 100 → 윈도우에 맞춰 명시, 미설정 시 서킷 미작동), `failureRateThreshold=50`, `waitDurationInOpenState=60s`
   - `ResilientPushNotificationAdapter`에 `@CircuitBreaker` 적용, open 상태에서 `CallNotPermittedException` → `KNOCK_CIRCUIT_OPEN` 분류
 - [ ] `OneSignalFallbackNotificationAdapter` — `FallbackNotificationPort` OneSignal REST API 구현체
   - `@ConditionalOnProperty(name="notification.fallback.onesignal.enabled")`
