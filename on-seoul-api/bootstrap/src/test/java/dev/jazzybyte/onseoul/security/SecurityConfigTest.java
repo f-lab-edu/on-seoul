@@ -6,7 +6,9 @@ import dev.jazzybyte.onseoul.user.port.in.GetMeUseCase;
 import dev.jazzybyte.onseoul.user.port.in.LogoutUseCase;
 import dev.jazzybyte.onseoul.user.port.in.RefreshTokenUseCase;
 import dev.jazzybyte.onseoul.collection.port.out.GeocodingPort;
+import dev.jazzybyte.onseoul.collection.port.out.EmbeddingSyncPort;
 import dev.jazzybyte.onseoul.collection.port.out.LoadApiSourceCatalogPort;
+import dev.jazzybyte.onseoul.collection.port.out.LoadChangedServiceIdsPort;
 import dev.jazzybyte.onseoul.chat.port.out.LoadChatRoomPort;
 import dev.jazzybyte.onseoul.collection.port.out.LoadPublicServicePort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
@@ -83,6 +85,8 @@ class SecurityConfigTest {
     @MockitoBean LoadApiSourceCatalogPort loadApiSourceCatalogPort;
     @MockitoBean SaveCollectionHistoryPort saveCollectionHistoryPort;
     @MockitoBean SaveServiceChangeLogPort saveServiceChangeLogPort;
+    @MockitoBean LoadChangedServiceIdsPort loadChangedServiceIdsPort;
+    @MockitoBean EmbeddingSyncPort embeddingSyncPort;
     @MockitoBean SeoulDatasetFetchPort seoulDatasetFetchPort;
     @MockitoBean GeocodingPort geocodingPort;
     @MockitoBean StringRedisTemplate stringRedisTemplate;

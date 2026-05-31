@@ -8,7 +8,10 @@ import dev.jazzybyte.onseoul.collection.domain.PublicServiceReservation;
 import dev.jazzybyte.onseoul.collection.port.out.LoadApiSourceCatalogPort;
 import dev.jazzybyte.onseoul.collection.port.out.LoadPublicServicePort;
 import dev.jazzybyte.onseoul.collection.port.out.SaveCollectionHistoryPort;
+import dev.jazzybyte.onseoul.collection.domain.ChangeType;
+import dev.jazzybyte.onseoul.collection.domain.ServiceChangeLog;
 import dev.jazzybyte.onseoul.collection.port.out.SavePublicServicePort;
+import dev.jazzybyte.onseoul.collection.port.out.SaveServiceChangeLogPort;
 import dev.jazzybyte.onseoul.collection.port.out.SeoulDatasetFetchPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -35,6 +38,7 @@ class CollectDatasetServiceTest {
     @Mock private SeoulDatasetFetchPort fetchPort;
     @Mock private UpsertService upsertService;
     @Mock private GeocodingService geocodingService;
+    @Mock private SaveServiceChangeLogPort saveServiceChangeLogPort;
 
     private CollectDatasetService service;
 
@@ -42,7 +46,7 @@ class CollectDatasetServiceTest {
     void setUp() {
         service = new CollectDatasetService(
                 catalogPort, historyPort, loadPublicServicePort, savePublicServicePort,
-                fetchPort, upsertService, geocodingService);
+                fetchPort, upsertService, geocodingService, saveServiceChangeLogPort);
     }
 
     /** 영속성 어댑터처럼 생성된 PK가 담긴 새 도메인 객체를 반환하도록 mock한다. */
@@ -205,6 +209,30 @@ class CollectDatasetServiceTest {
         assertThat(deleted).hasSize(1);
         assertThat(deleted.get(0).getServiceId()).isEqualTo("SVC-ORPHAN");
         assertThat(deleted.get(0).getDeletedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("deletion sweep — 삭제된 service_id마다 DELETED change_log를 이번 run의 collectionId로 기록한다")
+    void collectAll_deletionSweep_recordsDeletedChangeLog() {
+        ApiSourceCatalog src = source(1L, "OA-2266", "/path");
+        PublicServiceReservation collected = reservation("SVC-SEEN");
+        PublicServiceReservation orphan = reservation("SVC-ORPHAN");
+
+        stubHistorySaveReturnsWithId(500L);
+        when(catalogPort.findAllByActiveTrue()).thenReturn(List.of(src));
+        when(fetchPort.fetchAll(anyString())).thenReturn(List.of(collected));
+        when(upsertService.upsert(anyList(), any())).thenReturn(emptyResult());
+        when(loadPublicServicePort.findAllByDeletedAtIsNull()).thenReturn(List.of(collected, orphan));
+
+        service.collectAll();
+
+        ArgumentCaptor<List<ServiceChangeLog>> logCaptor = ArgumentCaptor.forClass(List.class);
+        verify(saveServiceChangeLogPort).saveAll(logCaptor.capture());
+        List<ServiceChangeLog> logs = logCaptor.getValue();
+        assertThat(logs).hasSize(1);
+        assertThat(logs.get(0).getServiceId()).isEqualTo("SVC-ORPHAN");
+        assertThat(logs.get(0).getChangeType()).isEqualTo(ChangeType.DELETED);
+        assertThat(logs.get(0).getCollectionId()).isEqualTo(500L);
     }
 
     @Test

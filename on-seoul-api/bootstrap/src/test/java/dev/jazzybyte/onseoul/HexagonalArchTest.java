@@ -72,6 +72,38 @@ class HexagonalArchTest {
             .should().dependOnClassesThat().resideInAPackage("..user.domain..");
 
     /**
+     * ADR-0001 (README 컨텍스트 간 참조 정책): BC 간 직접 엔티티(domain) 참조 부재.
+     * 각 BC의 domain/application/adapter 어떤 클래스도 다른 BC의 domain 패키지를 import하면 안 된다.
+     * BC 간 통신은 ID(원시값) 전달과 inbound port(use case)를 통해서만 한다.
+     *
+     * <p>{@code bc_*_must_not_import_user_domain} 규칙이 user.domain 한 방향만 막던 것을
+     * 모든 BC 쌍(chat/collection/notification/user)으로 일반화한다.
+     */
+    @ArchTest
+    static final ArchRule no_cross_bc_domain_entity_references = noClasses()
+            .that().resideInAPackage("..chat..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "..collection.domain..", "..notification.domain..", "..user.domain..");
+
+    @ArchTest
+    static final ArchRule no_cross_bc_domain_entity_references_collection = noClasses()
+            .that().resideInAPackage("..collection..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "..chat.domain..", "..notification.domain..", "..user.domain..");
+
+    @ArchTest
+    static final ArchRule no_cross_bc_domain_entity_references_notification = noClasses()
+            .that().resideInAPackage("..notification..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "..chat.domain..", "..collection.domain..", "..user.domain..");
+
+    @ArchTest
+    static final ArchRule no_cross_bc_domain_entity_references_user = noClasses()
+            .that().resideInAPackage("..user..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "..chat.domain..", "..collection.domain..", "..notification.domain..");
+
+    /**
      * ADR-0001: chat.adapter는 다른 BC의 port를 직접 구현하면 안 된다.
      * M1 같은 위반(chat 어댑터가 collection.port를 구현)을 사전에 차단한다.
      */

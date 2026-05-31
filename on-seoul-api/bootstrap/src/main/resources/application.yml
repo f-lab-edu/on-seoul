@@ -96,6 +96,9 @@ ai:
     url: ${AI_SERVICE_URL:http://localhost:8000}
     stream-timeout-seconds: 120
     template-timeout-seconds: 10  # ADR-0004: AI 호출 timeout
+    # Phase 7: 임베딩 동기화(POST /embeddings/services/sync) 호출 timeout.
+    # 청크당 최대 500건이므로 템플릿 생성보다 넉넉하게 설정한다.
+    embedding-sync-timeout-seconds: 30
 
 management:
   endpoints:
@@ -114,10 +117,26 @@ knock:
 
 notification:
   scheduler:
-    fixed-delay-ms: 300000       # 5분
-    stale-threshold-ms: 600000   # 10분 (fixed-delay × 2) — stale RUNNING batch 회수 임계값
+    # fixed-delay-ms 는 더 이상 사용되지 않는다.
+    # NotificationScheduler 는 EmbeddingSyncCompletedEvent(임베딩 동기화 완료 이벤트) 수신 시 1회 실행된다.
+    # 처리 순서: 수집 → 임베딩 동기화 → 알림.
+    stale-threshold-ms: 600000   # 10분 — stale RUNNING batch 회수 임계값
   retry-scheduler:
     fixed-delay-ms: 3600000  # 1시간
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      knock:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        # minimum-number-of-calls 기본값은 100 → 윈도우(10)보다 커서 실패율이 평가되지 않아
+        # 서킷이 절대 열리지 않는다. 윈도우 크기에 맞춰 10으로 명시해야 실제로 동작한다.
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50          # 10회 중 5회 실패 시 OPEN
+        wait-duration-in-open-state: 60s    # OPEN → HALF_OPEN 전환 대기
+        permitted-number-of-calls-in-half-open-state: 3
+        register-health-indicator: true
 
 logging:
   level:
