@@ -227,22 +227,37 @@ ADR 기반 수직 BC 분리 및 알림 기능 신규 구현.
 - `len(upsert) + len(delete) ≤ 500` — 초과 시 청크 분할 전송.
 - 둘 다 빈 배열이면 422 → 호출 전 가드 필요.
 
+**처리 순서 보장 (이벤트 체인): 수집 → 임베딩 동기화 → 알림**
+
+별도 큐 대신 Spring `ApplicationEvent` 체인으로 인과관계를 코드로 표현한다. in-memory 큐/ScheduledExecutor는 도입하지 않는다(불필요한 복잡도). 일 1회 수집이므로 폴링/재큐가 필요 없고, 실패는 best-effort로 다음 수집 run에서 자연 복구된다.
+
+```
+CollectionScheduler ──CollectionCompletedEvent(runStartedAt)──▶ EmbeddingSyncWorker(@Async, collection BC)
+                                                                      │
+                                                          ──EmbeddingSyncCompletedEvent──▶ NotificationScheduler(@Async)
+```
+
+- `CollectionCompletedEvent`에 `runStartedAt`(Instant)을 실어 "이번 run" 변경분을 식별한다. `collectAll()`은 소스별 collection_id를 만들고 deletion sweep은 소스 횡단이라 단일 collection_id가 없으므로, `service_change_log.changed_at >= runStartedAt` timestamp 기반이 collection_id 기반보다 견고하다.
+- 변경 service_id를 아는 것은 collection BC 책임이므로 `EmbeddingSyncWorker`는 collection 모듈에 둔다.
+
 ---
 
-- [ ] `EmbeddingSyncQueue` — in-memory 큐 또는 `ScheduledExecutor`
-- [ ] 수집 TX 커밋 직후 변경 유형별로 enqueue — 신규/변경 `service_id`는 `upsert`, 삭제된 `service_id`는 `delete`로 분류
-- [ ] 워커 — `on-seoul-agent` `POST /embeddings/services/sync` 호출 (WebClient, 빈 배열 가드 + 500건 초과 시 청크 분할). 실패 시 로그 + 다음 tick 재시도
-- [ ] Micrometer 게이지 `embeddings.sync.lag.seconds` 등록 — `adr/0003` 감시 요건 참조
+- [x] 변경 분류 소스 보강 — `UpsertService`가 NEW(신규 service_id), DELETED(deletion sweep)도 `service_change_log`에 기록(기존 UPDATED 유지). DDL 변경 없음(field_name/old_value/new_value는 nullable, DELETED collection_id는 이번 run 첫 collection_id 재사용).
+- [x] `LoadChangedServiceIdsPort.loadSince(since)` — `changed_at >= since`인 distinct service_id를 upsert(NEW∪UPDATED)/delete(DELETED)로 분류 (`CollectionPersistenceAdapter` 구현).
+- [x] `EmbeddingSyncWorker` — `@Async @EventListener(CollectionCompletedEvent)`. 변경 조회 → 빈배열 가드 → 500건 초과 시 청크 분할 → `EmbeddingSyncPort.sync()` 호출. 실패해도 예외를 삼키지 않고 로그 남기며, finally에서 `EmbeddingSyncCompletedEvent` 발행(best-effort, 알림 흐름 비차단).
+- [x] `EmbeddingSyncClient` — `on-seoul-agent` `POST /embeddings/services/sync` 호출 (WebClient, `ai.service.embedding-sync-timeout-seconds`, TemplateAgentClient 패턴). 둘 다 빈 배열이면 호출 생략(422 회피).
+- [x] `EmbeddingSyncCompletedEvent`(common) 신설 + `NotificationScheduler` 재배선 — `CollectionCompletedEvent` 대신 `EmbeddingSyncCompletedEvent`를 listen해 알림이 임베딩 동기화 완료 후 실행됨을 보장(AtomicBoolean 중복 방지 유지).
+- [ ] Micrometer 게이지 `embeddings.sync.lag.seconds` 등록 — `adr/0003` 감시 요건 참조 (선택, 미구현)
 
 ---
 
 ## Phase 8. 테스트
 
-- [ ] `NotificationSubscription` / `NotificationDispatch` 도메인 단위 테스트
-- [ ] `NotificationScheduler` — TX A / TX B 분리, `ON CONFLICT DO NOTHING` 멱등성, `last_notified_at` 갱신 시점, DEAD 전환
-- [ ] `TemplateAgentClient` — AI 호출 성공 / non-2xx / 타임아웃 / 빈 title·body → fallback
-- [ ] ArchUnit — BC 간 직접 엔티티 참조 부재 검증
-- [ ] `./gradlew test` 전 구간 통과
+- [x] `NotificationSubscription` / `NotificationDispatch` 도메인 단위 테스트 — 상태 전이(FAILED→SUCCESS lastError 초기화), 5회 도달 시 DEAD, `MAX_ATTEMPTS==5`, `isPending`, filter 생성 경로(parsedFilter/JSON null/정규화)
+- [x] `NotificationScheduler` — TX A / TX B 분리, `ON CONFLICT DO NOTHING` 멱등성(`NotificationTxHelperTest`), `last_notified_at` 푸시 성공 시에만 전진, DEAD 전환(`DispatchRetrySchedulerTest`)
+- [x] `TemplateAgentClient` — AI 호출 성공 / non-2xx(4xx·5xx) / 타임아웃 / 빈 title·body → fallback (MockWebServer)
+- [x] ArchUnit — 모든 BC 쌍으로 cross-BC `domain` 엔티티 참조 금지 일반화(`HexagonalArchTest`)
+- [x] `./gradlew test` 전 구간 통과 — 6개 모듈 530 tests, 0 failures
 
 ---
 

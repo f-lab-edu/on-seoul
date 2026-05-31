@@ -8,6 +8,8 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -25,10 +27,14 @@ public class CollectionScheduler {
     @Scheduled(cron = "0 0 8 * * *")
     public void scheduledCollect() {
         log.info("스케줄 수집 시작");
+        // collectAll() 호출 직전 시각을 캡처한다. 임베딩 동기화 워커가 이 시각 이후
+        // service_change_log.changed_at 을 "이번 run의 변경분"으로 식별한다.
+        // 부분 실패해도 finally에서 이벤트를 발행하므로 시작 시각은 항상 전달된다.
+        Instant runStartedAt = Instant.now();
         try {
             collectDatasetUseCase.collectAll();
         } finally {
-            eventPublisher.publishEvent(new CollectionCompletedEvent());
+            eventPublisher.publishEvent(new CollectionCompletedEvent(runStartedAt));
             log.info("수집 완료 이벤트 발행");
         }
     }

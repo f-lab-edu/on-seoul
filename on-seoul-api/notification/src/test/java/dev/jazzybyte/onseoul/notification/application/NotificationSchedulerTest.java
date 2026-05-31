@@ -597,11 +597,11 @@ class NotificationSchedulerTest {
     // ── 이벤트 트리거 + 중복 실행 방지 (QA 회귀 테스트) ──────────────────────
 
     @Test
-    @DisplayName("이벤트 수신 시 알림 배치가 1회 실행된다 (onCollectionCompleted → processAllSubscriptions)")
-    void onCollectionCompleted_runsBatchOnce() {
+    @DisplayName("이벤트 수신 시 알림 배치가 1회 실행된다 (onEmbeddingSyncCompleted → processAllSubscriptions)")
+    void onEmbeddingSyncCompleted_runsBatchOnce() {
         when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
 
-        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
 
         verify(saveBatchPort).insertRunning(any());
         verify(saveBatchPort).update(any());
@@ -609,11 +609,11 @@ class NotificationSchedulerTest {
 
     @Test
     @DisplayName("배치 실행이 끝나면 running 플래그가 해제되어 다음 이벤트도 정상 실행된다")
-    void onCollectionCompleted_releasesFlagAfterRun_allowingNextEvent() {
+    void onEmbeddingSyncCompleted_releasesFlagAfterRun_allowingNextEvent() {
         when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
 
-        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
-        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
 
         // 두 번의 순차 이벤트 → 두 번 실행 (flag가 finally에서 해제됨)
         verify(saveBatchPort, org.mockito.Mockito.times(2)).insertRunning(any());
@@ -621,7 +621,7 @@ class NotificationSchedulerTest {
 
     @Test
     @DisplayName("배치 실행 중 예외가 나도 running 플래그가 해제된다 (finally)")
-    void onCollectionCompleted_resetsFlagEvenWhenBatchThrows() {
+    void onEmbeddingSyncCompleted_resetsFlagEvenWhenBatchThrows() {
         // stale 회수가 정상 종료 후, recoverStaleBatches 단계에서 던진 예외는 내부에서 삼켜진다.
         // 대신 update가 던지게 하여 processAllSubscriptions 종료 경로의 안정성과 flag 해제를 함께 검증한다.
         when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
@@ -631,9 +631,9 @@ class NotificationSchedulerTest {
                 .thenAnswer(inv -> inv.getArgument(0));
 
         // 1회차: update 예외를 내부에서 삼키고 종료 (flag 해제 기대)
-        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
         // 2회차: flag가 해제되었으므로 다시 실행되어야 한다
-        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
 
         // flag가 매번 해제됨을 증명 — insertRunning이 2회 호출됨
         verify(saveBatchPort, org.mockito.Mockito.times(2)).insertRunning(any());
@@ -641,7 +641,7 @@ class NotificationSchedulerTest {
 
     @Test
     @DisplayName("이미 실행 중(running=true)이면 동시 이벤트는 무시된다 (CAS 중복 방지)")
-    void onCollectionCompleted_concurrentEvent_isIgnoredWhileRunning() throws Exception {
+    void onEmbeddingSyncCompleted_concurrentEvent_isIgnoredWhileRunning() throws Exception {
         java.util.concurrent.CountDownLatch insideBatch = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch releaseBatch = new java.util.concurrent.CountDownLatch(1);
 
@@ -654,14 +654,14 @@ class NotificationSchedulerTest {
         });
 
         Thread first = new Thread(() ->
-                scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent()));
+                scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent()));
         first.start();
 
         // 첫 이벤트가 배치 내부(running=true)에 진입할 때까지 대기
         assertThat(insideBatch.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
 
         // 두 번째 이벤트: running=true이므로 즉시 무시되어야 한다 (insertRunning 추가 호출 없음)
-        scheduler.onCollectionCompleted(new dev.jazzybyte.onseoul.event.CollectionCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
 
         releaseBatch.countDown();
         first.join(5_000);

@@ -79,6 +79,40 @@ class TemplateAgentClientTest {
     }
 
     @Test
+    @DisplayName("generate() - AI가 4xx(400)을 반환하면 fallback 템플릿을 반환한다")
+    void generate_aiReturns400_returnsFallback() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(400));
+
+        TemplateResult result = client.generate(singleChangeRequest("SVC-400", "status", "예약가능", "마감"));
+
+        assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
+        assertThat(result.title()).contains("SVC-400");
+    }
+
+    @Test
+    @DisplayName("generate() - AI가 404를 반환하면 fallback 템플릿을 반환한다")
+    void generate_aiReturns404_returnsFallback() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(404));
+
+        TemplateResult result = client.generate(singleChangeRequest("SVC-404", "status", "예약가능", "마감"));
+
+        assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
+    }
+
+    @Test
+    @DisplayName("generate() - title/body가 모두 null이면 fallback을 사용한다")
+    void generate_bothNull_returnsFallback() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"title\":null,\"body\":null}"));
+
+        TemplateResult result = client.generate(singleChangeRequest("SVC-NULL", "status", "열림", "닫힘"));
+
+        assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
+    }
+
+    @Test
     @DisplayName("generate() - AI가 title 빈 문자열을 반환하면 fallback을 사용한다")
     void generate_emptyTitle_returnsFallback() {
         mockWebServer.enqueue(new MockResponse()

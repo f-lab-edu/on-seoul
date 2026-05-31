@@ -68,7 +68,7 @@ class UpsertServiceTest {
     }
 
     @Test
-    @DisplayName("DB에 없는 항목들은 모두 신규로 분류되어 save()가 호출된다")
+    @DisplayName("DB에 없는 항목들은 모두 신규로 분류되어 save()가 호출되고 NEW change_log가 기록된다")
     void upsert_allNew_savesAllAndCountsNew() {
         List<PublicServiceReservation> incoming = List.of(
                 reservation("SVC-001"), reservation("SVC-002"), reservation("SVC-003"));
@@ -81,7 +81,19 @@ class UpsertServiceTest {
         assertThat(result.updatedCount()).isZero();
         assertThat(result.unchangedCount()).isZero();
         verify(savePublicServicePort, times(3)).save(any());
-        verify(saveServiceChangeLogPort, never()).saveAll(anyList());
+
+        ArgumentCaptor<List<ServiceChangeLog>> logCaptor = ArgumentCaptor.forClass(List.class);
+        verify(saveServiceChangeLogPort).saveAll(logCaptor.capture());
+        List<ServiceChangeLog> logs = logCaptor.getValue();
+        assertThat(logs).hasSize(3);
+        assertThat(logs).allSatisfy(l -> {
+            assertThat(l.getChangeType()).isEqualTo(dev.jazzybyte.onseoul.collection.domain.ChangeType.NEW);
+            assertThat(l.getFieldName()).isNull();
+            assertThat(l.getOldValue()).isNull();
+            assertThat(l.getNewValue()).isNull();
+        });
+        assertThat(logs).extracting(ServiceChangeLog::getServiceId)
+                .containsExactlyInAnyOrder("SVC-001", "SVC-002", "SVC-003");
     }
 
     @Test

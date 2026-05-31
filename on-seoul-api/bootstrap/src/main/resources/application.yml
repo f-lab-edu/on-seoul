@@ -96,6 +96,9 @@ ai:
     url: ${AI_SERVICE_URL:http://localhost:8000}
     stream-timeout-seconds: 120
     template-timeout-seconds: 10  # ADR-0004: AI 호출 timeout
+    # Phase 7: 임베딩 동기화(POST /embeddings/services/sync) 호출 timeout.
+    # 청크당 최대 500건이므로 템플릿 생성보다 넉넉하게 설정한다.
+    embedding-sync-timeout-seconds: 30
 
 management:
   endpoints:
@@ -115,7 +118,8 @@ knock:
 notification:
   scheduler:
     # fixed-delay-ms 는 더 이상 사용되지 않는다.
-    # NotificationScheduler 는 CollectionCompletedEvent(수집 완료 이벤트) 수신 시 1회 실행된다.
+    # NotificationScheduler 는 EmbeddingSyncCompletedEvent(임베딩 동기화 완료 이벤트) 수신 시 1회 실행된다.
+    # 처리 순서: 수집 → 임베딩 동기화 → 알림.
     stale-threshold-ms: 600000   # 10분 — stale RUNNING batch 회수 임계값
   retry-scheduler:
     fixed-delay-ms: 3600000  # 1시간

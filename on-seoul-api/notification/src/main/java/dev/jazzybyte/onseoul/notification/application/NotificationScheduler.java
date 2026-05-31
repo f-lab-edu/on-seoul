@@ -1,6 +1,6 @@
 package dev.jazzybyte.onseoul.notification.application;
 
-import dev.jazzybyte.onseoul.event.CollectionCompletedEvent;
+import dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent;
 import dev.jazzybyte.onseoul.notification.domain.NotificationBatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
@@ -33,9 +33,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * ADR-0004 per-batch 알림 스케줄러.
  *
- * <p>트리거: {@link CollectionCompletedEvent} — 수집 완료 시 1회만 실행.
- * 수집 스케줄러(매일 08:00)가 이벤트를 발행하면 {@link #onCollectionCompleted(CollectionCompletedEvent)}가
- * 비동기로 기동한다. 5분마다 폴링하던 기존 방식 대신 인과관계를 코드로 표현한다.
+ * <p>트리거: {@link EmbeddingSyncCompletedEvent} — 임베딩 동기화 완료 시 1회만 실행.
+ * 처리 순서는 수집 → 임베딩 동기화 → 알림 이다. 수집 완료(CollectionCompletedEvent) 후
+ * EmbeddingSyncWorker가 임베딩 동기화를 끝내고 EmbeddingSyncCompletedEvent를 발행하면
+ * {@link #onEmbeddingSyncCompleted(EmbeddingSyncCompletedEvent)}가 비동기로 기동한다.
+ * 알림은 임베딩 동기화 단계 완료 후에만 실행된다(임베딩 실패해도 best-effort로 진행).
  *
  * <p>흐름:
  * <ol>
@@ -100,14 +102,14 @@ public class NotificationScheduler {
     }
 
     /**
-     * 수집 완료 이벤트 수신 → 알림 배치 실행.
+     * 임베딩 동기화 완료 이벤트 수신 → 알림 배치 실행.
      *
-     * <p>{@code @Async}로 수집 스레드를 블로킹하지 않는다.
+     * <p>{@code @Async}로 호출 스레드를 블로킹하지 않는다.
      * 이미 실행 중이면 이벤트를 무시한다 (일 1회 수집이므로 정상적으로는 중복이 없다).
      */
     @Async
     @EventListener
-    public void onCollectionCompleted(CollectionCompletedEvent event) {
+    public void onEmbeddingSyncCompleted(EmbeddingSyncCompletedEvent event) {
         if (!running.compareAndSet(false, true)) {
             log.warn("[NotificationScheduler] 이미 실행 중 — 이벤트 무시");
             return;

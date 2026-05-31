@@ -86,6 +86,63 @@ class NotificationDispatchTest {
     }
 
     @Test
+    @DisplayName("markFailed() 후 markSuccess()로 재전이하면 lastError가 null로 초기화된다")
+    void markSuccess_afterFailure_clearsLastError() {
+        NotificationDispatch dispatch = NotificationDispatch.create(7L, 10L);
+        dispatch.markFailed("이전 오류", "제목", "본문", TemplateSource.FALLBACK);
+        assertThat(dispatch.getLastError()).isEqualTo("이전 오류");
+
+        dispatch.markSuccess("최종 제목", "최종 본문", TemplateSource.AI);
+
+        assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.SUCCESS);
+        assertThat(dispatch.getLastError()).isNull();
+        assertThat(dispatch.getGeneratedTitle()).isEqualTo("최종 제목");
+        assertThat(dispatch.getTemplateSource()).isEqualTo(TemplateSource.AI);
+    }
+
+    @Test
+    @DisplayName("재시도 한도 도달 시나리오 — incrementAttemptCount 5회 후 markDead로 DEAD 전환")
+    void retryExhaustedThenMarkDead_transitionsToDead() {
+        NotificationDispatch dispatch = NotificationDispatch.create(7L, 10L);
+
+        // 5회 시도(증가) → 한도 도달
+        for (int i = 0; i < NotificationDispatch.MAX_ATTEMPTS; i++) {
+            assertThat(dispatch.isRetryExhausted())
+                    .as("attemptCount=%d 시점", dispatch.getAttemptCount())
+                    .isFalse();
+            dispatch.incrementAttemptCount();
+        }
+        assertThat(dispatch.isRetryExhausted()).isTrue();
+
+        dispatch.markDead("재시도 한도 초과");
+        assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.DEAD);
+        assertThat(dispatch.getLastError()).isEqualTo("재시도 한도 초과");
+        assertThat(dispatch.getAttemptCount()).isEqualTo(NotificationDispatch.MAX_ATTEMPTS);
+    }
+
+    @Test
+    @DisplayName("isPending() — PENDING이 아니면 false (SUCCESS/FAILED/DEAD)")
+    void isPending_falseForNonPendingStates() {
+        NotificationDispatch success = NotificationDispatch.create(7L, 10L);
+        success.markSuccess("t", "b", TemplateSource.AI);
+        assertThat(success.isPending()).isFalse();
+
+        NotificationDispatch failed = NotificationDispatch.create(7L, 10L);
+        failed.markFailed("e", "t", "b", TemplateSource.AI);
+        assertThat(failed.isPending()).isFalse();
+
+        NotificationDispatch dead = NotificationDispatch.create(7L, 10L);
+        dead.markDead("e");
+        assertThat(dead.isPending()).isFalse();
+    }
+
+    @Test
+    @DisplayName("MAX_ATTEMPTS는 5 (ADR-0004)")
+    void maxAttempts_isFive() {
+        assertThat(NotificationDispatch.MAX_ATTEMPTS).isEqualTo(5);
+    }
+
+    @Test
     @DisplayName("isRetryExhausted() — attemptCount=4이면 false, 5이면 true")
     void isRetryExhausted_boundaryValues() {
         NotificationDispatch dispatch = NotificationDispatch.create(7L, 10L);
