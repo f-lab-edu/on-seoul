@@ -48,7 +48,7 @@ class NotificationDispatchPersistenceAdapterTest {
     void setUp() {
         dev.jazzybyte.onseoul.notification.domain.NotificationSubscription sub =
                 dev.jazzybyte.onseoul.notification.domain.NotificationSubscription.create(
-                        10L, "SVC-SETUP", Set.of(NotificationChannel.EMAIL));
+                        10L, Set.of(NotificationChannel.EMAIL));
         subscriptionId = subscriptionAdapter.save(sub).getId();
 
         NotificationBatch batch = batchAdapter.insertRunning(NotificationBatch.start());
@@ -179,7 +179,7 @@ class NotificationDispatchPersistenceAdapterTest {
         // 다른 유저 (userId=999) 소유 subscription + dispatch
         Long otherSubId = subscriptionAdapter.save(
                 dev.jazzybyte.onseoul.notification.domain.NotificationSubscription.create(
-                        999L, "SVC-OTHER", Set.of(NotificationChannel.EMAIL))).getId();
+                        999L, Set.of(NotificationChannel.EMAIL))).getId();
         dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batchId, otherSubId));
 
         var list = dispatchAdapter.loadByUserId(10L, null, 50);
@@ -341,7 +341,7 @@ class NotificationDispatchPersistenceAdapterTest {
     void existsDeadDispatch_otherSubscription_returnsFalse() {
         Long otherSubId = subscriptionAdapter.save(
                 dev.jazzybyte.onseoul.notification.domain.NotificationSubscription.create(
-                        999L, "SVC-OTHER", Set.of(NotificationChannel.EMAIL))).getId();
+                        999L, Set.of(NotificationChannel.EMAIL))).getId();
 
         NotificationDispatch d = dispatchAdapter
                 .saveIfAbsent(NotificationDispatch.create(batchId, otherSubId))

@@ -56,8 +56,8 @@ class NotificationSubscriptionControllerTest {
 
     private SubscriptionView sampleView(Long id, Long userId) {
         return new SubscriptionView(
-                id, userId, "OA-2269",
-                SubscriptionFilter.empty(),
+                id, userId,
+                new SubscriptionFilter(Set.of("RECEIVING"), Set.of(), Set.of(), Set.of()),
                 Set.of(NotificationChannel.EMAIL),
                 null, Instant.parse("2026-05-01T00:00:00Z"));
     }
@@ -70,7 +70,7 @@ class NotificationSubscriptionControllerTest {
         mockMvc.perform(get("/api/notifications/subscriptions").requestAttr("userId", 1L))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.subscriptions[0].id").value(10))
-                .andExpect(jsonPath("$.subscriptions[0].serviceId").value("OA-2269"))
+                .andExpect(jsonPath("$.subscriptions[0].filter.statuses[0]").value("RECEIVING"))
                 .andExpect(jsonPath("$.subscriptions[0].channels[0]").value("EMAIL"));
     }
 
@@ -92,19 +92,30 @@ class NotificationSubscriptionControllerTest {
                         .requestAttr("userId", 1L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"serviceId":"OA-2269","channels":["EMAIL"]}
+                                {"filter":{"statuses":["RECEIVING"]},"channels":["EMAIL"]}
                                 """))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value(11));
     }
 
     @Test
-    @DisplayName("POST /api/notifications/subscriptions — serviceId 누락 → 400")
-    void create_missingServiceId_returns400() throws Exception {
+    @DisplayName("POST /api/notifications/subscriptions — 빈 필터(전체 구독) → 400")
+    void create_emptyFilter_returns400() throws Exception {
         mockMvc.perform(post("/api/notifications/subscriptions")
                         .requestAttr("userId", 1L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"channels\":[\"EMAIL\"]}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(createUseCase);
+    }
+
+    @Test
+    @DisplayName("POST /api/notifications/subscriptions — 키워드 4개 초과 → 400")
+    void create_tooManyKeywords_returns400() throws Exception {
+        mockMvc.perform(post("/api/notifications/subscriptions")
+                        .requestAttr("userId", 1L)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"filter\":{\"keywords\":[\"a\",\"b\",\"c\",\"d\"]},\"channels\":[\"EMAIL\"]}"))
                 .andExpect(status().isBadRequest());
         verifyNoInteractions(createUseCase);
     }
@@ -115,8 +126,44 @@ class NotificationSubscriptionControllerTest {
         mockMvc.perform(post("/api/notifications/subscriptions")
                         .requestAttr("userId", 1L)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"serviceId\":\"OA-2269\",\"channels\":[]}"))
+                        .content("{\"filter\":{\"statuses\":[\"RECEIVING\"]},\"channels\":[]}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("POST /api/notifications/subscriptions — 잘못된 keywordTargets 값(FOO) → 400, useCase 미호출")
+    void create_invalidKeywordTarget_returns400() throws Exception {
+        mockMvc.perform(post("/api/notifications/subscriptions")
+                        .requestAttr("userId", 1L)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"filter\":{\"keywords\":[\"수영\"],\"keywordTargets\":[\"FOO\"]},\"channels\":[\"EMAIL\"]}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(createUseCase);
+    }
+
+    @Test
+    @DisplayName("POST /api/notifications/subscriptions — 소문자 keywordTargets(service_name) → 400")
+    void create_lowercaseKeywordTarget_returns400() throws Exception {
+        mockMvc.perform(post("/api/notifications/subscriptions")
+                        .requestAttr("userId", 1L)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"filter\":{\"keywords\":[\"수영\"],\"keywordTargets\":[\"service_name\"]},\"channels\":[\"EMAIL\"]}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(createUseCase);
+    }
+
+    @Test
+    @DisplayName("POST /api/notifications/subscriptions — 유효 keywordTargets(SERVICE_NAME) happy path → 201")
+    void create_validKeywordTarget_returns201() throws Exception {
+        when(createUseCase.create(eq(1L), any(CreateSubscriptionCommand.class)))
+                .thenReturn(sampleView(12L, 1L));
+
+        mockMvc.perform(post("/api/notifications/subscriptions")
+                        .requestAttr("userId", 1L)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"filter\":{\"keywords\":[\"수영\"],\"keywordTargets\":[\"SERVICE_NAME\"]},\"channels\":[\"EMAIL\"]}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(12));
     }
 
     @Test
@@ -128,7 +175,7 @@ class NotificationSubscriptionControllerTest {
         mockMvc.perform(post("/api/notifications/subscriptions")
                         .requestAttr("userId", 1L)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"serviceId\":\"OA-2269\",\"channels\":[\"EMAIL\"]}"))
+                        .content("{\"filter\":{\"statuses\":[\"RECEIVING\"]},\"channels\":[\"EMAIL\"]}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("SUBSCRIPTION_CONFLICT"));
     }

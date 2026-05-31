@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.notification.application;
 
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
+import dev.jazzybyte.onseoul.notification.domain.KeywordTarget;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
 import dev.jazzybyte.onseoul.notification.domain.SubscriptionFilter;
@@ -25,7 +26,7 @@ import java.util.Set;
  * 알림 구독 관리 use case 집합 구현체.
  *
  * <p>권한 위반(다른 유저의 구독)은 {@code FORBIDDEN}, 미존재는 {@code SUBSCRIPTION_NOT_FOUND},
- * {@code (user_id, service_id)} 중복은 {@code SUBSCRIPTION_CONFLICT} 로 변환한다.
+ * 조건이 하나도 없는 빈 구독·키워드 한도 초과는 {@code INVALID_INPUT} 로 변환한다.
  *
  * <p>JSON 직렬화는 어댑터(persistence mapper) 책임이다. application 은 도메인 타입
  * ({@link SubscriptionFilter}, {@link NotificationChannel}) 만 다룬다.
@@ -54,19 +55,20 @@ public class NotificationSubscriptionService implements
     @Override
     @Transactional
     public SubscriptionView create(Long userId, CreateSubscriptionCommand cmd) {
-        requireServiceId(cmd.serviceId());
         Set<NotificationChannel> channels = requireNonEmptyChannels(cmd.channels());
         SubscriptionFilter filter = cmd.filter() != null ? cmd.filter() : SubscriptionFilter.empty();
+        requireAtLeastOneCondition(filter);
+        requireKeywordLimit(filter);
+        filter = normalizeKeywordTargets(filter);
 
         NotificationSubscription subscription =
-                NotificationSubscription.create(userId, cmd.serviceId(), filter, channels);
+                NotificationSubscription.create(userId, filter, channels);
 
         try {
             NotificationSubscription saved = saveSubscriptionPort.insert(subscription);
             return toView(saved);
         } catch (DataIntegrityViolationException ex) {
-            log.debug("[NotificationSubscription] 중복 구독 INSERT 차단: userId={}, serviceId={}",
-                    userId, cmd.serviceId());
+            log.debug("[NotificationSubscription] 구독 INSERT 제약 위반: userId={}", userId);
             throw new OnSeoulApiException(ErrorCode.SUBSCRIPTION_CONFLICT);
         }
     }
@@ -75,6 +77,12 @@ public class NotificationSubscriptionService implements
     @Transactional
     public SubscriptionView update(Long userId, Long subscriptionId, UpdateSubscriptionCommand cmd) {
         requireAnyUpdate(cmd);
+        SubscriptionFilter filter = cmd.filter();
+        if (filter != null) {
+            requireAtLeastOneCondition(filter);
+            requireKeywordLimit(filter);
+            filter = normalizeKeywordTargets(filter);
+        }
         NotificationSubscription existing = loadOwned(userId, subscriptionId);
 
         Set<NotificationChannel> channels = cmd.channels();
@@ -82,7 +90,7 @@ public class NotificationSubscriptionService implements
             channels = requireNonEmptyChannels(channels);
         }
         NotificationSubscription updated =
-                saveSubscriptionPort.updatePartial(existing.getId(), cmd.filter(), channels);
+                saveSubscriptionPort.updatePartial(existing.getId(), filter, channels);
         return toView(updated);
     }
 
@@ -99,7 +107,6 @@ public class NotificationSubscriptionService implements
         return new SubscriptionView(
                 s.getId(),
                 s.getUserId(),
-                s.getServiceId(),
                 filterParser.parse(s.getFilter()),
                 s.getChannels(),
                 s.getLastNotifiedAt(),
@@ -115,9 +122,33 @@ public class NotificationSubscriptionService implements
         return existing;
     }
 
-    private void requireServiceId(String serviceId) {
-        if (serviceId == null || serviceId.isBlank()) {
-            throw new OnSeoulApiException(ErrorCode.INVALID_INPUT, "serviceId 는 필수입니다.");
+    /** 빈 구독 가드: 필터 조건이 모두 비어 있으면 거부 (전체 변경 구독 방지). */
+    private void requireAtLeastOneCondition(SubscriptionFilter filter) {
+        if (filter == null || filter.isEmpty()) {
+            throw new OnSeoulApiException(ErrorCode.INVALID_INPUT,
+                    "필터 조건(상태/지역/카테고리/키워드) 중 최소 1개는 지정해야 합니다.");
+        }
+    }
+
+    /**
+     * 키워드 대상 정규화: 키워드가 있는데 keywordTargets 가 비어 있으면
+     * {@link KeywordTarget#serverDefaults()}(둘 다)로 채운다 — 기존 동작 보존 + 하위호환.
+     * 키워드 자체가 없으면 대상은 무의미하므로 그대로 둔다.
+     */
+    private SubscriptionFilter normalizeKeywordTargets(SubscriptionFilter filter) {
+        if (filter.keywords().isEmpty() || !filter.keywordTargets().isEmpty()) {
+            return filter;
+        }
+        return new SubscriptionFilter(
+                filter.statuses(), filter.areaNames(), filter.maxClassNames(),
+                filter.keywords(), KeywordTarget.serverDefaults());
+    }
+
+    /** 키워드 개수 제한 가드. */
+    private void requireKeywordLimit(SubscriptionFilter filter) {
+        if (filter != null && filter.keywords().size() > SubscriptionFilter.MAX_KEYWORDS) {
+            throw new OnSeoulApiException(ErrorCode.INVALID_INPUT,
+                    "키워드는 최대 " + SubscriptionFilter.MAX_KEYWORDS + "개까지 지정할 수 있습니다.");
         }
     }
 

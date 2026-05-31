@@ -9,7 +9,6 @@ import java.util.stream.Collectors;
 
 public record SubscriptionResponse(
         Long id,
-        String serviceId,
         FilterDto filter,
         Set<String> channels,
         Instant lastNotifiedAt,
@@ -21,7 +20,6 @@ public record SubscriptionResponse(
                 .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
         return new SubscriptionResponse(
                 view.id(),
-                view.serviceId(),
                 FilterDto.fromDomain(view.filter()),
                 channels,
                 view.lastNotifiedAt(),

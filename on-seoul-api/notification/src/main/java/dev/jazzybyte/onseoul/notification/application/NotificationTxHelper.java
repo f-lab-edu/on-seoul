@@ -63,7 +63,7 @@ public class NotificationTxHelper {
         SubscriptionFilter filter = subscriptionFilterParserPort.parse(sub.getFilter());
 
         List<ServiceChange> changes = loadServiceChangePort.loadFiltered(
-                sub.getServiceId(), filter, sub.getLastNotifiedAt(), batch.getStartedAt());
+                filter, sub.getLastNotifiedAt(), batch.getStartedAt());
 
         if (changes.isEmpty()) {
             return new TxAResult(List.of(), Optional.empty());

@@ -16,7 +16,6 @@ import java.util.Set;
 public record SubscriptionView(
         Long id,
         Long userId,
-        String serviceId,
         SubscriptionFilter filter,
         Set<NotificationChannel> channels,
         Instant lastNotifiedAt,
