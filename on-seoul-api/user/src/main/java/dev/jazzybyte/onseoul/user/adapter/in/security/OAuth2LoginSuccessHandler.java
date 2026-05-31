@@ -117,6 +117,11 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
             log.warn("[Security] OAuth2 로그인 실패: provider={}, providerId={}, error={}",
                     provider, providerId, ex.getMessage());
             response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=" + errorParam);
+        } catch (org.springframework.dao.DataAccessException ex) {
+            // Redis timeout(QueryTimeoutException) 등 데이터 접근 오류.
+            // catch하지 않으면 500으로 죽어 프론트 리다이렉트가 수행되지 않는다.
+            log.error("[Security] OAuth2 로그인 중 Redis 오류: provider={}, error={}", provider, ex.getMessage());
+            response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=server_error");
         }
     }
 
