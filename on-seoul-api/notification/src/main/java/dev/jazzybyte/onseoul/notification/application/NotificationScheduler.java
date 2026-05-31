@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.notification.application;
 
+import dev.jazzybyte.onseoul.event.CollectionCompletedEvent;
 import dev.jazzybyte.onseoul.notification.domain.NotificationBatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
@@ -17,7 +18,8 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -25,10 +27,15 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * ADR-0004 per-batch 알림 스케줄러.
+ *
+ * <p>트리거: {@link CollectionCompletedEvent} — 수집 완료 시 1회만 실행.
+ * 수집 스케줄러(매일 08:00)가 이벤트를 발행하면 {@link #onCollectionCompleted(CollectionCompletedEvent)}가
+ * 비동기로 기동한다. 5분마다 폴링하던 기존 방식 대신 인과관계를 코드로 표현한다.
  *
  * <p>흐름:
  * <ol>
@@ -68,6 +75,9 @@ public class NotificationScheduler {
     private final MeterRegistry meterRegistry;
     private final long staleThresholdMs;
 
+    /** 중복 실행 방지 플래그. 이벤트가 연속으로 두 번 오더라도 한 번만 처리한다. */
+    private final AtomicBoolean running = new AtomicBoolean(false);
+
     public NotificationScheduler(
             final LoadSubscriptionPort loadSubscriptionPort,
             final LoadUserContactPort loadUserContactPort,
@@ -89,9 +99,28 @@ public class NotificationScheduler {
         this.staleThresholdMs = staleThresholdMs;
     }
 
-    @Scheduled(fixedDelayString = "${notification.scheduler.fixed-delay-ms:300000}")
-    public void processAllSubscriptions() {
-        log.debug("[NotificationScheduler] 스케줄 실행 시작");
+    /**
+     * 수집 완료 이벤트 수신 → 알림 배치 실행.
+     *
+     * <p>{@code @Async}로 수집 스레드를 블로킹하지 않는다.
+     * 이미 실행 중이면 이벤트를 무시한다 (일 1회 수집이므로 정상적으로는 중복이 없다).
+     */
+    @Async
+    @EventListener
+    public void onCollectionCompleted(CollectionCompletedEvent event) {
+        if (!running.compareAndSet(false, true)) {
+            log.warn("[NotificationScheduler] 이미 실행 중 — 이벤트 무시");
+            return;
+        }
+        try {
+            processAllSubscriptions();
+        } finally {
+            running.set(false);
+        }
+    }
+
+    void processAllSubscriptions() {
+        log.debug("[NotificationScheduler] 배치 실행 시작");
 
         // 0. JVM 크래시로 complete()/fail() 호출 없이 종료된 stale RUNNING batch를 회수한다.
         recoverStaleBatches();
