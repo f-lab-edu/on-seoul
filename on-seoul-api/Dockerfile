@@ -26,5 +26,10 @@ COPY bootstrap/build/libs/bootstrap.jar app.jar
 # 서비스 포트 노출
 EXPOSE 8080
 
+# JVM DNS 캐시 TTL을 30초로 단축한다.
+# Docker 컨테이너 환경에서 Redis/DB 엔드포인트가 재배포 시 IP가 바뀔 수 있으므로
+# 기본값(무기한 캐시)을 유지하면 연결이 끊긴 이후에도 구 IP로 계속 시도한다.
+ENV JAVA_TOOL_OPTIONS="-Dnetworkaddress.cache.ttl=30"
+
 # 애플리케이션 실행
 ENTRYPOINT ["java", "-jar", "app.jar"]
