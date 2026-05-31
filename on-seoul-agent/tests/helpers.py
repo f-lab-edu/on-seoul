@@ -14,7 +14,16 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from agents.analytics_agent import AnalyticsAgent, _AnalyticsParams
-from agents.answer_agent import AnswerAgent, _TitleOutput
+from agents.answer_agent import (
+    AnswerAgent,
+    _TitleOutput,
+    _compose,
+    _OUTPUT_RULES,
+    _ROLE,
+    _STRUCT_ANALYTICS,
+    _STRUCT_FALLBACK,
+    _STRUCT_MAP,
+)
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.sql_agent import SqlAgent, _SqlParams
 from schemas.state import AgentState, IntentType
@@ -139,6 +148,13 @@ def make_answer_agent(
         return_value=_TitleOutput(title=title or "수영장 안내")
     )
     agent._title_chain = title_chain
+
+    # Tier 1 정적 프롬프트 캐시 — 실제 __init__과 동일한 값으로 초기화.
+    agent._static_prompts = {
+        IntentType.MAP.value: _compose(_ROLE, _STRUCT_MAP, _OUTPUT_RULES),
+        IntentType.ANALYTICS.value: _compose(_ROLE, _STRUCT_ANALYTICS, _OUTPUT_RULES),
+        IntentType.FALLBACK.value: _compose(_ROLE, _STRUCT_FALLBACK, _OUTPUT_RULES),
+    }
     return agent
 
 
