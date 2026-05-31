@@ -11,12 +11,12 @@ async def analytics_search(
     session: AsyncSession,
     *,
     group_by: str,
-    metric: Literal["count", "distinct"] = "count",
+    metric: Literal["count", "distinct"],
     max_class_name: str | None = None,
     area_name: str | None = None,
     service_status: str | None = None,
     keyword: str | None = None,
-    top_k: int = 20,
+    top_k: int = 25,
 ) -> list[dict]:
 ```
 
@@ -26,12 +26,12 @@ async def analytics_search(
 |---|---|---|
 | `session` | `AsyncSession` | `on_data_reader` 계정 세션 (SELECT 전용) |
 | `group_by` | `str` | 집계 차원. 허용값: `area_name` / `max_class_name` / `min_class_name` / `service_status` |
-| `metric` | `Literal["count", "distinct"]` | 집계 방식. `count`=건수 집계(GROUP BY COUNT), `distinct`=고유값 목록(SELECT DISTINCT). 기본값: `"count"` |
-| `max_class_name` | `str \| None` | 필터: 대분류 카테고리 (체육시설·문화행사·시설대관·교육·진료). None이면 미적용 |
+| `metric` | `Literal["count", "distinct"]` | 집계 방식. `count`=건수 집계(GROUP BY COUNT), `distinct`=고유값 목록(SELECT DISTINCT). 기본값 없는 필수 키워드 인자 |
+| `max_class_name` | `str \| None` | 필터: 대분류 카테고리 (체육시설·문화체험·공간시설·교육강좌·진료복지). None이면 미적용 |
 | `area_name` | `str \| None` | 필터: 서울 자치구 (예: 강남구). None이면 미적용 |
 | `service_status` | `str \| None` | 필터: 예약 상태 (접수중·예약마감·접수종료·예약일시중지·안내중). None이면 미적용 |
 | `keyword` | `str \| None` | 필터: 시설명·장소명 키워드 (`%keyword%` ILIKE). None이면 미적용 |
-| `top_k` | `int` | 최대 반환 건수. 기본값: 20 |
+| `top_k` | `int` | 최대 반환 건수. 기본값: 25 |
 
 ## 반환 스키마
 
@@ -52,14 +52,14 @@ async def analytics_search(
 ```python
 [
     {"group_value": "체육시설"},
-    {"group_value": "문화행사"},
+    {"group_value": "문화체험"},
     ...
 ]
 ```
 
 ## 차원 화이트리스트 (`_DIMENSION_COLUMNS`)
 
-컬럼명은 아래 dict의 값만 f-string에 삽입할 수 있다. dict 외의 값은 도구 진입 시 즉시 `ValueError`로 거부된다.
+컬럼명은 아래 dict의 값만 f-string에 삽입할 수 있다. `group_by` 키가 화이트리스트 dict에 없으면 `_DIMENSION_COLUMNS[group_by]` 조회가 도구 진입 시 즉시 `KeyError`를 발생시켜 DB 도달 전 차단한다.
 
 | `group_by` 입력값 | 실제 컬럼명 |
 |---|---|
@@ -79,7 +79,7 @@ _DIMENSION_COLUMNS: dict[str, str] = {
 
 ## 보안 노트
 
-- **컬럼명 인젝션 방지**: `group_by` 값은 화이트리스트 dict 조회로만 실제 컬럼명을 얻는다. dict 외 값은 `ValueError` 반환. f-string에 삽입되는 것은 dict의 값(하드코딩된 컬럼명)뿐이므로 SQL Injection이 불가능하다.
+- **컬럼명 인젝션 방지**: `group_by` 값은 화이트리스트 dict 조회로만 실제 컬럼명을 얻는다. dict 외 값은 `_DIMENSION_COLUMNS[group_by]` 조회에서 `KeyError`를 발생시켜 DB 도달 전 차단한다. f-string에 삽입되는 것은 dict의 값(하드코딩된 컬럼명)뿐이므로 SQL Injection이 불가능하다.
 - **필터값·top_k**: `max_class_name`, `area_name`, `service_status`, `keyword`, `top_k` 전부 SQLAlchemy bind 파라미터로 처리한다.
 - **세션 격리**: `on_data_reader` (SELECT 전용) 계정 세션만 사용한다. 쓰기 권한 없음.
 
@@ -119,5 +119,5 @@ kinds = await analytics_search(
     group_by="max_class_name",
     metric="distinct",
 )
-# [{"group_value": "체육시설"}, {"group_value": "문화행사"}, ...]
+# [{"group_value": "체육시설"}, {"group_value": "문화체험"}, ...]
 ```

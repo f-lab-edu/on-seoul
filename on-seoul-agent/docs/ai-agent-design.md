@@ -56,7 +56,7 @@ flowchart TD
     SEARCH_PERSIST --> TRACE
 ```
 
-각 노드는 공유 상태인 **`AgentState`** (TypedDict) 를 입력받아 부분 업데이트 dict를 반환한다. LangGraph가 상태 병합을 담당하므로 노드 내부에서 직접 변이하지 않는다. 그래프 전체에는 `recursion_limit=15`이 적용되어 무한 사이클을 방지한다.
+각 노드는 공유 상태인 **`AgentState`** (TypedDict) 를 입력받아 부분 업데이트 dict를 반환한다. LangGraph가 상태 병합을 담당하므로 노드 내부에서 직접 변이하지 않는다. 그래프 전체에는 `recursion_limit=16`이 적용되어 무한 사이클을 방지한다.
 
 > **종단 체인 일관성**: cache hit 경로도 `search_persist_node` 를 경유한다. 빈 `search_channels` 에서는 즉시 skip 되므로 오버헤드는 없으나, 명시적으로 통과시켜 "cache_write → search_persist → trace" 의 종단 체인 형태를 항상 동일하게 유지한다.
 
@@ -160,7 +160,7 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 집계 파라미터
 
 | 파라미터 | 설명 |
 |---|---|
-| `max_class_name` | 대분류 카테고리 (체육시설·문화행사·시설대관·교육·진료) |
+| `max_class_name` | 대분류 카테고리 (체육시설·문화체험·공간시설·교육강좌·진료복지) |
 | `area_name` | 서울 자치구 (예: 마포구) |
 | `service_status` | 예약 상태 (접수중·예약마감·접수종료·예약일시중지·안내중) |
 | `keyword` | 시설명·장소명 키워드 (`%keyword%` ILIKE) |
@@ -225,7 +225,7 @@ PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도
 | `area_name` | 필터: 서울 자치구. None이면 미적용 |
 | `service_status` | 필터: 예약 상태. None이면 미적용 |
 | `keyword` | 필터: 시설명·장소명 키워드 (`%keyword%` ILIKE). None이면 미적용 |
-| `top_k` | 최대 반환 건수 (기본값: 20) |
+| `top_k` | 최대 반환 건수 (기본값: 25) |
 
 반환: `metric=count` → `[{"group_value": ..., "count": ...}]`, `metric=distinct` → `[{"group_value": ...}]`. 결과가 없으면 빈 리스트.
 
@@ -342,7 +342,7 @@ needs_retry = not answer.strip() and retry_count == 0
 
 - `answer`가 비어 있을 때만 재검색이 의미 있다. error + fallback_answer 조합은 이미 최선의 응답이므로 재시도하지 않는다.
 - `retry_count >= 1`이면 항상 `trace_node` 로 진행 — 최대 1회 보장.
-- 추가로 그래프 호출 시 `recursion_limit=10`을 명시하여 어떤 경우에도 무한 사이클을 차단한다.
+- 추가로 그래프 호출 시 `recursion_limit=16`을 명시하여 어떤 경우에도 무한 사이클을 차단한다.
 
 ---
 
