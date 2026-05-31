@@ -43,6 +43,7 @@ class AgentState(TypedDict):
     analytics_results: list[dict[str, Any]] | None  # 집계 결과 행 (group_value/count)
     analytics_group_by: str | None  # 집계 차원 (area_name/max_class_name/min_class_name/service_status)
     analytics_metric: str | None  # 집계 metric (count / distinct)
+    analytics_keyword: str | None  # AnalyticsAgent가 LLM으로 추출한 키워드 (trace 관측용)
     # ─── Hydration (service_id → public_service_reservations 원본) ───
     # HydrationNode 가 검색 노드(sql/vector) 직후에 채우는 통합 슬롯.
     # AnswerAgent 등 후속 단계는 이 슬롯을 사용하여 검색 경로에 의존하지 않는다.

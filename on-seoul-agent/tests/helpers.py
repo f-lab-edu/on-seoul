@@ -13,6 +13,7 @@ AgentState에 필드가 추가될 때 make_agent_state만 수정하면 된다.
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from agents.analytics_agent import AnalyticsAgent, _AnalyticsParams
 from agents.answer_agent import AnswerAgent, _TitleOutput
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.sql_agent import SqlAgent, _SqlParams
@@ -41,6 +42,7 @@ def make_agent_state(**overrides: Any) -> AgentState:
         analytics_results=None,
         analytics_group_by=None,
         analytics_metric=None,
+        analytics_keyword=None,
         answer=None,
         title=None,
         trace=None,
@@ -80,6 +82,37 @@ def make_sql_agent(
     agent = SqlAgent.__new__(SqlAgent)
     chain = MagicMock()
     chain.ainvoke = AsyncMock(return_value=_SqlParams(keyword=keyword))
+    agent._chain = chain
+
+    mock_result = MagicMock()
+    mock_result.keys.return_value = list(rows[0].keys()) if rows else []
+    mock_result.fetchall.return_value = [tuple(r.values()) for r in rows]
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=mock_result)
+    return agent, session
+
+
+def make_analytics_agent(
+    rows: list[dict],
+    *,
+    group_by: str = "max_class_name",
+    metric: str = "count",
+    keyword: str | None = None,
+) -> tuple[AnalyticsAgent, MagicMock]:
+    """rows 를 반환하는 AnalyticsAgent mock + data_session mock.
+
+    _chain 은 주어진 group_by/metric/keyword 로 _AnalyticsParams 를 반환하고,
+    data_session.execute 는 rows 를 group_value/count 형태로 돌려준다.
+    """
+    agent = AnalyticsAgent.__new__(AnalyticsAgent)
+    chain = MagicMock()
+    chain.ainvoke = AsyncMock(
+        return_value=_AnalyticsParams(
+            group_by=group_by,  # type: ignore[arg-type]
+            metric=metric,  # type: ignore[arg-type]
+            keyword=keyword,
+        )
+    )
     agent._chain = chain
 
     mock_result = MagicMock()

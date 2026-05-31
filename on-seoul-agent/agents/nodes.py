@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agents.analytics_agent import AnalyticsAgent
 from agents.answer_agent import AnswerAgent
 from agents.hydration_node import HydrationNode
 from agents.router_agent import RouterAgent
@@ -84,6 +85,7 @@ class GraphNodes:
         sql_agent: SqlAgent,
         vector_agent: VectorAgent,
         answer_agent: AnswerAgent,
+        analytics_agent: AnalyticsAgent,
         redis: Any = None,
         hydration: HydrationNode | None = None,
     ) -> None:
@@ -91,6 +93,7 @@ class GraphNodes:
         self._sql = sql_agent
         self._vector = vector_agent
         self._answer = answer_agent
+        self._analytics = analytics_agent
         self._hydration = hydration or HydrationNode()
         self._cache_check = CacheCheckNode(redis=redis)
         self._cache_write = CacheWriteNode(redis=redis)
@@ -335,6 +338,40 @@ class GraphNodes:
             self.node_path.append("map_node")
             return {"map_results": None}
 
+    async def analytics_node(self, state: AgentState) -> dict[str, Any]:
+        """AnalyticsAgent.run() 호출 — analytics_results/group_by/metric 설정.
+
+        집계는 on_data(data_session) 에서 수행한다. hydration 없이 answer_node 로 직행한다.
+        search_channels 는 채우지 않으므로 search_persist_node 가 즉시 skip 한다.
+
+        graceful degrade:
+            _AnalyticsParams Literal+validator 로 group_by 화이트리스트를 강제하지만,
+            만일의 KeyError/DB 오류라도 미처리 500 으로 새지 않도록 예외를 잡아
+            빈 결과 + error + node_path "analytics_error" 로 처리한다.
+        """
+        assert self.data_session is not None
+        try:
+            new_state = await self._analytics.run(state, self.data_session)
+            self.node_path.append("analytics_node")
+            rows = new_state.get("analytics_results") or []
+            logger.info(
+                "analytics.results room=%s group_by=%s metric=%s count=%d",
+                state.get("room_id"),
+                new_state.get("analytics_group_by"),
+                new_state.get("analytics_metric"),
+                len(rows),
+            )
+            return {
+                "analytics_results": new_state.get("analytics_results"),
+                "analytics_group_by": new_state.get("analytics_group_by"),
+                "analytics_metric": new_state.get("analytics_metric"),
+                "analytics_keyword": new_state.get("analytics_keyword"),
+            }
+        except Exception as exc:
+            logger.exception("analytics_node 실행 오류")
+            self.node_path.append("analytics_error")
+            return {"analytics_results": [], "error": str(exc)}
+
     async def answer_node(self, state: AgentState) -> dict[str, Any]:
         """AnswerAgent.answer() 호출 — answer, title 설정."""
         if state.get("error") and state.get("answer"):
@@ -486,6 +523,22 @@ class GraphNodes:
             "elapsed_ms": elapsed_ms,
             "error": state.get("error"),
         }
+        # ANALYTICS 관측치는 chat_search_results(service_id/score) 스키마에 맞지 않으므로
+        # trace(JSONB) 확장으로 저장한다 (마이그레이션 없이, §4-4.1).
+        if state.get("intent") == IntentType.ANALYTICS:
+            analytics_rows = state.get("analytics_results") or []
+            trace_payload["analytics"] = {
+                "group_by": state.get("analytics_group_by"),
+                "metric": state.get("analytics_metric"),
+                "filters": {
+                    "max_class_name": state.get("max_class_name"),
+                    "area_name": state.get("area_name"),
+                    "service_status": state.get("service_status"),
+                    "keyword": state.get("analytics_keyword"),
+                },
+                "result_count": len(analytics_rows),
+                "result": analytics_rows,
+            }
         await _save_trace(self.ai_session, state["message_id"], trace_payload)
         return {"trace": trace_payload}
 
@@ -525,6 +578,8 @@ class GraphNodes:
             return "vector_node"
         elif intent == IntentType.MAP:
             return "map_node"
+        elif intent == IntentType.ANALYTICS:
+            return "analytics_node"
         else:
             return "answer_node"
 

@@ -33,6 +33,7 @@ def _make_nodes(
         sql_agent=sql_agent or MagicMock(),
         vector_agent=vector_agent or MagicMock(),
         answer_agent=answer_agent or MagicMock(),
+        analytics_agent=MagicMock(),
     )
     return nodes
 
