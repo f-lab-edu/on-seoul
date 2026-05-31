@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
@@ -12,7 +13,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmb
 from langchain_openai import ChatOpenAI
 
 from core.config import settings
-from core.exceptions import ConfigurationException
+from core.exceptions import ConfigurationException, RateLimitException
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ _gemini_embed_limiter = AsyncLimiter(max_rate=1, time_period=_EMBED_INTERVAL)
 
 _EMBED_MAX_RETRIES: int = 5
 _EMBED_RETRY_BASE_DELAY: float = 10.0  # 첫 429 대기 시간(초), 이후 2배씩 증가
+_EMBED_RETRY_MAX_DELAY: float = 60.0  # 단일 재시도 최대 대기 시간(초)
 
 
 def _rate_limited(limiter: AsyncLimiter) -> Callable:
@@ -103,14 +105,22 @@ class _GeminiEmbeddings(Embeddings):
             except Exception as exc:
                 is_rate_limit = isinstance(exc, ResourceExhausted)
                 if is_rate_limit and attempt < _EMBED_MAX_RETRIES - 1:
-                    delay = _EMBED_RETRY_BASE_DELAY * (2**attempt)
+                    delay = random.uniform(
+                        0,
+                        min(_EMBED_RETRY_BASE_DELAY * (2**attempt), _EMBED_RETRY_MAX_DELAY),
+                    )
                     logger.warning(
-                        "Gemini embed 429 (시도 %d/%d). %ds 후 재시도.",
+                        "Gemini embed 429 (시도 %d/%d). %.1fs 후 재시도.",
                         attempt + 1,
                         _EMBED_MAX_RETRIES,
                         delay,
                     )
                     await asyncio.sleep(delay)
+                elif is_rate_limit:
+                    raise RateLimitException(
+                        f"Gemini embed rate limit 소진 (최대 {_EMBED_MAX_RETRIES}회 재시도)",
+                        detail=exc,
+                    ) from exc
                 else:
                     raise
         raise RuntimeError("unreachable")  # pragma: no cover
