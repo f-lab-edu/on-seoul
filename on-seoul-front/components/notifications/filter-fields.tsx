@@ -97,7 +97,24 @@ export function FilterFields({ value, onChange }: FilterFieldsProps) {
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="text-sm font-medium">지역</legend>
+        <div className="flex items-center justify-between">
+          <legend className="text-sm font-medium">지역</legend>
+          <button
+            type="button"
+            onClick={() =>
+              onChange({
+                ...value,
+                areaNames:
+                  areaNames.length === SEOUL_DISTRICTS.length
+                    ? []
+                    : [...SEOUL_DISTRICTS],
+              })
+            }
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            {areaNames.length === SEOUL_DISTRICTS.length ? "전체 해제" : "전체 선택"}
+          </button>
+        </div>
         <div className="grid max-h-40 grid-cols-3 gap-1 overflow-y-auto rounded-md border border-border p-2 text-xs">
           {SEOUL_DISTRICTS.map((d) => {
             const id = `filter-area-${d}`;

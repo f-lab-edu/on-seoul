@@ -9,7 +9,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agents.answer_agent import AnswerAgent, _AnswerOutput, _TitleOutput
+from agents.answer_agent import AnswerAgent, _TitleOutput
 from agents.graph import AgentGraph
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.vector_agent import VectorAgent, _RefinedQuery
@@ -17,6 +17,7 @@ from schemas.state import AgentState, IntentType
 from tests.helpers import (
     make_agent_state,
     make_ai_session,
+    make_analytics_agent,
     make_answer_agent,
     make_router,
     make_sql_agent,
@@ -185,6 +186,153 @@ class TestConditionalEdgeRouting:
 
 
 # ---------------------------------------------------------------------------
+# 1b. ANALYTICS intent 경로 (analytics_node → answer_node, hydration 없음)
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsRoute:
+    async def test_analytics_route_reaches_answer(self):
+        """ANALYTICS intent → analytics_node 실행 → answer_node 도달."""
+        rows = [{"group_value": "강서구", "count": 7}]
+        analytics_agent, data_session = make_analytics_agent(
+            rows, group_by="area_name", keyword="테니스장"
+        )
+        graph = AgentGraph(
+            router=_router(IntentType.ANALYTICS),
+            analytics_agent=analytics_agent,
+            answer_agent=_answer_agent("강서구에 가장 많습니다."),
+        )
+        result = await graph.run(
+            _state(message="테니스장 자치구별 분포"),
+            data_session=data_session,
+            ai_session=_ai_session(),
+        )
+
+        assert result["intent"] == IntentType.ANALYTICS
+        assert result["analytics_results"] == rows
+        assert result["analytics_group_by"] == "area_name"
+        assert result["analytics_metric"] == "count"
+        assert result["answer"] == "강서구에 가장 많습니다."
+        assert result["error"] is None
+
+    async def test_analytics_skips_hydration_and_search_persist(self):
+        """analytics_node 는 hydration 을 거치지 않고 search_persist 채널을 쓰지 않는다."""
+        rows = [{"group_value": "체육시설", "count": 12}]
+        analytics_agent, data_session = make_analytics_agent(rows)
+        ai_session = _ai_session()
+
+        graph = AgentGraph(
+            router=_router(IntentType.ANALYTICS),
+            analytics_agent=analytics_agent,
+            answer_agent=_answer_agent("요약"),
+        )
+        result = await graph.run(
+            _state(),
+            data_session=data_session,
+            ai_session=ai_session,
+        )
+
+        # search_channels 미사용 → search_persist 는 chat_search_* 적재를 건너뛴다.
+        all_sqls = [str(c[0][0]) for c in ai_session.execute.call_args_list]
+        assert not any("chat_search_results" in sql for sql in all_sqls)
+        assert not any("chat_search_queries" in sql for sql in all_sqls)
+        # trace 는 종단 노드로 항상 적재된다.
+        assert any("chat_agent_traces" in sql for sql in all_sqls)
+        assert result["analytics_results"] == rows
+
+    async def test_analytics_node_graceful_degrade_on_exception(self):
+        """analytics_node 내부 예외 시 빈 결과 + error 로 graceful degrade 한다."""
+        analytics_agent, data_session = make_analytics_agent([])
+        analytics_agent._chain.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
+
+        graph = AgentGraph(
+            router=_router(IntentType.ANALYTICS),
+            analytics_agent=analytics_agent,
+            answer_agent=_answer_agent("그래도 답변"),
+        )
+        result = await graph.run(
+            _state(),
+            data_session=data_session,
+            ai_session=_ai_session(),
+        )
+
+        assert result["analytics_results"] == []
+        assert result["error"] is not None
+        # 예외에도 그래프는 종료되고 answer 가 채워진다.
+        assert result["answer"]
+
+    async def test_analytics_node_graceful_degrade_on_tool_db_error(self):
+        """analytics_search(도구) 가 DB 오류를 던져도 빈 결과 + error + analytics_error
+        node_path 로 graceful degrade 하고 answer_node 가 실행된다.
+
+        graceful_degrade_on_exception 은 LLM 체인 예외를 검증하지만, 설계 문서가
+        명시한 'KeyError/DB 오류' 는 도구 호출 경로의 예외다. 도구 자체를 강제로
+        터뜨려 analytics_node 의 try/except 가 그 경로도 포착하는지 봉인한다.
+        """
+        analytics_agent, data_session = make_analytics_agent(
+            [], group_by="area_name"
+        )
+
+        graph = AgentGraph(
+            router=_router(IntentType.ANALYTICS),
+            analytics_agent=analytics_agent,
+            answer_agent=_answer_agent("그래도 답변"),
+        )
+
+        with patch(
+            "agents.analytics_agent.analytics_search",
+            AsyncMock(side_effect=RuntimeError("DB down")),
+        ):
+            result = await graph.run(
+                _state(),
+                data_session=data_session,
+                ai_session=_ai_session(),
+            )
+
+        assert result["analytics_results"] == []
+        assert result["error"] is not None
+        # 예외에도 answer_node 가 실행되어 답변이 채워진다.
+        assert result["answer"] == "그래도 답변"
+        # node_path 에 analytics_error 가 기록되고 정상 analytics_node 는 없다.
+        assert "analytics_error" in graph._nodes.node_path
+        assert "analytics_node" not in graph._nodes.node_path
+        assert "answer_node" in graph._nodes.node_path
+        # trace 의 analytics 블록은 빈 결과로 적재된다 (intent==ANALYTICS 유지).
+        assert result["trace"]["analytics"]["result_count"] == 0
+
+    async def test_analytics_block_persisted_to_trace(self):
+        """trace_node 가 ANALYTICS 일 때 trace.analytics 블록을 적재한다."""
+        rows = [{"group_value": "강남구", "count": 4}]
+        analytics_agent, data_session = make_analytics_agent(
+            rows, group_by="area_name", keyword="수영장"
+        )
+        ai_session = _ai_session()
+
+        graph = AgentGraph(
+            router=_router(IntentType.ANALYTICS),
+            analytics_agent=analytics_agent,
+            answer_agent=_answer_agent("요약"),
+        )
+        result = await graph.run(
+            _state(),
+            data_session=data_session,
+            ai_session=ai_session,
+        )
+
+        trace = result["trace"]
+        assert "analytics" in trace
+        analytics = trace["analytics"]
+        assert analytics["group_by"] == "area_name"
+        assert analytics["metric"] == "count"
+        assert analytics["result_count"] == 1
+        assert analytics["result"] == rows
+        assert "filters" in analytics
+        # MAJOR 1: AnalyticsAgent 가 추출한 키워드가 trace filters 에 보존돼야 한다
+        # (ANALYTICS 경로는 sql_node 를 거치지 않으므로 analytics_keyword 슬롯으로 전달).
+        assert analytics["filters"]["keyword"] == "수영장"
+
+
+# ---------------------------------------------------------------------------
 # 2. trace_node 검증 (종단 노드)
 # ---------------------------------------------------------------------------
 
@@ -230,6 +378,29 @@ class TestTraceNode:
 
         assert result["answer"] == "답변"
 
+    async def test_non_analytics_intent_omits_analytics_block_from_trace(self):
+        """ANALYTICS 가 아닌 intent 의 trace 에는 analytics 블록이 없어야 한다 (회귀).
+
+        trace_node 의 analytics 블록 적재는 intent==ANALYTICS 가드 안에서만
+        일어나야 하며, SQL_SEARCH/VECTOR_SEARCH/MAP/FALLBACK 에는 누출되면 안 된다.
+        """
+        rows = [{"service_id": "S001", "service_name": "수영장"}]
+        sql_agent, data_session = _sql_agent(rows)
+
+        graph = AgentGraph(
+            router=_router(IntentType.SQL_SEARCH),
+            sql_agent=sql_agent,
+            answer_agent=_answer_agent("수영장 안내"),
+        )
+        result = await graph.run(
+            _state(),
+            data_session=data_session,
+            ai_session=_ai_session(),
+        )
+
+        assert result["intent"] == IntentType.SQL_SEARCH
+        assert "analytics" not in result["trace"]
+
     async def test_trace_has_required_fields(self):
         """결과 state의 trace에 intent, node_path, elapsed_ms가 존재한다."""
         _, data_session = _sql_agent([])
@@ -269,8 +440,8 @@ class TestSelfCorrectionCycle:
         answer_chain = MagicMock()
         answer_chain.ainvoke = AsyncMock(
             side_effect=[
-                _AnswerOutput(answer=""),  # 첫 번째: 빈 답변 → 재시도 트리거
-                _AnswerOutput(answer="재검색 후 답변"),  # 두 번째: 정상 답변
+                "",  # 첫 번째: 빈 답변 → 재시도 트리거
+                "재검색 후 답변",  # 두 번째: 정상 답변
             ]
         )
         agent._answer_chain = answer_chain
@@ -300,7 +471,7 @@ class TestSelfCorrectionCycle:
         agent = AnswerAgent.__new__(AnswerAgent)
         answer_chain = MagicMock()
         # 두 번 모두 빈 답변 반환 — 두 번째는 trace로 진행해야 한다
-        answer_chain.ainvoke = AsyncMock(return_value=_AnswerOutput(answer=""))
+        answer_chain.ainvoke = AsyncMock(return_value="")
         agent._answer_chain = answer_chain
         title_chain = MagicMock()
         title_chain.ainvoke = AsyncMock(return_value=_TitleOutput(title=""))
@@ -548,6 +719,29 @@ class TestAgentGraphStream:
         assert "routing" in progress_steps
         assert "searching" in progress_steps
         assert "answering" in progress_steps
+
+    async def test_analytics_route_emits_searching_progress(self):
+        """ANALYTICS 경로도 router 에서 'searching' progress 를 방출한다 (MAJOR 2).
+
+        회귀: ANALYTICS 가 searching intent 튜플에서 누락되면 LLM 추출 + DB 집계가
+        진행 중인데도 router_node 에서 조기에 answering 을 방출한다.
+        """
+        analytics_agent, data_session = make_analytics_agent(
+            [{"group_value": "강남구", "count": 4}], group_by="area_name"
+        )
+        graph = AgentGraph(
+            router=_router(IntentType.ANALYTICS),
+            analytics_agent=analytics_agent,
+            answer_agent=_answer_agent(),
+        )
+        events = await self._collect(
+            graph.stream(_state(), data_session=data_session, ai_session=_ai_session())
+        )
+
+        progress_steps = [d["step"] for t, d in events if t == "progress"]
+        assert "searching" in progress_steps
+        # searching 은 answering 보다 먼저 방출돼야 한다 (조기 answering 회귀 방어).
+        assert progress_steps.index("searching") < progress_steps.index("answering")
 
 
 # ---------------------------------------------------------------------------

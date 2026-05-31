@@ -15,7 +15,6 @@ DISTINCT ON (service_id) 패턴으로 중복을 제거한다.
     실행 계획이 단순해졌다. scan_k 파라미터도 제거했다.
     서브쿼리로 감싸 outer ORDER BY similarity DESC + LIMIT :top_k 를 적용함으로써
     service_id 알파벳 순이 아닌 유사도 내림차순으로 최종 결과를 정렬한다.
-    (EXPLAIN 분석: docs/question-search-query-analysis.md 참조)
 """
 
 from sqlalchemy import text

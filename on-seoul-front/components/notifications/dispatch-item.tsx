@@ -25,11 +25,8 @@ export function DispatchItem({ dispatch }: { dispatch: Dispatch }) {
   return (
     <article className="flex flex-col gap-1 rounded-lg border border-border bg-card p-4">
       <header className="flex items-start justify-between gap-2">
-        <div className="flex flex-col gap-0.5">
+        <div>
           <h3 className="text-sm font-medium">{dispatch.title}</h3>
-          <p className="text-xs text-muted-foreground">
-            {dispatch.serviceName ?? "서비스 정보 없음"}
-          </p>
         </div>
         <StatusBadge status={dispatch.status} />
       </header>
