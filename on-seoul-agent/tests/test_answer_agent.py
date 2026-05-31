@@ -500,6 +500,46 @@ class TestAnswerAgentDisplaySlice:
         rows[0]["service_name"] = "원본_변경"
         assert result["service_cards"][0]["service_name"] == snapshot_name
 
+    async def test_card_system_built_from_sliced_display_not_full_results(self):
+        """회귀: 카드형 system 프롬프트는 슬라이스된 display(상위 5건) 기준으로 조립된다.
+
+        6번째 이후에만 "접수중" 시설이 있고 상위 5건이 모두 비접수면,
+        _build_card_system 은 display 만 보므로 _CLAUSE_RESERVATION_GUIDE 를
+        포함하지 않는다. answer() 가 _build_card_system(message, display) 로
+        호출하는 현재 동작(라인 323)을 고정한다 — all_results 로 바뀌면 RED.
+        """
+        agent = _make_agent()
+        rows = [
+            {"service_id": f"S{i:03d}", "service_name": f"시설{i}", "service_status": "예약마감"}
+            for i in range(1, 6)
+        ]
+        # 6번째 행에만 접수중 — 슬라이스로 잘려나간다.
+        rows.append(
+            {"service_id": "S006", "service_name": "시설6", "service_status": "접수중"}
+        )
+        # 자치구 명시로 refine_hint 절은 배제하여 reservation_guide 판정만 격리.
+        state = _make_state(sql_results=rows, message="강남구 시설")
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        system_prompt = call_kwargs["system"]
+        assert _CLAUSE_RESERVATION_GUIDE not in system_prompt
+
+    async def test_card_system_includes_guide_when_open_facility_within_top_five(self):
+        """대조군: 접수중 시설이 상위 5건 안에 있으면 _CLAUSE_RESERVATION_GUIDE 포함."""
+        agent = _make_agent()
+        rows = [
+            {"service_id": "S001", "service_name": "시설1", "service_status": "접수중"},
+            {"service_id": "S002", "service_name": "시설2", "service_status": "예약마감"},
+        ]
+        state = _make_state(sql_results=rows, message="강남구 시설")
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        assert _CLAUSE_RESERVATION_GUIDE in call_kwargs["system"]
+
     async def test_hydrated_services_empty_plus_map_results(self):
         """hydrated_services=[]이고 map_results가 있으면 map features가 결과에 포함된다.
 
