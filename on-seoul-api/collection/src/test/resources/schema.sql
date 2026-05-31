@@ -99,5 +99,7 @@ CREATE TABLE IF NOT EXISTS service_change_log (
     field_name    VARCHAR(50),
     old_value     CLOB,
     new_value     CLOB,
-    changed_at    TIMESTAMP NOT NULL DEFAULT NOW()
+    -- 운영 DDL과 동일하게 TIMESTAMPTZ. LoadChangedServiceIdsPort.loadSince의
+    -- Instant→TIMESTAMPTZ 변환 경로(존 변환)를 테스트가 검증하도록 정렬한다.
+    changed_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
