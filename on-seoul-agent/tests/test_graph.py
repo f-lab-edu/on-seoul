@@ -1042,6 +1042,7 @@ class TestVectorNodeRateLimitPropagation:
             sql_agent=MagicMock(),
             vector_agent=vector_agent,
             answer_agent=_answer_agent(),
+            analytics_agent=MagicMock(),
         )
         nodes.prepare(data_session=MagicMock(), ai_session=_ai_session())
         return nodes
