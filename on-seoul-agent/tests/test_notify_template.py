@@ -4,9 +4,9 @@
 생성한다. 사실(서비스명·상태·접수기간·링크)은 Knock 이메일 Liquid 템플릿이
 결정적으로 렌더링하므로, AI는 행동 유도 하이라이트만 만든다.
 
-응답 계약은 {title, summary}이며, title·summary 둘 다 LLM이 생성한다.
-실제 LLM/외부 API 호출 없이 AsyncMock으로 LLM을 모킹한다.
-망 분리/Nginx 레벨 보호 가정이므로 엔드포인트에 별도 인증은 없다.
+응답 계약은 {title, summary}이며, title은 코드에서 결정적으로 생성하고
+summary만 LLM이 생성한다. 실제 LLM/외부 API 호출 없이 AsyncMock으로 LLM을
+모킹한다. 망 분리/Nginx 레벨 보호 가정이므로 엔드포인트에 별도 인증은 없다.
 """
 
 import asyncio
@@ -16,7 +16,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from routers.notification import _SummaryResponse
+from routers.notification import _HighlightResponse
 
 # ---------------------------------------------------------------------------
 # 픽스처
@@ -39,13 +39,12 @@ async def client(app: FastAPI) -> AsyncClient:
 
 
 def _make_llm_mock(
-    title: str = "관심 서비스 변경 알림",
     summary: str = "접수가 다시 시작됐어요. 마감 전에 확인해 보세요.",
 ):
-    """정상 title/summary를 반환하는 LLM chain mock을 생성한다."""
+    """정상 summary를 반환하는 LLM chain mock을 생성한다(title은 코드 생성)."""
     chain_mock = AsyncMock()
     chain_mock.ainvoke = AsyncMock(
-        return_value=_SummaryResponse(title=title, summary=summary)
+        return_value=_HighlightResponse(summary=summary)
     )
 
     llm_mock = AsyncMock()
@@ -82,9 +81,8 @@ def _single_group(service_id: str = "SVC001", **overrides) -> dict:
 
 class TestCreateTemplateSuccess:
     async def test_single_group_returns_200(self, client: AsyncClient):
-        """서비스 그룹 1개 → 200, LLM이 생성한 title/summary를 그대로 반환."""
+        """서비스 그룹 1개 → 200, title은 코드 생성·summary는 LLM 반환."""
         llm_mock, _ = _make_llm_mock(
-            title="접수가 다시 시작됐어요",
             summary="강남구 자유수영 접수가 재개됐어요. 마감 전 신청하세요.",
         )
 
@@ -93,8 +91,12 @@ class TestCreateTemplateSuccess:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["title"] == "접수가 다시 시작됐어요"
-        assert data["summary"]
+        assert "온서울 맞춤" in data["title"]  # 코드 결정적 생성 포맷
+        assert "1개" in data["title"]  # service_count=1
+        assert "공공서비스 정보" in data["title"]
+        assert (
+            data["summary"] == "강남구 자유수영 접수가 재개됐어요. 마감 전 신청하세요."
+        )
         assert "body" not in data
 
     async def test_multiple_groups_new_and_updated_returns_200(
@@ -102,7 +104,6 @@ class TestCreateTemplateSuccess:
     ):
         """여러 서비스 그룹(NEW+UPDATED 혼합) → 200."""
         llm_mock, _ = _make_llm_mock(
-            title="구독하신 2개 서비스 변경 알림",
             summary="2건의 변경이 있어요. 자유수영 접수 재개에 주목하세요.",
         )
 
@@ -135,7 +136,8 @@ class TestCreateTemplateSuccess:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["title"]
+        assert "온서울 맞춤" in data["title"]
+        assert "2개" in data["title"]  # service_count=2
         assert data["summary"]
 
     async def test_invokes_llm_with_single_retry(self, client: AsyncClient):
@@ -292,16 +294,7 @@ class TestCreateTemplateDegrade:
         self, client: AsyncClient
     ):
         """LLM이 공백만 있는 summary 반환 → 503."""
-        llm_mock, _ = _make_llm_mock(title="제목", summary="   ")
-
-        with patch("routers.notification.get_chat_model", return_value=llm_mock):
-            response = await client.post("/notification/template", json=_single_group())
-
-        assert response.status_code == 503
-
-    async def test_llm_returns_whitespace_title_yields_503(self, client: AsyncClient):
-        """LLM이 공백만 있는 title 반환 → 503."""
-        llm_mock, _ = _make_llm_mock(title="  ", summary="요약입니다.")
+        llm_mock, _ = _make_llm_mock(summary="   ")
 
         with patch("routers.notification.get_chat_model", return_value=llm_mock):
             response = await client.post("/notification/template", json=_single_group())
@@ -440,7 +433,7 @@ class TestServiceSerialization:
 
         async def _capture(messages, *args, **kwargs):
             captured["messages"] = messages
-            return _SummaryResponse(title="t", summary="s")
+            return _HighlightResponse(summary="s")
 
         chain_mock = AsyncMock()
         chain_mock.ainvoke = _capture

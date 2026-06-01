@@ -74,9 +74,10 @@ class NotificationTemplateRequest(BaseModel):
 class NotificationTemplateResponse(BaseModel):
     """알림 응답.
 
-    title/summary 모두 LLM이 생성한다. summary는 사실 재나열이 아니라 짧은
-    요약/하이라이트다 — 서비스명·상태·접수기간·링크 같은 사실은 소비자(API
-    서비스)의 Knock 이메일 Liquid 템플릿이 결정적으로 렌더링한다.
+    title은 코드에서 결정적으로 생성한다(날짜·서비스 건수 기반). summary만 LLM이
+    생성하며, 사실 재나열이 아니라 짧은 요약/하이라이트다 — 서비스명·상태·접수기간
+    ·링크 같은 사실은 소비자(API 서비스)의 Knock 이메일 Liquid 템플릿이
+    결정적으로 렌더링한다.
     """
 
     title: str

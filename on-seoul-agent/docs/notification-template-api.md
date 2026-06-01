@@ -8,7 +8,7 @@
 
 ## 1. 개요
 
-API 서비스는 서울 공공서비스 예약 데이터를 일 1회 수집한 뒤, 구독 조건에 맞는 변경(신규/변경/삭제)을 감지한다. 변경이 감지된 **구독 1건마다** 이 AI 엔드포인트를 1회 호출하여, 해당 구독자에게 보낼 **알림 제목(`title`)과 요약/하이라이트(`summary`)** 를 생성받는다.
+API 서비스는 서울 공공서비스 예약 데이터를 일 1회 수집한 뒤, 구독 조건에 맞는 변경(신규/변경/삭제)을 감지한다. 변경이 감지된 **구독 1건마다** 이 AI 엔드포인트를 1회 호출하여, 해당 구독자에게 보낼 **알림 제목(`title`)과 요약/하이라이트(`summary`)** 를 생성받는다. 단, `title`은 라우터 코드가 날짜·서비스 개수로 결정적으로 생성하고 **AI(LLM)는 `summary`만 생성**한다.
 
 > **역할 재정의(중요)**: 서비스명·상태·접수기간·링크 같은 "사실 정보"는 소비자(API 서비스)의 **Knock 이메일 Liquid 템플릿이 표/카드로 결정적(deterministic)으로 렌더링**한다. 따라서 AI는 사실을 본문에 재나열하지 않고, **"무엇을 주목해야 하는지"만 담은 짧은 요약/하이라이트(`summary`)** 만 생성한다. 이전 설계(서비스명·링크·상태를 `body`에 필수 포함하는 완성 본문 생성)는 **폐기**됐다 — AI의 링크·상태 환각 위험이 사라지고 책임이 명확해진다.
 
@@ -90,11 +90,11 @@ JSON 필드명은 **snake_case**다(Spring DTO가 `@JsonProperty`로 snake_case 
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `title` | string | 알림 제목/SMS 첫 줄. **non-null & 공백 아님**. LLM 생성 |
+| `title` | string | 알림 제목/SMS 첫 줄. **non-null & 공백 아님**. **라우터 코드가 결정적으로 생성**(LLM 아님): `온서울 맞춤 {월}월 {일}일 공공서비스 정보 - {service_count}개` |
 | `summary` | string | 짧은 요약/하이라이트(2~3문장 이내). **non-null & 공백 아님**. LLM 생성 |
 
 > **유효성 규칙(중요)**: 클라이언트는 `title`과 `summary`가 **둘 다 non-null이고 `!isBlank()`** 일 때만 AI 응답을 채택한다. 둘 중 하나라도 null·빈문자·공백이면 클라이언트가 fallback으로 전환한다.
-> → **AI는 어떤 경우에도 의미 있는 `title`·`summary`를 반드시 채워야 한다.** 빈 문자열이나 공백만 채운 응답은 사실상 fallback과 동일하게 취급된다.
+> → `title`은 코드가 결정적으로 생성하므로 항상 non-blank가 보장된다. **AI는 의미 있는 `summary`를 반드시 채워야 한다.** 빈 문자열이나 공백만 채운 `summary`는 503으로 degrade된다(§4.3).
 > **`summary`는 사실 재나열이 아니다.** 서비스명·상태·접수기간·링크는 Knock Liquid 템플릿이 별도로 보여주므로, `summary`에는 "무엇을 주목할지"(접수 임박·신규·종료·상태 변화)만 담는다(§4.2).
 
 ### 2.3 Pydantic 모델 제안 (`schemas/notification.py` 신규)
@@ -252,7 +252,7 @@ class NotificationTemplateResponse(BaseModel):
 
 - **프롬프트 배치**: `llm/prompts/notification.py` 신규. 시스템 프롬프트(`NOTIFICATION_SYSTEM`)와 Few-shot 예시를 `router.py`처럼 모듈 상수로 둔다. 프롬프트를 라우터/스키마에 인라인하지 않는다.
 - **입력 직렬화**: `NotificationTemplateRequest.services`를 사람이 읽기 쉬운 형태로 정리해 프롬프트에 넣는다(예: 서비스별로 `service_name`/`area_name`/`service_url`/접수기간 + `changes` 요약을 한 블록으로). `image_url`은 메시지 생성에 직접 쓰지 않으니 생략 가능. 여러 서비스를 **그룹 단위로 구분**해 전달하면 LLM이 하나의 summary로 묶기 쉽다.
-- **호출**: `get_chat_model().with_structured_output(_SummaryResponse)` LCEL 체인. 구조화 출력으로 `{title, summary}` 누락을 모델 단에서 강제한다. `_SummaryResponse`는 라우터 내부 전용 모델(`title`, `summary`)이며, 응답 직전 검증 후 `NotificationTemplateResponse`로 옮긴다.
+- **호출**: `get_chat_model().with_structured_output(_HighlightResponse)` LCEL 체인. 구조화 출력으로 `{summary}` 누락을 모델 단에서 강제한다. `_HighlightResponse`는 라우터 내부 전용 모델(`summary`만)이며, 응답 직전 검증 후 `title`(코드 생성)과 함께 `NotificationTemplateResponse`로 옮긴다.
 - **service_id 비노출**: 입력 직렬화 시 각 서비스 블록 헤더를 `[서비스 N]` 인덱스로만 표기하고 `service_id`는 절대 프롬프트에 넣지 않는다(출력 누출 구조적 차단).
 - **온도**: `temperature=0.0`~`0.3` 권장(알림은 톤 일관성이 중요, 과한 창의성 불필요).
 - **provider/timeout**: `get_chat_model`이 이미 `timeout=30`(Gemini) / `request_timeout=30`(OpenAI), `max_retries=3`을 설정한다. 단 **소비자 타임아웃은 10초**(§6)이므로, 이 엔드포인트의 실효 응답은 10초 내여야 한다. LLM 호출에 `asyncio.wait_for(..., timeout=<10초 미만, 예: 8초>)`를 걸어 클라이언트 타임아웃 전에 자체 degrade(§5)로 빠지도록 한다. self-timeout 초과 시 명확한 에러로 전환(§5) — API 서비스의 10초 타임아웃이 발동하기 전에 빠진다.
@@ -264,21 +264,22 @@ class NotificationTemplateResponse(BaseModel):
 - **사실 재나열 금지**: 서비스명·상태·접수기간·링크는 Knock Liquid 템플릿이 표/카드로 보여주므로, `summary`에서 모두 옮겨 적지 않는다. AI는 "무엇을 주목할지"에 집중한다.
 - **행동 유도 우선순위**: 접수 임박(`receiptEndDt` 가까움) > 신규 등장(`NEW`) > 상태 변화(접수 재개 등) > 종료(`DELETED`) > 기타. 가장 가치 높은 1~2건만 골라 강조.
 - **여러 서비스**: "구독하신 조건에 N건의 변경이 있어요" 류로 묶고, 가장 중요한 1~2건만 하이라이트. **전부 나열 금지.**
-- **title**: 짧게(권장 ~25자). 서비스 1개면 그 변경의 핵심(예: `접수가 다시 시작됐어요`), 여러 개면 묶음 안내(예: `구독하신 3개 서비스 변경 알림`) 또는 가장 임박한 항목 기반 짧은 제목.
+- **title**: LLM이 생성하지 않는다. 라우터 코드(`_make_title`)가 `온서울 맞춤 {월}월 {일}일 공공서비스 정보 - {service_count}개` 포맷으로 결정적으로 생성한다.
 - **summary**: 2~3문장 이내(SMS 고려). 한국어 필수.
 - **노출 금지**: `service_id`, `[서비스 N]` 인덱스, `field_name`의 camelCase 값(serviceStatus 등) 같은 내부 식별자. `service_status` 변경값(접수중/예약마감 등 한글 표시명)은 필요 시 자연스럽게 사용 가능.
 - **change_type별 톤**: `NEW`=등장 안내, `UPDATED`=변경/행동 유도, `DELETED`=차분한 종료 안내.
 - **추측 금지**: 입력에 없는 사실(일정·가격·링크)을 지어내지 않는다.
 - **봉인 평가셋(`scripts/eval/eval_set_holdout.tsv`)은 프롬프트/few-shot에 절대 사용 금지**(검색 recall 평가셋이며 본 프롬프트와 무관하지만 명시적으로 금지).
 
-`title`·`summary` **둘 다 LLM이 생성**한다(구조화 출력). title을 코드에서 건수 기반으로 결정 생성하던 이전 방식(`_make_title`)은 제거했다 — 임박/신규 등 맥락을 반영한 제목이 더 자연스럽고, 건수 기반 제목은 소비자 fallback이 이미 담당하기 때문이다.
+`summary`만 LLM이 생성한다(구조화 출력 `{summary}`). `title`은 라우터 코드(`_make_title(len(req.services))`)가 날짜·서비스 개수로 결정적으로 생성한다 — LLM이 만든 제목은 일관성이 없어, 브랜드 톤(`온서울 맞춤 …`)을 고정하기 위해 코드 생성으로 되돌렸다.
 
 ### 4.3 빈 응답 방지(핵심)
 
-§2.2 유효성 규칙상 빈 title/summary는 fallback과 동일하다. 구현은 **LLM 결과를 그대로 반환하기 전에 자체 검증**한다.
+§2.2 유효성 규칙상 빈 summary는 fallback과 동일하다. 구현은 **LLM 결과를 그대로 반환하기 전에 자체 검증**한다.
 
-- 구조화 출력이라도 모델이 공백을 채울 수 있으므로, 반환 직전 `title.strip()` / `summary.strip()`이 비어 있지 않은지 확인한다.
-- 둘 중 하나라도 비어 있으면 503으로 전환한다 — **공백 응답을 200으로 흘려보내지 않는다.**
+- 구조화 출력이라도 모델이 공백을 채울 수 있으므로, 반환 직전 `summary.strip()`이 비어 있지 않은지 확인한다.
+- 비어 있으면 503으로 전환한다 — **공백 응답을 200으로 흘려보내지 않는다.**
+- `title`은 코드 생성이므로 빈 값이 될 수 없어 별도 검증하지 않는다.
 
 ---
 
@@ -288,7 +289,7 @@ class NotificationTemplateResponse(BaseModel):
 |---|---|---|
 | 입력 검증 실패(필수 필드 누락, `change_type` enum 위반, `services` 빈 리스트, 그룹별 `changes` 빈 배열 등) | **422** (Pydantic + `main.py`의 `validation_exception_handler`) | 별도 코드 불필요. 모델 정의만으로 동작 |
 | LLM 호출 실패(타임아웃/네트워크/파싱) | **503** | 아래 참고 |
-| LLM 결과가 빈 title/summary | **503** | §4.3 |
+| LLM 결과가 빈 summary | **503** | §4.3 (title은 코드 생성이라 빈 값 불가) |
 
 > **현재 구현**은 LLM 실패·타임아웃·빈 응답을 모두 **503**(detail: `알림 템플릿 생성에 실패했습니다.`)로 degrade한다. 소비자는 503을 fallback 트리거로 처리하므로 알림 누락은 발생하지 않는다.
 
@@ -372,14 +373,15 @@ async def create_template(
             detail="template generation failed",
         ) from exc
 
-    # 빈 응답 방지(§4.3): 공백 title/summary를 200으로 흘려보내지 않는다.
-    if not result.title.strip() or not result.summary.strip():
+    # 빈 응답 방지(§4.3): 공백 summary를 200으로 흘려보내지 않는다.
+    if not result.summary.strip():
         logger.warning("notification template 공백 응답, degrade")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="empty template",
         )
-    return result
+    # title은 코드 결정적 생성, summary는 LLM 생성
+    return NotificationTemplateResponse(title=_make_title(len(req.services)), summary=result.summary)
 ```
 
 - `main.py` 등록: 기존 `app.include_router(...)` 블록에 추가.
@@ -410,6 +412,7 @@ app.include_router(notification_router.router)
 
 | 날짜 | 변경 내용 | 사유 |
 |---|---|---|
+| 2026-06-01 | **`title` 생성 출처를 LLM → 코드로 변경.** `summary`만 LLM이 생성하고(`_HighlightResponse{summary}`), `title`은 라우터 코드 `_make_title(len(req.services))`가 `온서울 맞춤 {월}월 {일}일 공공서비스 정보 - {service_count}개` 포맷으로 결정적 생성. 프롬프트(`NOTIFICATION_SYSTEM`)·few-shot에서 `title` 제거(출력 JSON `{summary}`만). degrade 검사는 빈 `summary`→503만 유지(빈 `title` 검사 제거). 응답 계약 `{title, summary}`·유효성(둘 다 non-blank)·타임아웃·fallback 규칙은 불변. | LLM이 생성하던 제목이 일관성이 없어 브랜드 톤(`온서울 맞춤 …`)을 코드로 고정 |
 | 2026-06-01 | **역할 재정의: "완성 본문(`body`) 생성" → "요약/하이라이트(`summary`) 생성".** 응답 계약 `{title, body}` → `{title, summary}`. AI는 서비스명·상태·접수기간·링크 같은 사실을 재나열하지 않고 행동 유도 하이라이트(접수 임박·신규·종료·상태 변화)만 생성. `title`도 LLM이 맥락 반영해 생성(이전 `_make_title` 건수 기반 코드 생성 제거 → `_SummaryResponse{title, summary}` 구조화 출력). 프롬프트(`NOTIFICATION_SYSTEM`)·few-shot 전면 교체. 빈 title 또는 빈 summary → 503. | 사실 표시 책임이 소비자(API 서비스)의 Knock 이메일 Liquid 템플릿(표/카드 결정적 렌더링)으로 이전됨 — AI가 사실을 본문에 재나열할 필요가 사라지고 링크·상태 환각 위험이 제거됨 |
 | 2026-06-01 | `changes[].field_name` **값**을 snake_case → camelCase로 정정(예: `receipt_end_dt`→`receiptEndDt`, `service_status`→`serviceStatus`). JSON 키 자체는 snake_case 유지. §2에 키/값 표기 차이 명시 추가. `service_status` 예시값을 영문 enum(`RECEIPT`/`END`) → 서울 OpenAPI SVCSTATNM 한글 표시명(접수중/예약마감)으로 교체. | collection의 UpsertService가 실제 기록하는 `field_name` 값은 camelCase 엔티티 필드명이며, `service_status` 저장값은 한글 표시명이라 기존 예시가 구현 세션을 오도함 |
 | 2026-06-01 | **요청 계약을 단일 `service_id` → 서비스 그룹 리스트(`services[]`) 구조로 전환.** `ServiceChange` → `ChangeItem` 개명, `ServiceChangeGroup`(메타 필드 nullable + `changes`) 신설, `NotificationTemplateRequest.services: list[ServiceChangeGroup]`. `services` 빈 리스트 / 그룹별 `changes` 빈 배열 422. 프롬프트 가이드에 "여러 서비스를 하나의 body로 묶기" + 메타(이름/링크/지역/접수기간) 활용 추가. 응답 계약(`{title, body}`)·유효성·타임아웃·fallback 규칙은 불변. | 알림 구독이 조건 기반이라 하나의 구독이 여러 `service_id`에 동시 매칭됨 — 단일 구조로는 여러 서비스 변경을 한 body로 묶지 못함 |
