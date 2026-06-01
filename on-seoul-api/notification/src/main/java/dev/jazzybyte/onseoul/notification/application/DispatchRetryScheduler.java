@@ -1,11 +1,13 @@
 package dev.jazzybyte.onseoul.notification.application;
 
+import dev.jazzybyte.onseoul.notification.domain.NotificationContent;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
+import dev.jazzybyte.onseoul.notification.port.out.NotificationContentSerializerPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -39,18 +41,21 @@ public class DispatchRetryScheduler {
     private final LoadUserContactPort loadUserContactPort;
     private final PushNotificationPort pushNotificationPort;
     private final NotificationTxHelper txHelper;
+    private final NotificationContentSerializerPort contentSerializer;
 
     public DispatchRetryScheduler(
             final LoadDispatchPort loadDispatchPort,
             final LoadSubscriptionPort loadSubscriptionPort,
             final LoadUserContactPort loadUserContactPort,
             final PushNotificationPort pushNotificationPort,
-            final NotificationTxHelper txHelper) {
+            final NotificationTxHelper txHelper,
+            final NotificationContentSerializerPort contentSerializer) {
         this.loadDispatchPort = loadDispatchPort;
         this.loadSubscriptionPort = loadSubscriptionPort;
         this.loadUserContactPort = loadUserContactPort;
         this.pushNotificationPort = pushNotificationPort;
         this.txHelper = txHelper;
+        this.contentSerializer = contentSerializer;
     }
 
     @Scheduled(fixedDelayString = "${notification.retry-scheduler.fixed-delay-ms:3600000}")
@@ -106,11 +111,14 @@ public class DispatchRetryScheduler {
                     return new UserContact(sub.getUserId(), null, null);
                 });
 
+        // notification_payload != null → 저장된 구조화 콘텐츠를 복원하여 무손실 재발송.
+        // null(09 마이그레이션 이전 row 또는 직렬화 실패) → generated_title/body 평문 폴백.
+        NotificationContent content = resolveContent(dispatch);
+
         try {
             pushNotificationPort.send(
                     recipient,
-                    dispatch.getGeneratedTitle(),
-                    dispatch.getGeneratedBody(),
+                    content,
                     dispatch.getId(),
                     sub.getChannels());
 
@@ -146,5 +154,19 @@ public class DispatchRetryScheduler {
                         dispatch.getId(), e.getMessage());
             }
         }
+    }
+
+    /**
+     * 저장된 notification_payload(JSON)를 {@link NotificationContent}로 복원한다.
+     * payload가 null/blank/파싱 실패면 generated_title/generated_body로 최소 콘텐츠를 구성한다
+     * (구조화 카드 없는 평문 폴백 — 09 마이그레이션 이전 row 호환).
+     */
+    private NotificationContent resolveContent(NotificationDispatch dispatch) {
+        NotificationContent restored = contentSerializer.deserialize(dispatch.getNotificationPayload());
+        if (restored != null) {
+            return restored;
+        }
+        return new NotificationContent(
+                dispatch.getGeneratedTitle(), dispatch.getGeneratedBody(), List.of());
     }
 }

@@ -25,6 +25,12 @@ public class NotificationDispatch {
     private TemplateSource templateSource;
     private String lastError;
     private int attemptCount;
+    /**
+     * 발송 콘텐츠({@code NotificationContent})의 직렬화 JSON 문자열 (재시도 무손실 복원용).
+     * 직렬화/역직렬화는 어댑터/매퍼 계층 책임 — 도메인은 raw String만 보관한다.
+     * 09 마이그레이션 이전 row 또는 조립 전이면 null.
+     */
+    private String notificationPayload;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -33,7 +39,7 @@ public class NotificationDispatch {
                                 DispatchStatus status,
                                 Instant sentAt, String generatedTitle, String generatedBody,
                                 TemplateSource templateSource, String lastError,
-                                int attemptCount,
+                                int attemptCount, String notificationPayload,
                                 Instant createdAt, Instant updatedAt) {
         this.id = id;
         this.batchId = batchId;
@@ -45,6 +51,7 @@ public class NotificationDispatch {
         this.templateSource = templateSource;
         this.lastError = lastError;
         this.attemptCount = attemptCount;
+        this.notificationPayload = notificationPayload;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }
@@ -62,6 +69,14 @@ public class NotificationDispatch {
         d.createdAt = now;
         d.updatedAt = now;
         return d;
+    }
+
+    /**
+     * 발송 콘텐츠 직렬화 JSON을 할당한다(발송 직전 호출).
+     * 직렬화는 어댑터/매퍼 계층에서 수행하고, 결과 raw String만 도메인에 전달한다.
+     */
+    public void assignPayload(String notificationPayload) {
+        this.notificationPayload = notificationPayload;
     }
 
     /** 성공 기록. */

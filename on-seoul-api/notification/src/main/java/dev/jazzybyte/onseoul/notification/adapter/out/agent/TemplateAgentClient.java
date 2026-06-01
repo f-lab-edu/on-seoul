@@ -45,7 +45,7 @@ class TemplateAgentClient implements TemplateGenerationPort {
                 log.debug("[TemplateAgent] AI 템플릿 생성 성공: serviceCount={}", request.services().size());
                 return mapper.toDomain(response);
             }
-            log.warn("[TemplateAgent] AI 응답 유효하지 않음(빈 title/body), fallback 사용: serviceCount={}", request.services().size());
+            log.warn("[TemplateAgent] AI 응답 유효하지 않음(빈 title/summary), fallback 사용: serviceCount={}", request.services().size());
         } catch (WebClientResponseException e) {
             log.warn("[TemplateAgent] AI 호출 non-2xx({}), fallback 사용: serviceCount={}", e.getStatusCode(), request.services().size());
         } catch (Exception e) {

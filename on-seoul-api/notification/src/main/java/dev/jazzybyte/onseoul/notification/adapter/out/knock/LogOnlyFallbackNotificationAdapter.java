@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.notification.adapter.out.knock;
 
 import dev.jazzybyte.onseoul.notification.domain.FallbackReason;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
+import dev.jazzybyte.onseoul.notification.domain.NotificationContent;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.FallbackNotificationPort;
 import lombok.extern.slf4j.Slf4j;
@@ -30,7 +31,7 @@ import java.util.Set;
 public class LogOnlyFallbackNotificationAdapter implements FallbackNotificationPort {
 
     @Override
-    public void sendFallback(UserContact recipient, String title, String body,
+    public void sendFallback(UserContact recipient, NotificationContent content,
                              Long dispatchId, Set<NotificationChannel> channels,
                              FallbackReason reason, Throwable cause) {
         log.error(

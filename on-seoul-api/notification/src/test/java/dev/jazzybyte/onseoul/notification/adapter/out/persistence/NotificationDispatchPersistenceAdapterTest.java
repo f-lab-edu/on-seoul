@@ -126,6 +126,28 @@ class NotificationDispatchPersistenceAdapterTest {
     }
 
     @Test
+    @DisplayName("save() assignPayload 후 저장/재조회 — notification_payload(JSONB) 라운드트립")
+    void save_withNotificationPayload_roundTrips() {
+        NotificationDispatch saved = dispatchAdapter
+                .saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId))
+                .orElseThrow();
+
+        String payload = "{\"title\":\"제목\",\"summary\":\"요약\",\"services\":[]}";
+        saved.markSuccess("제목", "요약", TemplateSource.AI);
+        saved.assignPayload(payload);
+        dispatchAdapter.save(saved);
+
+        em.flush();
+        em.clear();
+
+        Optional<NotificationDispatch> reloaded =
+                dispatchAdapter.loadByBatchAndSubscription(batchId, subscriptionId);
+
+        assertThat(reloaded).isPresent();
+        assertThat(reloaded.get().getNotificationPayload()).isEqualTo(payload);
+    }
+
+    @Test
     @DisplayName("loadByBatchAndSubscription() — 저장된 dispatch 반환")
     void loadByBatchAndSubscription_returnsPresent() {
         dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId));

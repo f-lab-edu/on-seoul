@@ -94,8 +94,10 @@ class KnockNotificationAdapterIntegrationTest {
         // 예외 없이 완료되면 성공. Knock 대시보드 > Logs 에서 수신 확인.
         adapter.send(
                 recipient,
-                "[on-seoul] 서비스 변경 알림 (이메일 연동 테스트)",
-                "안녕하세요. ON-Seoul 입니다.\nOA-2266 체육시설 예약 서비스의 상태가 변경되었습니다.",
+                new dev.jazzybyte.onseoul.notification.domain.NotificationContent(
+                        "[on-seoul] 서비스 변경 알림 (이메일 연동 테스트)",
+                        "안녕하세요. ON-Seoul 입니다.\nOA-2266 체육시설 예약 서비스의 상태가 변경되었습니다.",
+                        java.util.List.of()),
                 99901L,
                 Set.of(NotificationChannel.EMAIL)
         );
@@ -117,8 +119,10 @@ class KnockNotificationAdapterIntegrationTest {
         // 예외 없이 완료되면 성공. Knock 대시보드 > Logs 에서 수신 확인.
         adapter.send(
                 recipient,
-                "[on-seoul] 서비스 변경 알림 (SMS 연동 테스트)",
-                "OA-2269 문화행사 예약 서비스의 상태가 변경되었습니다.",
+                new dev.jazzybyte.onseoul.notification.domain.NotificationContent(
+                        "[on-seoul] 서비스 변경 알림 (SMS 연동 테스트)",
+                        "OA-2269 문화행사 예약 서비스의 상태가 변경되었습니다.",
+                        java.util.List.of()),
                 99902L,
                 Set.of(NotificationChannel.SMS)
         );

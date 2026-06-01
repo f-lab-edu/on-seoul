@@ -25,6 +25,6 @@ class TemplateAgentDtoMapper {
     }
 
     TemplateResult toDomain(TemplateAgentResponse response) {
-        return new TemplateResult(response.title(), response.body(), TemplateSource.AI);
+        return new TemplateResult(response.title(), response.summary(), TemplateSource.AI);
     }
 }
