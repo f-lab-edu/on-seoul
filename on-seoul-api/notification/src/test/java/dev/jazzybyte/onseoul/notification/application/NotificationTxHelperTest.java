@@ -75,7 +75,8 @@ class NotificationTxHelperTest {
     }
 
     private ServiceChange changeAt(Instant changedAt) {
-        return new ServiceChange(10L, "OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", changedAt);
+        return new ServiceChange(10L, "OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", changedAt,
+                "수영교실", null, null, null, null, "RECEIVING", null, null, null);
     }
 
     private NotificationDispatch pendingDispatch() {

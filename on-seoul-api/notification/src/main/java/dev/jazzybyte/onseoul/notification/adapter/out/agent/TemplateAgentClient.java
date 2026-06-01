@@ -42,17 +42,17 @@ class TemplateAgentClient implements TemplateGenerationPort {
                     .block();
 
             if (response != null && response.isValid()) {
-                log.debug("[TemplateAgent] AI 템플릿 생성 성공: serviceId={}", request.serviceId());
+                log.debug("[TemplateAgent] AI 템플릿 생성 성공: serviceCount={}", request.services().size());
                 return mapper.toDomain(response);
             }
-            log.warn("[TemplateAgent] AI 응답 유효하지 않음(빈 title/body), fallback 사용: serviceId={}", request.serviceId());
+            log.warn("[TemplateAgent] AI 응답 유효하지 않음(빈 title/body), fallback 사용: serviceCount={}", request.services().size());
         } catch (WebClientResponseException e) {
-            log.warn("[TemplateAgent] AI 호출 non-2xx({}), fallback 사용: serviceId={}", e.getStatusCode(), request.serviceId());
+            log.warn("[TemplateAgent] AI 호출 non-2xx({}), fallback 사용: serviceCount={}", e.getStatusCode(), request.services().size());
         } catch (Exception e) {
             if (e.getCause() instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            log.warn("[TemplateAgent] AI 호출 실패({}), fallback 사용: serviceId={}", e.getClass().getSimpleName(), request.serviceId());
+            log.warn("[TemplateAgent] AI 호출 실패({}), fallback 사용: serviceCount={}", e.getClass().getSimpleName(), request.services().size());
         }
         return NotificationTemplate.render(request);
     }

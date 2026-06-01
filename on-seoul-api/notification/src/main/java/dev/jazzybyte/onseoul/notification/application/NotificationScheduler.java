@@ -23,6 +23,8 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -220,11 +222,9 @@ public class NotificationScheduler {
                              List<ServiceChange> changes, NotificationDispatch dispatch,
                              AtomicInteger sentCount, AtomicInteger failedCount) {
         // TX 밖: 배치 템플릿 생성 (구독 1건 = AI 호출 1회)
-        // 구독은 더 이상 serviceId에 고정되지 않으므로, 템플릿 요청의 serviceId는
-        // 매칭된 변경의 대표 serviceId(첫 변경)에서 가져온다.
-        String serviceId = changes.get(0).serviceId();
+        // 하나의 구독 필터가 여러 service_id에 매칭될 수 있으므로 service_id 단위로 그룹핑한다.
         TemplateResult template = templateGenerationPort.generate(
-                new NotificationTemplateRequest(serviceId, toChangeItems(changes)));
+                new NotificationTemplateRequest(toServiceGroups(changes)));
 
         Counter.builder("notification.template.source")
                 .tag("source", template.source().name())
@@ -283,10 +283,28 @@ public class NotificationScheduler {
         }
     }
 
-    private List<NotificationTemplateRequest.ChangeItem> toChangeItems(List<ServiceChange> changes) {
-        return changes.stream()
-                .map(c -> new NotificationTemplateRequest.ChangeItem(
-                        c.changeType(), c.fieldName(), c.oldValue(), c.newValue()))
+    /**
+     * 변경 목록을 service_id 단위로 그룹핑한다.
+     * {@link LinkedHashMap}으로 입력 순서(= changed_at asc)를 보존한다.
+     * 각 그룹의 메타(serviceName 등)는 그 서비스의 첫 ServiceChange에서 가져온다.
+     */
+    private List<NotificationTemplateRequest.ServiceChangeGroup> toServiceGroups(List<ServiceChange> changes) {
+        LinkedHashMap<String, List<ServiceChange>> byServiceId = new LinkedHashMap<>();
+        for (ServiceChange c : changes) {
+            byServiceId.computeIfAbsent(c.serviceId(), k -> new ArrayList<>()).add(c);
+        }
+        return byServiceId.values().stream()
+                .map(group -> {
+                    ServiceChange first = group.get(0);
+                    List<NotificationTemplateRequest.ChangeItem> items = group.stream()
+                            .map(c -> new NotificationTemplateRequest.ChangeItem(
+                                    c.changeType(), c.fieldName(), c.oldValue(), c.newValue()))
+                            .toList();
+                    return new NotificationTemplateRequest.ServiceChangeGroup(
+                            first.serviceId(), first.serviceName(), first.serviceUrl(), first.imageUrl(),
+                            first.placeName(), first.areaName(), first.serviceStatus(), first.targetInfo(),
+                            first.receiptStartDt(), first.receiptEndDt(), items);
+                })
                 .toList();
     }
 

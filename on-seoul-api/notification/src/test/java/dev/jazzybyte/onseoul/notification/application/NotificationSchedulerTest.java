@@ -94,7 +94,8 @@ class NotificationSchedulerTest {
 
     private ServiceChange change(Long id, String serviceId) {
         return new ServiceChange(id, serviceId, "UPDATED", "service_status",
-                "RECEIVING", "CLOSED", Instant.now());
+                "RECEIVING", "CLOSED", Instant.now(),
+                serviceId + "-name", null, null, null, null, "RECEIVING", null, null, null);
     }
 
     private NotificationDispatch dispatch(Long subId) {
@@ -567,13 +568,17 @@ class NotificationSchedulerTest {
     }
 
     @Test
-    @DisplayName("templateGenerationPort에 변경 목록이 List<ChangeItem>으로 전달된다")
-    void templateRequest_carriesBatchedChangeItems() {
+    @DisplayName("같은 serviceId의 변경들은 하나의 그룹으로 묶여 changes 목록에 순서대로 담긴다")
+    void templateRequest_sameServiceId_groupedIntoSingleGroup() {
         NotificationSubscription s = sub(1L);
         ServiceChange c1 = new ServiceChange(100L, "OA-2269", "UPDATED",
-                "service_status", "RECEIVING", "CLOSED", Instant.now());
+                "service_status", "RECEIVING", "CLOSED", Instant.now(),
+                "수영교실", "https://ex.com/1", null, "강남센터", "강남구", "RECEIVING",
+                "성인", "2026-05-01T00:00Z", "2026-05-31T00:00Z");
         ServiceChange c2 = new ServiceChange(101L, "OA-2269", "UPDATED",
-                "receipt_end_dt", "2026-05-01", "2026-05-31", Instant.now());
+                "receipt_end_dt", "2026-05-01", "2026-05-31", Instant.now(),
+                "수영교실", "https://ex.com/1", null, "강남센터", "강남구", "RECEIVING",
+                "성인", "2026-05-01T00:00Z", "2026-05-31T00:00Z");
         NotificationDispatch d = dispatch(1L);
 
         when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of(s));
@@ -588,10 +593,46 @@ class NotificationSchedulerTest {
         verify(templateGenerationPort).generate(captor.capture());
         NotificationTemplateRequest req = captor.getValue();
 
-        assertThat(req.serviceId()).isEqualTo("OA-2269");
-        assertThat(req.changes()).hasSize(2);
-        assertThat(req.changes().get(0).fieldName()).isEqualTo("service_status");
-        assertThat(req.changes().get(1).fieldName()).isEqualTo("receipt_end_dt");
+        assertThat(req.services()).hasSize(1);
+        NotificationTemplateRequest.ServiceChangeGroup g = req.services().get(0);
+        assertThat(g.serviceId()).isEqualTo("OA-2269");
+        assertThat(g.serviceName()).isEqualTo("수영교실");
+        assertThat(g.serviceUrl()).isEqualTo("https://ex.com/1");
+        assertThat(g.changes()).hasSize(2);
+        assertThat(g.changes().get(0).fieldName()).isEqualTo("service_status");
+        assertThat(g.changes().get(1).fieldName()).isEqualTo("receipt_end_dt");
+    }
+
+    @Test
+    @DisplayName("여러 serviceId가 섞인 변경은 입력 순서를 보존한 N개 그룹으로 묶여 1회 generate 호출된다")
+    void templateRequest_multipleServiceIds_groupedPreservingOrder() {
+        NotificationSubscription s = sub(1L);
+        ServiceChange a = change(100L, "OA-A");
+        ServiceChange b1 = change(101L, "OA-B");
+        ServiceChange b2 = change(102L, "OA-B");
+        ServiceChange c = change(103L, "OA-C");
+        NotificationDispatch d = dispatch(1L);
+
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of(s));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s)))
+                .thenReturn(txAResult(List.of(a, b1, b2, c), d));
+        when(templateGenerationPort.generate(any()))
+                .thenReturn(new TemplateResult("t", "b", TemplateSource.AI));
+
+        scheduler.processAllSubscriptions();
+
+        ArgumentCaptor<NotificationTemplateRequest> captor =
+                ArgumentCaptor.forClass(NotificationTemplateRequest.class);
+        verify(templateGenerationPort).generate(captor.capture());
+        NotificationTemplateRequest req = captor.getValue();
+
+        // 3개 그룹: OA-A, OA-B, OA-C — 입력 순서(changed_at asc) 보존
+        assertThat(req.services()).extracting(NotificationTemplateRequest.ServiceChangeGroup::serviceId)
+                .containsExactly("OA-A", "OA-B", "OA-C");
+        // OA-B 그룹은 변경 2건을 가진다
+        assertThat(req.services().get(1).changes()).hasSize(2);
+        assertThat(req.services().get(0).changes()).hasSize(1);
+        assertThat(req.services().get(2).changes()).hasSize(1);
     }
 
     // ── 이벤트 트리거 + 중복 실행 방지 (QA 회귀 테스트) ──────────────────────
