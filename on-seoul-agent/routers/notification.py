@@ -87,9 +87,10 @@ def _build_messages(
 
 async def _invoke_llm(req: NotificationTemplateRequest) -> NotificationTemplateResponse:
     """LLM을 호출하여 NotificationTemplateResponse를 반환한다."""
-    # self-timeout(8s)과 정합하도록 SDK 타임아웃을 좁힌다. 알림은 지연 민감 경로라
-    # 재시도 1회로 충분하다.
-    llm = get_chat_model(temperature=0.2, timeout=8, max_retries=1)
+    # Gemini API의 최솟값(10s) 제약으로 SDK timeout을 self-timeout(8s) 이하로
+    # 설정할 수 없다. SDK timeout은 기본값(30s)을 사용하고 asyncio.wait_for가
+    # consumer 계약(10s)을 보장한다. max_retries=1로 알림 경로 재시도는 최소화.
+    llm = get_chat_model(temperature=0.2, max_retries=1)
     chain = llm.with_structured_output(NotificationTemplateResponse)
     return await chain.ainvoke(_build_messages(req))
 

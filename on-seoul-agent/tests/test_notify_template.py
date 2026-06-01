@@ -146,10 +146,10 @@ class TestCreateTemplateSuccess:
         assert response.status_code == 200
         assert url in response.json()["body"]
 
-    async def test_invokes_llm_with_narrowed_timeout_and_single_retry(
-        self, client: AsyncClient
-    ):
-        """알림 경로는 지연 민감 → get_chat_model(timeout=8, max_retries=1)로 호출한다."""
+    async def test_invokes_llm_with_single_retry(self, client: AsyncClient):
+        """알림 경로는 지연 민감 → max_retries=1로 호출한다.
+        Gemini API 최솟값(10s) 제약으로 timeout은 기본값(30s) 사용.
+        asyncio.wait_for(8s)가 consumer 계약(10s)을 보장한다."""
         llm_mock, _ = _make_llm_mock()
 
         with patch(
@@ -160,7 +160,7 @@ class TestCreateTemplateSuccess:
         assert response.status_code == 200
         factory.assert_called_once()
         kwargs = factory.call_args.kwargs
-        assert kwargs["timeout"] == 8
+        assert "timeout" not in kwargs  # Gemini 최솟값 10s 제약, 기본값(30s) 사용
         assert kwargs["max_retries"] == 1
         assert kwargs["temperature"] == 0.2
 
