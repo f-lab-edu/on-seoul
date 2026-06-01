@@ -55,12 +55,12 @@ class TemplateAgentClientTest {
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"title\":\"제목\",\"body\":\"본문\"}"));
+                .setBody("{\"title\":\"제목\",\"summary\":\"본문\"}"));
 
         TemplateResult result = client.generate(singleChangeRequest("SVC-001", "status", "예약가능", "마감"));
 
         assertThat(result.title()).isEqualTo("제목");
-        assertThat(result.body()).isEqualTo("본문");
+        assertThat(result.summary()).isEqualTo("본문");
         assertThat(result.source()).isEqualTo(TemplateSource.AI);
 
         RecordedRequest recorded = mockWebServer.takeRequest();
@@ -78,7 +78,8 @@ class TemplateAgentClientTest {
 
         assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
         assertThat(result.title()).contains("SVC-001");
-        assertThat(result.body()).contains("status");
+        // 사실(field/old/new)은 Knock 카드가 그리므로 fallback summary는 serviceId 기반 안내만 담는다.
+        assertThat(result.summary()).contains("SVC-001");
     }
 
     @Test
@@ -108,7 +109,7 @@ class TemplateAgentClientTest {
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"title\":null,\"body\":null}"));
+                .setBody("{\"title\":null,\"summary\":null}"));
 
         TemplateResult result = client.generate(singleChangeRequest("SVC-NULL", "status", "열림", "닫힘"));
 
@@ -121,7 +122,7 @@ class TemplateAgentClientTest {
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"title\":\"\",\"body\":\"본문\"}"));
+                .setBody("{\"title\":\"\",\"summary\":\"본문\"}"));
 
         TemplateResult result = client.generate(singleChangeRequest("SVC-002", "name", "구장", "체육관"));
 
@@ -134,7 +135,7 @@ class TemplateAgentClientTest {
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"title\":\"제목\",\"body\":null}"));
+                .setBody("{\"title\":\"제목\",\"summary\":null}"));
 
         TemplateResult result = client.generate(singleChangeRequest("SVC-003", "date", "1월", "2월"));
 
@@ -165,7 +166,7 @@ class TemplateAgentClientTest {
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"title\":\"제목\",\"body\":\"본문\"}")
+                .setBody("{\"title\":\"제목\",\"summary\":\"본문\"}")
                 .setBodyDelay(3, TimeUnit.SECONDS));
 
         TemplateResult result = fastClient.generate(
@@ -180,7 +181,7 @@ class TemplateAgentClientTest {
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"title\":\"제목\",\"body\":\"   \"}"));
+                .setBody("{\"title\":\"제목\",\"summary\":\"   \"}"));
 
         TemplateResult result = client.generate(singleChangeRequest("SVC-005", "location", "서울", "부산"));
 
@@ -193,7 +194,7 @@ class TemplateAgentClientTest {
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"title\":\"t\",\"body\":\"b\"}"));
+                .setBody("{\"title\":\"t\",\"summary\":\"b\"}"));
 
         NotificationTemplateRequest request = new NotificationTemplateRequest(List.of(
                 new NotificationTemplateRequest.ServiceChangeGroup(
@@ -234,7 +235,7 @@ class TemplateAgentClientTest {
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"title\":\"t\",\"body\":\"b\"}"));
+                .setBody("{\"title\":\"t\",\"summary\":\"b\"}"));
 
         // serviceId와 changes만 채우고 나머지 메타는 모두 null
         NotificationTemplateRequest request = new NotificationTemplateRequest(List.of(

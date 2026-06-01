@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.notification.adapter.out.knock;
 
 import dev.jazzybyte.onseoul.notification.domain.FallbackReason;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
+import dev.jazzybyte.onseoul.notification.domain.NotificationContent;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.FallbackNotificationPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
@@ -93,31 +94,31 @@ public class ResilientPushNotificationAdapter implements PushNotificationPort {
      * @throws RuntimeException          Knock 발송 실패
      */
     @Override
-    public void send(UserContact recipient, String title, String body,
+    public void send(UserContact recipient, NotificationContent content,
                      Long dispatchId, Set<NotificationChannel> channels) {
         Runnable decorated = CircuitBreaker.decorateRunnable(circuitBreaker,
-                () -> primary.send(recipient, title, body, dispatchId, channels));
+                () -> primary.send(recipient, content, dispatchId, channels));
         try {
             decorated.run();
         } catch (CallNotPermittedException e) {
             // 서킷 오픈: Knock 호출 없이 fast-fail
-            handleFallback(FallbackReason.KNOCK_CIRCUIT_OPEN, e, recipient, title, body,
+            handleFallback(FallbackReason.KNOCK_CIRCUIT_OPEN, e, recipient, content,
                     dispatchId, channels);
             throw e;
         } catch (RuntimeException e) {
             // Knock 발송 실패: 회로 차단기가 실패 기록 후 예외를 그대로 전파
-            handleFallback(classifyReason(e), e, recipient, title, body, dispatchId, channels);
+            handleFallback(classifyReason(e), e, recipient, content, dispatchId, channels);
             throw e;
         }
     }
 
     private void handleFallback(FallbackReason reason, Throwable cause,
-                                UserContact recipient, String title, String body,
+                                UserContact recipient, NotificationContent content,
                                 Long dispatchId, Set<NotificationChannel> channels) {
         log.warn("[ResilientPush] Knock 발송 실패 — fallback 실행: dispatchId={}, reason={}, exceptionType={}",
                 dispatchId, reason, cause.getClass().getSimpleName());
         fallbackCounters.get(reason).increment();
-        fallback.sendFallback(recipient, title, body, dispatchId, channels, reason, cause);
+        fallback.sendFallback(recipient, content, dispatchId, channels, reason, cause);
     }
 
     /**

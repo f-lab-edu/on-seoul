@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.notification.adapter.out.knock;
 
 import dev.jazzybyte.onseoul.notification.domain.FallbackReason;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
+import dev.jazzybyte.onseoul.notification.domain.NotificationContent;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
 import lombok.extern.slf4j.Slf4j;
@@ -55,7 +56,7 @@ class KnockNotificationAdapter implements PushNotificationPort {
     }
 
     @Override
-    public void send(UserContact recipient, String title, String body, Long dispatchId,
+    public void send(UserContact recipient, NotificationContent content, Long dispatchId,
                      Set<NotificationChannel> channels) {
         if (channels == null || channels.isEmpty()) {
             log.warn("[Knock] channels가 비어있어 발송 스킵: userId={}, dispatchId={}",
@@ -76,7 +77,7 @@ class KnockNotificationAdapter implements PushNotificationPort {
 
             String workflowKey = resolveWorkflowKey(channel);
             try {
-                triggerWorkflow(workflowKey, recipient, title, body, dispatchId);
+                triggerWorkflow(workflowKey, recipient, content, dispatchId);
                 log.info("[Knock] 발송 성공: userId={}, channel={}, dispatchId={}",
                         recipient.userId(), channel, dispatchId);
             } catch (KnockDispatchException ex) {
@@ -117,9 +118,17 @@ class KnockNotificationAdapter implements PushNotificationPort {
     /**
      * Knock 워크플로우를 트리거한다.
      * recipients에 email/phone_number를 포함하여 Knock이 수신자를 인라인으로 upsert하게 한다.
+     *
+     * <p>data 페이로드 계약(이메일 Liquid 템플릿이 결정적으로 렌더링):
+     * <pre>
+     * data: { title, summary, services:[{name,status,area,place,target,
+     *          receipt_start,receipt_end,url,image_url,
+     *          changes:[{label,old,new}]}], dispatch_id }
+     * </pre>
+     * null 필드는 {@code @JsonInclude} 없이 직접 생략한다(빈 키 미포함).
      */
     private void triggerWorkflow(String workflowKey, UserContact recipient,
-                                 String title, String body, Long dispatchId) {
+                                 NotificationContent content, Long dispatchId) {
         Map<String, Object> recipientMap = new LinkedHashMap<>();
         recipientMap.put("id", String.valueOf(recipient.userId()));
         if (StringUtils.hasText(recipient.email())) {
@@ -131,11 +140,7 @@ class KnockNotificationAdapter implements PushNotificationPort {
 
         Map<String, Object> requestBody = Map.of(
                 "recipients", List.of(recipientMap),
-                "data", Map.of(
-                        "title", title,
-                        "body", body,
-                        "dispatch_id", String.valueOf(dispatchId)
-                )
+                "data", toDataPayload(content, dispatchId)
         );
 
         try {
@@ -155,6 +160,54 @@ class KnockNotificationAdapter implements PushNotificationPort {
         } catch (Exception e) {
             throw new KnockDispatchException(classifyException(e),
                     "Knock 워크플로우 트리거 실패: workflowKey=" + workflowKey, e);
+        }
+    }
+
+    /**
+     * {@link NotificationContent}를 Knock data 페이로드 Map으로 변환한다.
+     * null 필드는 키 자체를 생략한다(NON_NULL). 도메인은 JSON을 모르므로 변환은 어댑터 책임이다.
+     */
+    private Map<String, Object> toDataPayload(NotificationContent content, Long dispatchId) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        putIfText(data, "title", content.title());
+        putIfText(data, "summary", content.summary());
+        List<Map<String, Object>> services = content.services().stream()
+                .map(this::toServiceMap)
+                .toList();
+        data.put("services", services);
+        data.put("dispatch_id", String.valueOf(dispatchId));
+        return data;
+    }
+
+    private Map<String, Object> toServiceMap(NotificationContent.ServiceCard card) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        putIfText(m, "name", card.name());
+        putIfText(m, "status", card.status());
+        putIfText(m, "area", card.area());
+        putIfText(m, "place", card.place());
+        putIfText(m, "target", card.target());
+        putIfText(m, "receipt_start", card.receiptStart());
+        putIfText(m, "receipt_end", card.receiptEnd());
+        putIfText(m, "url", card.url());
+        putIfText(m, "image_url", card.imageUrl());
+        List<Map<String, Object>> changes = card.changes().stream()
+                .map(this::toChangeMap)
+                .toList();
+        m.put("changes", changes);
+        return m;
+    }
+
+    private Map<String, Object> toChangeMap(NotificationContent.ChangeLine line) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        putIfText(m, "label", line.label());
+        putIfText(m, "old", line.oldValue());
+        putIfText(m, "new", line.newValue());
+        return m;
+    }
+
+    private void putIfText(Map<String, Object> map, String key, String value) {
+        if (StringUtils.hasText(value)) {
+            map.put(key, value);
         }
     }
 

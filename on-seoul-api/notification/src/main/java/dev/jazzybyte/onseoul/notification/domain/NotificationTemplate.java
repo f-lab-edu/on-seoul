@@ -3,12 +3,18 @@ package dev.jazzybyte.onseoul.notification.domain;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 알림 title + summary 생성용 도메인 헬퍼.
+ *
+ * <p>사실 정보(서비스명·상태·접수기간·링크·변경 표)는 Knock 이메일 템플릿이
+ * 구조화 데이터({@link NotificationContent.ServiceCard})로 결정적 렌더링하므로,
+ * 여기서 만드는 {@code summary}는 "N개 서비스 변경 안내" 수준의 짧은 요약이면 충분하다.
+ *
+ * <p>{@link #render(NotificationTemplateRequest)}는 AI 호출 실패 시 fallback summary를 만든다.
+ */
 public class NotificationTemplate {
 
     private NotificationTemplate() {}
-
-    /** N개 서비스 fallback body에서 본문에 나열할 서비스 최대 개수. 초과분은 "외 M건"으로 요약한다. */
-    private static final int MAX_LISTED_SERVICES = 5;
 
     /**
      * change_log의 field_name → 한글 라벨 매핑.
@@ -40,9 +46,22 @@ public class NotificationTemplate {
             Map.entry("area_name", "지역"));
 
     /**
-     * Fallback: 정형 변수 치환. AI 호출 실패 시 사용한다.
-     * 구독 1건에 매칭된 서비스 그룹 목록을 받아 요약 메시지를 만든다.
-     * services가 비어 있으면(이 경로는 호출자가 사전 차단해야 함) 일반 안내문을 반환한다.
+     * field_name을 한글 라벨로 매핑한다. 매핑에 없거나 null이면 원본을 그대로 반환한다.
+     *
+     * <p>Knock data 페이로드의 {@code changes[].label} 생성 시 재사용한다 —
+     * camelCase field_name을 그대로 노출하지 않기 위함이다.
+     */
+    public static String fieldLabel(String fieldName) {
+        if (fieldName == null) {
+            return "";
+        }
+        return FIELD_LABELS.getOrDefault(fieldName, fieldName);
+    }
+
+    /**
+     * Fallback: AI 호출 실패 시 결정적 title + summary를 만든다.
+     * 구독 1건에 매칭된 서비스 그룹 목록을 받는다.
+     * 사실 표/카드는 Knock이 그리므로 summary는 변경 서비스 개수 안내 수준이면 충분하다.
      */
     public static TemplateResult render(NotificationTemplateRequest req) {
         List<NotificationTemplateRequest.ServiceChangeGroup> services = req.services();
@@ -55,86 +74,21 @@ public class NotificationTemplate {
         }
 
         if (services.size() == 1) {
-            return renderSingle(services.get(0));
+            String label = displayName(services.get(0));
+            return new TemplateResult(
+                    "[서울공공서비스] " + label + " 변경 알림",
+                    label + " 서비스에 변경이 감지되었습니다.",
+                    TemplateSource.FALLBACK);
         }
-        return renderMultiple(services);
-    }
 
-    private static TemplateResult renderSingle(NotificationTemplateRequest.ServiceChangeGroup g) {
-        String label = displayName(g);
-        String title = "[서울공공서비스] " + label + " 변경 알림";
-
-        StringBuilder body = new StringBuilder(changeSummary(g.changes()));
-        if (g.serviceUrl() != null && !g.serviceUrl().isBlank()) {
-            body.append(System.lineSeparator()).append("자세히 보기: ").append(g.serviceUrl());
-        }
-        return new TemplateResult(title, body.toString(), TemplateSource.FALLBACK);
-    }
-
-    private static TemplateResult renderMultiple(List<NotificationTemplateRequest.ServiceChangeGroup> services) {
-        String title = "[서울공공서비스] 구독하신 " + services.size() + "개 서비스 변경 알림";
-
-        StringBuilder body = new StringBuilder();
-        int listed = Math.min(services.size(), MAX_LISTED_SERVICES);
-        for (int i = 0; i < listed; i++) {
-            NotificationTemplateRequest.ServiceChangeGroup g = services.get(i);
-            if (i > 0) {
-                body.append(System.lineSeparator());
-            }
-            body.append("- ").append(displayName(g)).append(": ").append(changeSummary(g.changes()));
-            if (g.serviceUrl() != null && !g.serviceUrl().isBlank()) {
-                body.append(" ").append(g.serviceUrl());
-            }
-        }
-        int remaining = services.size() - listed;
-        if (remaining > 0) {
-            body.append(System.lineSeparator()).append("외 ").append(remaining).append("건");
-        }
-        return new TemplateResult(title, body.toString(), TemplateSource.FALLBACK);
+        return new TemplateResult(
+                "[서울공공서비스] 구독하신 " + services.size() + "개 서비스 변경 알림",
+                "구독하신 " + services.size() + "개 서비스에 변경이 감지되었습니다.",
+                TemplateSource.FALLBACK);
     }
 
     /** serviceName이 있으면 우선, 없으면 serviceId로 표기. */
     private static String displayName(NotificationTemplateRequest.ServiceChangeGroup g) {
         return (g.serviceName() != null && !g.serviceName().isBlank()) ? g.serviceName() : g.serviceId();
-    }
-
-    /** 한 서비스의 변경 목록을 대표 1건 + (외 N건) 요약 문자열로 만든다. */
-    private static String changeSummary(List<NotificationTemplateRequest.ChangeItem> changes) {
-        if (changes.isEmpty()) {
-            return "변경이 감지되었습니다.";
-        }
-        NotificationTemplateRequest.ChangeItem c = changes.get(0);
-        String summary = summarizeChange(c);
-        if (changes.size() > 1) {
-            summary += " (외 " + (changes.size() - 1) + "건)";
-        }
-        return summary;
-    }
-
-    /** change_type별로 변경 1건을 사람이 읽을 수 있는 문장으로 변환한다. NEW/DELETED는 필드 값이 없을 수 있다. */
-    private static String summarizeChange(NotificationTemplateRequest.ChangeItem c) {
-        String type = c.changeType() == null ? "" : c.changeType().trim().toUpperCase();
-        return switch (type) {
-            case "NEW" -> "신규 등록되었습니다.";
-            case "DELETED" -> "접수가 종료되었습니다.";
-            default -> summarizeUpdate(c);
-        };
-    }
-
-    /** UPDATED 요약. field/old/new 데이터가 없으면 'null' 노출 대신 일반 안내로 폴백한다. */
-    private static String summarizeUpdate(NotificationTemplateRequest.ChangeItem c) {
-        if (c.fieldName() == null && c.oldValue() == null && c.newValue() == null) {
-            return "변경이 감지되었습니다.";
-        }
-        return fieldLabel(c.fieldName()) + " 이(가) "
-                + c.oldValue() + " → " + c.newValue() + " 으로 변경되었습니다.";
-    }
-
-    /** field_name을 한글 라벨로 매핑한다. 매핑에 없거나 null이면 원본을 그대로 반환한다. */
-    private static String fieldLabel(String fieldName) {
-        if (fieldName == null) {
-            return "";
-        }
-        return FIELD_LABELS.getOrDefault(fieldName, fieldName);
     }
 }

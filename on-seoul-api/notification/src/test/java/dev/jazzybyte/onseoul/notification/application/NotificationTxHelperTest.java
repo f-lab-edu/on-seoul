@@ -295,7 +295,7 @@ class NotificationTxHelperTest {
                 99L, 1L, sub.getId(), DispatchStatus.FAILED,
                 null, "재시도 제목", "재시도 본문", TemplateSource.AI,
                 "이전 오류", 2,
-                Instant.now(), Instant.now());
+                null, Instant.now(), Instant.now());
 
         when(saveDispatchPort.save(any())).thenReturn(dispatch);
         when(saveSubscriptionPort.save(any())).thenReturn(sub);
@@ -328,7 +328,7 @@ class NotificationTxHelperTest {
                 99L, 1L, sub.getId(), DispatchStatus.FAILED,
                 null, "제목", "본문", TemplateSource.AI,
                 "오류", 3,
-                Instant.now(), Instant.now());
+                null, Instant.now(), Instant.now());
 
         // 재시도 실패 — 도메인 메서드 먼저 호출한 후 txBRetryFailure
         dispatch.incrementAttemptCount(); // attemptCount=4
@@ -353,7 +353,7 @@ class NotificationTxHelperTest {
                 99L, 1L, 1L, DispatchStatus.FAILED,
                 null, "제목", "본문", TemplateSource.AI,
                 "오류", 4,
-                Instant.now(), Instant.now());
+                null, Instant.now(), Instant.now());
 
         dispatch.incrementAttemptCount(); // attemptCount=5
         dispatch.markDead("최종 실패");

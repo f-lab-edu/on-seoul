@@ -1,7 +1,10 @@
 package dev.jazzybyte.onseoul.notification.application;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.jazzybyte.onseoul.notification.adapter.out.persistence.NotificationContentSerializer;
 import dev.jazzybyte.onseoul.notification.domain.DispatchStatus;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
+import dev.jazzybyte.onseoul.notification.domain.NotificationContent;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
@@ -9,6 +12,7 @@ import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
+import dev.jazzybyte.onseoul.notification.port.out.NotificationContentSerializerPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -25,7 +29,6 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
@@ -43,6 +46,9 @@ class DispatchRetrySchedulerTest {
     @Mock private PushNotificationPort pushNotificationPort;
     @Mock private NotificationTxHelper txHelper;
 
+    private final NotificationContentSerializerPort contentSerializer =
+            new NotificationContentSerializer(new ObjectMapper());
+
     private DispatchRetryScheduler scheduler;
 
     private static final Long SUB_ID = 10L;
@@ -53,16 +59,19 @@ class DispatchRetrySchedulerTest {
     void setUp() {
         scheduler = new DispatchRetryScheduler(
                 loadDispatchPort, loadSubscriptionPort, loadUserContactPort,
-                pushNotificationPort, txHelper);
+                pushNotificationPort, txHelper, contentSerializer);
     }
 
     private NotificationDispatch failedDispatch(Long id, int attemptCount) {
-        NotificationDispatch d = new NotificationDispatch(
+        return failedDispatch(id, attemptCount, null);
+    }
+
+    private NotificationDispatch failedDispatch(Long id, int attemptCount, String payload) {
+        return new NotificationDispatch(
                 id, 1L, SUB_ID, DispatchStatus.FAILED,
                 null, "재시도 제목", "재시도 본문", TemplateSource.AI,
-                "이전 오류", attemptCount,
+                "이전 오류", attemptCount, payload,
                 Instant.now(), Instant.now());
-        return d;
     }
 
     private NotificationSubscription subscription() {
@@ -98,7 +107,7 @@ class DispatchRetrySchedulerTest {
         scheduler.retryFailedDispatches();
 
         verify(pushNotificationPort).send(
-                eq(CONTACT), eq("재시도 제목"), eq("재시도 본문"), eq(100L), any());
+                eq(CONTACT), any(NotificationContent.class), eq(100L), any());
 
         ArgumentCaptor<NotificationDispatch> dispatchCaptor =
                 ArgumentCaptor.forClass(NotificationDispatch.class);
@@ -107,6 +116,60 @@ class DispatchRetrySchedulerTest {
         verify(txHelper).txBRetrySuccess(dispatchCaptor.capture(), subCaptor.capture(), any(Instant.class));
         assertThat(dispatchCaptor.getValue().getId()).isEqualTo(100L);
         assertThat(subCaptor.getValue().getId()).isEqualTo(SUB_ID);
+    }
+
+    // ── payload 존재 → 구조화 콘텐츠 복원 후 무손실 재발송 ──────────────
+
+    @Test
+    @DisplayName("notification_payload 존재 → 직렬화된 NotificationContent를 복원하여 재발송")
+    void retrySuccess_withPayload_resendsDeserializedContent() {
+        NotificationContent original = new NotificationContent(
+                "구독하신 2개 서비스 변경 알림", "구독하신 2개 서비스에 변경이 감지되었습니다.",
+                List.of(new NotificationContent.ServiceCard(
+                        "강남 수영교실", "예약마감", "강남구", "강남센터", "성인",
+                        "2026-05-01", "2026-05-31",
+                        "https://ex.com/1", "https://ex.com/img.png",
+                        List.of(new NotificationContent.ChangeLine("모집상태", "접수중", "예약마감")))));
+        String payload = contentSerializer.serialize(original);
+
+        NotificationDispatch dispatch = failedDispatch(100L, 1, payload);
+        when(loadDispatchPort.findRetryable()).thenReturn(List.of(dispatch));
+        when(loadSubscriptionPort.loadById(SUB_ID)).thenReturn(Optional.of(subscription()));
+        when(loadUserContactPort.loadContact(USER_ID)).thenReturn(Optional.of(CONTACT));
+
+        scheduler.retryFailedDispatches();
+
+        ArgumentCaptor<NotificationContent> contentCaptor =
+                ArgumentCaptor.forClass(NotificationContent.class);
+        verify(pushNotificationPort).send(eq(CONTACT), contentCaptor.capture(), eq(100L), any());
+
+        NotificationContent sent = contentCaptor.getValue();
+        assertThat(sent.title()).isEqualTo("구독하신 2개 서비스 변경 알림");
+        assertThat(sent.services()).hasSize(1);
+        assertThat(sent.services().get(0).name()).isEqualTo("강남 수영교실");
+        assertThat(sent.services().get(0).changes().get(0).label()).isEqualTo("모집상태");
+    }
+
+    // ── payload null → generated_title/body 평문 폴백 재발송 ─────────────
+
+    @Test
+    @DisplayName("notification_payload null(이전 row) → generated_title/body 평문 폴백으로 재발송")
+    void retrySuccess_nullPayload_usesPlainFallback() {
+        NotificationDispatch dispatch = failedDispatch(100L, 1, null);
+        when(loadDispatchPort.findRetryable()).thenReturn(List.of(dispatch));
+        when(loadSubscriptionPort.loadById(SUB_ID)).thenReturn(Optional.of(subscription()));
+        when(loadUserContactPort.loadContact(USER_ID)).thenReturn(Optional.of(CONTACT));
+
+        scheduler.retryFailedDispatches();
+
+        ArgumentCaptor<NotificationContent> contentCaptor =
+                ArgumentCaptor.forClass(NotificationContent.class);
+        verify(pushNotificationPort).send(eq(CONTACT), contentCaptor.capture(), eq(100L), any());
+
+        NotificationContent sent = contentCaptor.getValue();
+        assertThat(sent.title()).isEqualTo("재시도 제목");
+        assertThat(sent.summary()).isEqualTo("재시도 본문");
+        assertThat(sent.services()).isEmpty();
     }
 
     // ── 재시도 실패 (attempt_count < 4) ────────────────────────────────
@@ -121,7 +184,7 @@ class DispatchRetrySchedulerTest {
         when(loadSubscriptionPort.loadById(SUB_ID)).thenReturn(Optional.of(sub));
         when(loadUserContactPort.loadContact(USER_ID)).thenReturn(Optional.of(CONTACT));
         doThrow(new RuntimeException("Knock 오류")).when(pushNotificationPort)
-                .send(any(), anyString(), anyString(), any(), any());
+                .send(any(), any(NotificationContent.class), any(), any());
 
         scheduler.retryFailedDispatches();
 
@@ -144,7 +207,7 @@ class DispatchRetrySchedulerTest {
         when(loadSubscriptionPort.loadById(SUB_ID)).thenReturn(Optional.of(sub));
         when(loadUserContactPort.loadContact(USER_ID)).thenReturn(Optional.of(CONTACT));
         doThrow(new RuntimeException("최종 실패")).when(pushNotificationPort)
-                .send(any(), anyString(), anyString(), any(), any());
+                .send(any(), any(NotificationContent.class), any(), any());
 
         scheduler.retryFailedDispatches();
 
@@ -186,7 +249,8 @@ class DispatchRetrySchedulerTest {
         scheduler.retryFailedDispatches();
 
         ArgumentCaptor<UserContact> contactCaptor = ArgumentCaptor.forClass(UserContact.class);
-        verify(pushNotificationPort).send(contactCaptor.capture(), anyString(), anyString(), any(), any());
+        verify(pushNotificationPort).send(
+                contactCaptor.capture(), any(NotificationContent.class), any(), any());
         assertThat(contactCaptor.getValue().userId()).isEqualTo(USER_ID);
         assertThat(contactCaptor.getValue().email()).isNull();
     }

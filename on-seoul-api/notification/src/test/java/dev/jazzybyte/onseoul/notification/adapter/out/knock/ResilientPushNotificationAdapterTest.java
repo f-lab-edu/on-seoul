@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.notification.adapter.out.knock;
 
 import dev.jazzybyte.onseoul.notification.domain.FallbackReason;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
+import dev.jazzybyte.onseoul.notification.domain.NotificationContent;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.FallbackNotificationPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
@@ -35,6 +36,8 @@ class ResilientPushNotificationAdapterTest {
 
     private final UserContact recipient = new UserContact(1L, "test@example.com", "010-1234-5678");
     private final Set<NotificationChannel> channels = Set.of(NotificationChannel.EMAIL);
+    private final NotificationContent content =
+            new NotificationContent("제목", "요약", java.util.List.of());
 
     @BeforeEach
     void setUp() {
@@ -59,11 +62,11 @@ class ResilientPushNotificationAdapterTest {
     @Test
     @DisplayName("1차 발송 성공 시 fallback을 호출하지 않고 예외도 없다")
     void send_primarySucceeds_noFallbackNoException() {
-        doNothing().when(primary).send(any(), anyString(), anyString(), anyLong(), anySet());
+        doNothing().when(primary).send(any(), any(NotificationContent.class), anyLong(), anySet());
 
-        adapter.send(recipient, "제목", "본문", 10L, channels);
+        adapter.send(recipient, content, 10L, channels);
 
-        verify(primary).send(recipient, "제목", "본문", 10L, channels);
+        verify(primary).send(recipient, content, 10L, channels);
         verifyNoInteractions(fallback);
     }
 
@@ -71,13 +74,13 @@ class ResilientPushNotificationAdapterTest {
     @DisplayName("1차 발송 실패 시 fallback을 호출하고 예외를 rethrow한다")
     void send_primaryThrows_fallbackCalledAndExceptionRethrown() {
         RuntimeException knock = new RuntimeException("connection refused");
-        doThrow(knock).when(primary).send(any(), anyString(), anyString(), anyLong(), anySet());
+        doThrow(knock).when(primary).send(any(), any(NotificationContent.class), anyLong(), anySet());
 
-        assertThatThrownBy(() -> adapter.send(recipient, "제목", "본문", 10L, channels))
+        assertThatThrownBy(() -> adapter.send(recipient, content, 10L, channels))
                 .isSameAs(knock);
 
         verify(fallback).sendFallback(
-                eq(recipient), eq("제목"), eq("본문"), eq(10L),
+                eq(recipient), eq(content), eq(10L),
                 eq(channels), any(FallbackReason.class), eq(knock));
     }
 
@@ -85,13 +88,13 @@ class ResilientPushNotificationAdapterTest {
     @DisplayName("KnockDispatchException(KNOCK_TIMEOUT) → FallbackReason.KNOCK_TIMEOUT으로 분류")
     void send_knockTimeoutException_classifiesAsKnockTimeout() {
         doThrow(new KnockDispatchException(FallbackReason.KNOCK_TIMEOUT, "타임아웃", null))
-                .when(primary).send(any(), anyString(), anyString(), anyLong(), anySet());
+                .when(primary).send(any(), any(NotificationContent.class), anyLong(), anySet());
 
-        assertThatThrownBy(() -> adapter.send(recipient, "제목", "본문", 10L, channels))
+        assertThatThrownBy(() -> adapter.send(recipient, content, 10L, channels))
                 .isInstanceOf(KnockDispatchException.class);
 
         ArgumentCaptor<FallbackReason> reasonCaptor = ArgumentCaptor.forClass(FallbackReason.class);
-        verify(fallback).sendFallback(any(), anyString(), anyString(), anyLong(), anySet(),
+        verify(fallback).sendFallback(any(), any(NotificationContent.class), anyLong(), anySet(),
                 reasonCaptor.capture(), any());
         assertThat(reasonCaptor.getValue()).isEqualTo(FallbackReason.KNOCK_TIMEOUT);
     }
@@ -100,13 +103,13 @@ class ResilientPushNotificationAdapterTest {
     @DisplayName("일반 RuntimeException → FallbackReason.KNOCK_UNAVAILABLE로 분류")
     void send_genericException_classifiesAsKnockUnavailable() {
         doThrow(new RuntimeException("unknown error"))
-                .when(primary).send(any(), anyString(), anyString(), anyLong(), anySet());
+                .when(primary).send(any(), any(NotificationContent.class), anyLong(), anySet());
 
-        assertThatThrownBy(() -> adapter.send(recipient, "제목", "본문", 10L, channels))
+        assertThatThrownBy(() -> adapter.send(recipient, content, 10L, channels))
                 .isInstanceOf(RuntimeException.class);
 
         ArgumentCaptor<FallbackReason> reasonCaptor = ArgumentCaptor.forClass(FallbackReason.class);
-        verify(fallback).sendFallback(any(), anyString(), anyString(), anyLong(), anySet(),
+        verify(fallback).sendFallback(any(), any(NotificationContent.class), anyLong(), anySet(),
                 reasonCaptor.capture(), any());
         assertThat(reasonCaptor.getValue()).isEqualTo(FallbackReason.KNOCK_UNAVAILABLE);
     }
@@ -115,9 +118,9 @@ class ResilientPushNotificationAdapterTest {
     @DisplayName("1차 발송 실패 시 fallback 이유별 metric이 기록된다")
     void send_primaryFails_metricIncremented() {
         doThrow(new RuntimeException("connection refused"))
-                .when(primary).send(any(), anyString(), anyString(), anyLong(), anySet());
+                .when(primary).send(any(), any(NotificationContent.class), anyLong(), anySet());
 
-        assertThatThrownBy(() -> adapter.send(recipient, "제목", "본문", 10L, channels));
+        assertThatThrownBy(() -> adapter.send(recipient, content, 10L, channels));
 
         double count = meterRegistry.counter("notification.push.fallback",
                 "reason", FallbackReason.KNOCK_UNAVAILABLE.name()).count();
@@ -128,13 +131,13 @@ class ResilientPushNotificationAdapterTest {
     @DisplayName("KnockDispatchException(KNOCK_SERVER_ERROR) → FallbackReason.KNOCK_SERVER_ERROR로 분류")
     void send_knockServerErrorException_classifiesAsKnockServerError() {
         doThrow(new KnockDispatchException(FallbackReason.KNOCK_SERVER_ERROR, "5xx 오류", null))
-                .when(primary).send(any(), anyString(), anyString(), anyLong(), anySet());
+                .when(primary).send(any(), any(NotificationContent.class), anyLong(), anySet());
 
-        assertThatThrownBy(() -> adapter.send(recipient, "제목", "본문", 10L, channels))
+        assertThatThrownBy(() -> adapter.send(recipient, content, 10L, channels))
                 .isInstanceOf(KnockDispatchException.class);
 
         ArgumentCaptor<FallbackReason> reasonCaptor = ArgumentCaptor.forClass(FallbackReason.class);
-        verify(fallback).sendFallback(any(), anyString(), anyString(), anyLong(), anySet(),
+        verify(fallback).sendFallback(any(), any(NotificationContent.class), anyLong(), anySet(),
                 reasonCaptor.capture(), any());
         assertThat(reasonCaptor.getValue()).isEqualTo(FallbackReason.KNOCK_SERVER_ERROR);
     }
@@ -147,10 +150,10 @@ class ResilientPushNotificationAdapterTest {
         // 3회 모두 실패 → 실패율 100% > 50% → OPEN 전환
         RuntimeException knockEx = new KnockDispatchException(
                 FallbackReason.KNOCK_UNAVAILABLE, "down", null);
-        doThrow(knockEx).when(primary).send(any(), anyString(), anyString(), anyLong(), anySet());
+        doThrow(knockEx).when(primary).send(any(), any(NotificationContent.class), anyLong(), anySet());
 
         for (int i = 0; i < 3; i++) {
-            try { adapter.send(recipient, "제목", "본문", (long) i, channels); } catch (Exception ignored) {}
+            try { adapter.send(recipient, content, (long) i, channels); } catch (Exception ignored) {}
         }
 
         CircuitBreaker cb = circuitBreakerRegistry.circuitBreaker(
@@ -158,12 +161,12 @@ class ResilientPushNotificationAdapterTest {
         assertThat(cb.getState()).isEqualTo(CircuitBreaker.State.OPEN);
 
         // OPEN 상태에서 발송 시도 → CallNotPermittedException rethrow
-        assertThatThrownBy(() -> adapter.send(recipient, "제목", "본문", 99L, channels))
+        assertThatThrownBy(() -> adapter.send(recipient, content, 99L, channels))
                 .isInstanceOf(CallNotPermittedException.class);
 
         // KNOCK_CIRCUIT_OPEN 이유로 fallback 호출 확인
         ArgumentCaptor<FallbackReason> reasonCaptor = ArgumentCaptor.forClass(FallbackReason.class);
-        verify(fallback, atLeastOnce()).sendFallback(any(), anyString(), anyString(), eq(99L),
+        verify(fallback, atLeastOnce()).sendFallback(any(), any(NotificationContent.class), eq(99L),
                 anySet(), reasonCaptor.capture(), any());
         assertThat(reasonCaptor.getAllValues()).contains(FallbackReason.KNOCK_CIRCUIT_OPEN);
     }
