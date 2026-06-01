@@ -501,6 +501,72 @@ class TestGetChatModel:
             # provider 인자 없이 호출 — settings.llm_provider="openai"가 적용되어야 한다
             get_chat_model()  # ConfigurationException 없이 통과하면 OK
 
+    # --- timeout/max_retries I/O 레이어 전달 (회귀 안전성 핵심) ---
+
+    def test_gemini_default_timeout_and_retries_unchanged(self):
+        """인자 미전달 시 Gemini SDK에 기존 하드코딩값(timeout=30, max_retries=3)을 그대로 전달한다."""
+        with (
+            patch("llm.client.settings") as mock_settings,
+            patch("llm.client.ChatGoogleGenerativeAI") as mock_cls,
+        ):
+            mock_settings.llm_provider = "gemini"
+            mock_settings.google_api_key = "fake-google-key"
+            mock_settings.gemini_model = "gemini-2.0-flash"
+
+            get_chat_model(provider="gemini")
+
+            kwargs = mock_cls.call_args.kwargs
+            assert kwargs["timeout"] == 30
+            assert kwargs["max_retries"] == 3
+
+    def test_openai_default_timeout_and_retries_unchanged(self):
+        """인자 미전달 시 OpenAI SDK에 기존 하드코딩값(request_timeout=30, max_retries=3)을 전달한다."""
+        with (
+            patch("llm.client.settings") as mock_settings,
+            patch("llm.client.ChatOpenAI") as mock_cls,
+        ):
+            mock_settings.llm_provider = "openai"
+            mock_settings.openai_api_key = "fake-openai-key"
+            mock_settings.gpt_model = "gpt-4o-mini"
+
+            get_chat_model(provider="openai")
+
+            kwargs = mock_cls.call_args.kwargs
+            assert kwargs["request_timeout"] == 30
+            assert kwargs["max_retries"] == 3
+
+    def test_gemini_custom_timeout_and_retries_passthrough(self):
+        """전달된 timeout/max_retries가 Gemini SDK 인자로 그대로 내려간다."""
+        with (
+            patch("llm.client.settings") as mock_settings,
+            patch("llm.client.ChatGoogleGenerativeAI") as mock_cls,
+        ):
+            mock_settings.llm_provider = "gemini"
+            mock_settings.google_api_key = "fake-google-key"
+            mock_settings.gemini_model = "gemini-2.0-flash"
+
+            get_chat_model(provider="gemini", timeout=8, max_retries=1)
+
+            kwargs = mock_cls.call_args.kwargs
+            assert kwargs["timeout"] == 8
+            assert kwargs["max_retries"] == 1
+
+    def test_openai_custom_timeout_and_retries_passthrough(self):
+        """전달된 timeout/max_retries가 OpenAI SDK 인자(request_timeout)로 내려간다."""
+        with (
+            patch("llm.client.settings") as mock_settings,
+            patch("llm.client.ChatOpenAI") as mock_cls,
+        ):
+            mock_settings.llm_provider = "openai"
+            mock_settings.openai_api_key = "fake-openai-key"
+            mock_settings.gpt_model = "gpt-4o-mini"
+
+            get_chat_model(provider="openai", timeout=8, max_retries=1)
+
+            kwargs = mock_cls.call_args.kwargs
+            assert kwargs["request_timeout"] == 8
+            assert kwargs["max_retries"] == 1
+
 
 # ---------------------------------------------------------------------------
 # get_embeddings 팩토리

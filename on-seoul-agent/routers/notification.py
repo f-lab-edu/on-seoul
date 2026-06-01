@@ -43,11 +43,10 @@ _META_FIELDS = (
 
 def _format_group(index: int, group: ServiceChangeGroup) -> str:
     """서비스 그룹 1개를 LLM 입력용 블록 텍스트로 변환한다."""
-    header_name = group.service_name or group.service_id
-    lines = [f"[서비스 {index}] {header_name}"]
+    # service_id는 LLM 입력에 절대 넣지 않는다(출력 누출 구조적 차단).
+    # 서비스 구분은 [서비스 N] 인덱스만으로 충분하다.
+    lines = [f"[서비스 {index}]"]
     for label, attr in _META_FIELDS:
-        if attr == "service_name":
-            continue  # 헤더에 이미 표기
         value = getattr(group, attr)
         if value:
             lines.append(f"- {label}: {value}")
@@ -88,7 +87,9 @@ def _build_messages(
 
 async def _invoke_llm(req: NotificationTemplateRequest) -> NotificationTemplateResponse:
     """LLM을 호출하여 NotificationTemplateResponse를 반환한다."""
-    llm = get_chat_model(temperature=0.2)
+    # self-timeout(8s)과 정합하도록 SDK 타임아웃을 좁힌다. 알림은 지연 민감 경로라
+    # 재시도 1회로 충분하다.
+    llm = get_chat_model(temperature=0.2, timeout=8, max_retries=1)
     chain = llm.with_structured_output(NotificationTemplateResponse)
     return await chain.ainvoke(_build_messages(req))
 

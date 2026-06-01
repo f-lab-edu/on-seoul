@@ -138,10 +138,15 @@ def get_chat_model(
     model: str | None = None,
     temperature: float = 0.0,
     streaming: bool = False,
+    timeout: int = 30,
+    max_retries: int = 3,
 ) -> BaseChatModel:
     """Return a configured chat LLM instance.
 
     Gemini를 기본으로 사용하고, provider="openai" 지정 시 GPT로 전환한다.
+
+    timeout/max_retries는 SDK(I/O 레이어)로 직접 내려보내 in-flight HTTP 요청을
+    실제 소켓 레벨에서 끊게 한다. 기본값은 기존 하드코딩값과 동일하다.
     """
     selected_provider = provider or settings.llm_provider
 
@@ -154,8 +159,8 @@ def get_chat_model(
             google_api_key=settings.google_api_key,
             model=model or settings.gemini_model,
             temperature=temperature,
-            max_retries=3,
-            timeout=30,
+            max_retries=max_retries,
+            timeout=timeout,
         )
     elif selected_provider == "openai":
         if not settings.openai_api_key:
@@ -167,8 +172,8 @@ def get_chat_model(
             model=model or settings.gpt_model,
             temperature=temperature,
             streaming=streaming,
-            max_retries=3,
-            request_timeout=30,
+            max_retries=max_retries,
+            request_timeout=timeout,
         )
     else:
         raise ConfigurationException(

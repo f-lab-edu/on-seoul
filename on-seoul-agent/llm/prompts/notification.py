@@ -72,10 +72,11 @@ NOTIFICATION_FEW_SHOT_EXAMPLES = [
     # 서비스 1개 · 상태 변경(UPDATED 1건) + 링크
     {
         "input": """\
-[서비스 1] OO수영장 자유수영
+[서비스 1]
+- service_name: OO수영장 자유수영
+- service_url: https://yeyak.seoul.go.kr/aaa
 - area_name: 강남구
 - service_status: 접수중
-- service_url: https://yeyak.seoul.go.kr/aaa
 - 변경:
   - UPDATED serviceStatus: 예약마감 -> 접수중""",
         "output": (
@@ -88,7 +89,8 @@ NOTIFICATION_FEW_SHOT_EXAMPLES = [
     # 서비스 1개 · 변경 여러 건(접수 마감일 + 상태)
     {
         "input": """\
-[서비스 1] OO수영장 자유수영
+[서비스 1]
+- service_name: OO수영장 자유수영
 - area_name: 강남구
 - receipt_end_dt: 2026-06-20T18:00:00
 - 변경:
@@ -104,15 +106,17 @@ NOTIFICATION_FEW_SHOT_EXAMPLES = [
     # 여러 서비스(UPDATED + NEW)를 하나의 body로 묶음
     {
         "input": """\
-[서비스 1] OO수영장 자유수영
+[서비스 1]
+- service_name: OO수영장 자유수영
+- service_url: https://yeyak.seoul.go.kr/aaa
 - area_name: 강남구
 - service_status: 접수중
-- service_url: https://yeyak.seoul.go.kr/aaa
 - 변경:
   - UPDATED serviceStatus: 예약마감 -> 접수중
-[서비스 2] 강남구립도서관 글쓰기교실
-- area_name: 강남구
+[서비스 2]
+- service_name: 강남구립도서관 글쓰기교실
 - service_url: https://yeyak.seoul.go.kr/bbb
+- area_name: 강남구
 - 변경:
   - NEW""",
         "output": (
@@ -126,7 +130,8 @@ NOTIFICATION_FEW_SHOT_EXAMPLES = [
     # 신규(NEW) 단일
     {
         "input": """\
-[서비스 1] 마포 봄꽃 문화행사
+[서비스 1]
+- service_name: 마포 봄꽃 문화행사
 - area_name: 마포구
 - target_info: 누구나
 - 변경:
@@ -140,7 +145,8 @@ NOTIFICATION_FEW_SHOT_EXAMPLES = [
     # 종료(DELETED)
     {
         "input": """\
-[서비스 1] 종로 도자기 공방 체험
+[서비스 1]
+- service_name: 종로 도자기 공방 체험
 - area_name: 종로구
 - 변경:
   - DELETED""",

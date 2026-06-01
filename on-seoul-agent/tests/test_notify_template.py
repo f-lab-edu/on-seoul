@@ -146,6 +146,24 @@ class TestCreateTemplateSuccess:
         assert response.status_code == 200
         assert url in response.json()["body"]
 
+    async def test_invokes_llm_with_narrowed_timeout_and_single_retry(
+        self, client: AsyncClient
+    ):
+        """알림 경로는 지연 민감 → get_chat_model(timeout=8, max_retries=1)로 호출한다."""
+        llm_mock, _ = _make_llm_mock()
+
+        with patch(
+            "routers.notification.get_chat_model", return_value=llm_mock
+        ) as factory:
+            response = await client.post("/notification/template", json=_single_group())
+
+        assert response.status_code == 200
+        factory.assert_called_once()
+        kwargs = factory.call_args.kwargs
+        assert kwargs["timeout"] == 8
+        assert kwargs["max_retries"] == 1
+        assert kwargs["temperature"] == 0.2
+
 
 # ---------------------------------------------------------------------------
 # 입력 검증 케이스 (422)
@@ -344,13 +362,16 @@ class TestServiceSerialization:
             ]
         )
         text = _format_services(req)
-        assert "OO수영장" in text  # 헤더에 이름
+        assert "[서비스 1]" in text  # 헤더는 인덱스만
+        assert "S1" not in text  # service_id는 입력에 등장하지 않음
+        assert "OO수영장" in text  # service_name은 메타 라인으로
         assert "https://x/aaa" in text  # service_url이 프롬프트에 포함
         assert "강남구" in text
         assert "접수중" in text
         assert "UPDATED serviceStatus: 예약마감 -> 접수중" in text
 
-    def test_format_falls_back_to_service_id_header_when_no_name(self):
+    def test_format_header_omits_service_id_when_no_name(self):
+        """service_name이 없어도 service_id는 직렬화 결과 어디에도 등장하지 않는다."""
         from routers.notification import _format_services
         from schemas.notification import NotificationTemplateRequest
 
@@ -358,9 +379,28 @@ class TestServiceSerialization:
             services=[{"service_id": "S2", "changes": [{"change_type": "NEW"}]}]
         )
         text = _format_services(req)
-        assert "[서비스 1] S2" in text
+        assert "[서비스 1]" in text
+        assert "S2" not in text  # raw service_id 노출 불가
         # NEW는 old/new 값이 없으므로 화살표 표기가 붙지 않아야 한다.
         assert "->" not in text
+
+    def test_format_service_name_appears_as_meta_line(self):
+        """service_name이 있으면 헤더가 아닌 메타 라인으로 출력된다."""
+        from routers.notification import _format_services
+        from schemas.notification import NotificationTemplateRequest
+
+        req = NotificationTemplateRequest(
+            services=[
+                {
+                    "service_id": "S9",
+                    "service_name": "강남구립도서관",
+                    "changes": [{"change_type": "NEW"}],
+                }
+            ]
+        )
+        text = _format_services(req)
+        assert "- service_name: 강남구립도서관" in text
+        assert "S9" not in text
 
     def test_format_omits_absent_optional_meta(self):
         """없는 필드는 프롬프트에 라벨조차 등장하지 않아야 한다(추측 금지)."""
@@ -387,13 +427,15 @@ class TestServiceSerialization:
 
         req = NotificationTemplateRequest(
             services=[
-                {"service_id": "A", "changes": [{"change_type": "NEW"}]},
-                {"service_id": "B", "changes": [{"change_type": "NEW"}]},
+                {"service_id": "SVC-AAA", "changes": [{"change_type": "NEW"}]},
+                {"service_id": "SVC-BBB", "changes": [{"change_type": "NEW"}]},
             ]
         )
         text = _format_services(req)
-        assert "[서비스 1] A" in text
-        assert "[서비스 2] B" in text
+        assert "[서비스 1]" in text
+        assert "[서비스 2]" in text
+        assert "SVC-AAA" not in text
+        assert "SVC-BBB" not in text
 
     async def test_url_reaches_llm_input_not_just_echoed(self, client: AsyncClient):
         """service_url이 LLM에 전달된 메시지 안에 실제로 들어가는지 확인.
