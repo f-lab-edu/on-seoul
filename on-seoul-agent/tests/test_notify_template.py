@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from schemas.notification import NotificationTemplateResponse
+from routers.notification import _BodyResponse
 
 # ---------------------------------------------------------------------------
 # 픽스처
@@ -33,15 +33,10 @@ async def client(app: FastAPI) -> AsyncClient:
         yield c
 
 
-def _make_llm_mock(
-    title: str = "접수가 시작됐어요",
-    body: str = "지금 바로 신청하세요.",
-):
-    """정상 응답을 반환하는 LLM chain mock을 생성한다."""
+def _make_llm_mock(body: str = "지금 바로 신청하세요."):
+    """정상 body를 반환하는 LLM chain mock을 생성한다. title은 코드에서 생성한다."""
     chain_mock = AsyncMock()
-    chain_mock.ainvoke = AsyncMock(
-        return_value=NotificationTemplateResponse(title=title, body=body)
-    )
+    chain_mock.ainvoke = AsyncMock(return_value=_BodyResponse(body=body))
 
     llm_mock = AsyncMock()
     llm_mock.with_structured_output = lambda _: chain_mock
@@ -77,9 +72,8 @@ def _single_group(service_id: str = "SVC001", **overrides) -> dict:
 
 class TestCreateTemplateSuccess:
     async def test_single_group_returns_200(self, client: AsyncClient):
-        """서비스 그룹 1개 → 200, title/body 비어있지 않음."""
+        """서비스 그룹 1개 → 200, title은 '온서울 맞춤 N월 N일 공공서비스 정보 - 1개' 포맷."""
         llm_mock, _ = _make_llm_mock(
-            title="접수가 다시 시작됐어요",
             body="강남구 OO수영장 자유수영의 접수가 다시 시작됐습니다.",
         )
 
@@ -88,15 +82,16 @@ class TestCreateTemplateSuccess:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["title"]
+        assert "온서울 맞춤" in data["title"]
+        assert "공공서비스 정보" in data["title"]
+        assert "1개" in data["title"]
         assert data["body"]
 
     async def test_multiple_groups_new_and_updated_returns_200(
         self, client: AsyncClient
     ):
-        """여러 서비스 그룹(NEW+UPDATED 혼합) → 200."""
+        """여러 서비스 그룹(NEW+UPDATED 혼합) → 200, title에 건수 포함."""
         llm_mock, _ = _make_llm_mock(
-            title="관심 서비스 2건 변경 안내",
             body="OO수영장 접수가 시작되고 글쓰기교실이 새로 등록됐습니다.",
         )
 
@@ -129,14 +124,14 @@ class TestCreateTemplateSuccess:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["title"]
+        assert "온서울 맞춤" in data["title"]
+        assert "2개" in data["title"]
         assert data["body"]
 
     async def test_service_url_included_in_body(self, client: AsyncClient):
         """service_url이 본문에 포함된 응답을 그대로 반환한다."""
         url = "https://yeyak.seoul.go.kr/aaa"
         llm_mock, _ = _make_llm_mock(
-            title="접수가 시작됐어요",
             body=f"강남구 OO수영장 자유수영의 접수가 시작됐습니다. {url}",
         )
 
@@ -296,19 +291,9 @@ class TestCreateTemplateDegrade:
 
         assert response.status_code == 503
 
-    async def test_llm_returns_empty_title_yields_503(self, client: AsyncClient):
-        """LLM이 빈 title 반환 → 503 (빈 응답이 200으로 흘러나오지 않는지)."""
-        llm_mock, _ = _make_llm_mock(title="", body="본문은 있어요.")
-
-        with patch("routers.notification.get_chat_model", return_value=llm_mock):
-            response = await client.post("/notification/template", json=_single_group())
-
-        assert response.status_code == 503
-        assert response.json()["detail"] == "알림 템플릿 생성에 실패했습니다."
-
     async def test_llm_returns_whitespace_body_yields_503(self, client: AsyncClient):
         """LLM이 공백만 있는 body 반환 → 503."""
-        llm_mock, _ = _make_llm_mock(title="제목이 있어요", body="   ")
+        llm_mock, _ = _make_llm_mock(body="   ")
 
         with patch("routers.notification.get_chat_model", return_value=llm_mock):
             response = await client.post("/notification/template", json=_single_group())
@@ -448,7 +433,7 @@ class TestServiceSerialization:
 
         async def _capture(messages, *args, **kwargs):
             captured["messages"] = messages
-            return NotificationTemplateResponse(title="t", body="b")
+            return _BodyResponse(body="b")
 
         chain_mock = AsyncMock()
         chain_mock.ainvoke = _capture
