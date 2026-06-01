@@ -1,6 +1,7 @@
-"""POST /notification/template 라우터 테스트.
+"""POST /notification/template 라우터 테스트(서비스 그룹 구조).
 
 실제 LLM/외부 API 호출 없이 AsyncMock으로 LLM을 모킹한다.
+망 분리/Nginx 레벨 보호 가정이므로 엔드포인트에 별도 인증은 없다.
 """
 
 import asyncio
@@ -12,7 +13,6 @@ from httpx import ASGITransport, AsyncClient
 
 from schemas.notification import NotificationTemplateResponse
 
-
 # ---------------------------------------------------------------------------
 # 픽스처
 # ---------------------------------------------------------------------------
@@ -21,11 +21,8 @@ from schemas.notification import NotificationTemplateResponse
 @pytest.fixture()
 def app() -> FastAPI:
     from main import app as _app
-    from routers.notification import _verify_token
 
-    _app.dependency_overrides[_verify_token] = lambda: None
-    yield _app
-    _app.dependency_overrides.pop(_verify_token, None)
+    return _app
 
 
 @pytest.fixture()
@@ -36,7 +33,10 @@ async def client(app: FastAPI) -> AsyncClient:
         yield c
 
 
-def _make_llm_mock(title: str = "접수가 시작됐어요", body: str = "지금 바로 신청하세요."):
+def _make_llm_mock(
+    title: str = "접수가 시작됐어요",
+    body: str = "지금 바로 신청하세요.",
+):
     """정상 응답을 반환하는 LLM chain mock을 생성한다."""
     chain_mock = AsyncMock()
     chain_mock.ainvoke = AsyncMock(
@@ -49,67 +49,102 @@ def _make_llm_mock(title: str = "접수가 시작됐어요", body: str = "지금
     return llm_mock, chain_mock
 
 
+def _single_group(service_id: str = "SVC001", **overrides) -> dict:
+    """서비스 그룹 1개를 담은 요청 본문을 생성한다."""
+    group = {
+        "service_id": service_id,
+        "service_name": "OO수영장 자유수영",
+        "area_name": "강남구",
+        "service_url": "https://yeyak.seoul.go.kr/aaa",
+        "service_status": "접수중",
+        "changes": [
+            {
+                "change_type": "UPDATED",
+                "field_name": "serviceStatus",
+                "old_value": "예약마감",
+                "new_value": "접수중",
+            }
+        ],
+    }
+    group.update(overrides)
+    return {"services": [group]}
+
+
 # ---------------------------------------------------------------------------
 # 정상 응답 케이스
 # ---------------------------------------------------------------------------
 
 
 class TestCreateTemplateSuccess:
-    async def test_updated_single_change_returns_200(self, client: AsyncClient):
-        """UPDATED 단건 → 200, title/body 비어있지 않음."""
-        llm_mock, _ = _make_llm_mock(title="접수 일정이 변경됐어요", body="일정이 바뀌었습니다. 확인해 주세요.")
-
-        with patch("routers.notification.get_chat_model", return_value=llm_mock):
-            response = await client.post(
-                "/notification/template",
-                json={
-                    "service_id": "SVC001",
-                    "changes": [
-                        {
-                            "change_type": "UPDATED",
-                            "field_name": "receipt_start_dt",
-                            "old_value": "2025-06-01",
-                            "new_value": "2025-06-15",
-                        }
-                    ],
-                },
-            )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["title"] != ""
-        assert data["body"] != ""
-        assert data["title"] == "접수 일정이 변경됐어요"
-        assert data["body"] == "일정이 바뀌었습니다. 확인해 주세요."
-
-    async def test_multiple_changes_new_and_updated_returns_200(self, client: AsyncClient):
-        """changes 여러 건(NEW+UPDATED) → 200."""
+    async def test_single_group_returns_200(self, client: AsyncClient):
+        """서비스 그룹 1개 → 200, title/body 비어있지 않음."""
         llm_mock, _ = _make_llm_mock(
-            title="새 서비스 등록 및 정보 변경",
-            body="새 서비스가 등록되고 정보가 변경됐습니다.",
+            title="접수가 다시 시작됐어요",
+            body="강남구 OO수영장 자유수영의 접수가 다시 시작됐습니다.",
         )
 
         with patch("routers.notification.get_chat_model", return_value=llm_mock):
-            response = await client.post(
-                "/notification/template",
-                json={
-                    "service_id": "SVC002",
-                    "changes": [
-                        {"change_type": "NEW"},
-                        {
-                            "change_type": "UPDATED",
-                            "field_name": "place_name",
-                            "old_value": "강남체육관",
-                            "new_value": "강남종합체육관",
-                        },
-                    ],
-                },
-            )
+            response = await client.post("/notification/template", json=_single_group())
 
         assert response.status_code == 200
         data = response.json()
         assert data["title"]
         assert data["body"]
+
+    async def test_multiple_groups_new_and_updated_returns_200(
+        self, client: AsyncClient
+    ):
+        """여러 서비스 그룹(NEW+UPDATED 혼합) → 200."""
+        llm_mock, _ = _make_llm_mock(
+            title="관심 서비스 2건 변경 안내",
+            body="OO수영장 접수가 시작되고 글쓰기교실이 새로 등록됐습니다.",
+        )
+
+        body = {
+            "services": [
+                {
+                    "service_id": "SVC001",
+                    "service_name": "OO수영장 자유수영",
+                    "area_name": "강남구",
+                    "changes": [
+                        {
+                            "change_type": "UPDATED",
+                            "field_name": "serviceStatus",
+                            "old_value": "예약마감",
+                            "new_value": "접수중",
+                        }
+                    ],
+                },
+                {
+                    "service_id": "SVC002",
+                    "service_name": "강남구립도서관 글쓰기교실",
+                    "area_name": "강남구",
+                    "changes": [{"change_type": "NEW"}],
+                },
+            ]
+        }
+
+        with patch("routers.notification.get_chat_model", return_value=llm_mock):
+            response = await client.post("/notification/template", json=body)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["title"]
+        assert data["body"]
+
+    async def test_service_url_included_in_body(self, client: AsyncClient):
+        """service_url이 본문에 포함된 응답을 그대로 반환한다."""
+        url = "https://yeyak.seoul.go.kr/aaa"
+        llm_mock, _ = _make_llm_mock(
+            title="접수가 시작됐어요",
+            body=f"강남구 OO수영장 자유수영의 접수가 시작됐습니다. {url}",
+        )
+
+        with patch("routers.notification.get_chat_model", return_value=llm_mock):
+            response = await client.post("/notification/template", json=_single_group())
+
+        assert response.status_code == 200
+        assert url in response.json()["body"]
 
 
 # ---------------------------------------------------------------------------
@@ -118,22 +153,30 @@ class TestCreateTemplateSuccess:
 
 
 class TestCreateTemplateValidation:
-    async def test_invalid_change_type_returns_422(self, client: AsyncClient):
-        """change_type 범위 위반("MODIFIED") → 422."""
+    async def test_empty_services_returns_422(self, client: AsyncClient):
+        """services 빈 리스트 → 422."""
         response = await client.post(
-            "/notification/template",
-            json={
-                "service_id": "SVC001",
-                "changes": [{"change_type": "MODIFIED"}],
-            },
+            "/notification/template", json={"services": []}
         )
         assert response.status_code == 422
 
-    async def test_empty_changes_returns_422(self, client: AsyncClient):
-        """changes 빈 배열 → 422."""
+    async def test_empty_changes_in_group_returns_422(self, client: AsyncClient):
+        """그룹 내 changes 빈 배열 → 422."""
         response = await client.post(
             "/notification/template",
-            json={"service_id": "SVC001", "changes": []},
+            json={"services": [{"service_id": "SVC001", "changes": []}]},
+        )
+        assert response.status_code == 422
+
+    async def test_invalid_change_type_returns_422(self, client: AsyncClient):
+        """change_type 범위 위반 → 422."""
+        response = await client.post(
+            "/notification/template",
+            json={
+                "services": [
+                    {"service_id": "SVC001", "changes": [{"change_type": "MODIFIED"}]}
+                ]
+            },
         )
         assert response.status_code == 422
 
@@ -142,32 +185,57 @@ class TestCreateTemplateValidation:
         response = await client.post(
             "/notification/template",
             json={
-                "service_id": "   ",
-                "changes": [{"change_type": "NEW"}],
+                "services": [
+                    {"service_id": "   ", "changes": [{"change_type": "NEW"}]}
+                ]
             },
         )
         assert response.status_code == 422
 
-    async def test_too_many_changes_returns_422(self, client: AsyncClient):
-        """changes 51건(MAX=50 초과) → 422."""
-        overflow = [{"change_type": "UPDATED"} for _ in range(51)]
+    async def test_too_many_services_returns_422(self, client: AsyncClient):
+        """services 51개(MAX_SERVICES=50 초과) → 422."""
+        services = [
+            {"service_id": f"SVC{i:03d}", "changes": [{"change_type": "NEW"}]}
+            for i in range(51)
+        ]
         response = await client.post(
-            "/notification/template",
-            json={"service_id": "SVC001", "changes": overflow},
+            "/notification/template", json={"services": services}
         )
         assert response.status_code == 422
 
-    async def test_exactly_max_changes_is_accepted(self, client: AsyncClient):
-        """changes 50건(MAX 경계값) → validator를 통과해 LLM 호출까지 도달."""
+    async def test_exactly_max_services_is_accepted(self, client: AsyncClient):
+        """services 50개(MAX_SERVICES 경계값) → 200까지 도달."""
         llm_mock, _ = _make_llm_mock()
-        boundary = [{"change_type": "UPDATED"} for _ in range(50)]
+        services = [
+            {"service_id": f"SVC{i:03d}", "changes": [{"change_type": "NEW"}]}
+            for i in range(50)
+        ]
+        with patch("routers.notification.get_chat_model", return_value=llm_mock):
+            response = await client.post(
+                "/notification/template", json={"services": services}
+            )
+        assert response.status_code == 200
 
+    async def test_too_many_changes_in_group_returns_422(self, client: AsyncClient):
+        """그룹 내 changes 51건(MAX_CHANGES_PER_SERVICE=50 초과) → 422."""
+        changes = [{"change_type": "UPDATED"} for _ in range(51)]
+        response = await client.post(
+            "/notification/template",
+            json={"services": [{"service_id": "SVC001", "changes": changes}]},
+        )
+        assert response.status_code == 422
+
+    async def test_exactly_max_changes_in_group_is_accepted(
+        self, client: AsyncClient
+    ):
+        """그룹 내 changes 50건(경계값) → 200까지 도달."""
+        llm_mock, _ = _make_llm_mock()
+        changes = [{"change_type": "UPDATED"} for _ in range(50)]
         with patch("routers.notification.get_chat_model", return_value=llm_mock):
             response = await client.post(
                 "/notification/template",
-                json={"service_id": "SVC001", "changes": boundary},
+                json={"services": [{"service_id": "SVC001", "changes": changes}]},
             )
-
         assert response.status_code == 200
 
 
@@ -185,18 +253,11 @@ class TestCreateTemplateDegrade:
 
         chain_mock = AsyncMock()
         chain_mock.ainvoke = _timeout
-
         llm_mock = AsyncMock()
         llm_mock.with_structured_output = lambda _: chain_mock
 
         with patch("routers.notification.get_chat_model", return_value=llm_mock):
-            response = await client.post(
-                "/notification/template",
-                json={
-                    "service_id": "SVC001",
-                    "changes": [{"change_type": "NEW"}],
-                },
-            )
+            response = await client.post("/notification/template", json=_single_group())
 
         assert response.status_code == 503
         assert response.json()["detail"] == "알림 템플릿 생성에 실패했습니다."
@@ -209,18 +270,11 @@ class TestCreateTemplateDegrade:
 
         chain_mock = AsyncMock()
         chain_mock.ainvoke = _fail
-
         llm_mock = AsyncMock()
         llm_mock.with_structured_output = lambda _: chain_mock
 
         with patch("routers.notification.get_chat_model", return_value=llm_mock):
-            response = await client.post(
-                "/notification/template",
-                json={
-                    "service_id": "SVC001",
-                    "changes": [{"change_type": "UPDATED", "field_name": "status"}],
-                },
-            )
+            response = await client.post("/notification/template", json=_single_group())
 
         assert response.status_code == 503
 
@@ -229,13 +283,7 @@ class TestCreateTemplateDegrade:
         llm_mock, _ = _make_llm_mock(title="", body="본문은 있어요.")
 
         with patch("routers.notification.get_chat_model", return_value=llm_mock):
-            response = await client.post(
-                "/notification/template",
-                json={
-                    "service_id": "SVC001",
-                    "changes": [{"change_type": "NEW"}],
-                },
-            )
+            response = await client.post("/notification/template", json=_single_group())
 
         assert response.status_code == 503
         assert response.json()["detail"] == "알림 템플릿 생성에 실패했습니다."
@@ -245,103 +293,132 @@ class TestCreateTemplateDegrade:
         llm_mock, _ = _make_llm_mock(title="제목이 있어요", body="   ")
 
         with patch("routers.notification.get_chat_model", return_value=llm_mock):
-            response = await client.post(
-                "/notification/template",
-                json={
-                    "service_id": "SVC001",
-                    "changes": [{"change_type": "DELETED"}],
-                },
-            )
+            response = await client.post("/notification/template", json=_single_group())
 
         assert response.status_code == 503
 
     async def test_self_timeout_triggers_503(self, client: AsyncClient):
-        """asyncio.wait_for 타임아웃 → 503.
-
-        _invoke_llm이 실제로 오래 걸리는 상황을 시뮬레이션한다.
-        routers.notification._invoke_llm을 직접 패치하여 asyncio.wait_for가 타임아웃을
-        발생시키는 경로를 검증한다.
-        """
-
-        async def _slow_invoke(_req):
-            await asyncio.sleep(100)
-            return NotificationTemplateResponse(title="제목", body="본문")
-
-        with patch("routers.notification._invoke_llm", side_effect=asyncio.TimeoutError()):
-            response = await client.post(
-                "/notification/template",
-                json={
-                    "service_id": "SVC001",
-                    "changes": [{"change_type": "NEW"}],
-                },
-            )
+        """asyncio.wait_for self-timeout 경로 → 503."""
+        with patch(
+            "routers.notification._invoke_llm",
+            side_effect=asyncio.TimeoutError(),
+        ):
+            response = await client.post("/notification/template", json=_single_group())
 
         assert response.status_code == 503
 
 
 # ---------------------------------------------------------------------------
-# 인증 테스트
+# 입력 직렬화(프롬프트로 메타/변경이 실제 전달되는지) 검증
 # ---------------------------------------------------------------------------
 
 
-class TestNotificationAuth:
-    """X-Internal-Token 인증 검증."""
+class TestServiceSerialization:
+    """_format_services / _build_messages가 LLM 입력에 메타·변경을 담는지 확인.
 
-    async def test_missing_token_returns_401(self, app: FastAPI):
-        """토큰 헤더 없이 호출하면 401을 반환한다."""
-        from routers.notification import _verify_token
+    상태/echo만 보는 happy-path 테스트로는 'service_url이 프롬프트에 전달됐는지'를
+    검증할 수 없어, 직렬화 결과를 직접 단언한다(추측 금지·노출 금지 규칙의 회귀 가드).
+    """
 
-        app.dependency_overrides.pop(_verify_token, None)
-        try:
-            async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as c:
-                from unittest.mock import patch
-                from core.config import settings
+    def test_format_includes_meta_and_change_detail(self):
+        from routers.notification import _format_services
+        from schemas.notification import NotificationTemplateRequest
 
-                with patch.object(settings, "admin_internal_token", "secret-token"):
-                    response = await c.post(
-                        "/notification/template",
-                        json={
-                            "service_id": "SVC001",
-                            "changes": [{"change_type": "NEW"}],
-                        },
-                    )
-                assert response.status_code == 401
-        finally:
-            app.dependency_overrides[_verify_token] = lambda: None
+        req = NotificationTemplateRequest(
+            services=[
+                {
+                    "service_id": "S1",
+                    "service_name": "OO수영장",
+                    "area_name": "강남구",
+                    "service_url": "https://x/aaa",
+                    "service_status": "접수중",
+                    "changes": [
+                        {
+                            "change_type": "UPDATED",
+                            "field_name": "serviceStatus",
+                            "old_value": "예약마감",
+                            "new_value": "접수중",
+                        }
+                    ],
+                }
+            ]
+        )
+        text = _format_services(req)
+        assert "OO수영장" in text  # 헤더에 이름
+        assert "https://x/aaa" in text  # service_url이 프롬프트에 포함
+        assert "강남구" in text
+        assert "접수중" in text
+        assert "UPDATED serviceStatus: 예약마감 -> 접수중" in text
 
-    async def test_correct_token_passes(self, app: FastAPI):
-        """올바른 토큰 헤더로 호출하면 인증을 통과한다(LLM mock으로 200 확인)."""
-        from routers.notification import _verify_token
+    def test_format_falls_back_to_service_id_header_when_no_name(self):
+        from routers.notification import _format_services
+        from schemas.notification import NotificationTemplateRequest
 
-        app.dependency_overrides.pop(_verify_token, None)
-        try:
-            from unittest.mock import AsyncMock, patch
-            from core.config import settings
-            from schemas.notification import NotificationTemplateResponse
+        req = NotificationTemplateRequest(
+            services=[{"service_id": "S2", "changes": [{"change_type": "NEW"}]}]
+        )
+        text = _format_services(req)
+        assert "[서비스 1] S2" in text
+        # NEW는 old/new 값이 없으므로 화살표 표기가 붙지 않아야 한다.
+        assert "->" not in text
 
-            chain_mock = AsyncMock()
-            chain_mock.ainvoke = AsyncMock(
-                return_value=NotificationTemplateResponse(title="제목", body="본문")
+    def test_format_omits_absent_optional_meta(self):
+        """없는 필드는 프롬프트에 라벨조차 등장하지 않아야 한다(추측 금지)."""
+        from routers.notification import _format_services
+        from schemas.notification import NotificationTemplateRequest
+
+        req = NotificationTemplateRequest(
+            services=[
+                {
+                    "service_id": "S3",
+                    "service_name": "이름만 있는 서비스",
+                    "changes": [{"change_type": "DELETED"}],
+                }
+            ]
+        )
+        text = _format_services(req)
+        assert "service_url" not in text
+        assert "area_name" not in text
+        assert "place_name" not in text
+
+    def test_format_numbers_multiple_groups(self):
+        from routers.notification import _format_services
+        from schemas.notification import NotificationTemplateRequest
+
+        req = NotificationTemplateRequest(
+            services=[
+                {"service_id": "A", "changes": [{"change_type": "NEW"}]},
+                {"service_id": "B", "changes": [{"change_type": "NEW"}]},
+            ]
+        )
+        text = _format_services(req)
+        assert "[서비스 1] A" in text
+        assert "[서비스 2] B" in text
+
+    async def test_url_reaches_llm_input_not_just_echoed(self, client: AsyncClient):
+        """service_url이 LLM에 전달된 메시지 안에 실제로 들어가는지 확인.
+
+        happy-path echo 테스트는 mock 반환값을 그대로 검증하므로 입력 전달을
+        보장하지 못한다. ainvoke 인자를 캡처해 직렬화된 입력을 직접 단언한다.
+        """
+        url = "https://yeyak.seoul.go.kr/aaa"
+        captured: dict = {}
+
+        async def _capture(messages, *args, **kwargs):
+            captured["messages"] = messages
+            return NotificationTemplateResponse(title="t", body="b")
+
+        chain_mock = AsyncMock()
+        chain_mock.ainvoke = _capture
+        llm_mock = AsyncMock()
+        llm_mock.with_structured_output = lambda _: chain_mock
+
+        with patch("routers.notification.get_chat_model", return_value=llm_mock):
+            response = await client.post(
+                "/notification/template", json=_single_group()
             )
-            llm_mock = AsyncMock()
-            llm_mock.with_structured_output = lambda _: chain_mock
 
-            with patch.object(settings, "admin_internal_token", "secret-token"), patch(
-                "routers.notification.get_chat_model", return_value=llm_mock
-            ):
-                async with AsyncClient(
-                    transport=ASGITransport(app=app), base_url="http://test"
-                ) as c:
-                    response = await c.post(
-                        "/notification/template",
-                        headers={"X-Internal-Token": "secret-token"},
-                        json={
-                            "service_id": "SVC001",
-                            "changes": [{"change_type": "NEW"}],
-                        },
-                    )
-            assert response.status_code == 200
-        finally:
-            app.dependency_overrides[_verify_token] = lambda: None
+        assert response.status_code == 200
+        # 마지막 HumanMessage가 직렬화된 서비스 입력이며 url을 포함해야 한다.
+        last_human = captured["messages"][-1]
+        assert url in last_human.content
