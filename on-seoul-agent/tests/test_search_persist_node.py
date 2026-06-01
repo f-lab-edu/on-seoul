@@ -53,6 +53,7 @@ def _make_nodes(ai_session: Any) -> GraphNodes:
         sql_agent=MagicMock(),
         vector_agent=MagicMock(),
         answer_agent=MagicMock(),
+        analytics_agent=MagicMock(),
     )
     nodes.ai_session = ai_session
     return nodes
@@ -411,6 +412,7 @@ class TestRetryPrepResetsSearchChannels:
             sql_agent=MagicMock(),
             vector_agent=MagicMock(),
             answer_agent=MagicMock(),
+            analytics_agent=MagicMock(),
         )
         state = {
             "room_id": 1,

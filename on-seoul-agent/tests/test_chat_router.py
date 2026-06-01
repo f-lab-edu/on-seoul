@@ -12,6 +12,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from core.exceptions import RateLimitException
 from tests.helpers import make_agent_state
 from schemas.state import AgentState, IntentType
 
@@ -339,6 +340,50 @@ class TestChatStreamRouter:
         events = _parse_sse_events(response.content)
         assert len(events) == 1
         assert events[0]["event"] == "error"
+
+    async def test_rate_limit_exception_yields_rate_limit_error_event(
+        self, client: AsyncClient, mock_graph
+    ):
+        """RateLimitException 발생 시 error 이벤트와 rate-limit 안내 메시지가 반환된다."""
+        mock_graph.stream = MagicMock(
+            side_effect=RateLimitException("Gemini embed rate limit 소진")
+        )
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        assert response.status_code == 200
+        events = _parse_sse_events(response.content)
+        error_events = [e for e in events if e.get("event") == "error"]
+        assert len(error_events) == 1
+        assert error_events[0]["data"]["message"] == "현재 요청이 많아 잠시 후 다시 시도해 주세요."
+
+    async def test_rate_limit_error_message_differs_from_generic_error(
+        self, client: AsyncClient, mock_graph
+    ):
+        """RateLimitException의 error 메시지는 범용 error 메시지와 다른 문자열이다."""
+        mock_graph.stream = MagicMock(
+            side_effect=RateLimitException("소진")
+        )
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "테스트"},
+            )
+
+        events = _parse_sse_events(response.content)
+        msg = events[0]["data"]["message"]
+        assert msg != "서비스 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 
     async def test_error_event_message_is_generic(
         self, client: AsyncClient, mock_graph

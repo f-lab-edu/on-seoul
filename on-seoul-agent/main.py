@@ -16,6 +16,7 @@ from middleware.metrics import ProcessTimeMiddleware
 from routers import admin as admin_router
 from routers import chat
 from routers import embeddings as embeddings_router
+from routers import notification as notification_router
 
 setup_logging()
 
@@ -95,6 +96,7 @@ app.add_middleware(ProcessTimeMiddleware)
 app.include_router(chat.router, prefix="/chat")
 app.include_router(admin_router.router)
 app.include_router(embeddings_router.router)
+app.include_router(notification_router.router)
 
 # ---------------------------------------------------------------------------
 # 전역 에러 핸들러

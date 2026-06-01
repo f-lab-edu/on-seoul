@@ -13,7 +13,17 @@ AgentState에 필드가 추가될 때 make_agent_state만 수정하면 된다.
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from agents.answer_agent import AnswerAgent, _AnswerOutput, _TitleOutput
+from agents.analytics_agent import AnalyticsAgent, _AnalyticsParams
+from agents.answer_agent import (
+    AnswerAgent,
+    _TitleOutput,
+    _compose,
+    _OUTPUT_RULES,
+    _ROLE,
+    _STRUCT_ANALYTICS,
+    _STRUCT_FALLBACK,
+    _STRUCT_MAP,
+)
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.sql_agent import SqlAgent, _SqlParams
 from schemas.state import AgentState, IntentType
@@ -38,6 +48,10 @@ def make_agent_state(**overrides: Any) -> AgentState:
         vector_sub_intent=None,
         vector_results=None,
         map_results=None,
+        analytics_results=None,
+        analytics_group_by=None,
+        analytics_metric=None,
+        analytics_keyword=None,
         answer=None,
         title=None,
         trace=None,
@@ -87,6 +101,37 @@ def make_sql_agent(
     return agent, session
 
 
+def make_analytics_agent(
+    rows: list[dict],
+    *,
+    group_by: str = "max_class_name",
+    metric: str = "count",
+    keyword: str | None = None,
+) -> tuple[AnalyticsAgent, MagicMock]:
+    """rows 를 반환하는 AnalyticsAgent mock + data_session mock.
+
+    _chain 은 주어진 group_by/metric/keyword 로 _AnalyticsParams 를 반환하고,
+    data_session.execute 는 rows 를 group_value/count 형태로 돌려준다.
+    """
+    agent = AnalyticsAgent.__new__(AnalyticsAgent)
+    chain = MagicMock()
+    chain.ainvoke = AsyncMock(
+        return_value=_AnalyticsParams(
+            group_by=group_by,  # type: ignore[arg-type]
+            metric=metric,  # type: ignore[arg-type]
+            keyword=keyword,
+        )
+    )
+    agent._chain = chain
+
+    mock_result = MagicMock()
+    mock_result.keys.return_value = list(rows[0].keys()) if rows else []
+    mock_result.fetchall.return_value = [tuple(r.values()) for r in rows]
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=mock_result)
+    return agent, session
+
+
 def make_answer_agent(
     answer: str = "답변입니다.",
     title: str | None = None,
@@ -95,7 +140,7 @@ def make_answer_agent(
     agent = AnswerAgent.__new__(AnswerAgent)
 
     answer_chain = MagicMock()
-    answer_chain.ainvoke = AsyncMock(return_value=_AnswerOutput(answer=answer))
+    answer_chain.ainvoke = AsyncMock(return_value=answer)
     agent._answer_chain = answer_chain
 
     title_chain = MagicMock()
@@ -103,6 +148,13 @@ def make_answer_agent(
         return_value=_TitleOutput(title=title or "수영장 안내")
     )
     agent._title_chain = title_chain
+
+    # Tier 1 정적 프롬프트 캐시 — 실제 __init__과 동일한 값으로 초기화.
+    agent._static_prompts = {
+        IntentType.MAP.value: _compose(_ROLE, _STRUCT_MAP, _OUTPUT_RULES),
+        IntentType.ANALYTICS.value: _compose(_ROLE, _STRUCT_ANALYTICS, _OUTPUT_RULES),
+        IntentType.FALLBACK.value: _compose(_ROLE, _STRUCT_FALLBACK, _OUTPUT_RULES),
+    }
     return agent
 
 

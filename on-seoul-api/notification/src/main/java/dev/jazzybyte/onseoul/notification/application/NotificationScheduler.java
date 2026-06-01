@@ -1,8 +1,11 @@
 package dev.jazzybyte.onseoul.notification.application;
 
+import dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent;
 import dev.jazzybyte.onseoul.notification.domain.NotificationBatch;
+import dev.jazzybyte.onseoul.notification.domain.NotificationContent;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
+import dev.jazzybyte.onseoul.notification.domain.NotificationTemplate;
 import dev.jazzybyte.onseoul.notification.domain.NotificationTemplateRequest;
 import dev.jazzybyte.onseoul.notification.domain.ServiceChange;
 import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
@@ -10,6 +13,7 @@ import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.LoadBatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
+import dev.jazzybyte.onseoul.notification.port.out.NotificationContentSerializerPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveBatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.TemplateGenerationPort;
@@ -17,18 +21,28 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * ADR-0004 per-batch 알림 스케줄러.
+ *
+ * <p>트리거: {@link EmbeddingSyncCompletedEvent} — 임베딩 동기화 완료 시 1회만 실행.
+ * 처리 순서는 수집 → 임베딩 동기화 → 알림 이다. 수집 완료(CollectionCompletedEvent) 후
+ * EmbeddingSyncWorker가 임베딩 동기화를 끝내고 EmbeddingSyncCompletedEvent를 발행하면
+ * {@link #onEmbeddingSyncCompleted(EmbeddingSyncCompletedEvent)}가 비동기로 기동한다.
+ * 알림은 임베딩 동기화 단계 완료 후에만 실행된다(임베딩 실패해도 best-effort로 진행).
  *
  * <p>흐름:
  * <ol>
@@ -65,8 +79,12 @@ public class NotificationScheduler {
     private final SaveBatchPort saveBatchPort;
     private final LoadBatchPort loadBatchPort;
     private final NotificationTxHelper txHelper;
+    private final NotificationContentSerializerPort contentSerializer;
     private final MeterRegistry meterRegistry;
     private final long staleThresholdMs;
+
+    /** 중복 실행 방지 플래그. 이벤트가 연속으로 두 번 오더라도 한 번만 처리한다. */
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     public NotificationScheduler(
             final LoadSubscriptionPort loadSubscriptionPort,
@@ -76,6 +94,7 @@ public class NotificationScheduler {
             final SaveBatchPort saveBatchPort,
             final LoadBatchPort loadBatchPort,
             final NotificationTxHelper txHelper,
+            final NotificationContentSerializerPort contentSerializer,
             final MeterRegistry meterRegistry,
             @Value("${notification.scheduler.stale-threshold-ms:600000}") final long staleThresholdMs) {
         this.loadSubscriptionPort = loadSubscriptionPort;
@@ -85,13 +104,33 @@ public class NotificationScheduler {
         this.saveBatchPort = saveBatchPort;
         this.loadBatchPort = loadBatchPort;
         this.txHelper = txHelper;
+        this.contentSerializer = contentSerializer;
         this.meterRegistry = meterRegistry;
         this.staleThresholdMs = staleThresholdMs;
     }
 
-    @Scheduled(fixedDelayString = "${notification.scheduler.fixed-delay-ms:300000}")
-    public void processAllSubscriptions() {
-        log.debug("[NotificationScheduler] 스케줄 실행 시작");
+    /**
+     * 임베딩 동기화 완료 이벤트 수신 → 알림 배치 실행.
+     *
+     * <p>{@code @Async}로 호출 스레드를 블로킹하지 않는다.
+     * 이미 실행 중이면 이벤트를 무시한다 (일 1회 수집이므로 정상적으로는 중복이 없다).
+     */
+    @Async
+    @EventListener
+    public void onEmbeddingSyncCompleted(EmbeddingSyncCompletedEvent event) {
+        if (!running.compareAndSet(false, true)) {
+            log.warn("[NotificationScheduler] 이미 실행 중 — 이벤트 무시");
+            return;
+        }
+        try {
+            processAllSubscriptions();
+        } finally {
+            running.set(false);
+        }
+    }
+
+    void processAllSubscriptions() {
+        log.debug("[NotificationScheduler] 배치 실행 시작");
 
         // 0. JVM 크래시로 complete()/fail() 호출 없이 종료된 stale RUNNING batch를 회수한다.
         recoverStaleBatches();
@@ -189,16 +228,23 @@ public class NotificationScheduler {
                              List<ServiceChange> changes, NotificationDispatch dispatch,
                              AtomicInteger sentCount, AtomicInteger failedCount) {
         // TX 밖: 배치 템플릿 생성 (구독 1건 = AI 호출 1회)
-        // 구독은 더 이상 serviceId에 고정되지 않으므로, 템플릿 요청의 serviceId는
-        // 매칭된 변경의 대표 serviceId(첫 변경)에서 가져온다.
-        String serviceId = changes.get(0).serviceId();
+        // 하나의 구독 필터가 여러 service_id에 매칭될 수 있으므로 service_id 단위로 그룹핑한다.
+        List<NotificationTemplateRequest.ServiceChangeGroup> groups = toServiceGroups(changes);
         TemplateResult template = templateGenerationPort.generate(
-                new NotificationTemplateRequest(serviceId, toChangeItems(changes)));
+                new NotificationTemplateRequest(groups));
 
         Counter.builder("notification.template.source")
                 .tag("source", template.source().name())
                 .register(meterRegistry)
                 .increment();
+
+        // 사실 데이터(서비스 카드)는 결정적으로 조립한다. AI는 summary만 생성한다.
+        NotificationContent content = new NotificationContent(
+                template.title(), template.summary(), toServiceCards(groups));
+
+        // 발송 직전: content를 JSON 직렬화하여 dispatch에 보관(재시도 무손실 복원).
+        // 직렬화 자체는 어댑터/매퍼 계층(contentSerializer) 책임 — 도메인/스케줄러는 raw String만 다룬다.
+        dispatch.assignPayload(contentSerializer.serialize(content));
 
         // TX 밖: 연락처 조회 (미등록 시 userId만으로 fallback)
         UserContact recipient = loadUserContactPort.loadContact(sub.getUserId())
@@ -212,14 +258,13 @@ public class NotificationScheduler {
         try {
             pushNotificationPort.send(
                     recipient,
-                    template.title(),
-                    template.body(),
+                    content,
                     dispatch.getId(),
                     sub.getChannels());
 
             try {
                 txHelper.txBSuccess(dispatch, sub, batch,
-                        template.title(), template.body(), template.source());
+                        template.title(), template.summary(), template.source());
             } catch (Exception e) {
                 log.error("[NotificationScheduler] TX B(성공) 실패: dispatchId={}, error={}",
                         dispatch.getId(), e.getMessage());
@@ -234,7 +279,7 @@ public class NotificationScheduler {
         } catch (RuntimeException pushEx) {
             try {
                 txHelper.txBFailure(dispatch,
-                        template.title(), template.body(), template.source(),
+                        template.title(), template.summary(), template.source(),
                         pushEx.getMessage());
             } catch (Exception e) {
                 log.error("[NotificationScheduler] TX B(실패) 실패: dispatchId={}, error={}",
@@ -252,10 +297,52 @@ public class NotificationScheduler {
         }
     }
 
-    private List<NotificationTemplateRequest.ChangeItem> toChangeItems(List<ServiceChange> changes) {
-        return changes.stream()
-                .map(c -> new NotificationTemplateRequest.ChangeItem(
-                        c.changeType(), c.fieldName(), c.oldValue(), c.newValue()))
+    /**
+     * 변경 목록을 service_id 단위로 그룹핑한다.
+     * {@link LinkedHashMap}으로 입력 순서(= changed_at asc)를 보존한다.
+     * 각 그룹의 메타(serviceName 등)는 그 서비스의 첫 ServiceChange에서 가져온다.
+     */
+    private List<NotificationTemplateRequest.ServiceChangeGroup> toServiceGroups(List<ServiceChange> changes) {
+        LinkedHashMap<String, List<ServiceChange>> byServiceId = new LinkedHashMap<>();
+        for (ServiceChange c : changes) {
+            byServiceId.computeIfAbsent(c.serviceId(), k -> new ArrayList<>()).add(c);
+        }
+        return byServiceId.values().stream()
+                .map(group -> {
+                    ServiceChange first = group.get(0);
+                    List<NotificationTemplateRequest.ChangeItem> items = group.stream()
+                            .map(c -> new NotificationTemplateRequest.ChangeItem(
+                                    c.changeType(), c.fieldName(), c.oldValue(), c.newValue()))
+                            .toList();
+                    return new NotificationTemplateRequest.ServiceChangeGroup(
+                            first.serviceId(), first.serviceName(), first.serviceUrl(), first.imageUrl(),
+                            first.placeName(), first.areaName(), first.serviceStatus(), first.targetInfo(),
+                            first.receiptStartDt(), first.receiptEndDt(), items);
+                })
+                .toList();
+    }
+
+    /**
+     * 그룹 메타를 결정적 {@link NotificationContent.ServiceCard}로 변환한다.
+     * 변경 라인의 label은 {@link NotificationTemplate#fieldLabel(String)}로 한글 매핑한다
+     * (camelCase field_name 그대로 노출 금지).
+     */
+    private List<NotificationContent.ServiceCard> toServiceCards(
+            List<NotificationTemplateRequest.ServiceChangeGroup> groups) {
+        return groups.stream()
+                .map(g -> {
+                    List<NotificationContent.ChangeLine> lines = g.changes().stream()
+                            .map(c -> new NotificationContent.ChangeLine(
+                                    NotificationTemplate.fieldLabel(c.fieldName()),
+                                    c.oldValue(), c.newValue()))
+                            .toList();
+                    String name = (g.serviceName() != null && !g.serviceName().isBlank())
+                            ? g.serviceName() : g.serviceId();
+                    return new NotificationContent.ServiceCard(
+                            name, g.serviceStatus(), g.areaName(), g.placeName(),
+                            g.targetInfo(), g.receiptStartDt(), g.receiptEndDt(),
+                            g.serviceUrl(), g.imageUrl(), lines);
+                })
                 .toList();
     }
 

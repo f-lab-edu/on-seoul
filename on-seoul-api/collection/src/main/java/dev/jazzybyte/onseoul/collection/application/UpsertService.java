@@ -53,6 +53,7 @@ public class UpsertService {
 
             if (existing == null) {
                 savePublicServicePort.save(entity);
+                changeLogs.add(newChangeLog(entity.getServiceId(), collectionId));
                 newCount++;
                 log.debug("NEW: serviceId={}", entity.getServiceId());
 
@@ -114,6 +115,19 @@ public class UpsertService {
                 .fieldName(fieldName)
                 .oldValue(oldValue)
                 .newValue(newValue)
+                .build();
+    }
+
+    /**
+     * 신규 service_id 1건당 change_type=NEW 행 1건.
+     * field-level diff가 없으므로 fieldName/oldValue/newValue는 모두 null이다(컬럼 nullable 허용).
+     * 이 행은 임베딩 동기화의 upsert 대상 식별 소스가 된다.
+     */
+    private ServiceChangeLog newChangeLog(String serviceId, Long collectionId) {
+        return ServiceChangeLog.builder()
+                .serviceId(serviceId)
+                .collectionId(collectionId)
+                .changeType(ChangeType.NEW)
                 .build();
     }
 

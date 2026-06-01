@@ -29,6 +29,9 @@ dependencies {
     // jooq-meta-extensions 불필요 — PostgresDatabase 는 jooq-codegen에 내장
     jooqCodegen 'org.postgresql:postgresql'
 
+    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.2.0'
+    implementation 'io.github.resilience4j:resilience4j-micrometer:2.2.0'
+
     testRuntimeOnly 'com.h2database:h2'
     testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
     testImplementation 'io.projectreactor:reactor-test'

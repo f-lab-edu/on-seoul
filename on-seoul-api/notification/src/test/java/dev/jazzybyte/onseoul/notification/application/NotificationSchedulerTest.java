@@ -5,6 +5,7 @@ import dev.jazzybyte.onseoul.notification.domain.NotificationBatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.domain.NotificationSubscription;
+import dev.jazzybyte.onseoul.notification.domain.NotificationContent;
 import dev.jazzybyte.onseoul.notification.domain.NotificationTemplateRequest;
 import dev.jazzybyte.onseoul.notification.domain.ServiceChange;
 import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
@@ -13,6 +14,7 @@ import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import dev.jazzybyte.onseoul.notification.port.out.LoadBatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
+import dev.jazzybyte.onseoul.notification.adapter.out.persistence.NotificationContentSerializer;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveBatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.TemplateGenerationPort;
@@ -69,7 +71,9 @@ class NotificationSchedulerTest {
         scheduler = new NotificationScheduler(
                 loadSubscriptionPort, loadUserContactPort,
                 templateGenerationPort, pushNotificationPort,
-                saveBatchPort, loadBatchPort, txHelper, meterRegistry, 600_000L);
+                saveBatchPort, loadBatchPort, txHelper,
+                new NotificationContentSerializer(new com.fasterxml.jackson.databind.ObjectMapper()),
+                meterRegistry, 600_000L);
 
         lenient().when(loadUserContactPort.loadContact(anyLong()))
                 .thenReturn(Optional.of(TEST_CONTACT));
@@ -94,7 +98,8 @@ class NotificationSchedulerTest {
 
     private ServiceChange change(Long id, String serviceId) {
         return new ServiceChange(id, serviceId, "UPDATED", "service_status",
-                "RECEIVING", "CLOSED", Instant.now());
+                "RECEIVING", "CLOSED", Instant.now(),
+                serviceId + "-name", null, null, null, null, "RECEIVING", null, null, null);
     }
 
     private NotificationDispatch dispatch(Long subId) {
@@ -288,7 +293,7 @@ class NotificationSchedulerTest {
 
         scheduler.processAllSubscriptions();
 
-        verify(pushNotificationPort).send(any(UserContact.class), anyString(), anyString(), any(), any());
+        verify(pushNotificationPort).send(any(UserContact.class), any(NotificationContent.class), any(), any());
         ArgumentCaptor<NotificationBatch> batchCaptor = ArgumentCaptor.forClass(NotificationBatch.class);
         verify(txHelper).txBSuccess(eq(d), eq(s), batchCaptor.capture(),
                 eq("제목"), eq("본문"), eq(TemplateSource.AI));
@@ -315,7 +320,7 @@ class NotificationSchedulerTest {
         when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
         when(templateGenerationPort.generate(any())).thenReturn(template);
         doThrow(new RuntimeException("Knock 오류")).when(pushNotificationPort)
-                .send(any(UserContact.class), anyString(), anyString(), any(), any());
+                .send(any(UserContact.class), any(NotificationContent.class), any(), any());
 
         scheduler.processAllSubscriptions();
 
@@ -344,7 +349,7 @@ class NotificationSchedulerTest {
 
         scheduler.processAllSubscriptions();
 
-        verify(pushNotificationPort).send(any(UserContact.class), anyString(), anyString(), any(), any());
+        verify(pushNotificationPort).send(any(UserContact.class), any(NotificationContent.class), any(), any());
 
         ArgumentCaptor<NotificationBatch> finalCaptor = ArgumentCaptor.forClass(NotificationBatch.class);
         verify(saveBatchPort).update(finalCaptor.capture());
@@ -384,7 +389,7 @@ class NotificationSchedulerTest {
         when(templateGenerationPort.generate(any()))
                 .thenReturn(new TemplateResult("제목", "본문", TemplateSource.AI));
         doThrow(new RuntimeException("Knock 오류")).when(pushNotificationPort)
-                .send(any(), anyString(), anyString(), any(), any());
+                .send(any(), any(NotificationContent.class), any(), any());
 
         scheduler.processAllSubscriptions();
 
@@ -477,7 +482,7 @@ class NotificationSchedulerTest {
         scheduler.processAllSubscriptions();
 
         ArgumentCaptor<UserContact> contactCaptor = ArgumentCaptor.forClass(UserContact.class);
-        verify(pushNotificationPort).send(contactCaptor.capture(), anyString(), anyString(), any(), any());
+        verify(pushNotificationPort).send(contactCaptor.capture(), any(NotificationContent.class), any(), any());
         assertThat(contactCaptor.getValue().userId()).isEqualTo(1L);
         assertThat(contactCaptor.getValue().email()).isNull();
     }
@@ -533,7 +538,7 @@ class NotificationSchedulerTest {
 
         // 모든 구독에 대해 push send가 호출되어야 한다
         verify(pushNotificationPort, org.mockito.Mockito.times(n))
-                .send(any(UserContact.class), anyString(), anyString(), any(), any());
+                .send(any(UserContact.class), any(NotificationContent.class), any(), any());
 
         ArgumentCaptor<NotificationBatch> finalCaptor = ArgumentCaptor.forClass(NotificationBatch.class);
         verify(saveBatchPort).update(finalCaptor.capture());
@@ -556,7 +561,7 @@ class NotificationSchedulerTest {
         when(templateGenerationPort.generate(any()))
                 .thenReturn(new TemplateResult("t", "b", TemplateSource.AI));
         doThrow(new RuntimeException("Knock 오류")).when(pushNotificationPort)
-                .send(any(), anyString(), anyString(), any(), any());
+                .send(any(), any(NotificationContent.class), any(), any());
 
         scheduler.processAllSubscriptions();
 
@@ -567,13 +572,17 @@ class NotificationSchedulerTest {
     }
 
     @Test
-    @DisplayName("templateGenerationPort에 변경 목록이 List<ChangeItem>으로 전달된다")
-    void templateRequest_carriesBatchedChangeItems() {
+    @DisplayName("같은 serviceId의 변경들은 하나의 그룹으로 묶여 changes 목록에 순서대로 담긴다")
+    void templateRequest_sameServiceId_groupedIntoSingleGroup() {
         NotificationSubscription s = sub(1L);
         ServiceChange c1 = new ServiceChange(100L, "OA-2269", "UPDATED",
-                "service_status", "RECEIVING", "CLOSED", Instant.now());
+                "service_status", "RECEIVING", "CLOSED", Instant.now(),
+                "수영교실", "https://ex.com/1", null, "강남센터", "강남구", "RECEIVING",
+                "성인", "2026-05-01T00:00Z", "2026-05-31T00:00Z");
         ServiceChange c2 = new ServiceChange(101L, "OA-2269", "UPDATED",
-                "receipt_end_dt", "2026-05-01", "2026-05-31", Instant.now());
+                "receipt_end_dt", "2026-05-01", "2026-05-31", Instant.now(),
+                "수영교실", "https://ex.com/1", null, "강남센터", "강남구", "RECEIVING",
+                "성인", "2026-05-01T00:00Z", "2026-05-31T00:00Z");
         NotificationDispatch d = dispatch(1L);
 
         when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of(s));
@@ -588,9 +597,217 @@ class NotificationSchedulerTest {
         verify(templateGenerationPort).generate(captor.capture());
         NotificationTemplateRequest req = captor.getValue();
 
-        assertThat(req.serviceId()).isEqualTo("OA-2269");
-        assertThat(req.changes()).hasSize(2);
-        assertThat(req.changes().get(0).fieldName()).isEqualTo("service_status");
-        assertThat(req.changes().get(1).fieldName()).isEqualTo("receipt_end_dt");
+        assertThat(req.services()).hasSize(1);
+        NotificationTemplateRequest.ServiceChangeGroup g = req.services().get(0);
+        assertThat(g.serviceId()).isEqualTo("OA-2269");
+        assertThat(g.serviceName()).isEqualTo("수영교실");
+        assertThat(g.serviceUrl()).isEqualTo("https://ex.com/1");
+        assertThat(g.changes()).hasSize(2);
+        assertThat(g.changes().get(0).fieldName()).isEqualTo("service_status");
+        assertThat(g.changes().get(1).fieldName()).isEqualTo("receipt_end_dt");
+    }
+
+    @Test
+    @DisplayName("여러 serviceId가 섞인 변경은 입력 순서를 보존한 N개 그룹으로 묶여 1회 generate 호출된다")
+    void templateRequest_multipleServiceIds_groupedPreservingOrder() {
+        NotificationSubscription s = sub(1L);
+        ServiceChange a = change(100L, "OA-A");
+        ServiceChange b1 = change(101L, "OA-B");
+        ServiceChange b2 = change(102L, "OA-B");
+        ServiceChange c = change(103L, "OA-C");
+        NotificationDispatch d = dispatch(1L);
+
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of(s));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s)))
+                .thenReturn(txAResult(List.of(a, b1, b2, c), d));
+        when(templateGenerationPort.generate(any()))
+                .thenReturn(new TemplateResult("t", "b", TemplateSource.AI));
+
+        scheduler.processAllSubscriptions();
+
+        ArgumentCaptor<NotificationTemplateRequest> captor =
+                ArgumentCaptor.forClass(NotificationTemplateRequest.class);
+        verify(templateGenerationPort).generate(captor.capture());
+        NotificationTemplateRequest req = captor.getValue();
+
+        // 3개 그룹: OA-A, OA-B, OA-C — 입력 순서(changed_at asc) 보존
+        assertThat(req.services()).extracting(NotificationTemplateRequest.ServiceChangeGroup::serviceId)
+                .containsExactly("OA-A", "OA-B", "OA-C");
+        // OA-B 그룹은 변경 2건을 가진다
+        assertThat(req.services().get(1).changes()).hasSize(2);
+        assertThat(req.services().get(0).changes()).hasSize(1);
+        assertThat(req.services().get(2).changes()).hasSize(1);
+    }
+
+    // ── 이벤트 트리거 + 중복 실행 방지 (QA 회귀 테스트) ──────────────────────
+
+    @Test
+    @DisplayName("이벤트 수신 시 알림 배치가 1회 실행된다 (onEmbeddingSyncCompleted → processAllSubscriptions)")
+    void onEmbeddingSyncCompleted_runsBatchOnce() {
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
+
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+
+        verify(saveBatchPort).insertRunning(any());
+        verify(saveBatchPort).update(any());
+    }
+
+    @Test
+    @DisplayName("배치 실행이 끝나면 running 플래그가 해제되어 다음 이벤트도 정상 실행된다")
+    void onEmbeddingSyncCompleted_releasesFlagAfterRun_allowingNextEvent() {
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
+
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+
+        // 두 번의 순차 이벤트 → 두 번 실행 (flag가 finally에서 해제됨)
+        verify(saveBatchPort, org.mockito.Mockito.times(2)).insertRunning(any());
+    }
+
+    @Test
+    @DisplayName("배치 실행 중 예외가 나도 running 플래그가 해제된다 (finally)")
+    void onEmbeddingSyncCompleted_resetsFlagEvenWhenBatchThrows() {
+        // stale 회수가 정상 종료 후, recoverStaleBatches 단계에서 던진 예외는 내부에서 삼켜진다.
+        // 대신 update가 던지게 하여 processAllSubscriptions 종료 경로의 안정성과 flag 해제를 함께 검증한다.
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
+        // 1회차에서 update가 예외를 던져도 safeUpdateBatch가 삼키고 정상 종료 → flag 해제
+        when(saveBatchPort.update(any()))
+                .thenThrow(new RuntimeException("update fail"))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        // 1회차: update 예외를 내부에서 삼키고 종료 (flag 해제 기대)
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+        // 2회차: flag가 해제되었으므로 다시 실행되어야 한다
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+
+        // flag가 매번 해제됨을 증명 — insertRunning이 2회 호출됨
+        verify(saveBatchPort, org.mockito.Mockito.times(2)).insertRunning(any());
+    }
+
+    @Test
+    @DisplayName("이미 실행 중(running=true)이면 동시 이벤트는 무시된다 (CAS 중복 방지)")
+    void onEmbeddingSyncCompleted_concurrentEvent_isIgnoredWhileRunning() throws Exception {
+        java.util.concurrent.CountDownLatch insideBatch = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch releaseBatch = new java.util.concurrent.CountDownLatch(1);
+
+        // loadChunk에서 블로킹시켜 첫 이벤트가 "실행 중(running=true)" 상태를 유지하게 한다.
+        // (insertRunning 기본 stub은 setUp의 lenient 답변을 그대로 사용)
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenAnswer(inv -> {
+            insideBatch.countDown();
+            releaseBatch.await();
+            return List.of();
+        });
+
+        Thread first = new Thread(() ->
+                scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent()));
+        first.start();
+
+        // 첫 이벤트가 배치 내부(running=true)에 진입할 때까지 대기
+        assertThat(insideBatch.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+        // 두 번째 이벤트: running=true이므로 즉시 무시되어야 한다 (insertRunning 추가 호출 없음)
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+
+        releaseBatch.countDown();
+        first.join(5_000);
+
+        // insertRunning은 첫 이벤트에 의해 정확히 1회만 호출됨
+        verify(saveBatchPort, org.mockito.Mockito.times(1)).insertRunning(any());
+    }
+
+    // ── 구조화 콘텐츠 조립 (ServiceCard + 한글 라벨 + payload 직렬화) ──────────
+
+    @Test
+    @DisplayName("발송 콘텐츠는 그룹 메타로 결정적 ServiceCard를 조립하고 changes[].label을 한글로 매핑한다")
+    void dispatch_assemblesDeterministicServiceCardWithKoreanLabel() {
+        NotificationSubscription s = sub(1L);
+        // fieldName=service_status → 한글 라벨 "모집상태"로 매핑되어야 한다 (camelCase 노출 금지).
+        ServiceChange c = new ServiceChange(
+                100L, "OA-2269", "UPDATED", "service_status",
+                "RECEIVING", "CLOSED", Instant.now(),
+                "강남 수영교실", "https://ex.com/1", "https://ex.com/img.png",
+                "강남센터", "강남구", "RECEIVING", "성인",
+                "2026-05-01", "2026-05-31");
+        NotificationDispatch d = dispatch(1L);
+        TemplateResult template = new TemplateResult("AI 제목", "AI 요약", TemplateSource.AI);
+
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of(s));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
+        when(templateGenerationPort.generate(any())).thenReturn(template);
+
+        scheduler.processAllSubscriptions();
+
+        ArgumentCaptor<NotificationContent> contentCaptor =
+                ArgumentCaptor.forClass(NotificationContent.class);
+        verify(pushNotificationPort).send(any(UserContact.class), contentCaptor.capture(), any(), any());
+
+        NotificationContent sent = contentCaptor.getValue();
+        // AI는 title/summary만 — 사실은 결정적 카드에서 온다.
+        assertThat(sent.title()).isEqualTo("AI 제목");
+        assertThat(sent.summary()).isEqualTo("AI 요약");
+        assertThat(sent.services()).hasSize(1);
+
+        NotificationContent.ServiceCard card = sent.services().get(0);
+        assertThat(card.name()).isEqualTo("강남 수영교실");
+        assertThat(card.status()).isEqualTo("RECEIVING");
+        assertThat(card.area()).isEqualTo("강남구");
+        assertThat(card.place()).isEqualTo("강남센터");
+        assertThat(card.target()).isEqualTo("성인");
+        assertThat(card.receiptStart()).isEqualTo("2026-05-01");
+        assertThat(card.receiptEnd()).isEqualTo("2026-05-31");
+        assertThat(card.url()).isEqualTo("https://ex.com/1");
+        assertThat(card.imageUrl()).isEqualTo("https://ex.com/img.png");
+
+        assertThat(card.changes()).hasSize(1);
+        NotificationContent.ChangeLine line = card.changes().get(0);
+        assertThat(line.label()).isEqualTo("모집상태");  // 한글 매핑 (NotificationTemplate.fieldLabel 재사용)
+        assertThat(line.label()).isNotEqualTo("service_status");
+        assertThat(line.oldValue()).isEqualTo("RECEIVING");
+        assertThat(line.newValue()).isEqualTo("CLOSED");
+    }
+
+    @Test
+    @DisplayName("발송 직전 dispatch에 비어있지 않은 직렬화 payload가 할당된다 (재시도 무손실 복원용)")
+    void dispatch_assignsNonNullSerializedPayloadBeforeSend() {
+        NotificationSubscription s = sub(1L);
+        ServiceChange c = change(100L, "OA-2269");
+        NotificationDispatch d = dispatch(1L);
+        TemplateResult template = new TemplateResult("제목", "요약", TemplateSource.AI);
+
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of(s));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
+        when(templateGenerationPort.generate(any())).thenReturn(template);
+
+        scheduler.processAllSubscriptions();
+
+        // 실제 NotificationContentSerializer가 주입되어 있으므로 payload는 유효 JSON이어야 한다.
+        assertThat(d.getNotificationPayload()).isNotNull();
+        assertThat(d.getNotificationPayload()).contains("\"title\"").contains("제목");
+        assertThat(d.getNotificationPayload()).contains("\"services\"");
+    }
+
+    @Test
+    @DisplayName("AI 실패 폴백(source=FALLBACK)이어도 결정적 카드를 포함한 콘텐츠가 조립되어 발송된다")
+    void dispatch_aiFallbackSource_stillAssemblesStructuredContent() {
+        NotificationSubscription s = sub(1L);
+        ServiceChange c = change(100L, "OA-2269");
+        NotificationDispatch d = dispatch(1L);
+        // generate가 결정적 폴백을 반환한 경우 (AI 호출 실패 시 어댑터가 FALLBACK source로 폴백)
+        TemplateResult fallback = new TemplateResult("결정적 제목", "결정적 요약", TemplateSource.FALLBACK);
+
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of(s));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(List.of(c), d));
+        when(templateGenerationPort.generate(any())).thenReturn(fallback);
+
+        scheduler.processAllSubscriptions();
+
+        ArgumentCaptor<NotificationContent> contentCaptor =
+                ArgumentCaptor.forClass(NotificationContent.class);
+        verify(pushNotificationPort).send(any(UserContact.class), contentCaptor.capture(), any(), any());
+
+        NotificationContent sent = contentCaptor.getValue();
+        assertThat(sent.summary()).isEqualTo("결정적 요약");
+        assertThat(sent.services()).hasSize(1);  // 폴백이어도 카드는 결정적으로 조립됨
+        assertThat(d.getNotificationPayload()).isNotNull();
     }
 }

@@ -90,7 +90,16 @@ class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
                         SERVICE_CHANGE_LOG.FIELD_NAME,
                         SERVICE_CHANGE_LOG.OLD_VALUE,
                         SERVICE_CHANGE_LOG.NEW_VALUE,
-                        SERVICE_CHANGE_LOG.CHANGED_AT)
+                        SERVICE_CHANGE_LOG.CHANGED_AT,
+                        PUBLIC_SERVICE_RESERVATIONS.SERVICE_NAME,
+                        PUBLIC_SERVICE_RESERVATIONS.SERVICE_URL,
+                        PUBLIC_SERVICE_RESERVATIONS.IMAGE_URL,
+                        PUBLIC_SERVICE_RESERVATIONS.PLACE_NAME,
+                        PUBLIC_SERVICE_RESERVATIONS.AREA_NAME,
+                        PUBLIC_SERVICE_RESERVATIONS.SERVICE_STATUS,
+                        PUBLIC_SERVICE_RESERVATIONS.TARGET_INFO,
+                        PUBLIC_SERVICE_RESERVATIONS.RECEIPT_START_DT,
+                        PUBLIC_SERVICE_RESERVATIONS.RECEIPT_END_DT)
                 .from(SERVICE_CHANGE_LOG)
                 .join(PUBLIC_SERVICE_RESERVATIONS)
                     .on(PUBLIC_SERVICE_RESERVATIONS.SERVICE_ID.eq(SERVICE_CHANGE_LOG.SERVICE_ID))
@@ -111,8 +120,25 @@ class ServiceChangePersistenceAdapter implements LoadServiceChangePort {
                             r.get(SERVICE_CHANGE_LOG.FIELD_NAME),
                             r.get(SERVICE_CHANGE_LOG.OLD_VALUE),
                             r.get(SERVICE_CHANGE_LOG.NEW_VALUE),
-                            changedAt);
+                            changedAt,
+                            r.get(PUBLIC_SERVICE_RESERVATIONS.SERVICE_NAME),
+                            r.get(PUBLIC_SERVICE_RESERVATIONS.SERVICE_URL),
+                            r.get(PUBLIC_SERVICE_RESERVATIONS.IMAGE_URL),
+                            r.get(PUBLIC_SERVICE_RESERVATIONS.PLACE_NAME),
+                            r.get(PUBLIC_SERVICE_RESERVATIONS.AREA_NAME),
+                            r.get(PUBLIC_SERVICE_RESERVATIONS.SERVICE_STATUS),
+                            r.get(PUBLIC_SERVICE_RESERVATIONS.TARGET_INFO),
+                            toIsoString(r.get(PUBLIC_SERVICE_RESERVATIONS.RECEIPT_START_DT)),
+                            toIsoString(r.get(PUBLIC_SERVICE_RESERVATIONS.RECEIPT_END_DT)));
                 });
+    }
+
+    /**
+     * TIMESTAMPTZ(OffsetDateTime) → ISO-8601 문자열. null-safe.
+     * 날짜는 AI에 그대로 전달하므로 변환 없이 ISO 표현을 사용한다.
+     */
+    private static String toIsoString(OffsetDateTime odt) {
+        return odt == null ? null : odt.toString();
     }
 
     /**

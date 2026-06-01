@@ -13,7 +13,7 @@ import pytest
 from aiolimiter import AsyncLimiter
 from google.api_core.exceptions import ResourceExhausted
 
-from core.exceptions import ConfigurationException
+from core.exceptions import ConfigurationException, RateLimitException
 from llm.client import _GeminiEmbeddings, _rate_limited, get_chat_model, get_embeddings
 
 # 테스트 전용 빠른 limiter — 실제 대기 없이 rate limit 흐름을 검증할 때 주입한다.
@@ -273,6 +273,139 @@ class TestGeminiEmbeddings:
 
         assert call_count == 1  # 재시도 없음
 
+    # --- A: Jitter ---
+
+    async def test_aembed_query_retry_uses_random_uniform(self):
+        """재시도 delay 계산에 random.uniform이 실제로 호출된다."""
+        base = MagicMock()
+        base.aembed_query = AsyncMock(
+            side_effect=[
+                ResourceExhausted("rate limit"),
+                [0.1, 0.2],
+            ]
+        )
+        emb = _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
+
+        with (
+            patch("llm.client.asyncio.sleep", AsyncMock()),
+            patch("llm.client.random.uniform", return_value=0.5) as mock_uniform,
+        ):
+            result = await emb.aembed_query("test")
+
+        mock_uniform.assert_called_once()
+        assert result == [0.1, 0.2]
+
+    async def test_aembed_query_jitter_delay_upper_bound(self):
+        """random.uniform 호출 시 상한이 min(base_delay * 2^attempt, max_delay) 이다."""
+        from llm.client import _EMBED_RETRY_BASE_DELAY, _EMBED_RETRY_MAX_DELAY
+
+        base = MagicMock()
+        base.aembed_query = AsyncMock(
+            side_effect=[
+                ResourceExhausted("rate limit"),
+                [0.3],
+            ]
+        )
+        emb = _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
+
+        captured_args: list = []
+
+        def _capture_uniform(lo, hi):
+            captured_args.append((lo, hi))
+            return 0.0
+
+        with (
+            patch("llm.client.asyncio.sleep", AsyncMock()),
+            patch("llm.client.random.uniform", side_effect=_capture_uniform),
+        ):
+            await emb.aembed_query("test")
+
+        assert captured_args[0][0] == 0  # lower bound always 0
+        # attempt=0: base_delay * 2^0 = 10.0 < 60.0 → 캡 미적용
+        expected_upper = min(_EMBED_RETRY_BASE_DELAY * (2**0), _EMBED_RETRY_MAX_DELAY)
+        assert captured_args[0][1] == expected_upper
+
+    async def test_aembed_query_jitter_delay_capped_at_max(self):
+        """attempt가 충분히 크면 delay 상한이 _EMBED_RETRY_MAX_DELAY로 캡된다."""
+        from llm.client import _EMBED_RETRY_BASE_DELAY, _EMBED_RETRY_MAX_DELAY
+
+        # attempt=3: base_delay * 2^3 = 80.0 > 60.0 → 캡 적용
+        assert _EMBED_RETRY_BASE_DELAY * (2**3) > _EMBED_RETRY_MAX_DELAY, (
+            "이 테스트는 base_delay * 2^3 > max_delay 조건을 전제한다"
+        )
+
+        # attempt=3까지 도달시키기 위해 4번 실패 후 성공
+        base = MagicMock()
+        base.aembed_query = AsyncMock(
+            side_effect=[
+                ResourceExhausted("rate limit"),
+                ResourceExhausted("rate limit"),
+                ResourceExhausted("rate limit"),
+                ResourceExhausted("rate limit"),
+                [0.5],
+            ]
+        )
+        emb = _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
+
+        captured_args: list = []
+
+        def _capture_uniform(lo, hi):
+            captured_args.append((lo, hi))
+            return 0.0
+
+        with (
+            patch("llm.client.asyncio.sleep", AsyncMock()),
+            patch("llm.client.random.uniform", side_effect=_capture_uniform),
+        ):
+            await emb.aembed_query("test")
+
+        # attempt=3 시점의 호출 (4번째 uniform 호출)
+        assert len(captured_args) == 4
+        _, hi = captured_args[3]
+        assert hi == _EMBED_RETRY_MAX_DELAY
+
+    # --- B: RateLimitException ---
+
+    async def test_aembed_query_raises_rate_limit_exception_after_max_retries(self):
+        """ResourceExhausted가 최대 재시도 횟수만큼 반복되면 RateLimitException이 발생한다."""
+        from llm.client import _EMBED_MAX_RETRIES
+
+        base = MagicMock()
+        base.aembed_query = AsyncMock(
+            side_effect=ResourceExhausted("persistent rate limit")
+        )
+        emb = _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
+
+        with (
+            patch("llm.client.asyncio.sleep", AsyncMock()),
+            pytest.raises(RateLimitException, match="rate limit 소진"),
+        ):
+            await emb.aembed_query("test")
+
+        assert base.aembed_query.call_count == _EMBED_MAX_RETRIES
+
+    async def test_rate_limit_exception_is_subclass_of_llm_exception(self):
+        """RateLimitException은 LLMException의 하위 클래스다."""
+        from core.exceptions import LLMException
+
+        exc = RateLimitException("소진", detail=None)
+        assert isinstance(exc, LLMException)
+
+    async def test_rate_limit_exception_carries_original_detail(self):
+        """RateLimitException.detail에 원본 ResourceExhausted 예외가 담긴다."""
+        base = MagicMock()
+        original_exc = ResourceExhausted("quota")
+        base.aembed_query = AsyncMock(side_effect=original_exc)
+        emb = _GeminiEmbeddings(base, limiter=_FAST_LIMITER)
+
+        with patch("llm.client.asyncio.sleep", AsyncMock()):
+            try:
+                await emb.aembed_query("test")
+            except RateLimitException as exc:
+                assert exc.detail is original_exc
+            else:
+                pytest.fail("RateLimitException이 발생하지 않았습니다")
+
 
 # ---------------------------------------------------------------------------
 # get_chat_model 팩토리
@@ -367,6 +500,72 @@ class TestGetChatModel:
 
             # provider 인자 없이 호출 — settings.llm_provider="openai"가 적용되어야 한다
             get_chat_model()  # ConfigurationException 없이 통과하면 OK
+
+    # --- timeout/max_retries I/O 레이어 전달 (회귀 안전성 핵심) ---
+
+    def test_gemini_default_timeout_and_retries_unchanged(self):
+        """인자 미전달 시 Gemini SDK에 기존 하드코딩값(timeout=30, max_retries=3)을 그대로 전달한다."""
+        with (
+            patch("llm.client.settings") as mock_settings,
+            patch("llm.client.ChatGoogleGenerativeAI") as mock_cls,
+        ):
+            mock_settings.llm_provider = "gemini"
+            mock_settings.google_api_key = "fake-google-key"
+            mock_settings.gemini_model = "gemini-2.0-flash"
+
+            get_chat_model(provider="gemini")
+
+            kwargs = mock_cls.call_args.kwargs
+            assert kwargs["timeout"] == 30
+            assert kwargs["max_retries"] == 3
+
+    def test_openai_default_timeout_and_retries_unchanged(self):
+        """인자 미전달 시 OpenAI SDK에 기존 하드코딩값(request_timeout=30, max_retries=3)을 전달한다."""
+        with (
+            patch("llm.client.settings") as mock_settings,
+            patch("llm.client.ChatOpenAI") as mock_cls,
+        ):
+            mock_settings.llm_provider = "openai"
+            mock_settings.openai_api_key = "fake-openai-key"
+            mock_settings.gpt_model = "gpt-4o-mini"
+
+            get_chat_model(provider="openai")
+
+            kwargs = mock_cls.call_args.kwargs
+            assert kwargs["request_timeout"] == 30
+            assert kwargs["max_retries"] == 3
+
+    def test_gemini_custom_timeout_and_retries_passthrough(self):
+        """전달된 timeout/max_retries가 Gemini SDK 인자로 그대로 내려간다."""
+        with (
+            patch("llm.client.settings") as mock_settings,
+            patch("llm.client.ChatGoogleGenerativeAI") as mock_cls,
+        ):
+            mock_settings.llm_provider = "gemini"
+            mock_settings.google_api_key = "fake-google-key"
+            mock_settings.gemini_model = "gemini-2.0-flash"
+
+            get_chat_model(provider="gemini", timeout=8, max_retries=1)
+
+            kwargs = mock_cls.call_args.kwargs
+            assert kwargs["timeout"] == 8
+            assert kwargs["max_retries"] == 1
+
+    def test_openai_custom_timeout_and_retries_passthrough(self):
+        """전달된 timeout/max_retries가 OpenAI SDK 인자(request_timeout)로 내려간다."""
+        with (
+            patch("llm.client.settings") as mock_settings,
+            patch("llm.client.ChatOpenAI") as mock_cls,
+        ):
+            mock_settings.llm_provider = "openai"
+            mock_settings.openai_api_key = "fake-openai-key"
+            mock_settings.gpt_model = "gpt-4o-mini"
+
+            get_chat_model(provider="openai", timeout=8, max_retries=1)
+
+            kwargs = mock_cls.call_args.kwargs
+            assert kwargs["request_timeout"] == 8
+            assert kwargs["max_retries"] == 1
 
 
 # ---------------------------------------------------------------------------

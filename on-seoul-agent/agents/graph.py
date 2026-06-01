@@ -52,6 +52,7 @@ from typing import Any, ClassVar, Literal
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agents.analytics_agent import AnalyticsAgent
 from agents.answer_agent import AnswerAgent
 from agents.nodes import GraphNodes
 from agents.router_agent import RouterAgent
@@ -105,6 +106,10 @@ async def _dispatch_map_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().map_node(state)
 
 
+async def _dispatch_analytics_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().analytics_node(state)
+
+
 async def _dispatch_hydration_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().hydration_node(state)
 
@@ -149,6 +154,7 @@ def _build_shared_graph() -> Any:
     builder.add_node("sql_node", _dispatch_sql_node)
     builder.add_node("vector_node", _dispatch_vector_node)
     builder.add_node("map_node", _dispatch_map_node)
+    builder.add_node("analytics_node", _dispatch_analytics_node)
     builder.add_node("hydration_node", _dispatch_hydration_node)
     builder.add_node("answer_node", _dispatch_answer_node)
     builder.add_node("search_persist_node", _dispatch_search_persist_node)
@@ -174,6 +180,7 @@ def _build_shared_graph() -> Any:
             "sql_node": "sql_node",
             "vector_node": "vector_node",
             "map_node": "map_node",
+            "analytics_node": "analytics_node",
             "answer_node": "answer_node",
         },
     )
@@ -186,6 +193,8 @@ def _build_shared_graph() -> Any:
     builder.add_edge("vector_node", "hydration_node")
     builder.add_edge("hydration_node", "answer_node")
     builder.add_edge("map_node", "answer_node")
+    # analytics_node 는 집계행을 최종 산출하므로 hydration 없이 answer_node 로 직행한다.
+    builder.add_edge("analytics_node", "answer_node")
 
     builder.add_conditional_edges(
         "answer_node",
@@ -232,6 +241,7 @@ class AgentGraph:
         sql_agent: SqlAgent | None = None,
         vector_agent: VectorAgent | None = None,
         answer_agent: AnswerAgent | None = None,
+        analytics_agent: AnalyticsAgent | None = None,
         redis: Any = None,
     ) -> None:
         self._nodes = GraphNodes(
@@ -239,6 +249,7 @@ class AgentGraph:
             sql_agent=sql_agent or SqlAgent(),
             vector_agent=vector_agent or VectorAgent(),
             answer_agent=answer_agent or AnswerAgent(),
+            analytics_agent=analytics_agent or AnalyticsAgent(),
             redis=redis,
         )
 
@@ -322,7 +333,9 @@ class AgentGraph:
         _answer_progress_emitted = False
 
         # hydration_node 완료 후 answering 이벤트로 이동 고려 (별도 이슈)
-        _SEARCH_NODES = frozenset({"sql_node", "vector_node", "map_node"})
+        _SEARCH_NODES = frozenset(
+            {"sql_node", "vector_node", "map_node", "analytics_node"}
+        )
 
         token = _ACTIVE_NODES.set(self._nodes)
         try:
@@ -343,6 +356,7 @@ class AgentGraph:
                         IntentType.SQL_SEARCH,
                         IntentType.VECTOR_SEARCH,
                         IntentType.MAP,
+                        IntentType.ANALYTICS,
                     ):
                         yield (
                             "progress",

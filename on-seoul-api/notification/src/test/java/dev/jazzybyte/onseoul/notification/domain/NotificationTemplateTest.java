@@ -9,60 +9,88 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class NotificationTemplateTest {
 
-    private NotificationTemplateRequest singleChange(String serviceId, String field,
-                                                    String oldVal, String newVal) {
-        return new NotificationTemplateRequest(serviceId, List.of(
-                new NotificationTemplateRequest.ChangeItem("UPDATED", field, oldVal, newVal)));
+    private NotificationTemplateRequest.ServiceChangeGroup group(
+            String serviceId, String serviceName,
+            NotificationTemplateRequest.ChangeItem... changes) {
+        return new NotificationTemplateRequest.ServiceChangeGroup(
+                serviceId, serviceName, null, null, null, null, null, null, null, null,
+                List.of(changes));
     }
 
+    private NotificationTemplateRequest.ChangeItem change(String field, String oldVal, String newVal) {
+        return new NotificationTemplateRequest.ChangeItem("UPDATED", field, oldVal, newVal);
+    }
+
+    // ── fallback summary: 사실은 Knock 카드가 그리므로 summary는 개수/이름 안내 수준 ──
+
     @Test
-    @DisplayName("render() - title에 serviceId가 포함되고 TemplateSource.FALLBACK을 반환한다")
-    void render_containsServiceIdAndFallbackSource() {
-        TemplateResult result = NotificationTemplate.render(
-                singleChange("SVC-123", "status", "예약가능", "마감"));
+    @DisplayName("render() - 단일 서비스: title/summary에 serviceName이 포함되고 FALLBACK 소스를 반환한다")
+    void render_singleService_containsServiceNameAndFallbackSource() {
+        TemplateResult result = NotificationTemplate.render(new NotificationTemplateRequest(List.of(
+                group("SVC-123", "강남 수영교실", change("serviceStatus", "예약가능", "마감")))));
 
         assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
-        assertThat(result.title()).contains("SVC-123");
-        assertThat(result.body()).contains("status");
-        assertThat(result.body()).contains("예약가능");
-        assertThat(result.body()).contains("마감");
-    }
-
-    @Test
-    @DisplayName("render() - title은 '[서울공공서비스]' 접두사로 시작한다")
-    void render_titleStartsWithPrefix() {
-        TemplateResult result = NotificationTemplate.render(
-                singleChange("SVC-999", "name", "구장A", "구장B"));
-
         assertThat(result.title()).startsWith("[서울공공서비스]");
+        assertThat(result.title()).contains("강남 수영교실");
+        assertThat(result.summary()).contains("강남 수영교실");
+        assertThat(result.isValid()).isTrue();
     }
 
     @Test
-    @DisplayName("render() - body에 → 구분자와 oldValue, newValue가 순서대로 포함된다")
-    void render_bodyContainsArrowSeparatorWithOldAndNewValue() {
-        TemplateResult result = NotificationTemplate.render(
-                singleChange("SVC-001", "date", "1월 10일", "2월 3일"));
+    @DisplayName("render() - 단일 서비스: serviceName이 없으면 serviceId가 title/summary에 사용된다")
+    void render_singleService_fallsBackToServiceIdWhenNoName() {
+        TemplateResult result = NotificationTemplate.render(new NotificationTemplateRequest(List.of(
+                group("SVC-999", null, change("name", "구장A", "구장B")))));
 
-        assertThat(result.body()).contains("1월 10일");
-        assertThat(result.body()).contains("→");
-        assertThat(result.body()).contains("2월 3일");
-        int oldIdx = result.body().indexOf("1월 10일");
-        int newIdx = result.body().indexOf("2월 3일");
-        assertThat(oldIdx).isLessThan(newIdx);
+        assertThat(result.title()).contains("SVC-999");
+        assertThat(result.summary()).contains("SVC-999");
     }
 
     @Test
-    @DisplayName("render() - 변경이 2건 이상이면 첫 항목 + '(외 N건)' 요약이 포함된다")
-    void render_multipleChanges_summarizes() {
-        NotificationTemplateRequest req = new NotificationTemplateRequest("SVC-555", List.of(
-                new NotificationTemplateRequest.ChangeItem("UPDATED", "status", "OPEN", "CLOSED"),
-                new NotificationTemplateRequest.ChangeItem("UPDATED", "name", "A", "B"),
-                new NotificationTemplateRequest.ChangeItem("UPDATED", "place", "P1", "P2")
-        ));
+    @DisplayName("render() - 복수 서비스: title/summary에 'N개 서비스'가 포함된다")
+    void render_multipleServices_containsCount() {
+        NotificationTemplateRequest req = new NotificationTemplateRequest(List.of(
+                group("SVC-A", "행사A", change("serviceStatus", "OPEN", "CLOSED")),
+                group("SVC-B", "행사B", change("serviceStatus", "OPEN", "CLOSED")),
+                group("SVC-C", "행사C", change("serviceStatus", "OPEN", "CLOSED"))));
 
         TemplateResult result = NotificationTemplate.render(req);
 
-        assertThat(result.body()).contains("status");
-        assertThat(result.body()).contains("외 2건");
+        assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
+        assertThat(result.title()).contains("3개 서비스");
+        assertThat(result.summary()).contains("3개");
+    }
+
+    @Test
+    @DisplayName("render() - services가 비면 일반 안내문을 반환한다")
+    void render_emptyServices_returnsGenericMessage() {
+        TemplateResult result = NotificationTemplate.render(new NotificationTemplateRequest(List.of()));
+
+        assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
+        assertThat(result.title()).startsWith("[서울공공서비스]");
+        assertThat(result.summary()).contains("변경이 감지");
+    }
+
+    // ── 한글 라벨 매핑 (Knock changes[].label 재사용) ──────────────────────
+
+    @Test
+    @DisplayName("fieldLabel() - serviceStatus는 '모집상태'로 매핑된다 (camelCase 미노출)")
+    void fieldLabel_serviceStatus_mapsToKorean() {
+        assertThat(NotificationTemplate.fieldLabel("serviceStatus")).isEqualTo("모집상태");
+        assertThat(NotificationTemplate.fieldLabel("service_status")).isEqualTo("모집상태");
+        assertThat(NotificationTemplate.fieldLabel("receiptStartDt")).isEqualTo("접수 시작일");
+        assertThat(NotificationTemplate.fieldLabel("receiptEndDt")).isEqualTo("접수 마감일");
+    }
+
+    @Test
+    @DisplayName("fieldLabel() - 매핑에 없는 field_name은 원본을 그대로 반환한다")
+    void fieldLabel_unmapped_keepsRaw() {
+        assertThat(NotificationTemplate.fieldLabel("someUnknownField")).isEqualTo("someUnknownField");
+    }
+
+    @Test
+    @DisplayName("fieldLabel() - null이면 빈 문자열을 반환한다")
+    void fieldLabel_null_returnsEmpty() {
+        assertThat(NotificationTemplate.fieldLabel(null)).isEmpty();
     }
 }

@@ -455,6 +455,56 @@ class ServiceChangePersistenceAdapterTest {
     }
 
     @Test
+    @DisplayName("예약 메타(serviceName/url/place 등)와 receipt 날짜가 ServiceChange에 매핑된다")
+    void loadFiltered_mapsReservationMetaAndReceiptDates() {
+        OffsetDateTime start = utc(2026, 5, 1, 9, 0);
+        OffsetDateTime end = utc(2026, 5, 31, 18, 0);
+        dsl.insertInto(PUBLIC_SERVICE_RESERVATIONS)
+                .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_ID, "OA-META")
+                .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_NAME, "수영교실")
+                .set(PUBLIC_SERVICE_RESERVATIONS.PLACE_NAME, "강남센터")
+                .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_STATUS, "RECEIVING")
+                .set(PUBLIC_SERVICE_RESERVATIONS.AREA_NAME, "강남구")
+                .set(PUBLIC_SERVICE_RESERVATIONS.MAX_CLASS_NAME, "체육시설")
+                .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_URL, "https://ex.com/a")
+                .set(PUBLIC_SERVICE_RESERVATIONS.IMAGE_URL, "https://ex.com/a.png")
+                .set(PUBLIC_SERVICE_RESERVATIONS.TARGET_INFO, "성인")
+                .set(PUBLIC_SERVICE_RESERVATIONS.RECEIPT_START_DT, start)
+                .set(PUBLIC_SERVICE_RESERVATIONS.RECEIPT_END_DT, end)
+                .execute();
+        insertChange("OA-META", "UPDATED", "service_status", "RECEIVING", "CLOSED",
+                OffsetDateTime.now(ZoneOffset.UTC));
+
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null);
+
+        assertThat(result).hasSize(1);
+        ServiceChange c = result.get(0);
+        assertThat(c.serviceName()).isEqualTo("수영교실");
+        assertThat(c.placeName()).isEqualTo("강남센터");
+        assertThat(c.areaName()).isEqualTo("강남구");
+        assertThat(c.serviceStatus()).isEqualTo("RECEIVING");
+        assertThat(c.serviceUrl()).isEqualTo("https://ex.com/a");
+        assertThat(c.imageUrl()).isEqualTo("https://ex.com/a.png");
+        assertThat(c.targetInfo()).isEqualTo("성인");
+        assertThat(c.receiptStartDt()).isEqualTo(start.toString());
+        assertThat(c.receiptEndDt()).isEqualTo(end.toString());
+    }
+
+    @Test
+    @DisplayName("receipt 날짜가 NULL이면 ServiceChange의 receiptStartDt/EndDt도 null")
+    void loadFiltered_nullReceiptDates_mappedAsNull() {
+        insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사");
+        insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED",
+                OffsetDateTime.now(ZoneOffset.UTC));
+
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).receiptStartDt()).isNull();
+        assertThat(result.get(0).receiptEndDt()).isNull();
+    }
+
+    @Test
     @DisplayName("changedAt은 TIMESTAMPTZ에서 Instant으로 정확히 변환된다")
     void loadFiltered_changedAtConvertedToInstant() {
         insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사");

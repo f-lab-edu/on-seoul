@@ -86,3 +86,35 @@ class TestRouterAgent:
         # 마지막 메시지가 실제 사용자 발화
         assert messages[-1].type == "human"
         assert "수영장" in messages[-1].content
+
+    async def test_classify_returns_analytics(self):
+        """ANALYTICS 의도가 반환된다."""
+        agent = _make_agent(IntentType.ANALYTICS)
+
+        result = await agent.classify("테니스장 자치구별로 몇 개씩 있어?")
+
+        assert result.intent == IntentType.ANALYTICS
+
+    async def test_analytics_post_filters_extracted(self):
+        """ANALYTICS intent에 max_class_name·service_status post-filter가 올바르게 담긴다."""
+        agent = RouterAgent.__new__(RouterAgent)
+        mock_llm = MagicMock()
+        mock_structured = MagicMock()
+        mock_structured.ainvoke = AsyncMock(
+            return_value=_IntentOutput(
+                intent=IntentType.ANALYTICS,
+                refined_query="접수중 체육시설 카테고리별 개수",
+                max_class_name="체육시설",
+                service_status="접수중",
+                vector_sub_intent=None,
+            )
+        )
+        mock_llm.with_structured_output = MagicMock(return_value=mock_structured)
+        agent._llm = mock_llm
+
+        result = await agent.classify("접수 중인 체육시설 카테고리별로 몇 개야?")
+
+        assert result.intent == IntentType.ANALYTICS
+        assert result.max_class_name == "체육시설"
+        assert result.service_status == "접수중"
+        assert result.vector_sub_intent is None

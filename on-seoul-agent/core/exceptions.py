@@ -16,6 +16,12 @@ class LLMException(OnSeoulAgentException):
     pass
 
 
+class RateLimitException(LLMException):
+    """LLM / 임베딩 API rate limit 소진 — 최대 재시도 초과."""
+
+    pass
+
+
 class DatabaseException(OnSeoulAgentException):
     """DB(on_ai, on_data) 연동 및 쿼리 관련 예외"""
 

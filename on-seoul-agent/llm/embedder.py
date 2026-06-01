@@ -1,7 +1,7 @@
 from langchain_core.embeddings import Embeddings
 
 from llm.client import get_embeddings
-from core.exceptions import LLMException
+from core.exceptions import LLMException, RateLimitException
 
 
 class Embedder:
@@ -12,6 +12,8 @@ class Embedder:
         """Embed a single text string and return the vector."""
         try:
             return await self._embeddings.aembed_query(text)
+        except RateLimitException:
+            raise  # 타입 보존 — LLMException으로 뭉개지 않음
         except Exception as e:
             raise LLMException(f"Embedding failed: {str(e)}", detail=e) from e
 
@@ -19,5 +21,7 @@ class Embedder:
         """Embed multiple texts and return a list of vectors."""
         try:
             return await self._embeddings.aembed_documents(texts)
+        except RateLimitException:
+            raise
         except Exception as e:
             raise LLMException(f"Batch embedding failed: {str(e)}", detail=e) from e

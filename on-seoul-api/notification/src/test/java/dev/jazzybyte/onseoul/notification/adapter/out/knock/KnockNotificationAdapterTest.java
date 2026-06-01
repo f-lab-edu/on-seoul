@@ -1,6 +1,7 @@
 package dev.jazzybyte.onseoul.notification.adapter.out.knock;
 
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
+import dev.jazzybyte.onseoul.notification.domain.NotificationContent;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -49,12 +50,78 @@ class KnockNotificationAdapterTest {
         mockWebServer.shutdown();
     }
 
+    private NotificationContent content() {
+        return new NotificationContent("제목", "요약", java.util.List.of());
+    }
+
+    @Test
+    @DisplayName("data 페이로드 계약: title/summary/services/dispatch_id 키 + 카드 필드 + 한글 라벨")
+    void send_dataPayload_containsContractKeysAndKoreanLabels() throws Exception {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
+
+        NotificationContent content = new NotificationContent(
+                "변경 알림", "1개 서비스 변경",
+                java.util.List.of(new NotificationContent.ServiceCard(
+                        "수영교실", "접수중", "강남구", "강남센터", "성인",
+                        "2026-05-01", "2026-05-31",
+                        "https://ex.com/1", "https://ex.com/img.png",
+                        java.util.List.of(new NotificationContent.ChangeLine("모집상태", "접수중", "예약마감")))));
+
+        adapter.send(FULL_CONTACT, content, 900L, Set.of(NotificationChannel.EMAIL));
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        String body = request.getBody().readUtf8();
+
+        assertThat(body).contains("\"title\"").contains("변경 알림");
+        assertThat(body).contains("\"summary\"").contains("1개 서비스 변경");
+        assertThat(body).contains("\"services\"");
+        assertThat(body).contains("\"dispatch_id\"").contains("900");
+        // 카드 키 (snake_case)
+        assertThat(body).contains("\"name\"").contains("수영교실");
+        assertThat(body).contains("\"status\"").contains("접수중");
+        assertThat(body).contains("\"area\"").contains("강남구");
+        assertThat(body).contains("\"place\"").contains("강남센터");
+        assertThat(body).contains("\"target\"").contains("성인");
+        assertThat(body).contains("\"receipt_start\"");
+        assertThat(body).contains("\"receipt_end\"");
+        assertThat(body).contains("\"url\"");
+        assertThat(body).contains("\"image_url\"");
+        // changes[].label 한글 매핑 (camelCase field_name 미노출)
+        assertThat(body).contains("\"changes\"");
+        assertThat(body).contains("\"label\"").contains("모집상태");
+        assertThat(body).contains("\"old\"").contains("\"new\"");
+        assertThat(body).doesNotContain("serviceStatus");
+    }
+
+    @Test
+    @DisplayName("data 페이로드: 카드의 null 필드는 키 자체가 생략된다 (NON_NULL)")
+    void send_dataPayload_omitsNullCardFields() throws Exception {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
+
+        NotificationContent content = new NotificationContent(
+                "제목", "요약",
+                java.util.List.of(new NotificationContent.ServiceCard(
+                        "행사", null, null, null, null, null, null, null, null,
+                        java.util.List.of())));
+
+        adapter.send(FULL_CONTACT, content, 901L, Set.of(NotificationChannel.EMAIL));
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        String body = request.getBody().readUtf8();
+
+        assertThat(body).contains("\"name\"");
+        assertThat(body).doesNotContain("\"status\"");
+        assertThat(body).doesNotContain("\"area\"");
+        assertThat(body).doesNotContain("\"place\"");
+        assertThat(body).doesNotContain("\"image_url\"");
+    }
+
     @Test
     @DisplayName("EMAIL 채널 → emailWorkflowKey로 Knock 트리거, recipient에 email 포함")
     void send_emailChannel_triggersEmailWorkflow() throws Exception {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
 
-        adapter.send(FULL_CONTACT, "제목", "본문", 100L, Set.of(NotificationChannel.EMAIL));
+        adapter.send(FULL_CONTACT, content(), 100L, Set.of(NotificationChannel.EMAIL));
 
         RecordedRequest request = mockWebServer.takeRequest();
         String body = request.getBody().readUtf8();
@@ -68,7 +135,7 @@ class KnockNotificationAdapterTest {
     void send_smsChannel_triggersSmsWorkflow() throws Exception {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
 
-        adapter.send(FULL_CONTACT, "제목", "본문", 200L, Set.of(NotificationChannel.SMS));
+        adapter.send(FULL_CONTACT, content(), 200L, Set.of(NotificationChannel.SMS));
 
         RecordedRequest request = mockWebServer.takeRequest();
         String body = request.getBody().readUtf8();
@@ -82,7 +149,7 @@ class KnockNotificationAdapterTest {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
 
-        adapter.send(FULL_CONTACT, "제목", "본문", 300L,
+        adapter.send(FULL_CONTACT, content(), 300L,
                 Set.of(NotificationChannel.EMAIL, NotificationChannel.SMS));
 
         assertThat(mockWebServer.getRequestCount()).isEqualTo(2);
@@ -94,7 +161,7 @@ class KnockNotificationAdapterTest {
         mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("error"));
 
         assertThatThrownBy(() ->
-                adapter.send(FULL_CONTACT, "제목", "본문", 400L, Set.of(NotificationChannel.EMAIL)))
+                adapter.send(FULL_CONTACT, content(), 400L, Set.of(NotificationChannel.EMAIL)))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("모든 채널 발송 실패");
     }
@@ -105,7 +172,7 @@ class KnockNotificationAdapterTest {
         mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("error"));
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
 
-        adapter.send(FULL_CONTACT, "제목", "본문", 500L,
+        adapter.send(FULL_CONTACT, content(), 500L,
                 Set.of(NotificationChannel.EMAIL, NotificationChannel.SMS));
 
         assertThat(mockWebServer.getRequestCount()).isEqualTo(2);
@@ -114,7 +181,7 @@ class KnockNotificationAdapterTest {
     @Test
     @DisplayName("빈 channels → HTTP 요청 없이 조용히 리턴")
     void send_emptyChannels_skipsWithoutHttpCall() {
-        adapter.send(FULL_CONTACT, "제목", "본문", 600L, new HashSet<>());
+        adapter.send(FULL_CONTACT, content(), 600L, new HashSet<>());
 
         assertThat(mockWebServer.getRequestCount()).isEqualTo(0);
     }
@@ -125,7 +192,7 @@ class KnockNotificationAdapterTest {
         UserContact noEmail = new UserContact(7L, null, "+821099990000");
 
         assertThatThrownBy(() ->
-                adapter.send(noEmail, "제목", "본문", 700L, Set.of(NotificationChannel.EMAIL)))
+                adapter.send(noEmail, content(), 700L, Set.of(NotificationChannel.EMAIL)))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("모든 채널 발송 실패");
 
@@ -139,7 +206,7 @@ class KnockNotificationAdapterTest {
         UserContact noPhone = new UserContact(8L, "user@example.com", null);
 
         assertThatThrownBy(() ->
-                adapter.send(noPhone, "제목", "본문", 800L, Set.of(NotificationChannel.SMS)))
+                adapter.send(noPhone, content(), 800L, Set.of(NotificationChannel.SMS)))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("모든 채널 발송 실패");
 

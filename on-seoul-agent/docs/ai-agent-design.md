@@ -26,6 +26,7 @@ flowchart TD
     SQL["sql_node<br/>(SQL Agent)"]
     VECTOR["vector_node<br/>(Vector Agent)<br/>BM25 + vector RRF"]
     MAP["map_node<br/>(map_search)<br/>lat/lng 미제공 시<br/>map_results=None"]
+    ANALYTICS["analytics_node<br/>(Analytics Agent)<br/>analytics_search 집계"]
     ANSWER["answer_node<br/>(Answer Agent)"]
     SELF_CORR{{"self_correction<br/>answer 비고 retry=0?"}}
     RETRY_PREP["retry_prep_node<br/>(search_channels 리셋)"]
@@ -39,11 +40,13 @@ flowchart TD
     CACHE_CHECK -- "miss · SQL_SEARCH" --> SQL
     CACHE_CHECK -- "miss · VECTOR_SEARCH" --> VECTOR
     CACHE_CHECK -- "miss · MAP" --> MAP
+    CACHE_CHECK -- "miss · ANALYTICS" --> ANALYTICS
     CACHE_CHECK -- "miss · FALLBACK 또는 router 예외" --> ANSWER
 
     SQL --> ANSWER
     VECTOR --> ANSWER
     MAP --> ANSWER
+    ANALYTICS --> ANSWER
 
     ANSWER --> SELF_CORR
     SELF_CORR -- "Yes (최대 1회)" --> RETRY_PREP
@@ -53,7 +56,7 @@ flowchart TD
     SEARCH_PERSIST --> TRACE
 ```
 
-각 노드는 공유 상태인 **`AgentState`** (TypedDict) 를 입력받아 부분 업데이트 dict를 반환한다. LangGraph가 상태 병합을 담당하므로 노드 내부에서 직접 변이하지 않는다. 그래프 전체에는 `recursion_limit=15`이 적용되어 무한 사이클을 방지한다.
+각 노드는 공유 상태인 **`AgentState`** (TypedDict) 를 입력받아 부분 업데이트 dict를 반환한다. LangGraph가 상태 병합을 담당하므로 노드 내부에서 직접 변이하지 않는다. 그래프 전체에는 `recursion_limit=16`이 적용되어 무한 사이클을 방지한다.
 
 > **종단 체인 일관성**: cache hit 경로도 `search_persist_node` 를 경유한다. 빈 `search_channels` 에서는 즉시 skip 되므로 오버헤드는 없으나, 명시적으로 통과시켜 "cache_write → search_persist → trace" 의 종단 체인 형태를 항상 동일하게 유지한다.
 
@@ -104,7 +107,16 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 필터 파라미터
 
 **BM25 도입 배경**: ParadeDB Lindera의 `user_dictionary`는 SQL API 레벨에서 지원되지 않아 커스텀 사전 적용에 소스 빌드가 필요했다. Python 레이어에서 lindera-py로 사전 토크나이징한 뒤 BM25 쿼리 조건을 구성하는 방식으로 우회한다. 도메인 용어(예: "따릉이", "한강공원")는 `DOMAIN_TOKENS` 화이트리스트로 보존된다.
 
-### 3-4. Answer Agent — 답변 생성
+### 3-4. Analytics Agent — 집계 질의 처리
+
+LLM이 SQL을 직접 생성하지 않는다. 메시지에서 집계 파라미터(group_by, metric, keyword 등)를 구조화 출력으로 추출한 뒤 `analytics_search` 도구를 호출한다. hydration 단계는 거치지 않는다.
+
+| 입출력 | 필드 |
+|---|---|
+| **in** | `message`, `max_class_name`, `area_name`, `service_status` |
+| **out** | `analytics_results`, `analytics_group_by`, `analytics_metric`, `analytics_keyword` |
+
+### 3-5. Answer Agent — 답변 생성
 
 검색 결과를 자연어 답변 + 시설 카드로 가공한다.
 
@@ -115,25 +127,32 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 필터 파라미터
 
 특이사항:
 
-- `sql_results` / `vector_results` / `map_results` 를 단일 목록으로 합쳐 LLM에 전달한다.
+- `sql_results` / `vector_results` / `map_results` / `analytics_results` 를 intent별로 분기하여 LLM에 전달한다.
 - `service_url` 이 없으면 `https://yeyak.seoul.go.kr` 로 fallback한다.
 - `title_needed=True` 이면 대화 제목(10자 이내)을 별도 LLM 호출로 생성한다.
 - 입력 state에 이미 `error` + `answer` 가 모두 채워져 있으면(router 예외 fast-path) 추가 LLM 호출 없이 즉시 반환한다.
 
-### 3-5. IntentType 분류 기준
+**2-tier 프롬프트 조립 구조:**
 
-| IntentType | 분류 기준 | 예시 | `vector_sub_intent` |
+- **Tier 1 (정적 조립)**: MAP / ANALYTICS / FALLBACK 프롬프트는 `__init__` 시 1회 조립되어 `_static_prompts` dict에 캐시된다. 실행 경로마다 프롬프트 객체를 재생성하지 않는다.
+- **Tier 2 (런타임 조립)**: 카드형(SQL / VECTOR) 프롬프트는 매 호출마다 조건부 절을 코드로 판단해 조합한다. 접수중 여부, 자치구 명시 여부에 따라 해당 절을 포함하거나 제외하여 LLM 컨텍스트를 최소화한다.
+- ANALYTICS / FALLBACK intent는 `service_cards=[]`를 반환한다 — 집계/안내 답변은 카드 UI를 사용하지 않는다.
+
+### 3-6. IntentType 분류 기준
+
+| IntentType | 분류 기준 | 예시 | 비고 |
 |---|---|---|---|
-| `SQL_SEARCH` | 카테고리·자치구·접수 상태·날짜 등 정형 조건 | "지금 접수 중인 수영장" | — |
-| `VECTOR_SEARCH` | 키워드·의미 기반 유사 시설 탐색 | "아이랑 체험할 수 있는 곳" | `identification` / `detail` / `semantic` |
-| `MAP` | 지도·위치·반경 탐색 | "내 주변 500m 이내 체육관" | — |
-| `FALLBACK` | 인사·기능 문의 등 그 외 | "어떤 서비스를 제공하나요?" | — |
+| `SQL_SEARCH` | 카테고리·자치구·접수 상태·날짜 등 정형 조건 | "지금 접수 중인 수영장" | 개별 목록 반환 |
+| `VECTOR_SEARCH` | 키워드·의미 기반 유사 시설 탐색 | "아이랑 체험할 수 있는 곳" | `vector_sub_intent`: `identification` / `detail` / `semantic` |
+| `MAP` | 지도·위치·반경 탐색 | "내 주변 500m 이내 체육관" | GeoJSON 반환 |
+| `ANALYTICS` | 개수·분포·종류 등 집계/요약 질의 | "강남구에 체육시설이 몇 개야?" | 통계/카운트 반환. hydration 생략. SQL_SEARCH(개별 목록)와 구별 |
+| `FALLBACK` | 인사·기능 문의 등 그 외 | "어떤 서비스를 제공하나요?" | service_cards=[] |
 
 ---
 
 ## 4. 도구 (Tools)
 
-에이전트는 SQL을 직접 작성하거나 벡터 연산을 직접 다루지 않는다. DB 조회는 아래 네 도구로 위임된다.
+에이전트는 SQL을 직접 작성하거나 벡터 연산을 직접 다루지 않는다. DB 조회는 아래 다섯 도구로 위임된다.
 
 ### 4-1. `sql_search` — 정형 필터 조회
 
@@ -141,7 +160,7 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 필터 파라미터
 
 | 파라미터 | 설명 |
 |---|---|
-| `max_class_name` | 대분류 카테고리 (체육시설·문화행사·시설대관·교육·진료) |
+| `max_class_name` | 대분류 카테고리 (체육시설·문화체험·공간시설·교육강좌·진료복지) |
 | `area_name` | 서울 자치구 (예: 마포구) |
 | `service_status` | 예약 상태 (접수중·예약마감·접수종료·예약일시중지·안내중) |
 | `keyword` | 시설명·장소명 키워드 (`%keyword%` ILIKE) |
@@ -194,13 +213,32 @@ PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도
 
 반환값: `GeoJSON FeatureCollection` — 각 Feature의 `properties` 에 시설 정보와 `distance_m` 포함.
 
-### 4-5. 도구 선택 기준
+### 4-5. `analytics_search` — 집계/분포 조회
+
+`on_data.public_service_reservations` 테이블에서 GROUP BY COUNT 또는 SELECT DISTINCT 집계를 실행한다. LLM이 SQL을 생성하지 않으며, 컬럼명은 화이트리스트 dict 값만 f-string으로 삽입하여 SQL Injection을 원천 차단한다. 필터 값과 top_k는 전부 bind 파라미터로 처리한다.
+
+| 파라미터 | 설명 |
+|---|---|
+| `group_by` | 집계 차원. 허용값: `area_name` / `max_class_name` / `min_class_name` / `service_status` |
+| `metric` | 집계 방식. `count`(건수 집계) 또는 `distinct`(고유값 목록) |
+| `max_class_name` | 필터: 대분류 카테고리. None이면 미적용 |
+| `area_name` | 필터: 서울 자치구. None이면 미적용 |
+| `service_status` | 필터: 예약 상태. None이면 미적용 |
+| `keyword` | 필터: 시설명·장소명 키워드 (`%keyword%` ILIKE). None이면 미적용 |
+| `top_k` | 최대 반환 건수 (기본값: 25) |
+
+반환: `metric=count` → `[{"group_value": ..., "count": ...}]`, `metric=distinct` → `[{"group_value": ...}]`. 결과가 없으면 빈 리스트.
+
+`on_data_reader`(SELECT 전용) 세션을 사용한다. 호출처: `AnalyticsAgent` (`agents/analytics_agent.py`).
+
+### 4-6. 도구 선택 기준
 
 | 상황 | 도구 |
 |---|---|
 | 카테고리·지역·상태·키워드로 정형 필터링 | `sql_search` |
 | 자연어 의미 기반 유사도 검색 | `vector_search` + `bm25_search` (RRF 결합) |
 | 사용자 위치 기준 반경 내 시설 탐색 | `map_search` |
+| 개수·분포·종류 등 집계/요약 질의 | `analytics_search` |
 
 ---
 
@@ -220,6 +258,10 @@ PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도
 | `sql_keyword` | sql_node | SqlAgent 가 LLM 으로 추출한 keyword (search_persist 의 sql 채널 query_text 로 사용) |
 | `vector_results` | vector_node | BM25 + vector RRF 결합 결과 |
 | `map_results` | map_node | 반경 검색 GeoJSON |
+| `analytics_results` | analytics_node | `analytics_search` 집계 결과 리스트 |
+| `analytics_group_by` | analytics_node | LLM이 추출한 집계 차원 (area_name / max_class_name / min_class_name / service_status) |
+| `analytics_metric` | analytics_node | LLM이 추출한 집계 방식 (`count` / `distinct`) |
+| `analytics_keyword` | analytics_node | LLM이 추출한 키워드 필터 (없으면 None) |
 | `search_channels` | sql/vector/map_node + retry_prep_node | `dict[str, ChannelData]` — 채널별 입력(query) + 출력(hits). reducer `search_channels_reducer` 로 누적, `{}` 시그널로 리셋 |
 | `answer`, `title` | answer_node | 최종 답변 / 대화 제목 |
 | `cache_hit` | cache_check_node | Answer Cache hit 여부 |
@@ -237,6 +279,7 @@ PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도
 | vector_node → `vector_search` / `bm25_search` | `ai_session` | `on_ai` | `service_embeddings` |
 | vector_node → `hydrate_services` | `data_session` | `on_data` | `public_service_reservations` |
 | map_node → `map_search` | `data_session` | `on_data` | `public_service_reservations` (earthdistance) |
+| analytics_node → `analytics_search` | `data_session` | `on_data` | `public_service_reservations` (GROUP BY / DISTINCT) |
 | search_persist_node | `ai_session` | `on_ai` | `chat_search_queries`, `chat_search_results` |
 | trace_node | `ai_session` | `on_ai` | `chat_agent_traces` |
 
@@ -271,7 +314,7 @@ result = await graph.run(
 
 | 엣지 | 분기 함수 | 동작 |
 |---|---|---|
-| `router_node → ?` | `_route_by_intent` | `intent` 값으로 다음 노드 결정 (`SQL_SEARCH`→sql, `VECTOR_SEARCH`→vector, `MAP`→map, `FALLBACK`/그 외→answer). router 예외 시 `error + answer` 가 채워져 있으면 `answer_node` 로 단락. `MAP` 의 lat/lng 미제공 처리는 `map_node` 내부에서 담당한다. |
+| `router_node → ?` | `_route_by_intent` | `intent` 값으로 다음 노드 결정 (`SQL_SEARCH`→sql, `VECTOR_SEARCH`→vector, `MAP`→map, `ANALYTICS`→analytics, `FALLBACK`/그 외→answer). router 예외 시 `error + answer` 가 채워져 있으면 `answer_node` 로 단락. `MAP` 의 lat/lng 미제공 처리는 `map_node` 내부에서 담당한다. |
 | `answer_node → ?` | `_self_correction_edge` | `not answer.strip() and retry_count == 0` 이면 `router_node` 재진입, 아니면 `trace_node` 로 진행. |
 
 ### 7-2. Self-Correction 사이클 (Phase 17)
@@ -299,7 +342,7 @@ needs_retry = not answer.strip() and retry_count == 0
 
 - `answer`가 비어 있을 때만 재검색이 의미 있다. error + fallback_answer 조합은 이미 최선의 응답이므로 재시도하지 않는다.
 - `retry_count >= 1`이면 항상 `trace_node` 로 진행 — 최대 1회 보장.
-- 추가로 그래프 호출 시 `recursion_limit=10`을 명시하여 어떤 경우에도 무한 사이클을 차단한다.
+- 추가로 그래프 호출 시 `recursion_limit=16`을 명시하여 어떤 경우에도 무한 사이클을 차단한다.
 
 ---
 
@@ -360,5 +403,6 @@ needs_retry = not answer.strip() and retry_count == 0
 | Phase 17 | LangGraph 전환 | `agents/graph.py` 신설(`AgentGraph`), Self-Correction 사이클, `AgentState.retry_count` 추가, `_router_node` 예외 시 fallback_answer fast-path, `recursion_limit=10` |
 | Phase 18 | 원본 hydration 도입 | `tools/hydrate_services` 신설, VectorAgent에서 RRF 후 `public_service_reservations` 조회. 답변 컨텍스트가 항상 최신 원본 값을 사용하도록 변경. `AnswerAgent._normalize`의 metadata 언팩 분기 제거. |
 | Phase 19 | 검색 채널 적재 (chat-search-persistence) | `chat_search_queries` + `chat_search_results` 두 테이블 도입. `AgentState.search_channels: dict[str, ChannelData]` 필드(reducer 적용) + 종단 `search_persist_node` 신설. sql/vector/map 노드가 채널별 `ChannelData(kind, query, hits)` 를 채우고, `retry_prep_node` 가 재시도 시 `search_channels = {}` 리셋. cache hit 경로도 `search_persist_node` 경유로 종단 체인 일관성 유지. `recursion_limit` 10 → 15 상향. |
+| 2026-05-31 | ANALYTICS intent 신설 (Phase A-E) | `analytics_search` 도구(`tools/analytics_search.py`) 신설 — GROUP BY COUNT / SELECT DISTINCT 집계, 차원 화이트리스트 4종, 전 필터값 bind 파라미터. `AnalyticsAgent`(`agents/analytics_agent.py`) 신설 — LLM 구조화 추출 후 `analytics_search` 호출, hydration 생략. `AgentState`에 `analytics_results` / `analytics_group_by` / `analytics_metric` / `analytics_keyword` 필드 추가. Router에 ANALYTICS 분류 기준 + 경계 케이스 few-shot 추가. Answer Agent에 intent별 2-tier 프롬프트 조립 구조 도입 (Tier 1 정적 캐시, Tier 2 런타임 조건부 조립). AI 서비스 전체. |
 
 `AgentState` 입출력 규약을 유지하므로 각 Agent 클래스(`router_agent.py`, `sql_agent.py`, `vector_agent.py`, `answer_agent.py`)는 수정 없이 재사용된다. `agents/workflow.py` (LCEL)는 레거시로 유지된다.

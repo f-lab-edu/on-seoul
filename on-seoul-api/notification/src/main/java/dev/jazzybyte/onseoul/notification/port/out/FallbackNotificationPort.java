@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.notification.port.out;
 
 import dev.jazzybyte.onseoul.notification.domain.FallbackReason;
 import dev.jazzybyte.onseoul.notification.domain.NotificationChannel;
+import dev.jazzybyte.onseoul.notification.domain.NotificationContent;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
 
 import java.util.Set;
@@ -17,7 +18,6 @@ import java.util.Set;
  * <h3>구현체 후보</h3>
  * <ul>
  *   <li>{@code SmtpFallbackNotificationAdapter} — JavaMailSender 직접 SMTP 발송 (EMAIL 채널)</li>
- *   <li>{@code InAppFallbackNotificationAdapter} — DB {@code notification_outbox} 테이블 저장 (채널 무관)</li>
  *   <li>{@code LogOnlyFallbackNotificationAdapter} — 로그·메트릭만 기록 (현재 기본값, 스텁)</li>
  * </ul>
  *
@@ -30,8 +30,7 @@ public interface FallbackNotificationPort {
      * Knock 장애 시 대체 수단으로 알림을 발송한다.
      *
      * @param recipient  수신자 연락처 (userId + email + phoneNumber)
-     * @param title      알림 제목
-     * @param body       알림 본문
+     * @param content    발송 콘텐츠 (title + summary + 구조화 서비스 카드)
      * @param dispatchId idempotency key
      * @param channels   원래 발송 대상이었던 채널 목록
      * @param reason     fallback 트리거 원인
@@ -39,8 +38,7 @@ public interface FallbackNotificationPort {
      */
     void sendFallback(
             UserContact recipient,
-            String title,
-            String body,
+            NotificationContent content,
             Long dispatchId,
             Set<NotificationChannel> channels,
             FallbackReason reason,

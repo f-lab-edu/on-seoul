@@ -3,7 +3,9 @@ package dev.jazzybyte.onseoul;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.jazzybyte.onseoul.collection.port.out.GeocodingPort;
+import dev.jazzybyte.onseoul.collection.port.out.EmbeddingSyncPort;
 import dev.jazzybyte.onseoul.collection.port.out.LoadApiSourceCatalogPort;
+import dev.jazzybyte.onseoul.collection.port.out.LoadChangedServiceIdsPort;
 import dev.jazzybyte.onseoul.chat.port.out.LoadChatRoomPort;
 import dev.jazzybyte.onseoul.collection.port.out.LoadPublicServicePort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
@@ -65,6 +67,8 @@ class OnSeoulApiApplicationTests {
     @MockitoBean LoadApiSourceCatalogPort loadApiSourceCatalogPort;
     @MockitoBean SaveCollectionHistoryPort saveCollectionHistoryPort;
     @MockitoBean SaveServiceChangeLogPort saveServiceChangeLogPort;
+    @MockitoBean LoadChangedServiceIdsPort loadChangedServiceIdsPort;
+    @MockitoBean EmbeddingSyncPort embeddingSyncPort;
     @MockitoBean SeoulDatasetFetchPort seoulDatasetFetchPort;
     @MockitoBean GeocodingPort geocodingPort;
     @MockitoBean StringRedisTemplate stringRedisTemplate;
