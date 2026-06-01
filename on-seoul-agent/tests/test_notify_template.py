@@ -1,5 +1,10 @@
-"""POST /notification/template 라우터 테스트(서비스 그룹 구조).
+"""POST /notification/template 라우터 테스트(요약/하이라이트 생성).
 
+이 엔드포인트는 "완성 본문(body)"이 아니라 짧은 "요약/하이라이트(summary)"를
+생성한다. 사실(서비스명·상태·접수기간·링크)은 Knock 이메일 Liquid 템플릿이
+결정적으로 렌더링하므로, AI는 행동 유도 하이라이트만 만든다.
+
+응답 계약은 {title, summary}이며, title·summary 둘 다 LLM이 생성한다.
 실제 LLM/외부 API 호출 없이 AsyncMock으로 LLM을 모킹한다.
 망 분리/Nginx 레벨 보호 가정이므로 엔드포인트에 별도 인증은 없다.
 """
@@ -11,7 +16,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from routers.notification import _BodyResponse
+from routers.notification import _SummaryResponse
 
 # ---------------------------------------------------------------------------
 # 픽스처
@@ -33,10 +38,15 @@ async def client(app: FastAPI) -> AsyncClient:
         yield c
 
 
-def _make_llm_mock(body: str = "지금 바로 신청하세요."):
-    """정상 body를 반환하는 LLM chain mock을 생성한다. title은 코드에서 생성한다."""
+def _make_llm_mock(
+    title: str = "관심 서비스 변경 알림",
+    summary: str = "접수가 다시 시작됐어요. 마감 전에 확인해 보세요.",
+):
+    """정상 title/summary를 반환하는 LLM chain mock을 생성한다."""
     chain_mock = AsyncMock()
-    chain_mock.ainvoke = AsyncMock(return_value=_BodyResponse(body=body))
+    chain_mock.ainvoke = AsyncMock(
+        return_value=_SummaryResponse(title=title, summary=summary)
+    )
 
     llm_mock = AsyncMock()
     llm_mock.with_structured_output = lambda _: chain_mock
@@ -72,9 +82,10 @@ def _single_group(service_id: str = "SVC001", **overrides) -> dict:
 
 class TestCreateTemplateSuccess:
     async def test_single_group_returns_200(self, client: AsyncClient):
-        """서비스 그룹 1개 → 200, title은 '온서울 맞춤 N월 N일 공공서비스 정보 - 1개' 포맷."""
+        """서비스 그룹 1개 → 200, LLM이 생성한 title/summary를 그대로 반환."""
         llm_mock, _ = _make_llm_mock(
-            body="강남구 OO수영장 자유수영의 접수가 다시 시작됐습니다.",
+            title="접수가 다시 시작됐어요",
+            summary="강남구 자유수영 접수가 재개됐어요. 마감 전 신청하세요.",
         )
 
         with patch("routers.notification.get_chat_model", return_value=llm_mock):
@@ -82,17 +93,17 @@ class TestCreateTemplateSuccess:
 
         assert response.status_code == 200
         data = response.json()
-        assert "온서울 맞춤" in data["title"]
-        assert "공공서비스 정보" in data["title"]
-        assert "1개" in data["title"]
-        assert data["body"]
+        assert data["title"] == "접수가 다시 시작됐어요"
+        assert data["summary"]
+        assert "body" not in data
 
     async def test_multiple_groups_new_and_updated_returns_200(
         self, client: AsyncClient
     ):
-        """여러 서비스 그룹(NEW+UPDATED 혼합) → 200, title에 건수 포함."""
+        """여러 서비스 그룹(NEW+UPDATED 혼합) → 200."""
         llm_mock, _ = _make_llm_mock(
-            body="OO수영장 접수가 시작되고 글쓰기교실이 새로 등록됐습니다.",
+            title="구독하신 2개 서비스 변경 알림",
+            summary="2건의 변경이 있어요. 자유수영 접수 재개에 주목하세요.",
         )
 
         body = {
@@ -124,22 +135,8 @@ class TestCreateTemplateSuccess:
 
         assert response.status_code == 200
         data = response.json()
-        assert "온서울 맞춤" in data["title"]
-        assert "2개" in data["title"]
-        assert data["body"]
-
-    async def test_service_url_included_in_body(self, client: AsyncClient):
-        """service_url이 본문에 포함된 응답을 그대로 반환한다."""
-        url = "https://yeyak.seoul.go.kr/aaa"
-        llm_mock, _ = _make_llm_mock(
-            body=f"강남구 OO수영장 자유수영의 접수가 시작됐습니다. {url}",
-        )
-
-        with patch("routers.notification.get_chat_model", return_value=llm_mock):
-            response = await client.post("/notification/template", json=_single_group())
-
-        assert response.status_code == 200
-        assert url in response.json()["body"]
+        assert data["title"]
+        assert data["summary"]
 
     async def test_invokes_llm_with_single_retry(self, client: AsyncClient):
         """알림 경로는 지연 민감 → max_retries=1로 호출한다.
@@ -291,9 +288,20 @@ class TestCreateTemplateDegrade:
 
         assert response.status_code == 503
 
-    async def test_llm_returns_whitespace_body_yields_503(self, client: AsyncClient):
-        """LLM이 공백만 있는 body 반환 → 503."""
-        llm_mock, _ = _make_llm_mock(body="   ")
+    async def test_llm_returns_whitespace_summary_yields_503(
+        self, client: AsyncClient
+    ):
+        """LLM이 공백만 있는 summary 반환 → 503."""
+        llm_mock, _ = _make_llm_mock(title="제목", summary="   ")
+
+        with patch("routers.notification.get_chat_model", return_value=llm_mock):
+            response = await client.post("/notification/template", json=_single_group())
+
+        assert response.status_code == 503
+
+    async def test_llm_returns_whitespace_title_yields_503(self, client: AsyncClient):
+        """LLM이 공백만 있는 title 반환 → 503."""
+        llm_mock, _ = _make_llm_mock(title="  ", summary="요약입니다.")
 
         with patch("routers.notification.get_chat_model", return_value=llm_mock):
             response = await client.post("/notification/template", json=_single_group())
@@ -319,8 +327,8 @@ class TestCreateTemplateDegrade:
 class TestServiceSerialization:
     """_format_services / _build_messages가 LLM 입력에 메타·변경을 담는지 확인.
 
-    상태/echo만 보는 happy-path 테스트로는 'service_url이 프롬프트에 전달됐는지'를
-    검증할 수 없어, 직렬화 결과를 직접 단언한다(추측 금지·노출 금지 규칙의 회귀 가드).
+    happy-path echo 테스트로는 'service_url이 프롬프트에 전달됐는지'를 검증할 수
+    없어, 직렬화 결과를 직접 단언한다(추측 금지·노출 금지 규칙의 회귀 가드).
     """
 
     def test_format_includes_meta_and_change_detail(self):
@@ -422,18 +430,17 @@ class TestServiceSerialization:
         assert "SVC-AAA" not in text
         assert "SVC-BBB" not in text
 
-    async def test_url_reaches_llm_input_not_just_echoed(self, client: AsyncClient):
-        """service_url이 LLM에 전달된 메시지 안에 실제로 들어가는지 확인.
+    async def test_meta_reaches_llm_input_not_just_echoed(self, client: AsyncClient):
+        """직렬화된 서비스 메타가 LLM에 전달된 메시지 안에 실제로 들어가는지 확인.
 
         happy-path echo 테스트는 mock 반환값을 그대로 검증하므로 입력 전달을
         보장하지 못한다. ainvoke 인자를 캡처해 직렬화된 입력을 직접 단언한다.
         """
-        url = "https://yeyak.seoul.go.kr/aaa"
         captured: dict = {}
 
         async def _capture(messages, *args, **kwargs):
             captured["messages"] = messages
-            return _BodyResponse(body="b")
+            return _SummaryResponse(title="t", summary="s")
 
         chain_mock = AsyncMock()
         chain_mock.ainvoke = _capture
@@ -446,6 +453,7 @@ class TestServiceSerialization:
             )
 
         assert response.status_code == 200
-        # 마지막 HumanMessage가 직렬화된 서비스 입력이며 url을 포함해야 한다.
+        # 마지막 HumanMessage가 직렬화된 서비스 입력이며 메타를 포함해야 한다.
         last_human = captured["messages"][-1]
-        assert url in last_human.content
+        assert "OO수영장 자유수영" in last_human.content
+        assert "SVC001" not in last_human.content  # service_id 미노출
