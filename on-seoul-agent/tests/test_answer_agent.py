@@ -24,6 +24,7 @@ from agents.answer_agent import (
     _STRUCT_MAP,
     _CLAUSE_RESERVATION_GUIDE,
     _CLAUSE_REFINE_HINT,
+    _FALLBACK_GUARDRAILS,
 )
 from schemas.state import AgentState, IntentType
 
@@ -52,7 +53,9 @@ def _make_agent(
     agent._static_prompts = {
         IntentType.MAP.value: _compose(_ROLE, _STRUCT_MAP, _OUTPUT_RULES),
         IntentType.ANALYTICS.value: _compose(_ROLE, _STRUCT_ANALYTICS, _OUTPUT_RULES),
-        IntentType.FALLBACK.value: _compose(_ROLE, _STRUCT_FALLBACK, _OUTPUT_RULES),
+        IntentType.FALLBACK.value: _compose(
+            _ROLE, _STRUCT_FALLBACK, _FALLBACK_GUARDRAILS, _OUTPUT_RULES
+        ),
     }
 
     return agent
@@ -812,6 +815,64 @@ class TestAnswerAgentFallback:
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         assert _STRUCT_FALLBACK[:30] in call_kwargs["system"]
+
+    async def test_fallback_chain_includes_guardrails_in_system(self):
+        """FALLBACK chain 호출 시 system에 가드레일 블록(_FALLBACK_GUARDRAILS)이 포함된다.
+
+        fallback 은 도메인 밖 발화가 들어오는 공격 표면이므로 조립된 시스템
+        프롬프트에 가드레일이 반드시 실려야 한다.
+        """
+        agent = _make_agent()
+        state = self._make_fallback_state()
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        assert _FALLBACK_GUARDRAILS[:20] in call_kwargs["system"]
+
+
+class TestFallbackGuardrails:
+    """FALLBACK 시스템 프롬프트 가드레일 회귀 테스트.
+
+    프롬프트 인젝션/내부정보 유출/범위 밖 작업 방어 문구가 조립된 FALLBACK
+    시스템 프롬프트에 고정되어 있는지 검증한다. 문구가 통째로 삭제되면 RED.
+    """
+
+    def _fallback_system(self) -> str:
+        return _compose(_ROLE, _STRUCT_FALLBACK, _FALLBACK_GUARDRAILS, _OUTPUT_RULES)
+
+    def test_role_lock_against_injection(self):
+        """역할 고정/주입 방어: '이전 지시' 무시 거부 + 역할 변경 불가 취지가 들어있다."""
+        prompt = self._fallback_system()
+        assert "이전 지시" in prompt
+        assert "역할" in prompt
+
+    def test_system_prompt_non_disclosure(self):
+        """시스템 프롬프트/내부 규칙 비공개 취지 문구가 들어있다."""
+        prompt = self._fallback_system()
+        assert "시스템 프롬프트" in prompt
+
+    def test_out_of_scope_refusal(self):
+        """범위 밖 작업(코드/번역/자문 등) 거부 취지 문구가 들어있다.
+
+        "코드"는 _OUTPUT_RULES 에도 등장하므로 가드레일 고유 문구로 단언한다
+        (가드레일을 통째로 제거하면 RED 가 되도록).
+        """
+        prompt = self._fallback_system()
+        assert "범위 밖 작업 거부" in prompt
+        assert "번역" in prompt and "자문" in prompt
+
+    def test_persona_branches_present(self):
+        """인사/정체성/잡담 행동 분기가 응대 방식 섹션에 명시되어 있다."""
+        prompt = self._fallback_system()
+        assert "인사" in prompt
+        assert "정체성" in prompt
+
+    def test_question_examples_preserved(self):
+        """기존 유용한 질문 예시가 fallback 프롬프트에 유지된다."""
+        prompt = self._fallback_system()
+        assert "테니스장" in prompt
+        assert "수영장" in prompt
 
 
 class TestAnswerAgentMap:
