@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 from tests.helpers import make_agent_state
 from agents.answer_agent import (
     AnswerAgent,
+    _DISPLAY_LIMIT,
     _TitleOutput,
     _build_card_system,
     _compose,
@@ -362,7 +363,7 @@ class TestAnswerAgentDisplaySlice:
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         displayed = json.loads(call_kwargs["results_json"])
-        assert len(displayed) == 5
+        assert len(displayed) == _DISPLAY_LIMIT
         assert call_kwargs["extra_count"] == 0
 
     async def test_six_results_sliced_to_five_with_extra_one(self):
@@ -374,7 +375,7 @@ class TestAnswerAgentDisplaySlice:
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         displayed = json.loads(call_kwargs["results_json"])
-        assert len(displayed) == 5
+        assert len(displayed) == _DISPLAY_LIMIT
         assert displayed[0]["service_id"] == "S001"  # RRF 순위 첫 번째 보존
         assert call_kwargs["extra_count"] == 1
 
@@ -386,7 +387,7 @@ class TestAnswerAgentDisplaySlice:
         await agent.answer(state)
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
-        assert len(json.loads(call_kwargs["results_json"])) == 5
+        assert len(json.loads(call_kwargs["results_json"])) == _DISPLAY_LIMIT
         assert call_kwargs["extra_count"] == 5
 
     async def test_empty_results_extra_count_zero(self):
@@ -425,7 +426,7 @@ class TestAnswerAgentDisplaySlice:
         result = await agent.answer(state)
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
-        assert len(result["service_cards"]) == 5
+        assert len(result["service_cards"]) == _DISPLAY_LIMIT
         assert call_kwargs["extra_count"] == 5
 
     async def test_service_cards_at_display_limit_boundary(self):
@@ -439,7 +440,7 @@ class TestAnswerAgentDisplaySlice:
         result = await agent.answer(state)
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
-        assert len(result["service_cards"]) == 5
+        assert len(result["service_cards"]) == _DISPLAY_LIMIT
         assert call_kwargs["extra_count"] == 0
 
     async def test_service_cards_empty_when_no_results(self):
