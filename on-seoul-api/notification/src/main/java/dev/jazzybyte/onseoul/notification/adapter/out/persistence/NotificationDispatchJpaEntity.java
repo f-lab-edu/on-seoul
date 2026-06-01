@@ -7,6 +7,8 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 
@@ -49,6 +51,10 @@ public class NotificationDispatchJpaEntity {
     @Column(name = "attempt_count", nullable = false)
     private int attemptCount;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "notification_payload", columnDefinition = "jsonb")
+    private String notificationPayload;  // raw JSON String (NotificationContent 직렬화)
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -71,7 +77,8 @@ public class NotificationDispatchJpaEntity {
 
     void applyDomain(DispatchStatus status,
                      Instant sentAt, String generatedTitle, String generatedBody,
-                     TemplateSource templateSource, String lastError, int attemptCount) {
+                     TemplateSource templateSource, String lastError, int attemptCount,
+                     String notificationPayload) {
         this.status = status;
         this.sentAt = sentAt;
         this.generatedTitle = generatedTitle;
@@ -79,6 +86,7 @@ public class NotificationDispatchJpaEntity {
         this.templateSource = templateSource;
         this.lastError = lastError;
         this.attemptCount = attemptCount;
+        this.notificationPayload = notificationPayload;
         this.updatedAt = Instant.now();
     }
 }

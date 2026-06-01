@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS notification_dispatches
     template_source  VARCHAR(10),
     last_error       CLOB,
     attempt_count    INT           NOT NULL DEFAULT 0,
+    -- JSONB in PostgreSQL; H2 test schema declares as VARCHAR (filter/channels와 동일 패턴).
+    -- @JdbcTypeCode(SqlTypes.JSON) String 바인딩과 호환. NULL 허용.
+    notification_payload VARCHAR(8000),
     created_at       TIMESTAMP     NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMP     NOT NULL DEFAULT NOW(),
 

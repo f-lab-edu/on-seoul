@@ -59,7 +59,8 @@ class NotificationDispatchPersistenceAdapter
                 dispatch.getStatus(),
                 dispatch.getSentAt(), dispatch.getGeneratedTitle(),
                 dispatch.getGeneratedBody(), dispatch.getTemplateSource(),
-                dispatch.getLastError(), dispatch.getAttemptCount());
+                dispatch.getLastError(), dispatch.getAttemptCount(),
+                dispatch.getNotificationPayload());
         return mapper.toDomain(repository.save(entity));
     }
 
