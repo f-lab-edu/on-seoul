@@ -42,8 +42,11 @@ class TemplateAgentClientTest {
 
     private NotificationTemplateRequest singleChangeRequest(String serviceId, String field,
                                                             String oldVal, String newVal) {
-        return new NotificationTemplateRequest(serviceId, List.of(
-                new NotificationTemplateRequest.ChangeItem("UPDATED", field, oldVal, newVal)));
+        // serviceName=null → fallback title이 serviceId를 사용하므로 기존 assertion(contains serviceId) 유지
+        return new NotificationTemplateRequest(List.of(
+                new NotificationTemplateRequest.ServiceChangeGroup(
+                        serviceId, null, null, null, null, null, null, null, null, null,
+                        List.of(new NotificationTemplateRequest.ChangeItem("UPDATED", field, oldVal, newVal)))));
     }
 
     @Test
@@ -192,23 +195,69 @@ class TemplateAgentClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"title\":\"t\",\"body\":\"b\"}"));
 
-        NotificationTemplateRequest request = new NotificationTemplateRequest("SVC-001", List.of(
-                new NotificationTemplateRequest.ChangeItem("UPDATED", "service_status", "RECEIVING", "CLOSED"),
-                new NotificationTemplateRequest.ChangeItem("UPDATED", "service_name", "구", "신")
-        ));
+        NotificationTemplateRequest request = new NotificationTemplateRequest(List.of(
+                new NotificationTemplateRequest.ServiceChangeGroup(
+                        "SVC-001", "수영교실", "https://ex.com/1", "https://ex.com/img.png",
+                        "강남센터", "강남구", "RECEIVING", "성인",
+                        "2026-05-01T00:00Z", "2026-05-31T00:00Z",
+                        List.of(
+                                new NotificationTemplateRequest.ChangeItem("UPDATED", "service_status", "RECEIVING", "CLOSED"),
+                                new NotificationTemplateRequest.ChangeItem("UPDATED", "service_name", "구", "신")))));
         client.generate(request);
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         String body = recorded.getBody().readUtf8();
 
+        // 최상위 그룹 래퍼 + 그룹 메타 snake_case
+        assertThat(body).contains("\"services\"");
         assertThat(body).contains("\"service_id\"");
+        assertThat(body).contains("\"service_name\"");
+        assertThat(body).contains("\"service_url\"");
+        assertThat(body).contains("\"image_url\"");
+        assertThat(body).contains("\"place_name\"");
+        assertThat(body).contains("\"area_name\"");
+        assertThat(body).contains("\"service_status\"");
+        assertThat(body).contains("\"target_info\"");
+        assertThat(body).contains("\"receipt_start_dt\"");
+        assertThat(body).contains("\"receipt_end_dt\"");
+        // changes 배열 + 항목 snake_case
         assertThat(body).contains("\"changes\"");
         assertThat(body).contains("\"change_type\"");
         assertThat(body).contains("\"field_name\"");
         assertThat(body).contains("\"old_value\"");
         assertThat(body).contains("\"new_value\"");
-        // 두 개의 change 항목
-        assertThat(body).contains("\"service_status\"");
-        assertThat(body).contains("\"service_name\"");
+    }
+
+    @Test
+    @DisplayName("generate() - 그룹 메타가 null이면 @JsonInclude(NON_NULL)로 직렬화에서 제외된다")
+    void generate_nullMetaFields_omittedBySerialization() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"title\":\"t\",\"body\":\"b\"}"));
+
+        // serviceId와 changes만 채우고 나머지 메타는 모두 null
+        NotificationTemplateRequest request = new NotificationTemplateRequest(List.of(
+                new NotificationTemplateRequest.ServiceChangeGroup(
+                        "SVC-ONLY-ID", null, null, null, null, null, null, null, null, null,
+                        List.of(new NotificationTemplateRequest.ChangeItem(
+                                "UPDATED", "service_status", "RECEIVING", "CLOSED")))));
+        client.generate(request);
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        String body = recorded.getBody().readUtf8();
+
+        // 채워진 필드는 포함
+        assertThat(body).contains("\"service_id\"");
+        assertThat(body).contains("\"changes\"");
+        // null 메타 필드는 직렬화에서 제외되어야 한다 (NON_NULL)
+        assertThat(body).doesNotContain("service_name");
+        assertThat(body).doesNotContain("service_url");
+        assertThat(body).doesNotContain("image_url");
+        assertThat(body).doesNotContain("place_name");
+        assertThat(body).doesNotContain("area_name");
+        assertThat(body).doesNotContain("target_info");
+        assertThat(body).doesNotContain("receipt_start_dt");
+        assertThat(body).doesNotContain("receipt_end_dt");
     }
 }
