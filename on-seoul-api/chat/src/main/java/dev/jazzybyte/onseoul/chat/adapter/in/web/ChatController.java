@@ -23,7 +23,7 @@ public class ChatController {
         this.queryAndStreamUseCase = queryAndStreamUseCase;
     }
 
-    @PostMapping(value = "/query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @PostMapping(value = "/api/chat/query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter query(
             @RequestAttribute Long userId,
             @Valid @RequestBody QueryRequest request) {

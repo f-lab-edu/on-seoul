@@ -18,6 +18,8 @@ import dev.jazzybyte.onseoul.notification.port.out.SaveBatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.SubscriptionFilterParserPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
+import dev.jazzybyte.onseoul.chat.port.out.DeleteChatRoomPort;
+import dev.jazzybyte.onseoul.chat.port.out.LoadChatMessagePort;
 import dev.jazzybyte.onseoul.chat.port.out.SaveChatMessagePort;
 import dev.jazzybyte.onseoul.chat.port.out.SaveChatRoomPort;
 import dev.jazzybyte.onseoul.collection.port.out.SaveCollectionHistoryPort;
@@ -75,6 +77,8 @@ class OnSeoulApiApplicationTests {
     @MockitoBean SaveChatRoomPort saveChatRoomPort;
     @MockitoBean LoadChatRoomPort loadChatRoomPort;
     @MockitoBean SaveChatMessagePort saveChatMessagePort;
+    @MockitoBean LoadChatMessagePort loadChatMessagePort;
+    @MockitoBean DeleteChatRoomPort deleteChatRoomPort;
     @MockitoBean LoadSubscriptionPort loadSubscriptionPort;
     @MockitoBean SaveSubscriptionPort saveSubscriptionPort;
     @MockitoBean SaveDispatchPort saveDispatchPort;

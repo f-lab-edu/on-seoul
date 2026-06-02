@@ -12,7 +12,7 @@ on-seoul 프로젝트의 API 서비스입니다. 인증, 데이터 수집 스케
 | 인증 | OAuth 2.0 소셜 로그인 + JWT (Access Token / Refresh Token)                          |
 | 챗봇 릴레이 | 사용자 질의를 AI 서비스(`on-seoul-agent`)에 위임하고 SSE 응답을 프론트엔드에 릴레이                      |
 | 알림 발송 | 알림 스케줄러가 구독 조건별로 변경 이력을 조회하여, 매칭된 항목에 대해 AI 서비스로 메시지 템플릿 생성을 요청하고 Knock을 통해 발송 |
-| 대화 이력 | 질의/응답 이력 저장 및 조회                                                               |
+| 대화 이력 | 질의/응답 이력 저장·조회·삭제                                                              |
 
 ---
 
@@ -151,7 +151,10 @@ curl http://localhost:8080/actuator/health
 
 | Method | Path | 설명 | 인증 |
 |---|---|---|---|
-| POST | `/query` | 챗봇 질의 (AI 서비스 위임, SSE) | O |
+| POST | `/api/chat/query` | 챗봇 질의 (AI 서비스 위임, SSE) | O |
+| GET | `/api/chat/rooms` | 대화방 목록 조회 (cursor 페이지네이션) | O |
+| GET | `/api/chat/rooms/{roomId}/messages` | 대화방 메시지 이력 조회 | O |
+| DELETE | `/api/chat/rooms/{roomId}` | 대화방 삭제 (soft delete) | O |
 
 **알림 구독 / 발송 이력**
 
@@ -174,6 +177,5 @@ curl http://localhost:8080/actuator/health
 ## 관련 문서
 
 - [프로젝트 전체 구조](../docs/architecture.md)
-- [API 서비스 구현 목록](./docs/api-service-implementation.md)
 - [AI 서비스 구현 목록](../on-seoul-agent/docs/ai-service-implementation.md)
 - [알림 BC 상세 문서](./notification/README.md)

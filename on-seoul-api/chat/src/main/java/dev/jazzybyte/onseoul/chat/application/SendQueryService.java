@@ -52,7 +52,7 @@ public class SendQueryService implements SendQueryUseCase {
             log.info("[Chat] 새 ChatRoom 생성 - roomId={}, userId={}, title={}", savedRoom.getId(), command.userId(), title);
             return savedRoom;
         }
-        return loadChatRoomPort.findById(command.roomId())
+        return loadChatRoomPort.findActiveByIdAndUserId(command.roomId(), command.userId())
                 .orElseThrow(() -> new OnSeoulApiException(ErrorCode.CHAT_ROOM_NOT_FOUND));
     }
 

@@ -21,7 +21,7 @@ public class ChatRoomJpaEntity {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(nullable = false, length = 500)
+    @Column(nullable = false, length = 200)
     private String title;
 
     @Column(name = "is_title_generated", nullable = false)
@@ -33,6 +33,9 @@ public class ChatRoomJpaEntity {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
+    @Column(name = "deleted_at")
+    private OffsetDateTime deletedAt;
+
     @PrePersist
     void prePersist() {
         OffsetDateTime now = OffsetDateTime.now();
@@ -42,11 +45,13 @@ public class ChatRoomJpaEntity {
 
     @PreUpdate
     void preUpdate() {
-        updatedAt = OffsetDateTime.now();
+        if (deletedAt == null) {
+            updatedAt = OffsetDateTime.now();
+        }
     }
 
     public ChatRoom toDomain() {
-        return new ChatRoom(id, userId, title, titleGenerated, createdAt, updatedAt);
+        return new ChatRoom(id, userId, title, titleGenerated, createdAt, updatedAt, deletedAt);
     }
 
     public static ChatRoomJpaEntity fromDomain(ChatRoom room) {
@@ -57,6 +62,7 @@ public class ChatRoomJpaEntity {
         entity.titleGenerated = room.isTitleGenerated();
         entity.createdAt = room.getCreatedAt();
         entity.updatedAt = room.getUpdatedAt();
+        entity.deletedAt = room.getDeletedAt();
         return entity;
     }
 }

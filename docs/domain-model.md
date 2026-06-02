@@ -231,9 +231,11 @@ classDiagram
         +Long userId
         +String title
         +boolean titleGenerated
+        +OffsetDateTime deletedAt
         --
         +create(userId, title) ChatRoom
-        +updateTitle(title)
+        +softDelete()
+        +isDeleted() boolean
     }
 
     class ChatMessage {
@@ -260,8 +262,9 @@ classDiagram
 
 **불변 조건:**
 - `ChatMessage.seq`는 동일 Room 내에서 단조 증가 (메시지 순서 보장).
-- `ChatRoom`은 특정 `userId`에 귀속되며, 다른 사용자의 Room에 메시지 추가 불가.
-- `title`은 AI가 자동 생성하거나 사용자가 직접 수정할 수 있다 (`titleGenerated` 플래그로 구분).
+- `ChatRoom`은 특정 `userId`에 귀속되며, 다른 사용자의 Room에 메시지 추가·조회 불가 (IDOR 차단).
+- `title`은 AI가 자동 생성하거나 사용자가 직접 수정할 수 있다 (`titleGenerated` 플래그로 구분). 최대 200자.
+- `softDelete()`는 `deletedAt`과 `updatedAt`을 동시에 설정한다. 삭제된 Room은 목록/상세 API에서 제외된다. 메시지는 물리적으로 보존된다.
 
 ---
 
