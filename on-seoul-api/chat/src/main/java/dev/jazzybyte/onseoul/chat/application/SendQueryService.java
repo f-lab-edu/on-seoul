@@ -83,8 +83,14 @@ public class SendQueryService implements SendQueryUseCase {
                 .orElseThrow(() -> new OnSeoulApiException(ErrorCode.CHAT_ROOM_NOT_FOUND));
     }
 
+    /**
+     * 코드포인트(글자) 기준으로 절단한다. UTF-16 char 단위 substring과 달리
+     * 이모지 등 surrogate pair 경계에서 깨진 문자가 나가지 않도록 보장한다.
+     */
     private String truncate(String text, int maxLength) {
         if (text == null) return "";
-        return text.length() <= maxLength ? text : text.substring(0, maxLength);
+        if (text.codePointCount(0, text.length()) <= maxLength) return text;
+        int endIndex = text.offsetByCodePoints(0, maxLength);
+        return text.substring(0, endIndex);
     }
 }

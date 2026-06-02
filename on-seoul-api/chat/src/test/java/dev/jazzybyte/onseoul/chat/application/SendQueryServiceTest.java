@@ -296,6 +296,55 @@ class SendQueryServiceTest {
     }
 
     @Test
+    @DisplayName("prepare() - 이모지(surrogate pair) 경계에서 truncate해도 깨진 문자 없이 코드포인트 단위로 잘린다")
+    void prepare_emojiContent_truncatedWithoutBrokenSurrogate() {
+        // maxCharsPerMessage=3: 이모지 3개(각 surrogate pair, char 6개)까지만 남아야 한다
+        ChatHistoryProperties cap3 = new ChatHistoryProperties(5, 3);
+        service = new SendQueryService(saveChatRoomPort, loadChatRoomPort, saveChatMessagePort,
+                loadChatMessagePort, cap3);
+
+        Long roomId = 5L;
+        SendQueryCommand command = new SendQueryCommand(1L, roomId, "질문", null, null);
+        when(loadChatRoomPort.findActiveByIdAndUserId(roomId, 1L)).thenReturn(Optional.of(savedRoom(roomId)));
+        // 이모지 5개(😀😁😂😃😄), 각각 BMP 밖 코드포인트(surrogate pair)
+        String emojis = "😀😁😂😃😄";
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 10)).thenReturn(List.of(
+                msg(roomId, 1L, ChatMessageRole.ASSISTANT, emojis)));
+        when(saveChatMessagePort.nextSeq()).thenReturn(2L);
+        when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        PrepareResult result = service.prepare(command);
+
+        String truncated = result.history().get(0).content();
+        // 코드포인트 3개("😀😁😂") = char 6개로 잘려야 한다
+        assertThat(truncated.codePointCount(0, truncated.length())).isEqualTo(3);
+        assertThat(truncated).isEqualTo("😀😁😂");
+        // 끝에 외톨이 high-surrogate가 남지 않아야 한다
+        assertThat(Character.isHighSurrogate(truncated.charAt(truncated.length() - 1))).isFalse();
+    }
+
+    @Test
+    @DisplayName("prepare() - 캡 미만 길이의 이모지 문자열은 그대로 유지된다")
+    void prepare_emojiContentUnderCap_keptAsIs() {
+        ChatHistoryProperties cap10 = new ChatHistoryProperties(5, 10);
+        service = new SendQueryService(saveChatRoomPort, loadChatRoomPort, saveChatMessagePort,
+                loadChatMessagePort, cap10);
+
+        Long roomId = 5L;
+        SendQueryCommand command = new SendQueryCommand(1L, roomId, "질문", null, null);
+        when(loadChatRoomPort.findActiveByIdAndUserId(roomId, 1L)).thenReturn(Optional.of(savedRoom(roomId)));
+        String emojis = "😀😁"; // 코드포인트 2개 (< 캡 10)
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 10)).thenReturn(List.of(
+                msg(roomId, 1L, ChatMessageRole.ASSISTANT, emojis)));
+        when(saveChatMessagePort.nextSeq()).thenReturn(2L);
+        when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        PrepareResult result = service.prepare(command);
+
+        assertThat(result.history().get(0).content()).isEqualTo(emojis);
+    }
+
+    @Test
     @DisplayName("prepare() - history 조회가 예외를 던지면 빈 리스트로 폴백하고 USER 저장은 계속된다")
     void prepare_historyLoadFails_fallsBackToEmpty() {
         Long roomId = 5L;

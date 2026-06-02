@@ -37,7 +37,9 @@ public class ChatAgentClient implements AiServiceStreamPort {
                 .map(t -> new AiChatRequest.Turn(t.role(), t.content()))
                 .toList();
         AiChatRequest body = new AiChatRequest(roomId, messageId, question, lat, lng, turns);
-        log.info("[Chat] 스트림 요청 to AI 서비스 - ({})", body);
+        // PII 보호: 질문/대화 content 평문은 로깅하지 않고 식별자와 history 건수만 INFO로 남긴다.
+        log.info("[Chat] 스트림 요청 to AI 서비스 - roomId={}, messageId={}, historySize={}",
+                roomId, messageId, turns.size());
 
         return webClient.post()
                 .uri("/chat/stream")
