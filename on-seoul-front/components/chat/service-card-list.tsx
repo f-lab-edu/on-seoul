@@ -19,20 +19,14 @@ export function ServiceCardList({ cards }: ServiceCardListProps) {
 
   return (
     <div className="-mx-1 overflow-x-auto rounded-md border border-border">
-      <table className="w-full min-w-[36rem] text-xs">
+      <table className="w-full min-w-[18rem] text-xs">
         <thead className="bg-muted/60 text-muted-foreground">
           <tr>
-            <th scope="col" className="px-2 py-1.5 text-left font-medium">
+            <th scope="col" className="px-1 py-1 text-left font-medium">
               시설
             </th>
-            <th scope="col" className="px-2 py-1.5 text-left font-medium">
-              분류·위치
-            </th>
-            <th scope="col" className="px-2 py-1.5 text-left font-medium">
-              상태
-            </th>
-            <th scope="col" className="px-2 py-1.5 text-left font-medium">
-              접수기간
+            <th scope="col" className="px-1 py-1 text-left font-medium">
+              상태·접수기간
             </th>
           </tr>
         </thead>
@@ -47,16 +41,10 @@ export function ServiceCardList({ cards }: ServiceCardListProps) {
 }
 
 function ServiceCardRow({ card }: { card: ServiceCard }) {
-  const location = [card.area_name, card.place_name].filter(Boolean).join(" ");
-  const category = [card.max_class_name, card.min_class_name]
-    .filter(Boolean)
-    .join(" > ");
-  const meta = [location, category].filter(Boolean).join(" · ");
-
   const start = formatDate(card.receipt_start_dt);
   const end = formatDate(card.receipt_end_dt);
   const period =
-    start && end ? `${start} ~ ${end}` : start ? `${start} ~` : end ? `~ ${end}` : "—";
+    start && end ? `${start} ~ ${end}` : start ? `${start} ~` : end ? `~ ${end}` : null;
 
   return (
     // 행 전체를 클릭하면 서비스 URL을 새 탭으로 열도록 onClick 처리.
@@ -74,17 +62,14 @@ function ServiceCardRow({ card }: { card: ServiceCard }) {
         }
       }}
     >
-      <td className="px-2 py-1.5 font-medium break-keep">
+      <td className="px-1 py-1 font-medium break-keep">
         {card.service_name ?? "—"}
       </td>
-      <td className="px-2 py-1.5 text-muted-foreground break-keep">
-        {meta || "—"}
-      </td>
-      <td className="px-2 py-1.5 whitespace-nowrap">
+      <td className="px-1 py-1 whitespace-nowrap">
         {card.service_status ? <StatusChip status={card.service_status} /> : "—"}
-      </td>
-      <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground">
-        {period}
+        {period && (
+          <p className="mt-0.5 text-muted-foreground">{period}</p>
+        )}
       </td>
     </tr>
   );
