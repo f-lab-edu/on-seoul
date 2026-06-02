@@ -18,6 +18,15 @@ services:
     container_name: on-seoul-agent
     ports:
       - "49890:8000"
+    environment:
+      # OpenTelemetry → SigNoz (docker-compose-signoz.yml). 비밀 아님 → 가시성/재현성 위해 compose 에 직접 명시.
+      # OTEL_ENABLED 미설정 시 계측 no-op(기본 off). 같은 on-seoul-net 으로 on-seoul-signoz:4317 도달.
+      - OTEL_ENABLED=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://on-seoul-signoz:4317
+      - OTEL_SERVICE_NAME=on-seoul-agent
+      - OTEL_ENVIRONMENT=prod
+      - OTEL_EXPORTER_OTLP_TIMEOUT=10
+      - OTEL_METRIC_EXPORT_INTERVAL_MS=60000
     env_file:
       - .env.deploy
       - .env.agent

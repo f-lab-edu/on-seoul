@@ -6,6 +6,7 @@ on:
     paths:
       - 'on-seoul-agent/**'
       - 'docker-compose-app.yml'
+      - 'docker-compose-signoz.yml'
       - '.github/workflows/deploy-ai.yml'
 
 jobs:
@@ -95,6 +96,12 @@ jobs:
         run: |
           mkdir -p ~/on-seoul
           cp docker-compose-app.yml ~/on-seoul/
+          # SigNoz 관측 스택 compose 도 호스트에 함께 비치(파일만 갱신, 기동은 수동 1회).
+          # SigNoz 는 상태 저장(ClickHouse) 서비스라 매 배포마다 재기동하지 않는다.
+          # 최초/업그레이드 시에만 수동 기동:
+          #   cd ~/on-seoul && DIR_ROOT=$HOME/on-seoul docker compose -f docker-compose-signoz.yml up -d
+          # 배포 순서: Redis compose → SigNoz compose → app compose
+          cp docker-compose-signoz.yml ~/on-seoul/
           if [ ! -f ~/on-seoul/.env.secret ]; then
             echo "ERROR: ~/on-seoul/.env.secret not found."
             exit 1
