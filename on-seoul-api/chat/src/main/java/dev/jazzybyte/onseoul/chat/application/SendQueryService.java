@@ -3,9 +3,11 @@ package dev.jazzybyte.onseoul.chat.application;
 import dev.jazzybyte.onseoul.chat.domain.ChatMessage;
 import dev.jazzybyte.onseoul.chat.domain.ChatMessageRole;
 import dev.jazzybyte.onseoul.chat.domain.ChatRoom;
+import dev.jazzybyte.onseoul.chat.domain.ChatTurn;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryCommand;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryUseCase;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryUseCase.PrepareResult;
+import dev.jazzybyte.onseoul.chat.port.out.LoadChatMessagePort;
 import dev.jazzybyte.onseoul.chat.port.out.LoadChatRoomPort;
 import dev.jazzybyte.onseoul.chat.port.out.SaveChatMessagePort;
 import dev.jazzybyte.onseoul.chat.port.out.SaveChatRoomPort;
@@ -15,6 +17,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
 
 @Slf4j
 @Service
@@ -26,15 +30,38 @@ public class SendQueryService implements SendQueryUseCase {
     private final SaveChatRoomPort saveChatRoomPort;
     private final LoadChatRoomPort loadChatRoomPort;
     private final SaveChatMessagePort saveChatMessagePort;
+    private final LoadChatMessagePort loadChatMessagePort;
+    private final ChatHistoryProperties historyProperties;
 
     @Override
     @Transactional
     public PrepareResult prepare(SendQueryCommand command) {
         ChatRoom room = resolveRoom(command);
+        // 현재 질문을 저장하기 "전"에 직전 N턴을 조립한다(현재 질문이 history에 섞이지 않도록).
+        List<ChatTurn> history = loadRecentHistory(room.getId());
         Long seq = saveChatMessagePort.nextSeq();
         ChatMessage userMessage = ChatMessage.create(room.getId(), seq, ChatMessageRole.USER, command.question());
         saveChatMessagePort.save(userMessage);
-        return new PrepareResult(room.getId(), seq);
+        return new PrepareResult(room.getId(), seq, history);
+    }
+
+    /**
+     * 직전 N턴(최대 maxTurns*2 메시지)을 과거 → 최신 순으로 조회해 ChatTurn으로 변환한다.
+     * content는 메시지당 길이 캡으로 truncate한다. 조회 실패 시 빈 리스트로 폴백한다(스트림은 정상 진행).
+     */
+    private List<ChatTurn> loadRecentHistory(Long roomId) {
+        try {
+            return loadChatMessagePort
+                    .findRecentByRoomIdOrderBySeqAsc(roomId, historyProperties.maxMessages())
+                    .stream()
+                    .map(msg -> new ChatTurn(
+                            msg.getRole().name().toLowerCase(),
+                            truncate(msg.getContent(), historyProperties.maxCharsPerMessage())))
+                    .toList();
+        } catch (Exception e) {
+            log.warn("[Chat] history 조회 실패 - 빈 맥락으로 폴백: roomId={}", roomId, e);
+            return List.of();
+        }
     }
 
     @Override

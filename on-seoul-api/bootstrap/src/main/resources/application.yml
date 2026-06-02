@@ -102,6 +102,13 @@ ai:
     # 청크당 최대 500건이므로 템플릿 생성보다 넉넉하게 설정한다.
     embedding-sync-timeout-seconds: 30
 
+chat:
+  history:
+    # AI 서비스로 전달할 직전 턴(USER+ASSISTANT 쌍) 수. 최대 메시지 수는 max-turns * 2.
+    max-turns: 5
+    # 메시지당 content 길이 캡(초과 시 truncate).
+    max-chars-per-message: 1000
+
 management:
   endpoints:
     web:

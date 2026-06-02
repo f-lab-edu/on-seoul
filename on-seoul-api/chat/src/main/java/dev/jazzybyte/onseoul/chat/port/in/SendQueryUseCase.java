@@ -1,5 +1,9 @@
 package dev.jazzybyte.onseoul.chat.port.in;
 
+import dev.jazzybyte.onseoul.chat.domain.ChatTurn;
+
+import java.util.List;
+
 public interface SendQueryUseCase {
 
     /**
@@ -14,5 +18,8 @@ public interface SendQueryUseCase {
      */
     void saveAnswer(long roomId, String answer);
 
-    record PrepareResult(long roomId, long messageId) {}
+    /**
+     * @param history 현재 질문을 제외한 직전 N턴(과거 → 최신). 맥락이 없으면 빈 리스트.
+     */
+    record PrepareResult(long roomId, long messageId, List<ChatTurn> history) {}
 }
