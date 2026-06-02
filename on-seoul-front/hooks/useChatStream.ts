@@ -11,6 +11,9 @@ import type { ServiceCard, SseEvent } from "@/types/sse-events";
 export interface ChatStreamInput {
   question: string;
   roomId?: number;
+  // 지도(MAP) 의도용 좌표. 추후 위치 기반 검색 UI 구현 시 채워 보낸다.
+  lat?: number;
+  lng?: number;
 }
 
 export type ChatStreamState =
@@ -71,7 +74,7 @@ export function useChatStream(): UseChatStreamResult {
 
       try {
         // Route Handler 경유 필수 — 직접 백엔드 호출 금지 (CLAUDE.md A.2)
-        const res = await fetch("/api/query", {
+        const res = await fetch("/api/chat/query", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
