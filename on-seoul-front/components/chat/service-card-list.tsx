@@ -1,5 +1,3 @@
-import { ExternalLink } from "lucide-react";
-
 import { formatDate } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import type { ServiceCard } from "@/types/sse-events";
@@ -36,9 +34,6 @@ export function ServiceCardList({ cards }: ServiceCardListProps) {
             <th scope="col" className="px-2 py-1.5 text-left font-medium">
               접수기간
             </th>
-            <th scope="col" className="px-2 py-1.5 text-right font-medium">
-              <span className="sr-only">바로가기</span>
-            </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
@@ -64,7 +59,21 @@ function ServiceCardRow({ card }: { card: ServiceCard }) {
     start && end ? `${start} ~ ${end}` : start ? `${start} ~` : end ? `~ ${end}` : "—";
 
   return (
-    <tr className="align-top">
+    // 행 전체를 클릭하면 서비스 URL을 새 탭으로 열도록 onClick 처리.
+    // <tr>은 <a>로 감쌀 수 없으므로 onClick + cursor-pointer로 링크 동작을 구현한다.
+    <tr
+      className="cursor-pointer align-top transition-colors hover:bg-muted/40"
+      onClick={() => window.open(card.service_url, "_blank", "noopener,noreferrer")}
+      role="link"
+      tabIndex={0}
+      aria-label={`${card.service_name ?? "예약 페이지"} 새 창에서 열기`}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          window.open(card.service_url, "_blank", "noopener,noreferrer");
+        }
+      }}
+    >
       <td className="px-2 py-1.5 font-medium break-keep">
         {card.service_name ?? "—"}
       </td>
@@ -76,17 +85,6 @@ function ServiceCardRow({ card }: { card: ServiceCard }) {
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground">
         {period}
-      </td>
-      <td className="px-2 py-1.5 text-right">
-        <a
-          href={card.service_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={`${card.service_name ?? "예약 페이지"} 새 창에서 열기`}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-primary hover:bg-muted"
-        >
-          <ExternalLink className="h-4 w-4" aria-hidden />
-        </a>
       </td>
     </tr>
   );
