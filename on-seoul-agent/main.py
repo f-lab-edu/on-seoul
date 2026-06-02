@@ -12,6 +12,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from agents.graph import AgentGraph
 from core.logging import setup_logging
 from core.redis import get_redis
+from core.telemetry import setup_telemetry, shutdown_telemetry
 from middleware.metrics import ProcessTimeMiddleware
 from routers import admin as admin_router
 from routers import chat
@@ -31,6 +32,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     동일 Redis 인스턴스를 공유해야 하므로 app.state.redis에 보관한다.
     AgentGraph는 이 redis를 주입받아 process 내에서 1회만 컴파일된다.
     """
+    # OTel 인프라 계측 — otel_enabled=False(기본)이거나 endpoint 미설정 시 no-op.
+    # 기존 커스텀 트레이싱(chat_agent_traces)과 병행한다.
+    setup_telemetry(app)
     redis = get_redis()
     app.state.redis = redis
     app.state.graph = AgentGraph(redis=redis)
@@ -41,6 +45,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await redis.aclose()
         except Exception:
             logger.warning("redis aclose 실패", exc_info=True)
+        shutdown_telemetry()
 
 
 app = FastAPI(

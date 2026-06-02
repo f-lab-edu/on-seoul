@@ -39,6 +39,25 @@ class Settings(BaseSettings):
     # Admin
     admin_internal_token: str = ""  # /admin/* 보호용 공유 토큰
 
+    # ------------------------------------------------------------------
+    # OpenTelemetry (SigNoz, OTLP gRPC 4317)
+    # ------------------------------------------------------------------
+    # infra 핸드오프 — docker-compose에서 주입할 환경변수(키 = 대문자 필드명):
+    #   OTEL_ENABLED=true
+    #   OTEL_EXPORTER_OTLP_ENDPOINT=http://on-seoul-signoz:4317
+    #   OTEL_SERVICE_NAME=on-seoul-agent
+    #   OTEL_ENVIRONMENT=prod                (선택, 기본 "local")
+    #   OTEL_EXPORTER_OTLP_TIMEOUT=10        (선택, 초)
+    #   OTEL_METRIC_EXPORT_INTERVAL_MS=60000 (선택, ms)
+    # 기본 off — 명시적으로 OTEL_ENABLED=true 를 줘야 계측이 동작한다.
+    # endpoint가 비어 있으면 enabled여도 no-op(fail-open).
+    otel_enabled: bool = False
+    otel_service_name: str = "on-seoul-agent"
+    otel_exporter_otlp_endpoint: str = "http://on-seoul-signoz:4317"
+    otel_environment: str = "local"
+    otel_exporter_otlp_timeout: int = 10  # gRPC export 타임아웃(초)
+    otel_metric_export_interval_ms: int = 60000  # 메트릭 주기 export 간격(ms)
+
     # LLM — Gemini 우선, GPT 폴백
     llm_provider: str = "gemini"  # gemini | openai
 
