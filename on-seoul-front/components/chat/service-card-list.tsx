@@ -18,7 +18,11 @@ export function ServiceCardList({ cards }: ServiceCardListProps) {
   if (cards.length === 0) return null;
 
   return (
-    <div className="-mx-1 overflow-x-auto rounded-md border border-border">
+    <div className="-mx-1 flex flex-col gap-1">
+      <p className="px-1 text-[11px] text-muted-foreground">
+        항목을 누르면 공공서비스 페이지로 이동해요.
+      </p>
+      <div className="overflow-x-auto rounded-md border border-border">
       <table className="w-full min-w-[18rem] text-xs">
         <thead className="bg-muted/60 text-muted-foreground">
           <tr>
@@ -36,6 +40,7 @@ export function ServiceCardList({ cards }: ServiceCardListProps) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
