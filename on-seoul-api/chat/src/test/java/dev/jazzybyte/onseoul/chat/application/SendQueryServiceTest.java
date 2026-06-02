@@ -42,7 +42,7 @@ class SendQueryServiceTest {
 
     private ChatRoom savedRoom(Long id) {
         return new ChatRoom(id, 1L, "질문 제목", false,
-                OffsetDateTime.now(), OffsetDateTime.now());
+                OffsetDateTime.now(), OffsetDateTime.now(), null);
     }
 
     @Test
@@ -101,7 +101,7 @@ class SendQueryServiceTest {
         SendQueryCommand command = new SendQueryCommand(userId, existingRoomId, question, null, null);
 
         ChatRoom existingRoom = savedRoom(existingRoomId);
-        when(loadChatRoomPort.findById(existingRoomId)).thenReturn(Optional.of(existingRoom));
+        when(loadChatRoomPort.findActiveByIdAndUserId(existingRoomId, userId)).thenReturn(Optional.of(existingRoom));
         when(saveChatMessagePort.nextSeq()).thenReturn(2L);
         when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -121,12 +121,32 @@ class SendQueryServiceTest {
     @DisplayName("prepare() - roomId가 주어졌지만 존재하지 않으면 CHAT_ROOM_NOT_FOUND 예외를 던진다")
     void prepare_roomNotFound_throwsException() {
         SendQueryCommand command = new SendQueryCommand(1L, 999L, "질문", null, null);
-        when(loadChatRoomPort.findById(999L)).thenReturn(Optional.empty());
+        when(loadChatRoomPort.findActiveByIdAndUserId(999L, 1L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.prepare(command))
                 .isInstanceOf(OnSeoulApiException.class)
                 .satisfies(ex -> assertThat(((OnSeoulApiException) ex).getErrorCode())
                         .isEqualTo(ErrorCode.CHAT_ROOM_NOT_FOUND));
+    }
+
+    @Test
+    @DisplayName("prepare() - 다른 사용자의 roomId를 지정하면 CHAT_ROOM_NOT_FOUND 예외를 던진다 (IDOR 방지)")
+    void prepare_otherUserRoom_throwsChatRoomNotFound() {
+        Long requestingUserId = 1L;
+        Long otherUsersRoomId = 42L;
+        SendQueryCommand command = new SendQueryCommand(requestingUserId, otherUsersRoomId, "질문", null, null);
+
+        // findActiveByIdAndUserId는 소유자 불일치 시 empty를 반환한다
+        when(loadChatRoomPort.findActiveByIdAndUserId(otherUsersRoomId, requestingUserId))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.prepare(command))
+                .isInstanceOf(OnSeoulApiException.class)
+                .satisfies(ex -> assertThat(((OnSeoulApiException) ex).getErrorCode())
+                        .isEqualTo(ErrorCode.CHAT_ROOM_NOT_FOUND));
+
+        verify(loadChatRoomPort).findActiveByIdAndUserId(otherUsersRoomId, requestingUserId);
+        verify(saveChatRoomPort, never()).save(any());
     }
 
     @Test
