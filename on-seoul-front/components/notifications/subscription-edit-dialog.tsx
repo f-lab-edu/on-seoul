@@ -88,7 +88,7 @@ export function SubscriptionEditDialog({ subscription, open, onOpenChange }: Pro
           </p>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="gap-1 sm:gap-1">
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
