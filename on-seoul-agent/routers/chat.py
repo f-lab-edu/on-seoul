@@ -26,6 +26,7 @@ from fastapi.responses import StreamingResponse
 
 from agents.graph import AgentGraph
 from core.database import ai_session_ctx, data_session_ctx
+from core.exceptions import RateLimitException
 from core.recent_queries import get_recent_queries, push_recent_query
 from core.redis import get_redis
 from schemas.chat import ChatRequest
@@ -166,6 +167,15 @@ async def _stream(
                         push_after_success = True
                         yield sse_frame("final", payload)
 
+    except RateLimitException:
+        logger.warning(
+            "chat.rate_limit room=%s — 임베딩 rate limit 소진", request.room_id
+        )
+        yield sse_frame(
+            "error",
+            {"message": "현재 요청이 많아 잠시 후 다시 시도해 주세요."},
+        )
+        return
     except Exception:
         # 세션·DB 레벨 예외 — 워크플로우 진입 자체가 실패한 경우
         logger.exception("워크플로우 실행 중 오류")

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { History, LogOut, Menu, MessageSquarePlus, Bell } from "lucide-react";
+import { LogOut, Menu, MessageSquarePlus, Bell } from "lucide-react";
 
 import {
   Sheet,
@@ -18,22 +18,23 @@ import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
 interface AppHeaderProps {
-  /** 페이지별로 다른 타이틀이 필요하면 주입. 기본값은 서비스 명. */
+  /** 레거시 override. 미지정 시 현재 경로의 NAV_ITEMS pageTitle로 자동 결정. */
   title?: string;
 }
 
 type NavItem = {
   href: string;
   label: string;
+  /** 페이지 헤더에 노출할 타이틀. nav 라벨과 다를 때만 명시. */
+  pageTitle?: string;
   icon: typeof Menu;
   /** 정확 매칭 강제 (`/`처럼 prefix 매칭이 위험한 경로용). */
   exact?: boolean;
 };
 
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
-  { href: "/", label: "새 채팅", icon: MessageSquarePlus, exact: true },
-  { href: "/settings/notifications", label: "알림 설정", icon: Bell, exact: true },
-  { href: "/settings/notifications/history", label: "발송 이력", icon: History },
+  { href: "/chat", label: "새 채팅", pageTitle: "온 에이전트", icon: MessageSquarePlus, exact: true },
+  { href: "/settings/notifications", label: "구독 관리", icon: Bell, exact: true },
 ];
 
 function isActive(pathname: string, item: NavItem): boolean {
@@ -45,10 +46,13 @@ function isActive(pathname: string, item: NavItem): boolean {
  * 공통 헤더 + 좌측 햄버거 네비게이션 시트.
  * (chat) 그룹 layout이 흡수해 챗봇·알림 페이지에 공통 적용된다.
  */
-export function AppHeader({ title = "온 에이전트" }: AppHeaderProps) {
+export function AppHeader({ title }: AppHeaderProps) {
   const { user, loading, loggingOut, logout } = useAuth();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+
+  const activeItem = NAV_ITEMS.find((item) => isActive(pathname, item));
+  const pageTitle = title ?? activeItem?.pageTitle ?? activeItem?.label ?? "온서울";
 
   return (
     // 좌/우 동일 폭(44px) 슬롯으로 중앙 타이틀을 시각적으로 정렬한다.
@@ -71,7 +75,7 @@ export function AppHeader({ title = "온 에이전트" }: AppHeaderProps) {
           className="flex w-72 flex-col gap-0 sm:max-w-xs"
         >
           <SheetHeader className="border-b border-border">
-            <SheetTitle>{title}</SheetTitle>
+            <SheetTitle>온서울</SheetTitle>
             {/*
               base-ui Dialog.Description은 <p>로 렌더된다. Skeleton(div) 같은 블록 요소를
               그 안에 두면 HTML 스펙 위반 + hydration mismatch가 발생하므로,
@@ -135,7 +139,7 @@ export function AppHeader({ title = "온 에이전트" }: AppHeaderProps) {
         </SheetContent>
       </Sheet>
 
-      <h1 className="text-center text-base font-medium">{title}</h1>
+      <h1 className="text-center text-base font-medium">{pageTitle}</h1>
 
       <div aria-hidden="true">
         {/* 우측 균형용 placeholder — 좌측 햄버거(44px) 슬롯과 동일 폭 유지. */}

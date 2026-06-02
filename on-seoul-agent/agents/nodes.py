@@ -35,6 +35,7 @@ from agents.sql_agent import SqlAgent
 from agents.vector_agent import VectorAgent
 from core.cache import get_cached_answer, set_cached_answer
 from core.config import settings
+from core.exceptions import RateLimitException
 from agents._search_channel_utils import _to_hits
 from schemas.search import (
     RESET_CHANNELS,
@@ -262,6 +263,8 @@ class GraphNodes:
             if channels := new_state.get("search_channels"):
                 ret["search_channels"] = channels
             return ret
+        except RateLimitException:
+            raise
         except Exception as exc:
             logger.exception("vector_node 실행 오류")
             self.node_path.append("vector_error")

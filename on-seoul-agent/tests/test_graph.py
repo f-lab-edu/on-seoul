@@ -7,12 +7,15 @@
 - 기존 AgentWorkflow와 동일한 입출력 계약 (AgentState 기반)
 """
 
+import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents.answer_agent import AnswerAgent, _TitleOutput
 from agents.graph import AgentGraph
+from agents.nodes import GraphNodes
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.vector_agent import VectorAgent, _RefinedQuery
+from core.exceptions import RateLimitException
 from schemas.state import AgentState, IntentType
 from tests.helpers import (
     make_agent_state,
@@ -1022,3 +1025,66 @@ class TestRouterRefinedQueryPropagation:
 
         assert update["intent"] == IntentType.FALLBACK
         assert "refined_query" not in update
+
+
+# ---------------------------------------------------------------------------
+# RateLimitException 전파 테스트
+# ---------------------------------------------------------------------------
+
+
+class TestVectorNodeRateLimitPropagation:
+    """vector_node가 RateLimitException을 흡수하지 않고 re-raise하는지 검증."""
+
+    def _make_nodes(self, vector_agent: VectorAgent) -> GraphNodes:
+        """GraphNodes 인스턴스를 최소 의존성으로 생성한다."""
+        nodes = GraphNodes(
+            router=_router(IntentType.VECTOR_SEARCH),
+            sql_agent=MagicMock(),
+            vector_agent=vector_agent,
+            answer_agent=_answer_agent(),
+            analytics_agent=MagicMock(),
+        )
+        nodes.prepare(data_session=MagicMock(), ai_session=_ai_session())
+        return nodes
+
+    async def test_vector_node_reraises_rate_limit_exception(self):
+        """VectorAgent.search()가 RateLimitException을 던지면 vector_node가 re-raise한다."""
+        vector_agent = VectorAgent.__new__(VectorAgent)
+        vector_agent.search = AsyncMock(
+            side_effect=RateLimitException("Gemini embed rate limit 소진")
+        )
+
+        nodes = self._make_nodes(vector_agent)
+
+        with pytest.raises(RateLimitException, match="rate limit 소진"):
+            await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
+
+    async def test_vector_node_does_not_return_error_dict_on_rate_limit(self):
+        """RateLimitException 발생 시 {"error": ...} dict를 반환하지 않고 예외를 전파한다."""
+        vector_agent = VectorAgent.__new__(VectorAgent)
+        vector_agent.search = AsyncMock(
+            side_effect=RateLimitException("소진")
+        )
+
+        nodes = self._make_nodes(vector_agent)
+
+        raised = False
+        try:
+            await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
+        except RateLimitException:
+            raised = True
+
+        assert raised, "RateLimitException이 전파되어야 한다"
+
+    async def test_vector_node_wraps_generic_exception_as_error_dict(self):
+        """일반 예외는 기존과 동일하게 {"error": ...} dict로 변환된다."""
+        vector_agent = VectorAgent.__new__(VectorAgent)
+        vector_agent.search = AsyncMock(
+            side_effect=ValueError("일반 오류")
+        )
+
+        nodes = self._make_nodes(vector_agent)
+        result = await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
+
+        assert "error" in result
+        assert "일반 오류" in result["error"]

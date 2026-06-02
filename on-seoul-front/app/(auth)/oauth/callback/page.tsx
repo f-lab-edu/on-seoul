@@ -37,7 +37,7 @@ function OAuthCallbackInner() {
     const error = params.get("error");
 
     if (status === "success") {
-      router.replace("/");
+      router.replace("/chat");
       return;
     }
     if (error === "forbidden") {
