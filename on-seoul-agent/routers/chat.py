@@ -2,11 +2,9 @@
 
 흐름:
     ChatRequest 수신
-    → recent_queries fetch (Redis, per-room)
-    → AgentState 구성 (title_needed = message_id == 1, recent_queries 주입)
+    → AgentState 구성 (title_needed = message_id == 1, history 주입)
     → AgentGraph.stream() 단계별 실행 (LangGraph StateGraph)
     → SSE StreamingResponse 반환
-    → 정상 종료 시 사용자 message를 recent_queries 큐에 push
 
 SSE 이벤트:
     event: progress       — 워크플로우 진행 단계 안내 (routing / searching / answering)
@@ -27,7 +25,6 @@ from fastapi.responses import StreamingResponse
 from agents.graph import AgentGraph
 from core.database import ai_session_ctx, data_session_ctx
 from core.exceptions import RateLimitException
-from core.recent_queries import get_recent_queries, push_recent_query
 from core.redis import get_redis
 from schemas.chat import ChatRequest
 from schemas.state import AgentState
@@ -85,7 +82,7 @@ def _resolve_graph(request: Request) -> AgentGraph:
 
 
 async def _stream(
-    request: ChatRequest, graph: AgentGraph, redis: Any
+    request: ChatRequest, graph: AgentGraph
 ) -> AsyncGenerator[bytes, None]:
     """워크플로우를 실행하고 SSE 프레임을 yield한다."""
     logger.info(
@@ -94,9 +91,6 @@ async def _stream(
         request.message_id,
         request.message[:60],
     )
-    # 1) 최근 질의 컨텍스트 — Router Agent follow-up 분류용. 장애 시 빈 리스트.
-    recent_queries = await get_recent_queries(request.room_id, redis)
-
     state = AgentState(
         room_id=request.room_id,
         message_id=request.message_id,
@@ -118,11 +112,10 @@ async def _stream(
         trace=None,
         error=None,
         retry_count=0,
-        recent_queries=recent_queries,
+        history=[h.model_dump() for h in request.history],
         cache_hit=False,
     )
 
-    push_after_success = False
     try:
         async with data_session_ctx() as data_session, ai_session_ctx() as ai_session:
             async for event_type, data in graph.stream(
@@ -164,7 +157,6 @@ async def _stream(
                             payload["cache_hit"],
                             len(payload["answer"]),
                         )
-                        push_after_success = True
                         yield sse_frame("final", payload)
 
     except RateLimitException:
@@ -185,18 +177,13 @@ async def _stream(
         )
         return
 
-    # 정상 final만 recent_queries에 push (workflow_error/error 경로는 push 안 함)
-    if push_after_success:
-        await push_recent_query(request.room_id, request.message, redis)
-
 
 @router.post("/stream")
 async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingResponse:
     """사용자 메시지를 받아 에이전트 워크플로우를 실행하고 SSE로 응답한다."""
-    redis = _resolve_redis(http_request)
     graph = _resolve_graph(http_request)
     return StreamingResponse(
-        _stream(request, graph, redis),
+        _stream(request, graph),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )

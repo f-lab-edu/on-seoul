@@ -28,8 +28,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """애플리케이션 lifespan — Redis 클라이언트를 process-singleton으로 보관.
 
-    Answer Cache(core/cache.py)와 recent_queries(core/recent_queries.py)는
-    동일 Redis 인스턴스를 공유해야 하므로 app.state.redis에 보관한다.
+    Answer Cache(core/cache.py)가 Redis를 사용하므로 app.state.redis에 보관한다.
     AgentGraph는 이 redis를 주입받아 process 내에서 1회만 컴파일된다.
     """
     # OTel 인프라 계측 — otel_enabled=False(기본)이거나 endpoint 미설정 시 no-op.

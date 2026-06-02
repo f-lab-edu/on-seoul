@@ -134,7 +134,7 @@ class GraphNodes:
         try:
             result = await self._router.classify(
                 state["message"],
-                recent_queries=state.get("recent_queries") or [],
+                history=state.get("history") or [],
             )
             self.node_path.append("router")
             update: dict[str, Any] = {"intent": result.intent}

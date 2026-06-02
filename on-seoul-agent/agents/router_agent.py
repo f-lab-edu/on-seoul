@@ -7,7 +7,7 @@ LCEL 체인으로 사용자 메시지를 분석해 IntentType 5종 중 하나로
   - MAP         : 지도·위치·반경 탐색
   - FALLBACK    : 위 세 가지에 해당하지 않는 일반 안내
 
-recent_queries(per-room 최근 발화)가 주어지면 system prompt에 컨텍스트 블록을
+history(직전 N턴 대화 이력)가 주어지면 system prompt에 컨텍스트 블록을
 append하여 follow-up 질의("성동구는?")가 직전 발화의 카테고리·지역을 이어받도록
 유도한다. 빈 리스트/None이면 토큰 절약을 위해 섹션 자체를 생략한다.
 """
@@ -18,7 +18,6 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, field_validator
 
-from core.config import settings
 from llm.client import get_chat_model
 from llm.prompts.router import ROUTER_FEW_SHOT, ROUTER_SYSTEM
 from schemas.state import IntentType
@@ -126,43 +125,51 @@ class RouterAgent:
     """LCEL 기반 의도 분류 에이전트.
 
     LLM의 with_structured_output으로 IntentType을 직접 추출한다.
-    recent_queries는 호출마다 system prompt에 동적으로 합성된다.
+    history는 호출마다 system prompt에 동적으로 합성된다.
     """
 
     def __init__(self, model: BaseChatModel | None = None) -> None:
         self._llm = model or get_chat_model()
 
-    def _build_context_block(self, recent_queries: list[str] | None) -> str:
-        """recent_queries를 system prompt에 append할 블록으로 변환.
+    def _build_context_block(self, history: list[dict[str, str]] | None) -> str:
+        """history(직전 N턴)를 system prompt에 append할 블록으로 변환.
 
         비어 있으면 빈 문자열을 반환하여 섹션 자체를 생략한다(토큰 절약).
-        보관/주입 개수는 settings.recent_queries_max로 통일한다.
+
+        프롬프트 인젝션 표면: history.content(사용자·어시스턴트 발화)는 외부 입력이며
+        escape 없이 system prompt에 삽입된다. 다만 이 블록은 Router 분류에만 쓰이고
+        Router는 with_structured_output으로 IntentType(5값 enum) 등 고정 스키마만
+        추출하므로, content가 임의 지시를 담아도 자유 실행으로 이어지지 않는다.
+        (content는 HistoryTurn max_length=1000 + API 서비스 10메시지 윈도우로 제한.)
+        향후 Router 출력에 자유 텍스트 필드를 넓힐 경우 이 가정을 재검토할 것.
         """
-        if not recent_queries:
+        if not history:
             return ""
-        lines = "\n".join(
-            f"- {q}" for q in recent_queries[: settings.recent_queries_max]
-        )
+        lines = []
+        for turn in history:
+            role_label = "사용자" if turn["role"] == "user" else "어시스턴트"
+            lines.append(f"- [{role_label}] {turn['content']}")
+        turns_text = "\n".join(lines)
         return (
-            "이전 사용자 발화 (최신 순). 후속 질의는 직전 발화의 "
+            "이전 대화 이력 (과거 → 최신). 후속 질의는 직전 발화의 "
             "카테고리·지역을 이어받을 가능성이 높다.\n"
             "이전 맥락이 명확하면 refined_query에 카테고리·지역 키워드를 병합한다.\n"
-            f"{lines}"
+            f"{turns_text}"
         )
 
     async def classify(
         self,
         message: str,
-        recent_queries: list[str] | None = None,
+        history: list[dict[str, str]] | None = None,
     ) -> _IntentOutput:
         """사용자 메시지의 의도를 분류해 _IntentOutput을 반환한다.
 
         Args:
             message: 사용자 원본 발화.
-            recent_queries: per-room 최근 발화(최신 순). 기본값 None.
+            history: 직전 N턴 대화 이력(과거→최신). 기본값 None.
                 비어 있으면 system prompt에 컨텍스트 섹션을 추가하지 않는다.
         """
-        context_block = self._build_context_block(recent_queries)
+        context_block = self._build_context_block(history)
         system_text = ROUTER_SYSTEM + (f"\n\n{context_block}" if context_block else "")
         messages = [
             SystemMessage(content=system_text),

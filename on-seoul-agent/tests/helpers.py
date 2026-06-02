@@ -57,7 +57,7 @@ def make_agent_state(**overrides: Any) -> AgentState:
         trace=None,
         error=None,
         retry_count=0,
-        recent_queries=[],
+        history=[],
         cache_hit=False,
         search_channels={},
         hydrated_services=None,

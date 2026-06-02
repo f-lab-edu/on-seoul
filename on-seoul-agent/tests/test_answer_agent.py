@@ -604,15 +604,15 @@ class TestBuildCardSystem:
     def test_reservation_only_includes_reservation_guide(self):
         """접수중 시설 있음 + 자치구 명시 → CLAUSE_RESERVATION_GUIDE 포함, CLAUSE_REFINE_HINT 미포함."""
         results = [{"service_status": "접수중"}, {"service_status": "예약마감"}]
-        prompt = _build_card_system("광진구 수영장", results)
+        prompt = _build_card_system("광진구 수영장", results, None)
 
         assert _CLAUSE_RESERVATION_GUIDE in prompt
         assert _CLAUSE_REFINE_HINT not in prompt
 
     def test_no_reservation_no_district_includes_refine_hint(self):
-        """접수중 없음 + 자치구 미명시 → CLAUSE_REFINE_HINT 포함, CLAUSE_RESERVATION_GUIDE 미포함."""
+        """접수중 없음 + 자치구 미명시(area_name None) → CLAUSE_REFINE_HINT 포함."""
         results = [{"service_status": "예약마감"}]
-        prompt = _build_card_system("수영장 알려줘", results)
+        prompt = _build_card_system("수영장 알려줘", results, None)
 
         assert _CLAUSE_REFINE_HINT in prompt
         assert _CLAUSE_RESERVATION_GUIDE not in prompt
@@ -620,7 +620,7 @@ class TestBuildCardSystem:
     def test_both_conditions_includes_both_clauses(self):
         """접수중 있음 + 자치구 미명시 → 두 절 모두 포함."""
         results = [{"service_status": "접수중"}]
-        prompt = _build_card_system("수영장 알려줘", results)
+        prompt = _build_card_system("수영장 알려줘", results, None)
 
         assert _CLAUSE_RESERVATION_GUIDE in prompt
         assert _CLAUSE_REFINE_HINT in prompt
@@ -628,27 +628,52 @@ class TestBuildCardSystem:
     def test_no_conditions_excludes_both_clauses(self):
         """접수중 없음 + 자치구 명시 → 두 절 모두 미포함."""
         results = [{"service_status": "예약마감"}]
-        prompt = _build_card_system("강남구 수영장", results)
+        prompt = _build_card_system("강남구 수영장", results, None)
 
         assert _CLAUSE_RESERVATION_GUIDE not in prompt
         assert _CLAUSE_REFINE_HINT not in prompt
 
+    def test_resolved_area_name_suppresses_refine_hint(self):
+        """area_name이 해소돼 있으면(follow-up) message에 자치구 없어도 refine hint 생략.
+
+        §3e 핵심: raw message에 "강남구" 문자열이 없어도 Router가 area_name을
+        채웠으면(현재 질문 또는 history 병합) 이미 지정한 자치구를 다시 묻지 않는다.
+        """
+        results = [{"service_status": "예약마감"}]
+        prompt = _build_card_system("그 중 무료인 것만", results, "강남구")
+
+        assert _CLAUSE_REFINE_HINT not in prompt
+
+    def test_no_area_name_no_district_includes_refine_hint(self):
+        """area_name=None + message에 자치구 없음 → refine hint 포함."""
+        results = [{"service_status": "예약마감"}]
+        prompt = _build_card_system("무료인 것만", results, None)
+
+        assert _CLAUSE_REFINE_HINT in prompt
+
+    def test_message_district_fallback_suppresses_hint_when_area_none(self):
+        """area_name=None이어도 message에 공식 자치구명 있으면 fallback으로 hint 생략."""
+        results = [{"service_status": "예약마감"}]
+        prompt = _build_card_system("강남구 수영장", results, None)
+
+        assert _CLAUSE_REFINE_HINT not in prompt
+
     def test_always_includes_role_and_output_rules(self):
         """어떤 조건에서도 _ROLE과 _OUTPUT_RULES는 항상 포함된다."""
-        prompt = _build_card_system("수영장", [])
+        prompt = _build_card_system("수영장", [], None)
 
         assert _ROLE in prompt
         assert _OUTPUT_RULES in prompt
 
     def test_always_includes_struct_card_list(self):
         """카드형 구조 블록(_STRUCT_CARD_LIST)은 항상 포함된다."""
-        prompt = _build_card_system("수영장", [])
+        prompt = _build_card_system("수영장", [], None)
 
         assert _STRUCT_CARD_LIST[:30] in prompt  # 블록 도입부로 포함 여부 확인
 
     def test_empty_results_no_reservation_guide(self):
         """결과가 빈 리스트면 접수중 없음으로 처리 → CLAUSE_RESERVATION_GUIDE 미포함."""
-        prompt = _build_card_system("수영장", [])
+        prompt = _build_card_system("수영장", [], None)
 
         assert _CLAUSE_RESERVATION_GUIDE not in prompt
 

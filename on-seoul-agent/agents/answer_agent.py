@@ -172,16 +172,24 @@ def _has_district_in_message(message: str) -> bool:
     return any(district in message for district in SEOUL_DISTRICTS)
 
 
-def _build_card_system(message: str, results: list[dict]) -> str:
+def _build_card_system(message: str, results: list[dict], area_name: str | None) -> str:
     """카드형(SQL/VECTOR) intent의 시스템 프롬프트를 런타임에 조립한다.
 
     조건부 절:
     - _CLAUSE_RESERVATION_GUIDE: 결과 중 service_status="접수중" 시설이 있을 때만 추가.
-    - _CLAUSE_REFINE_HINT: 사용자 질문에 공식 자치구명이 없을 때만 추가.
+    - _CLAUSE_REFINE_HINT: 자치구가 아직 해소되지 않았을 때만 추가.
+
+    area_name 게이트:
+        Router가 이미 해소한 state["area_name"](현재 질문 또는 history 병합)을
+        우선 확인한다. area_name이 채워져 있으면 follow-up("그 중 무료인 것만")
+        에서도 refine hint를 생략하여 이미 지정한 자치구를 다시 묻지 않는다.
+        _has_district_in_message는 area_name 미해소 시의 보조 fallback이다
+        (원본 message에 비공식 표기가 있어도 area_name이 None일 수 있으므로).
 
     Args:
-        message: 사용자 원본 발화 (자치구 명시 여부 판단용).
+        message: 사용자 원본 발화 (자치구 명시 여부 fallback 판단용).
         results: 정규화 이전 또는 이후 결과 목록 (service_status 키 접근).
+        area_name: Router가 해소한 자치구명. 해소 실패 시 None.
 
     Returns:
         조립된 시스템 프롬프트 문자열.
@@ -189,7 +197,7 @@ def _build_card_system(message: str, results: list[dict]) -> str:
     blocks = [_ROLE, _STRUCT_CARD_LIST]
     if any(r.get("service_status") == "접수중" for r in results):
         blocks.append(_CLAUSE_RESERVATION_GUIDE)
-    if not _has_district_in_message(message):
+    if not area_name and not _has_district_in_message(message):
         blocks.append(_CLAUSE_REFINE_HINT)
     blocks.append(_OUTPUT_RULES)
     return _compose(*blocks)
@@ -352,7 +360,9 @@ class AnswerAgent:
                 system_prompt = self._static_prompts[IntentType.MAP.value]
             else:
                 # Tier 2: 카드형 (SQL_SEARCH / VECTOR_SEARCH / None)
-                system_prompt = _build_card_system(message, display)
+                system_prompt = _build_card_system(
+                    message, display, state.get("area_name")
+                )
 
             answer_text = await self._answer_chain.ainvoke(
                 {

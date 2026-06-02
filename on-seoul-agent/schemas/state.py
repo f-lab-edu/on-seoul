@@ -69,7 +69,9 @@ class AgentState(TypedDict):
     # answer가 비어 있거나 error가 있을 때 최대 1회 재검색을 허용한다.
     retry_count: int  # 재시도 횟수 (0 = 아직 재시도 없음)
     # Router 컨텍스트 / Answer Cache 흐름
-    recent_queries: list[str]  # router에 주입할 follow-up 컨텍스트 (기본값 [])
+    # API 서비스가 chat_messages에서 조립한 직전 N턴 대화 이력.
+    # ChatRequest.history에서 주입. 없으면 []. Router 에이전트가 맥락으로 활용.
+    history: list[dict[str, str]]  # [{"role": "user"|"assistant", "content": str}, ...]
     cache_hit: bool  # cache_check_node 결과 (기본값 False)
     # 검색 채널 관측 (chat_search_queries / chat_search_results 적재용).
     # 각 노드가 자기 채널 키 하나를 ChannelData(kind, query, hits) 로 채운다.
