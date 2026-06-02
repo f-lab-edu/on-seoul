@@ -1,41 +1,26 @@
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-
 import { AppHeader } from "@/components/layout/app-header";
-import { UnauthorizedError, serverGet } from "@/lib/server-api";
-import type { User } from "@/types/auth";
+import { AuthGate } from "@/components/layout/auth-gate";
 
 /**
- * 챗봇 영역 인증 가드.
- * 서버에서 `/auth/me`를 호출해 401이면 즉시 /login으로 보낸다.
- * 쿠키는 Next.js cookies() API로 forward — 클라이언트가 토큰을 보유하지 않는 규약을 유지한다.
+ * 챗봇 영역 셸. 인증 판단은 클라이언트 AuthGate에 위임한다.
+ *
+ * 서버 컴포넌트(layout)는 렌더 중 쿠키를 쓸 수 없어 토큰 회전(refresh)을 처리할 수 없다.
+ * 따라서 과거의 서버 가드(`/auth/me` 401 → redirect)는 silent refresh를 가로채
+ * 만료된 access_token + 유효한 refresh_token 사용자를 무조건 /login으로 보냈다.
+ * refresh는 /auth 경로로 직접 호출하는 클라이언트(api-client)에서만 가능하므로,
+ * 인증을 AuthGate + useAuth로 일원화한다(CLAUDE.md A.4).
  */
-async function requireUser(): Promise<void> {
-  const jar = await cookies();
-  const access = jar.get("access_token");
-  // refresh_token은 Path=/auth 전용 — /auth/me 호출에 포함하지 않는다.
-  const cookieHeader = access ? `access_token=${access.value}` : "";
-
-  try {
-    await serverGet<User>("/auth/me", cookieHeader);
-  } catch (e) {
-    if (e instanceof UnauthorizedError) {
-      redirect("/login");
-    }
-    throw e;
-  }
-}
-
-export default async function ChatLayout({
+export default function ChatLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  await requireUser();
   return (
     <div className="mx-auto flex h-dvh max-w-3xl flex-col">
       <AppHeader />
-      <div className="flex flex-1 flex-col overflow-hidden">{children}</div>
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <AuthGate>{children}</AuthGate>
+      </div>
     </div>
   );
 }
