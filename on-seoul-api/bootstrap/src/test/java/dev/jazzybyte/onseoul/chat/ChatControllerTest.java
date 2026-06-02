@@ -38,14 +38,14 @@ class ChatControllerTest {
     private QueryAndStreamUseCase queryAndStreamUseCase;
 
     @Test
-    @DisplayName("POST /query - 정상 질의 시 SSE 토큰을 스트리밍한다")
+    @DisplayName("POST /api/chat/query - 정상 질의 시 SSE 토큰을 스트리밍한다")
     void query_authenticatedUser_streamsTokens() throws Exception {
         Long userId = 1L;
 
         when(queryAndStreamUseCase.streamAndSave(any(SendQueryCommand.class)))
                 .thenReturn(Flux.just("안녕", "하세요"));
 
-        mockMvc.perform(post("/query")
+        mockMvc.perform(post("/api/chat/query")
                         .requestAttr("userId", userId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"question\":\"서울 문화행사 알려줘\"}"))
@@ -56,7 +56,7 @@ class ChatControllerTest {
     }
 
     @Test
-    @DisplayName("POST /query - roomId가 포함된 요청은 기존 방 ID를 커맨드에 전달한다")
+    @DisplayName("POST /api/chat/query - roomId가 포함된 요청은 기존 방 ID를 커맨드에 전달한다")
     void query_withExistingRoomId_passesRoomIdInCommand() throws Exception {
         Long userId = 1L;
         Long roomId = 5L;
@@ -64,7 +64,7 @@ class ChatControllerTest {
         when(queryAndStreamUseCase.streamAndSave(any(SendQueryCommand.class)))
                 .thenReturn(Flux.just("답변"));
 
-        mockMvc.perform(post("/query")
+        mockMvc.perform(post("/api/chat/query")
                         .requestAttr("userId", userId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"roomId\":5,\"question\":\"추가 질문\"}"))
@@ -77,9 +77,9 @@ class ChatControllerTest {
     }
 
     @Test
-    @DisplayName("POST /query - question이 빈 문자열이면 400과 GlobalExceptionHandler 형식의 JSON 바디를 반환한다")
+    @DisplayName("POST /api/chat/query - question이 빈 문자열이면 400과 GlobalExceptionHandler 형식의 JSON 바디를 반환한다")
     void query_emptyQuestion_returns400WithErrorBody() throws Exception {
-        mockMvc.perform(post("/query")
+        mockMvc.perform(post("/api/chat/query")
                         .requestAttr("userId", 1L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"question\":\"\"}"))
@@ -90,9 +90,9 @@ class ChatControllerTest {
     }
 
     @Test
-    @DisplayName("POST /query - question 필드 자체가 없으면 400과 GlobalExceptionHandler 형식의 JSON 바디를 반환한다")
+    @DisplayName("POST /api/chat/query - question 필드 자체가 없으면 400과 GlobalExceptionHandler 형식의 JSON 바디를 반환한다")
     void query_nullQuestion_returns400WithErrorBody() throws Exception {
-        mockMvc.perform(post("/query")
+        mockMvc.perform(post("/api/chat/query")
                         .requestAttr("userId", 1L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
@@ -103,7 +103,7 @@ class ChatControllerTest {
     }
 
     @Test
-    @DisplayName("POST /query - AI 서비스 오류 시 SSE error 이벤트를 전송한다")
+    @DisplayName("POST /api/chat/query - AI 서비스 오류 시 SSE error 이벤트를 전송한다")
     void query_aiServiceError_sendsErrorEvent() throws Exception {
         Long userId = 1L;
 
@@ -111,7 +111,7 @@ class ChatControllerTest {
                 .thenReturn(Flux.error(new OnSeoulApiException(
                         ErrorCode.AI_SERVICE_ERROR, "AI 서비스 스트림 오류: connection refused")));
 
-        mockMvc.perform(post("/query")
+        mockMvc.perform(post("/api/chat/query")
                         .requestAttr("userId", userId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"question\":\"서울 문화행사 알려줘\"}"))

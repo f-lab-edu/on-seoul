@@ -13,15 +13,17 @@ public class ChatRoom {
     private boolean titleGenerated;
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;
+    private OffsetDateTime deletedAt;
 
     public ChatRoom(Long id, Long userId, String title, boolean titleGenerated,
-                    OffsetDateTime createdAt, OffsetDateTime updatedAt) {
+                    OffsetDateTime createdAt, OffsetDateTime updatedAt, OffsetDateTime deletedAt) {
         this.id = id;
         this.userId = userId;
         this.title = title;
         this.titleGenerated = titleGenerated;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
+        this.deletedAt = deletedAt;
     }
 
     public static ChatRoom create(Long userId, String title) {
@@ -31,6 +33,7 @@ public class ChatRoom {
         room.titleGenerated = false;
         room.createdAt = OffsetDateTime.now();
         room.updatedAt = OffsetDateTime.now();
+        room.deletedAt = null;
         return room;
     }
 
@@ -40,5 +43,14 @@ public class ChatRoom {
         this.title = title;
         this.titleGenerated = true;
         this.updatedAt = OffsetDateTime.now();
+    }
+
+    public void softDelete() {
+        this.deletedAt = OffsetDateTime.now();
+        this.updatedAt = this.deletedAt;
+    }
+
+    public boolean isDeleted() {
+        return deletedAt != null;
     }
 }
