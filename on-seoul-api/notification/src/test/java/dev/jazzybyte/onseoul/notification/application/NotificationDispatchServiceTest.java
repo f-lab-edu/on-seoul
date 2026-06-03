@@ -24,7 +24,9 @@ class NotificationDispatchServiceTest {
     private final NotificationDispatchService service = new NotificationDispatchService(loadPort);
 
     private NotificationDispatch dispatch(long id) {
-        return new NotificationDispatch(id, 1L, 10L, DispatchStatus.SUCCESS,
+        return new NotificationDispatch(id, 1L, 10L,
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.CHANGE, null, null,
+                DispatchStatus.SUCCESS,
                 Instant.now(), "t", "b", null, null, 0, null, Instant.now(), Instant.now());
     }
 

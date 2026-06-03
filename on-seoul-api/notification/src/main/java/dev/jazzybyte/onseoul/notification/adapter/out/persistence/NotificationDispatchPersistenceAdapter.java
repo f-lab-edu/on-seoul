@@ -44,6 +44,24 @@ class NotificationDispatchPersistenceAdapter
         }
     }
 
+    /**
+     * 시점 트리거 dispatch 멱등 INSERT.
+     * 부분 unique 인덱스 {@code uq_nd_scheduled_dedup (subscription_id, service_id, dispatch_date)
+     * WHERE service_id IS NOT NULL} 충돌 시 {@link DataIntegrityViolationException} 을 catch 하여
+     * empty 를 반환한다(H2/PG 공통 동작 — saveIfAbsent 와 동일 패턴).
+     */
+    @Override
+    public Optional<NotificationDispatch> saveScheduledIfAbsent(NotificationDispatch dispatch) {
+        try {
+            NotificationDispatchJpaEntity entity = new NotificationDispatchJpaEntity(
+                    dispatch.getBatchId(), dispatch.getSubscriptionId(),
+                    dispatch.getTriggerType(), dispatch.getServiceId(), dispatch.getDispatchDate());
+            return Optional.of(mapper.toDomain(repository.saveAndFlush(entity)));
+        } catch (DataIntegrityViolationException e) {
+            return Optional.empty();
+        }
+    }
+
     @Override
     public NotificationDispatch save(NotificationDispatch dispatch) {
         NotificationDispatchJpaEntity entity;

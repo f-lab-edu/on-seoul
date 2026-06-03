@@ -379,6 +379,140 @@ class NotificationDispatchPersistenceAdapterTest {
         assertThat(dispatchAdapter.existsDeadDispatchBySubscriptionId(subscriptionId)).isFalse();
     }
 
+    // ── 시점 트리거 dispatch dedup (migration 11) ──────────────────────────
+
+    @Test
+    @DisplayName("saveScheduledIfAbsent() — 신규 시점 dispatch INSERT → trigger_type/service_id/dispatch_date 보존")
+    void saveScheduledIfAbsent_new_persistsScheduledFields() {
+        java.time.LocalDate today = java.time.LocalDate.of(2026, 6, 3);
+        NotificationDispatch d = NotificationDispatch.createScheduled(
+                batchId, subscriptionId,
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.DEADLINE_DDAY,
+                "OA-2269", today);
+
+        Optional<NotificationDispatch> result = dispatchAdapter.saveScheduledIfAbsent(d);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getTriggerType())
+                .isEqualTo(dev.jazzybyte.onseoul.notification.domain.TriggerType.DEADLINE_DDAY);
+        assertThat(result.get().getServiceId()).isEqualTo("OA-2269");
+        assertThat(result.get().getDispatchDate()).isEqualTo(today);
+        assertThat(result.get().getStatus()).isEqualTo(DispatchStatus.PENDING);
+    }
+
+    @Test
+    @DisplayName("saveScheduledIfAbsent() — 같은 (subscription_id, service_id, dispatch_date) 중복 → empty (멱등)")
+    void saveScheduledIfAbsent_duplicate_returnsEmpty() {
+        java.time.LocalDate today = java.time.LocalDate.of(2026, 6, 3);
+        dispatchAdapter.saveScheduledIfAbsent(NotificationDispatch.createScheduled(
+                batchId, subscriptionId,
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.DEADLINE_DDAY, "OA-2269", today));
+
+        // 다른 batch + 다른 trigger_type 이어도 동일 (sub, service, date) 면 중복.
+        NotificationBatch batch2 = batchAdapter.insertRunning(NotificationBatch.start());
+        Optional<NotificationDispatch> second = dispatchAdapter.saveScheduledIfAbsent(
+                NotificationDispatch.createScheduled(batch2.getId(), subscriptionId,
+                        dev.jazzybyte.onseoul.notification.domain.TriggerType.OPEN_DAY, "OA-2269", today));
+
+        assertThat(second).isEmpty();
+    }
+
+    @Test
+    @DisplayName("saveScheduledIfAbsent() — service_id가 다르면 같은 날 같은 구독에도 INSERT 가능")
+    void saveScheduledIfAbsent_differentServiceId_inserts() {
+        java.time.LocalDate today = java.time.LocalDate.of(2026, 6, 3);
+        dispatchAdapter.saveScheduledIfAbsent(NotificationDispatch.createScheduled(
+                batchId, subscriptionId,
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.DEADLINE_DDAY, "OA-A", today));
+
+        NotificationBatch batch2 = batchAdapter.insertRunning(NotificationBatch.start());
+        Optional<NotificationDispatch> second = dispatchAdapter.saveScheduledIfAbsent(
+                NotificationDispatch.createScheduled(batch2.getId(), subscriptionId,
+                        dev.jazzybyte.onseoul.notification.domain.TriggerType.DEADLINE_DDAY, "OA-B", today));
+
+        assertThat(second).isPresent();
+    }
+
+    @Test
+    @DisplayName("saveScheduledIfAbsent() — dispatch_date가 다르면 INSERT 가능 (다음날 재발송)")
+    void saveScheduledIfAbsent_differentDate_inserts() {
+        java.time.LocalDate today = java.time.LocalDate.of(2026, 6, 3);
+        dispatchAdapter.saveScheduledIfAbsent(NotificationDispatch.createScheduled(
+                batchId, subscriptionId,
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.OPEN_DAY, "OA-2269", today));
+
+        NotificationBatch batch2 = batchAdapter.insertRunning(NotificationBatch.start());
+        Optional<NotificationDispatch> second = dispatchAdapter.saveScheduledIfAbsent(
+                NotificationDispatch.createScheduled(batch2.getId(), subscriptionId,
+                        dev.jazzybyte.onseoul.notification.domain.TriggerType.OPEN_DAY,
+                        "OA-2269", today.plusDays(1)));
+
+        assertThat(second).isPresent();
+    }
+
+    @Test
+    @DisplayName("saveScheduledIfAbsent() — 시점 dedup은 기존 CHANGE dispatch(service_id NULL)와 독립적")
+    void saveScheduledIfAbsent_independentFromChangeDispatch() {
+        java.time.LocalDate today = java.time.LocalDate.of(2026, 6, 3);
+        // CHANGE dispatch (service_id NULL) 먼저 발행
+        dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId));
+
+        // 같은 구독에 시점 dispatch 도 발행 가능해야 한다(부분 인덱스에서 NULL service_id 는 제외).
+        NotificationBatch batch2 = batchAdapter.insertRunning(NotificationBatch.start());
+        Optional<NotificationDispatch> scheduled = dispatchAdapter.saveScheduledIfAbsent(
+                NotificationDispatch.createScheduled(batch2.getId(), subscriptionId,
+                        dev.jazzybyte.onseoul.notification.domain.TriggerType.DEADLINE_DDAY,
+                        "OA-2269", today));
+
+        assertThat(scheduled).isPresent();
+    }
+
+    @Test
+    @DisplayName("[QA] 여러 CHANGE dispatch(service_id NULL, dispatch_date NULL)는 dedup 인덱스에서 충돌하지 않는다 — NULL distinct 가정 검증")
+    void multipleChangeDispatches_nullServiceId_doNotCollideOnScheduledDedup() {
+        // spring-backend 가 플래그한 H2-vs-PG dedup 발산 검증.
+        // 같은 구독에 대해 매일(서로 다른 batch) CHANGE dispatch 가 발행된다.
+        // uq_nd_scheduled_dedup (subscription_id, service_id, dispatch_date) 에서
+        // (sub, NULL, NULL) 이 여러 row 에 반복되어도 — H2 plain unique 이든 PG partial unique 이든 —
+        // NULL 은 서로 distinct 로 취급되어 충돌하지 않아야 한다.
+        Optional<NotificationDispatch> first =
+                dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId));
+
+        NotificationBatch batch2 = batchAdapter.insertRunning(NotificationBatch.start());
+        Optional<NotificationDispatch> second =
+                dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batch2.getId(), subscriptionId));
+
+        NotificationBatch batch3 = batchAdapter.insertRunning(NotificationBatch.start());
+        Optional<NotificationDispatch> third =
+                dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batch3.getId(), subscriptionId));
+
+        // 셋 다 성공해야 한다 — uq_nd_scheduled_dedup 가 (NULL, NULL) 충돌을 일으키면 둘째부터 empty 가 된다.
+        assertThat(first).isPresent();
+        assertThat(second).isPresent();
+        assertThat(third).isPresent();
+    }
+
+    @Test
+    @DisplayName("[QA] CHANGE(NULL) 와 시점(service_id 있음)가 같은 구독·같은 날 공존해도 둘 다 발행된다 (cross-trigger 한계: DB dedup 없음)")
+    void changeAndScheduled_sameDay_coexist_noCrossDedup() {
+        // [한계] 문서화: CHANGE 와 시점 알림이 같은 날 같은 service 에 중복 발송될 수 있다.
+        // CHANGE 는 service_id NULL 이라 시점 dispatch 와 dedup 인덱스 상으로 절대 충돌하지 않는다.
+        // 즉 cross-trigger dedup 은 DB 가 보장하지 않고, 스케줄러 실행 순서만으로는 막지 못함을 증명.
+        java.time.LocalDate today = java.time.LocalDate.of(2026, 6, 3);
+        Optional<NotificationDispatch> change =
+                dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId));
+
+        NotificationBatch batch2 = batchAdapter.insertRunning(NotificationBatch.start());
+        Optional<NotificationDispatch> scheduled = dispatchAdapter.saveScheduledIfAbsent(
+                NotificationDispatch.createScheduled(batch2.getId(), subscriptionId,
+                        dev.jazzybyte.onseoul.notification.domain.TriggerType.DEADLINE_DDAY,
+                        "OA-SAME", today));
+
+        // 둘 다 발행됨 — DB 레벨 cross dedup 부재(설계상 best-effort) 를 회귀 고정.
+        assertThat(change).isPresent();
+        assertThat(scheduled).isPresent();
+    }
+
     @Test
     @DisplayName("saveIfAbsent() — EntityManager 직접 insert 후 saveIfAbsent → DataIntegrityViolationException 경로로 empty")
     void saveIfAbsent_directDuplicateInsert_returnsEmpty() {
