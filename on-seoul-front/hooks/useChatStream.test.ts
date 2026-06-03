@@ -1,18 +1,33 @@
 /**
  * useChatStream 훅 단위 테스트.
- * Mock fetch + ReadableStream으로 SSE 이벤트 누적·취소·에러 전환을 검증한다.
+ * Mock fetch + ReadableStream으로 SSE 이벤트(init/final/workflow_error/error) 처리·취소를 검증한다.
+ * 정본: docs/chat-sse-event-catalog.md
  */
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useChatStream } from "./useChatStream";
 
-function sseChunks(events: string[]): ReadableStream<Uint8Array> {
+/** name 없는 data 이벤트들 (step/final/workflow_error). */
+function dataFrames(events: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     start(controller) {
       for (const e of events) {
         controller.enqueue(encoder.encode(`data: ${e}\n\n`));
+      }
+      controller.close();
+    },
+  });
+}
+
+/** 완성된 SSE 프레임 문자열들 (named 이벤트 포함). */
+function rawFrames(frames: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const f of frames) {
+        controller.enqueue(encoder.encode(`${f}\n\n`));
       }
       controller.close();
     },
@@ -47,17 +62,22 @@ afterEach(() => {
 });
 
 describe("useChatStream", () => {
-  it("token 이벤트를 누적하고 done에서 phase가 'done'으로 전환된다", async () => {
+  it("step 진행을 trace에 쌓고 final에서 phase가 'done'으로 전환된다", async () => {
     const events = [
-      JSON.stringify({ type: "agent_start", agent: "router" }),
-      JSON.stringify({ type: "token", delta: "안녕" }),
-      JSON.stringify({ type: "token", delta: "하세요" }),
-      JSON.stringify({ type: "done", messageId: 42 }),
+      JSON.stringify({ step: "routing", message: "질문을 분석하고 있습니다..." }),
+      JSON.stringify({
+        message_id: 84,
+        answer: "안녕하세요",
+        intent: "FALLBACK",
+        title: null,
+        cache_hit: false,
+        service_cards: [],
+      }),
     ];
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(sseChunks(events), { status: 200 })),
+      vi.fn(async () => new Response(dataFrames(events), { status: 200 })),
     );
 
     const { result } = renderHook(() => useChatStream());
@@ -70,19 +90,41 @@ describe("useChatStream", () => {
     });
     if (result.current.state.phase !== "done") throw new Error("expected done");
     expect(result.current.state.content).toBe("안녕하세요");
-    expect(result.current.state.messageId).toBe(42);
-    expect(result.current.state.trace).toContain("▶ router");
+    expect(result.current.state.messageId).toBe(84);
+    expect(result.current.state.trace).toContain("⏳ 질문을 분석하고 있습니다...");
   });
 
-  it("error 이벤트 수신 시 phase가 'error'로 전환된다", async () => {
-    const events = [
-      JSON.stringify({ type: "token", delta: "부분" }),
-      JSON.stringify({ type: "error", message: "백엔드 장애" }),
+  it("init 이벤트 수신 시 onInit 콜백이 room_id/created로 호출된다", async () => {
+    const frames = [
+      `event:init\ndata:${JSON.stringify({ room_id: 42, created: true })}`,
+      `data:${JSON.stringify({ message_id: 1, answer: "답", intent: null, title: "방", cache_hit: false, service_cards: [] })}`,
     ];
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(sseChunks(events), { status: 200 })),
+      vi.fn(async () => new Response(rawFrames(frames), { status: 200 })),
+    );
+
+    const onInit = vi.fn();
+    const { result } = renderHook(() => useChatStream({ onInit }));
+    await act(async () => {
+      await result.current.send({ question: "hi" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.phase).toBe("done");
+    });
+    expect(onInit).toHaveBeenCalledWith({ roomId: 42, created: true });
+  });
+
+  it("workflow_error(answer+error)는 answer를 메시지로 error 전환된다", async () => {
+    const events = [
+      JSON.stringify({ message_id: 5, answer: "처리 중 문제가 발생했습니다.", error: "boom", intent: "FALLBACK" }),
+    ];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(dataFrames(events), { status: 200 })),
     );
 
     const { result } = renderHook(() => useChatStream());
@@ -94,8 +136,27 @@ describe("useChatStream", () => {
       expect(result.current.state.phase).toBe("error");
     });
     if (result.current.state.phase !== "error") throw new Error("expected error");
-    expect(result.current.state.message).toBe("백엔드 장애");
-    expect(result.current.state.content).toBe("부분");
+    expect(result.current.state.message).toBe("처리 중 문제가 발생했습니다.");
+  });
+
+  it("event:error(평문 문자열) 수신 시 phase가 'error'로 전환된다", async () => {
+    const frames = [`event:error\ndata:일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.`];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(rawFrames(frames), { status: 200 })),
+    );
+
+    const { result } = renderHook(() => useChatStream());
+    await act(async () => {
+      await result.current.send({ question: "hi" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.phase).toBe("error");
+    });
+    if (result.current.state.phase !== "error") throw new Error("expected error");
+    expect(result.current.state.message).toBe("일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.");
   });
 
   it("cancel() 호출 시 fetch가 abort되고 조기 종료된다", async () => {
@@ -112,19 +173,16 @@ describe("useChatStream", () => {
 
     const { result } = renderHook(() => useChatStream());
 
-    // send를 await하지 않고 진행 중에 cancel — pending 스트림으로 stream 상태 유지.
     let sendPromise!: Promise<void>;
     await act(async () => {
       sendPromise = result.current.send({ question: "hi" });
-      // 이벤트 루프 한 틱 양보 (fetch 응답 처리가 시작되도록).
       await Promise.resolve();
     });
 
-    push(JSON.stringify({ type: "token", delta: "first" }));
+    push(JSON.stringify({ step: "routing", message: "분석 중" }));
 
     await act(async () => {
       result.current.cancel();
-      // 종료 확인을 위해 stream도 닫아준다 (실제 abort는 reader에 신호 전달).
       try {
         close();
       } catch {
