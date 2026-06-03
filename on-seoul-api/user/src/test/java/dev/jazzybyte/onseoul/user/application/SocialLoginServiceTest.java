@@ -189,6 +189,33 @@ class SocialLoginServiceTest {
     }
 
     @Test
+    @DisplayName("이메일 충돌 — 같은 벤더 + 다른 providerId + 같은 이메일이면 일반 메시지로 충돌(existingProvider=같은벤더)")
+    void socialLogin_sameProviderDifferentProviderIdSameEmail_throwsConflict() {
+        // findByProviderAndProviderId는 (provider, providerId) 복합키로 조회하므로 다른 providerId면 빈 결과 →
+        // registerNewUser 진입 후 findByEmail이 같은 벤더의 기존 유저를 잡아낸다(이메일 1개=계정 1개 정책).
+        SocialLoginCommand cmd = command("google", "google-new-different-id"); // email=user@example.com
+        User existingGoogleUser = activeUser(77L, "google", "google-old-id");
+
+        when(loadUserPort.findByProviderAndProviderId("google", "google-new-different-id"))
+                .thenReturn(Optional.empty());
+        when(loadUserPort.findByEmail("user@example.com"))
+                .thenReturn(Optional.of(existingGoogleUser));
+
+        assertThatThrownBy(() -> service.socialLogin(cmd))
+                .isInstanceOf(EmailConflictException.class)
+                .satisfies(ex -> {
+                    EmailConflictException conflict = (EmailConflictException) ex;
+                    assertThat(conflict.getErrorCode()).isEqualTo(ErrorCode.EMAIL_ALREADY_REGISTERED);
+                    assertThat(conflict.getExistingProvider()).isEqualTo("google");
+                    // 같은 벤더이므로 벤더명 노출 없는 일반 메시지.
+                    assertThat(conflict.getMessage()).isEqualTo("이미 가입된 이메일입니다.");
+                });
+
+        verify(newUserRegistrar, never()).register(any(SocialLoginCommand.class));
+        verifyNoInteractions(tokenIssuerPort, refreshTokenStorePort);
+    }
+
+    @Test
     @DisplayName("이메일이 null인 카카오 신규 로그인 — 선검사를 건너뛰고 정상 가입한다")
     void socialLogin_nullEmail_skipsPrecheckAndCreates() {
         SocialLoginCommand cmd = new SocialLoginCommand("kakao", "kakao-noemail", null, "익명");
