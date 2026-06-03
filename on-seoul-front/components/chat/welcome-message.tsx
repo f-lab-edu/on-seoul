@@ -22,17 +22,14 @@ export function WelcomeMessage({ onQuestion }: WelcomeMessageProps) {
       {/* ASSISTANT 말풍선 스타일 */}
       <div className="flex w-full justify-start">
         <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-muted px-4 py-3 text-sm leading-relaxed text-foreground">
-          <p className="font-medium">안녕하세요! 저는 온 에이전트예요 👋</p>
+          <p className="font-medium">안녕하세요! 저는 온 에이전트예요.</p>
           <p className="mt-2 text-muted-foreground">
-            서울 열린데이터 광장의 공공 API를 활용해 서울시 및 산하기관, 자치구의
-            시설대관 및 예약 정보를 수집하고, 원하시는 시설 예약을 쉽게 찾을 수
-            있도록 도와드리는 서비스예요.
+            온서울의 AI 에이전트로써 서울시 공공시설과 서비스의 예약 정보를 쉽고 빠르게 찾아드릴 수 있어요.
           </p>
           <p className="mt-2 text-muted-foreground">
-            자연어로 질문하시면 관련 시설을 조회해 시설명·접수 상태·기간·예약
-            링크를 안내해 드려요.
+            지금 바로 저에게 질문주시면 체육시설, 교육, 문화행사 등 여러분이 찾으시는 예약 정보를 찾아드려요.
           </p>
-          <p className="mt-3 font-medium">아래 질문을 눌러 바로 시작해 보세요.</p>
+          <p className="mt-3 font-medium">아래의 질문을 눌러 바로 시작해 보세요.</p>
         </div>
       </div>
 
