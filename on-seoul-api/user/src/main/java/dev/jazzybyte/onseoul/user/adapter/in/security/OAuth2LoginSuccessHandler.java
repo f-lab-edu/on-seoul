@@ -112,17 +112,50 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
             response.sendRedirect(frontendBaseUrl + "/oauth/callback?status=success");
 
         } catch (OnSeoulApiException ex) {
-            // FORBIDDEN = SUSPENDED/DELETED 계정. 그 외 OnSeoulApiException은 서버 내부 오류.
-            String errorParam = ex.getErrorCode() == ErrorCode.FORBIDDEN ? "forbidden" : "server_error";
             log.warn("[Security] OAuth2 로그인 실패: provider={}, providerId={}, error={}",
                     provider, providerId, ex.getMessage());
-            response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=" + errorParam);
+            response.sendRedirect(frontendBaseUrl + "/oauth/callback?" + errorQuery(ex));
         } catch (org.springframework.dao.DataAccessException ex) {
             // Redis timeout(QueryTimeoutException) 등 데이터 접근 오류.
             // catch하지 않으면 500으로 죽어 프론트 리다이렉트가 수행되지 않는다.
-            log.error("[Security] OAuth2 로그인 중 Redis 오류: provider={}, error={}", provider, ex.getMessage());
+            log.error("[Security] OAuth2 로그인 중 데이터 접근 오류: provider={}, error={}", provider, ex.getMessage());
             response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=server_error");
         }
+    }
+
+    /**
+     * OnSeoulApiException을 프론트 콜백 쿼리스트링으로 매핑한다.
+     * <ul>
+     *   <li>FORBIDDEN(SUSPENDED/DELETED) → {@code error=forbidden}</li>
+     *   <li>EMAIL_ALREADY_REGISTERED → {@code error=email_conflict}, 기존 가입 provider를 알면 {@code &provider=...} 추가</li>
+     *   <li>그 외 → {@code error=server_error}</li>
+     * </ul>
+     */
+    private String errorQuery(OnSeoulApiException ex) {
+        if (ex.getErrorCode() == ErrorCode.FORBIDDEN) {
+            return "error=forbidden";
+        }
+        if (ex.getErrorCode() == ErrorCode.EMAIL_ALREADY_REGISTERED) {
+            String existingProvider = extractExistingProvider(ex.getMessage());
+            return existingProvider != null
+                    ? "error=email_conflict&provider=" + existingProvider
+                    : "error=email_conflict";
+        }
+        return "error=server_error";
+    }
+
+    /** 예외 메시지에서 기존 가입 provider를 추출한다. 못 찾으면 null. */
+    private String extractExistingProvider(String message) {
+        if (message == null) {
+            return null;
+        }
+        if (message.contains("google")) {
+            return "google";
+        }
+        if (message.contains("kakao")) {
+            return "kakao";
+        }
+        return null;
     }
 
     /**

@@ -20,6 +20,7 @@ public enum ErrorCode {
     INVALID_TOKEN(401, "INVALID_TOKEN", "유효하지 않은 토큰입니다."),
     EXPIRED_TOKEN(401, "EXPIRED_TOKEN", "만료된 토큰입니다."),
     INVALID_REFRESH_TOKEN(401, "INVALID_REFRESH_TOKEN", "유효하지 않은 리프레시 토큰입니다."),
+    EMAIL_ALREADY_REGISTERED(409, "EMAIL_ALREADY_REGISTERED", "이미 다른 방식으로 가입된 이메일입니다."),
 
     // ── 수집 파이프라인 (COLLECT_*) ────────────────────────────────────────
     COLLECT_API_SERVER_ERROR(502, "COLLECT_API_SERVER_ERROR", "외부 API 서버 오류가 발생했습니다."),

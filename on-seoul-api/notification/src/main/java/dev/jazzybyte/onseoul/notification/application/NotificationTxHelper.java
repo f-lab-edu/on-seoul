@@ -81,8 +81,10 @@ public class NotificationTxHelper {
             return new TxAResult(List.of(), Optional.empty());
         }
 
+        // CHANGE dispatch 도 dispatch_date(UTC today)를 채운다 — CHANGE↔시점 cross-trigger dedup
+        // 선조회의 "오늘 범위" 기준 컬럼(idx_nd_change_crossdedup, migration 12). serviceId 는 여전히 null.
         Optional<NotificationDispatch> dispatch = saveDispatchPort.saveIfAbsent(
-                NotificationDispatch.create(batch.getId(), sub.getId()));
+                NotificationDispatch.create(batch.getId(), sub.getId(), today));
         return new TxAResult(changes, dispatch);
     }
 

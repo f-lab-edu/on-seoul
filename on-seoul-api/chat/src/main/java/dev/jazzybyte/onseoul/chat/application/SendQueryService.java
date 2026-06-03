@@ -36,13 +36,14 @@ public class SendQueryService implements SendQueryUseCase {
     @Override
     @Transactional
     public PrepareResult prepare(SendQueryCommand command) {
+        boolean created = command.roomId() == null;
         ChatRoom room = resolveRoom(command);
         // 현재 질문을 저장하기 "전"에 직전 N턴을 조립한다(현재 질문이 history에 섞이지 않도록).
         List<ChatTurn> history = loadRecentHistory(room.getId());
         Long seq = saveChatMessagePort.nextSeq();
         ChatMessage userMessage = ChatMessage.create(room.getId(), seq, ChatMessageRole.USER, command.question());
         saveChatMessagePort.save(userMessage);
-        return new PrepareResult(room.getId(), seq, history);
+        return new PrepareResult(room.getId(), seq, created, history);
     }
 
     /**

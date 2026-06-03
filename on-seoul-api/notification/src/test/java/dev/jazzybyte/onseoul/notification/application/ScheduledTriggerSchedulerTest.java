@@ -14,6 +14,7 @@ import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
 import dev.jazzybyte.onseoul.notification.domain.TriggerType;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
+import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadScheduledTriggerPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
@@ -52,6 +53,7 @@ class ScheduledTriggerSchedulerTest {
 
     @Mock private LoadSubscriptionPort loadSubscriptionPort;
     @Mock private LoadScheduledTriggerPort loadScheduledTriggerPort;
+    @Mock private LoadDispatchPort loadDispatchPort;
     @Mock private SubscriptionFilterParserPort filterParser;
     @Mock private LoadUserContactPort loadUserContactPort;
     @Mock private TemplateGenerationPort templateGenerationPort;
@@ -67,12 +69,17 @@ class ScheduledTriggerSchedulerTest {
     @BeforeEach
     void setUp() {
         scheduler = new ScheduledTriggerScheduler(
-                loadSubscriptionPort, loadScheduledTriggerPort, filterParser,
+                loadSubscriptionPort, loadScheduledTriggerPort, loadDispatchPort, filterParser,
                 loadUserContactPort, templateGenerationPort, pushNotificationPort,
                 new NotificationContentSerializer(new com.fasterxml.jackson.databind.ObjectMapper()),
                 saveBatchPort, txHelper, Clock.systemUTC());
 
         lenient().when(filterParser.parse(any())).thenReturn(SubscriptionFilter.empty());
+        // 기본: 두 dedup 선조회 모두 미존재(발행 진행).
+        lenient().when(loadDispatchPort.existsChangeDispatchForServiceToday(anyLong(), any(), any()))
+                .thenReturn(false);
+        lenient().when(loadDispatchPort.existsScheduledDispatch(anyLong(), any(), any()))
+                .thenReturn(false);
         lenient().when(loadUserContactPort.loadContact(anyLong())).thenReturn(Optional.of(CONTACT));
         lenient().when(loadScheduledTriggerPort.loadOpeningToday(any(), any())).thenReturn(List.of());
         lenient().when(loadScheduledTriggerPort.loadReceiptStartTomorrow(any(), any())).thenReturn(List.of());
@@ -100,6 +107,42 @@ class ScheduledTriggerSchedulerTest {
     }
 
     @Test
+    @DisplayName("동시성 가드: 스케줄 run()이 실행 중이면 runManually()는 processAll 재진입 없이 SKIPPED")
+    void runManually_whileScheduledRunning_skipsWithoutReentry() throws Exception {
+        // run() 진입점이 보유한 running 플래그를 수동 호출이 공유하는지 검증한다.
+        // 첫 스레드를 loadChunk(0,*) 안에서 latch로 블로킹하여 running=true 상태를 유지한다.
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger loadChunkCalls = new java.util.concurrent.atomic.AtomicInteger();
+
+        when(loadSubscriptionPort.loadChunk(eq(0L), anyInt())).thenAnswer(inv -> {
+            loadChunkCalls.incrementAndGet();
+            entered.countDown();
+            release.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            return List.of();
+        });
+
+        Thread scheduled = new Thread(scheduler::run, "scheduled-run");
+        scheduled.start();
+        assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+        // run()이 running 플래그를 잡고 processAll 내부에 머무는 동안 수동 호출 시도
+        ScheduledTriggerScheduler.ManualRunResult result = scheduler.runManually();
+
+        assertThat(result).isEqualTo(ScheduledTriggerScheduler.ManualRunResult.SKIPPED_ALREADY_RUNNING);
+        // 가드 우회로 인한 processAll 재진입(=두 번째 loadChunk(0,*))이 없어야 한다.
+        assertThat(loadChunkCalls.get()).isEqualTo(1);
+
+        release.countDown();
+        scheduled.join(5_000);
+
+        // 첫 배치 종료 후 플래그가 해제되어 다음 수동 실행은 RAN 으로 진입 가능
+        assertThat(scheduler.runManually())
+                .isEqualTo(ScheduledTriggerScheduler.ManualRunResult.RAN);
+        assertThat(loadChunkCalls.get()).isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("매칭 service마다 시점 dispatch를 발행하고 푸시 발송한다")
     void dispatchesPerMatchedService() {
         NotificationSubscription s = sub(1L);
@@ -107,12 +150,15 @@ class ScheduledTriggerSchedulerTest {
         when(loadScheduledTriggerPort.loadDeadlineToday(any(), eq(TODAY)))
                 .thenReturn(List.of(match("OA-1"), match("OA-2")));
 
-        scheduler.processAll(TODAY);
+        ScheduledTriggerScheduler.RunResult result = scheduler.processAll(TODAY);
 
         verify(pushNotificationPort, org.mockito.Mockito.times(2))
                 .send(any(UserContact.class), any(NotificationContent.class), any(), any());
         verify(txHelper, org.mockito.Mockito.times(2))
                 .txBScheduledSuccess(any(), eq("제목"), eq("요약"), eq(TemplateSource.AI));
+        // 집계: 두 service 모두 발송 → sent==2, skipped==0.
+        assertThat(result.sent()).isEqualTo(2);
+        assertThat(result.skipped()).isZero();
     }
 
     @Test
@@ -128,6 +174,47 @@ class ScheduledTriggerSchedulerTest {
 
         verifyNoInteractions(pushNotificationPort, templateGenerationPort);
         verify(txHelper, never()).txBScheduledSuccess(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("CHANGE cross-dedup 히트 → 시점 발행 skip (batch 미생성, 발송 없음)")
+    void crossDedupHit_skipsWithoutBatch() {
+        NotificationSubscription s = sub(1L);
+        when(loadSubscriptionPort.loadChunk(eq(0L), anyInt())).thenReturn(List.of(s));
+        when(loadScheduledTriggerPort.loadDeadlineToday(any(), eq(TODAY)))
+                .thenReturn(List.of(match("OA-1")));
+        when(loadDispatchPort.existsChangeDispatchForServiceToday(eq(1L), eq("OA-1"), eq(TODAY)))
+                .thenReturn(true);
+
+        ScheduledTriggerScheduler.RunResult result = scheduler.processAll(TODAY);
+
+        // batch 를 만들지 않고, dispatch 발행/발송도 하지 않는다(빈 batch 미생성).
+        verifyNoInteractions(pushNotificationPort, templateGenerationPort);
+        verify(saveBatchPort, never()).insertRunning(any());
+        verify(txHelper, never()).saveScheduledIfAbsent(any());
+        // 집계: cross-dedup 히트는 skipped==1, sent==0 으로 잡힌다.
+        assertThat(result.skipped()).isEqualTo(1);
+        assertThat(result.sent()).isZero();
+    }
+
+    @Test
+    @DisplayName("시점-시점 dedup 선조회 히트 → 시점 발행 skip (batch 미생성)")
+    void scheduledDedupHit_skipsWithoutBatch() {
+        NotificationSubscription s = sub(1L);
+        when(loadSubscriptionPort.loadChunk(eq(0L), anyInt())).thenReturn(List.of(s));
+        when(loadScheduledTriggerPort.loadDeadlineToday(any(), eq(TODAY)))
+                .thenReturn(List.of(match("OA-1")));
+        when(loadDispatchPort.existsScheduledDispatch(eq(1L), eq("OA-1"), eq(TODAY)))
+                .thenReturn(true);
+
+        ScheduledTriggerScheduler.RunResult result = scheduler.processAll(TODAY);
+
+        verifyNoInteractions(pushNotificationPort, templateGenerationPort);
+        verify(saveBatchPort, never()).insertRunning(any());
+        verify(txHelper, never()).saveScheduledIfAbsent(any());
+        // 집계: 시점-시점 dedup 선조회 히트도 skipped==1, sent==0.
+        assertThat(result.skipped()).isEqualTo(1);
+        assertThat(result.sent()).isZero();
     }
 
     @Test

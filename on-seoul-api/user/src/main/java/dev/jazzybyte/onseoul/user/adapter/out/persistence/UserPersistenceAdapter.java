@@ -45,6 +45,16 @@ class UserPersistenceAdapter implements LoadUserPort, SaveUserPort {
 
     @Override
     @Transactional(readOnly = true)
+    public Optional<User> findByEmail(String email) {
+        if (email == null) {
+            return Optional.empty();
+        }
+        return jpaRepository.findByEmailHash(blindIndexer.index(email, "email"))
+                .map(mapper::toDomain);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Optional<User> findById(Long id) {
         return jpaRepository.findById(id).map(mapper::toDomain);
     }

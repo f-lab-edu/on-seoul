@@ -19,7 +19,8 @@ public interface SendQueryUseCase {
     void saveAnswer(long roomId, String answer);
 
     /**
+     * @param created 이번 질의로 새 ChatRoom이 생성되었으면 true, 기존 방이면 false.
      * @param history 현재 질문을 제외한 직전 N턴(과거 → 최신). 맥락이 없으면 빈 리스트.
      */
-    record PrepareResult(long roomId, long messageId, List<ChatTurn> history) {}
+    record PrepareResult(long roomId, long messageId, boolean created, List<ChatTurn> history) {}
 }

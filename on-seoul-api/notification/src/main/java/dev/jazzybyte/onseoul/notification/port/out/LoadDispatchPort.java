@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.notification.port.out;
 
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -41,4 +42,35 @@ public interface LoadDispatchPort {
      * @param subscriptionId 확인할 구독 ID
      */
     boolean existsDeadDispatchBySubscriptionId(Long subscriptionId);
+
+    /**
+     * 오늘({@code dispatchDate}) 같은 구독의 CHANGE dispatch payload 가 해당 서비스를 이미 커버하는지 조회한다.
+     *
+     * <p>CHANGE↔시점 cross-trigger dedup 강제용. 시점 잡이 dispatch 를 생성하기 <b>전</b> 호출해,
+     * 같은 날 같은 구독의 CHANGE 가 이 service 를 이미 발송 대상에 묶었으면(JSONB containment
+     * {@code notification_payload->'services' @> '[{"serviceId":"<sid>"}]'}) 시점 발행을 skip 한다
+     * (CHANGE 우선). idx_nd_change_crossdedup(migration 12) 가 후보를 0~1행으로 좁힌다.
+     *
+     * <p>"오늘 범위"는 {@code dispatch_date} 컬럼이다(sent_at::date 아님 — PENDING 이면 sent_at NULL
+     * 이라 누락된다). 따라서 CHANGE dispatch 가 dispatch_date 를 채워야 성립한다.
+     *
+     * @param subscriptionId 대상 구독
+     * @param serviceId      대상 서비스 ID
+     * @param dispatchDate   오늘(UTC 달력일)
+     * @return CHANGE 가 이미 이 서비스를 오늘 커버하면 true
+     */
+    boolean existsChangeDispatchForServiceToday(Long subscriptionId, String serviceId, LocalDate dispatchDate);
+
+    /**
+     * 오늘 같은 구독·서비스에 시점 dispatch 가 이미 존재하는지 조회한다(시점-시점 dedup 선조회).
+     *
+     * <p>빈 batch 누적을 막기 위해 batch 생성 <b>전</b> 호출한다. 존재하면 시점 발행을 skip 한다.
+     * {@code uq_nd_scheduled_dedup (subscription_id, service_id, dispatch_date)} 의 ON CONFLICT 멱등은
+     * race-safety 백업으로 유지된다.
+     *
+     * @param subscriptionId 대상 구독
+     * @param serviceId      대상 서비스 ID
+     * @param dispatchDate   오늘(UTC 달력일)
+     */
+    boolean existsScheduledDispatch(Long subscriptionId, String serviceId, LocalDate dispatchDate);
 }
