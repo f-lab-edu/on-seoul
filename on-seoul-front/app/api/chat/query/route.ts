@@ -12,6 +12,9 @@ export const dynamic = "force-dynamic";
 const QueryBodySchema = z.object({
   question: z.string().min(1),
   roomId: z.number().int().positive().optional(),
+  // 지도(MAP) 의도용 좌표. 추후 위치 기반 검색 UI 구현 시 클라이언트가 채워 보낸다.
+  lat: z.number().optional(),
+  lng: z.number().optional(),
 });
 
 /** SSE `event: error` 단일 이벤트를 담은 ReadableStream을 반환한다. */
@@ -45,7 +48,7 @@ export async function POST(req: NextRequest) {
   const cookie = req.headers.get("cookie") ?? "";
 
   // req.signal — 클라이언트가 disconnect 하면 upstream fetch도 함께 취소된다.
-  const upstream = await fetch(`${baseUrl.replace(/\/$/, "")}/query`, {
+  const upstream = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat/query`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

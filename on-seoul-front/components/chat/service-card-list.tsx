@@ -1,5 +1,3 @@
-import { ExternalLink } from "lucide-react";
-
 import { formatDate } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import type { ServiceCard } from "@/types/sse-events";
@@ -20,24 +18,19 @@ export function ServiceCardList({ cards }: ServiceCardListProps) {
   if (cards.length === 0) return null;
 
   return (
-    <div className="-mx-1 overflow-x-auto rounded-md border border-border">
-      <table className="w-full min-w-[36rem] text-xs">
+    <div className="-mx-1 flex flex-col gap-1">
+      <p className="px-1 text-[11px] text-muted-foreground">
+        항목을 누르면 공공서비스 페이지로 이동해요.
+      </p>
+      <div className="overflow-x-auto rounded-md border border-border">
+      <table className="w-full min-w-[18rem] text-xs">
         <thead className="bg-muted/60 text-muted-foreground">
           <tr>
-            <th scope="col" className="px-2 py-1.5 text-left font-medium">
+            <th scope="col" className="px-1 py-1 text-left font-medium">
               시설
             </th>
-            <th scope="col" className="px-2 py-1.5 text-left font-medium">
-              분류·위치
-            </th>
-            <th scope="col" className="px-2 py-1.5 text-left font-medium">
-              상태
-            </th>
-            <th scope="col" className="px-2 py-1.5 text-left font-medium">
-              접수기간
-            </th>
-            <th scope="col" className="px-2 py-1.5 text-right font-medium">
-              <span className="sr-only">바로가기</span>
+            <th scope="col" className="px-1 py-1 text-left font-medium">
+              상태·접수기간
             </th>
           </tr>
         </thead>
@@ -47,46 +40,41 @@ export function ServiceCardList({ cards }: ServiceCardListProps) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
 
 function ServiceCardRow({ card }: { card: ServiceCard }) {
-  const location = [card.area_name, card.place_name].filter(Boolean).join(" ");
-  const category = [card.max_class_name, card.min_class_name]
-    .filter(Boolean)
-    .join(" > ");
-  const meta = [location, category].filter(Boolean).join(" · ");
-
   const start = formatDate(card.receipt_start_dt);
   const end = formatDate(card.receipt_end_dt);
   const period =
-    start && end ? `${start} ~ ${end}` : start ? `${start} ~` : end ? `~ ${end}` : "—";
+    start && end ? `${start} ~ ${end}` : start ? `${start} ~` : end ? `~ ${end}` : null;
 
   return (
-    <tr className="align-top">
-      <td className="px-2 py-1.5 font-medium break-keep">
+    // 행 전체를 클릭하면 서비스 URL을 새 탭으로 열도록 onClick 처리.
+    // <tr>은 <a>로 감쌀 수 없으므로 onClick + cursor-pointer로 링크 동작을 구현한다.
+    <tr
+      className="cursor-pointer align-top transition-colors hover:bg-muted/40"
+      onClick={() => window.open(card.service_url, "_blank", "noopener,noreferrer")}
+      role="link"
+      tabIndex={0}
+      aria-label={`${card.service_name ?? "예약 페이지"} 새 창에서 열기`}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          window.open(card.service_url, "_blank", "noopener,noreferrer");
+        }
+      }}
+    >
+      <td className="px-1 py-1 font-medium break-keep">
         {card.service_name ?? "—"}
       </td>
-      <td className="px-2 py-1.5 text-muted-foreground break-keep">
-        {meta || "—"}
-      </td>
-      <td className="px-2 py-1.5 whitespace-nowrap">
+      <td className="px-1 py-1 whitespace-nowrap">
         {card.service_status ? <StatusChip status={card.service_status} /> : "—"}
-      </td>
-      <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground">
-        {period}
-      </td>
-      <td className="px-2 py-1.5 text-right">
-        <a
-          href={card.service_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={`${card.service_name ?? "예약 페이지"} 새 창에서 열기`}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-primary hover:bg-muted"
-        >
-          <ExternalLink className="h-4 w-4" aria-hidden />
-        </a>
+        {period && (
+          <p className="mt-0.5 text-muted-foreground">{period}</p>
+        )}
       </td>
     </tr>
   );

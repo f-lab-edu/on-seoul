@@ -26,3 +26,23 @@ export function notificationErrorMessage(err: unknown): string {
       return "잠시 후 다시 시도해 주세요.";
   }
 }
+
+/**
+ * 대화이력 도메인 ApiError → 한국어 메시지.
+ * 가이드 §6: 본 BC의 에러 바디 키는 `code`/`message`(알림의 `error`와 다름).
+ * 404 CHAT_ROOM_NOT_FOUND는 미존재/타인 소유/삭제된 방을 일괄 처리(IDOR 차단).
+ * 검증 에러(400)의 `code`는 한글 문자열이라 신뢰하지 않고 HTTP 상태로만 분기한다.
+ */
+export function chatHistoryErrorMessage(err: unknown): string {
+  if (!(err instanceof ApiError)) return "잠시 후 다시 시도해 주세요.";
+  switch (err.status) {
+    case 400:
+      return err.message || "요청을 처리할 수 없습니다.";
+    case 401:
+      return "세션이 만료되었습니다. 다시 로그인해주세요.";
+    case 404:
+      return "대화방을 찾을 수 없습니다.";
+    default:
+      return "잠시 후 다시 시도해 주세요.";
+  }
+}
