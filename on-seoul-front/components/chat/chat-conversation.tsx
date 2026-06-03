@@ -1,0 +1,98 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
+import { ChatInput } from "@/components/chat/chat-input";
+import { MessageList, type DisplayMessage } from "@/components/chat/message-list";
+import { WelcomeMessage } from "@/components/chat/welcome-message";
+import { Button } from "@/components/ui/button";
+import { useChatStream } from "@/hooks/useChatStream";
+
+interface ChatConversationProps {
+  /** 기존 방이면 roomId. 새 대화(/chat)면 undefined. */
+  roomId?: number;
+  /** 기존 방 이력 시드. */
+  initialMessages?: DisplayMessage[];
+  /** 새 대화에서 비어 있을 때 소개/예시 질문 버블 노출. */
+  welcome?: boolean;
+}
+
+/**
+ * 대화 코어 — 메시지 누적 + 스트리밍 + 입력. `/chat`(새 대화)과 `/chat/[roomId]`(기존 방)가 공유한다.
+ *
+ * roomId 스레딩: 첫 질의로 새 방 생성 시 `init`(created:true)에서 받은 room_id를
+ * 내부 ref에 보관하고, 라우터 네비게이션 대신 `history.replaceState`로 URL만 `/chat/{id}`로
+ * 교체한다(컴포넌트 언마운트 없이 스트림 유지 — chat-sse-event-catalog 동선).
+ */
+export function ChatConversation({ roomId, initialMessages, welcome }: ChatConversationProps) {
+  const currentRoomIdRef = useRef<number | undefined>(roomId);
+
+  const { state, send, cancel, retry } = useChatStream({
+    onInit: ({ roomId: rid, created }) => {
+      currentRoomIdRef.current = rid;
+      // 새 대화(URL에 roomId 없음)에서 방이 막 생성된 경우에만 URL 교체.
+      if (created && roomId === undefined && typeof window !== "undefined") {
+        window.history.replaceState(window.history.state, "", `/chat/${rid}`);
+      }
+    },
+  });
+
+  const [messages, setMessages] = useState<DisplayMessage[]>(initialMessages ?? []);
+  // done 이벤트를 한 번만 messages에 반영하기 위한 가드.
+  const lastCommittedDoneId = useRef<number | null>(null);
+
+  const doneMessageId = state.phase === "done" ? state.messageId : null;
+  const doneContent = state.phase === "done" ? state.content : null;
+  const doneServiceCards = state.phase === "done" ? state.serviceCards : null;
+  useEffect(() => {
+    if (doneMessageId === null) return;
+    if (lastCommittedDoneId.current === doneMessageId) return;
+    lastCommittedDoneId.current = doneMessageId;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `assistant-${doneMessageId}`,
+        role: "ASSISTANT",
+        content: doneContent ?? "",
+        serviceCards: doneServiceCards ?? [],
+      },
+    ]);
+  }, [doneMessageId, doneContent, doneServiceCards]);
+
+  function handleSubmit(question: string) {
+    setMessages((prev) => [
+      ...prev,
+      { id: `user-${Date.now()}`, role: "USER", content: question },
+    ]);
+    void send({ question, roomId: currentRoomIdRef.current });
+  }
+
+  const streaming = state.phase === "streaming";
+  const errored = state.phase === "error";
+  const showWelcome = welcome === true && messages.length === 0 && state.phase === "idle";
+
+  return (
+    <>
+      <section className="flex-1 overflow-y-auto px-4 py-4">
+        {showWelcome && <WelcomeMessage onQuestion={handleSubmit} />}
+        <MessageList messages={messages} streamState={state} />
+
+        {errored && (
+          <div
+            role="alert"
+            className="mt-3 flex flex-col gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+          >
+            <p>응답을 받지 못했습니다: {state.message}</p>
+            <div>
+              <Button variant="outline" size="sm" onClick={() => void retry()}>
+                다시 시도
+              </Button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <ChatInput onSubmit={handleSubmit} onCancel={cancel} streaming={streaming} />
+    </>
+  );
+}
