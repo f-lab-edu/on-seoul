@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.chat.adapter.out.agent;
 
+import dev.jazzybyte.onseoul.chat.domain.ChatTurn;
 import dev.jazzybyte.onseoul.chat.port.out.AiServiceStreamPort;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
@@ -13,6 +14,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.TimeoutException;
 
 @Slf4j
@@ -29,9 +31,15 @@ public class ChatAgentClient implements AiServiceStreamPort {
     }
 
     @Override
-    public Flux<String> stream(String question, long roomId, long messageId, Double lat, Double lng) {
-        AiChatRequest body = new AiChatRequest(roomId, messageId, question, lat, lng);
-        log.info("[Chat] 스트림 요청 to AI 서비스 - ({})", body);
+    public Flux<String> stream(String question, long roomId, long messageId, Double lat, Double lng,
+                               List<ChatTurn> history) {
+        List<AiChatRequest.Turn> turns = (history == null ? List.<ChatTurn>of() : history).stream()
+                .map(t -> new AiChatRequest.Turn(t.role(), t.content()))
+                .toList();
+        AiChatRequest body = new AiChatRequest(roomId, messageId, question, lat, lng, turns);
+        // PII 보호: 질문/대화 content 평문은 로깅하지 않고 식별자와 history 건수만 INFO로 남긴다.
+        log.info("[Chat] 스트림 요청 to AI 서비스 - roomId={}, messageId={}, historySize={}",
+                roomId, messageId, turns.size());
 
         return webClient.post()
                 .uri("/chat/stream")

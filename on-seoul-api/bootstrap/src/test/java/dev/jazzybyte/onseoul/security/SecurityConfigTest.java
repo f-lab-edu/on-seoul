@@ -12,6 +12,7 @@ import dev.jazzybyte.onseoul.collection.port.out.LoadChangedServiceIdsPort;
 import dev.jazzybyte.onseoul.chat.port.out.LoadChatRoomPort;
 import dev.jazzybyte.onseoul.collection.port.out.LoadPublicServicePort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
+import dev.jazzybyte.onseoul.notification.port.out.LoadScheduledTriggerPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadServiceChangePort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.user.port.out.LoadUserPort;
@@ -106,6 +107,7 @@ class SecurityConfigTest {
     @MockitoBean SaveDispatchPort saveDispatchPort;
     @MockitoBean LoadDispatchPort loadDispatchPort;
     @MockitoBean LoadServiceChangePort loadServiceChangePort;
+    @MockitoBean LoadScheduledTriggerPort loadScheduledTriggerPort;
     @MockitoBean SaveBatchPort saveBatchPort;
     @MockitoBean LoadBatchPort loadBatchPort;
     @MockitoBean SubscriptionFilterParserPort subscriptionFilterParserPort;

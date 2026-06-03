@@ -7,7 +7,7 @@ LCEL 체인으로 사용자 메시지를 분석해 IntentType 5종 중 하나로
   - MAP         : 지도·위치·반경 탐색
   - FALLBACK    : 위 세 가지에 해당하지 않는 일반 안내
 
-recent_queries(per-room 최근 발화)가 주어지면 system prompt에 컨텍스트 블록을
+history(직전 N턴 대화 이력)가 주어지면 system prompt에 컨텍스트 블록을
 append하여 follow-up 질의("성동구는?")가 직전 발화의 카테고리·지역을 이어받도록
 유도한다. 빈 리스트/None이면 토큰 절약을 위해 섹션 자체를 생략한다.
 """
@@ -18,7 +18,6 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, field_validator
 
-from core.config import settings
 from llm.client import get_chat_model
 from llm.prompts.router import ROUTER_FEW_SHOT, ROUTER_SYSTEM
 from schemas.state import IntentType
@@ -31,6 +30,11 @@ _ALLOWED_MAX_CLASS_NAMES: frozenset[str] = frozenset(
 _ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(
     ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
 )
+# payment_type 정규값 — 원천 데이터의 "유료(요금안내문의)" 변형은 sql_search 매칭에서
+# 접두("유료%")로 처리하므로, Router 산출값은 "무료"/"유료" 두 정규값만 허용한다.
+# DB distinct 확인(2026-06-03): {"유료","무료","유료(요금안내문의)"} — "유료%" 접두가
+# 두 유료 변형을 모두 포괄함을 검증함.
+_ALLOWED_PAYMENT_TYPES: frozenset[str] = frozenset({"무료", "유료"})
 
 # 서울특별시 25개 자치구 공식 명칭 화이트리스트.
 # LLM이 "강남" / "강 남구" / "Gangnam" 등 비표준 형식을 반환하면
@@ -81,6 +85,8 @@ class _IntentOutput(BaseModel):
     max_class_name: str | None = None
     area_name: str | None = None
     service_status: str | None = None
+    # 결제 유형 post-filter — "무료"/"유료" 정규값 또는 None.
+    payment_type: str | None = None
     # VECTOR_SEARCH 전용 서브 의도 — RRF 가중치 프로파일 선택에 사용.
     # intent가 VECTOR_SEARCH가 아니면 None. 허용 값 외 → None으로 정규화.
     vector_sub_intent: Literal["identification", "detail", "semantic"] | None = None
@@ -112,6 +118,28 @@ class _IntentOutput(BaseModel):
             return v  # type: ignore[return-value]
         return None
 
+    @field_validator("payment_type", mode="before")
+    @classmethod
+    def _validate_payment_type(cls, v: object) -> str | None:
+        """LLM 출력을 "무료"/"유료" 정규값으로 강제한다.
+
+        - 무료/free/공짜 류 → "무료"
+        - 유료/paid/요금 류 (원천값 "유료(요금안내문의)" 포함) → "유료"
+        - 그 외 / 추출 실패 → None (필터 미적용)
+        """
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            return None
+        normalized = v.strip().lower()
+        if not normalized:
+            return None
+        if "무료" in normalized or "free" in normalized or "공짜" in normalized:
+            return "무료"
+        if "유료" in normalized or "paid" in normalized or "요금" in normalized:
+            return "유료"
+        return None
+
     @field_validator("vector_sub_intent", mode="before")
     @classmethod
     def _validate_vector_sub_intent(cls, v: object) -> str | None:
@@ -126,43 +154,51 @@ class RouterAgent:
     """LCEL 기반 의도 분류 에이전트.
 
     LLM의 with_structured_output으로 IntentType을 직접 추출한다.
-    recent_queries는 호출마다 system prompt에 동적으로 합성된다.
+    history는 호출마다 system prompt에 동적으로 합성된다.
     """
 
     def __init__(self, model: BaseChatModel | None = None) -> None:
         self._llm = model or get_chat_model()
 
-    def _build_context_block(self, recent_queries: list[str] | None) -> str:
-        """recent_queries를 system prompt에 append할 블록으로 변환.
+    def _build_context_block(self, history: list[dict[str, str]] | None) -> str:
+        """history(직전 N턴)를 system prompt에 append할 블록으로 변환.
 
         비어 있으면 빈 문자열을 반환하여 섹션 자체를 생략한다(토큰 절약).
-        보관/주입 개수는 settings.recent_queries_max로 통일한다.
+
+        프롬프트 인젝션 표면: history.content(사용자·어시스턴트 발화)는 외부 입력이며
+        escape 없이 system prompt에 삽입된다. 다만 이 블록은 Router 분류에만 쓰이고
+        Router는 with_structured_output으로 IntentType(5값 enum) 등 고정 스키마만
+        추출하므로, content가 임의 지시를 담아도 자유 실행으로 이어지지 않는다.
+        (content는 HistoryTurn max_length=1000 + API 서비스 10메시지 윈도우로 제한.)
+        향후 Router 출력에 자유 텍스트 필드를 넓힐 경우 이 가정을 재검토할 것.
         """
-        if not recent_queries:
+        if not history:
             return ""
-        lines = "\n".join(
-            f"- {q}" for q in recent_queries[: settings.recent_queries_max]
-        )
+        lines = []
+        for turn in history:
+            role_label = "사용자" if turn["role"] == "user" else "어시스턴트"
+            lines.append(f"- [{role_label}] {turn['content']}")
+        turns_text = "\n".join(lines)
         return (
-            "이전 사용자 발화 (최신 순). 후속 질의는 직전 발화의 "
+            "이전 대화 이력 (과거 → 최신). 후속 질의는 직전 발화의 "
             "카테고리·지역을 이어받을 가능성이 높다.\n"
             "이전 맥락이 명확하면 refined_query에 카테고리·지역 키워드를 병합한다.\n"
-            f"{lines}"
+            f"{turns_text}"
         )
 
     async def classify(
         self,
         message: str,
-        recent_queries: list[str] | None = None,
+        history: list[dict[str, str]] | None = None,
     ) -> _IntentOutput:
         """사용자 메시지의 의도를 분류해 _IntentOutput을 반환한다.
 
         Args:
             message: 사용자 원본 발화.
-            recent_queries: per-room 최근 발화(최신 순). 기본값 None.
+            history: 직전 N턴 대화 이력(과거→최신). 기본값 None.
                 비어 있으면 system prompt에 컨텍스트 섹션을 추가하지 않는다.
         """
-        context_block = self._build_context_block(recent_queries)
+        context_block = self._build_context_block(history)
         system_text = ROUTER_SYSTEM + (f"\n\n{context_block}" if context_block else "")
         messages = [
             SystemMessage(content=system_text),

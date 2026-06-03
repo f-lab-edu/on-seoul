@@ -48,7 +48,7 @@ class ChatAgentClientTest {
                 .setBody("data: 안녕\n\ndata: 하세요\n\n")
                 .setResponseCode(200));
 
-        List<String> tokens = adapter.stream("서울 문화행사 알려줘", 1L, 10L, null, null)
+        List<String> tokens = adapter.stream("서울 문화행사 알려줘", 1L, 10L, null, null, java.util.List.of())
                 .collectList()
                 .block();
 
@@ -63,7 +63,7 @@ class ChatAgentClientTest {
                 .setBody("{\"error\": \"Internal Server Error\"}"));
 
         assertThatThrownBy(() ->
-                adapter.stream("질문", 1L, 10L, null, null).collectList().block()
+                adapter.stream("질문", 1L, 10L, null, null, java.util.List.of()).collectList().block()
         )
                 .isInstanceOf(OnSeoulApiException.class)
                 .satisfies(ex -> assertThat(((OnSeoulApiException) ex).getErrorCode())
@@ -76,7 +76,7 @@ class ChatAgentClientTest {
         mockWebServer.shutdown();
 
         assertThatThrownBy(() ->
-                adapter.stream("질문", 1L, 10L, null, null).collectList().block()
+                adapter.stream("질문", 1L, 10L, null, null, java.util.List.of()).collectList().block()
         )
                 .isInstanceOf(OnSeoulApiException.class)
                 .satisfies(ex -> assertThat(((OnSeoulApiException) ex).getErrorCode())
@@ -91,7 +91,7 @@ class ChatAgentClientTest {
                 .setBody(": keep-alive\n\ndata: 토큰\n\n")
                 .setResponseCode(200));
 
-        List<String> tokens = adapter.stream("질문", 1L, 10L, null, null)
+        List<String> tokens = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of())
                 .collectList()
                 .block();
 
@@ -106,7 +106,7 @@ class ChatAgentClientTest {
                 .setBody("data: ok\n\n")
                 .setResponseCode(200));
 
-        adapter.stream("서울 문화행사", 1L, 10L, null, null).collectList().block();
+        adapter.stream("서울 문화행사", 1L, 10L, null, null, java.util.List.of()).collectList().block();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         String body = recorded.getBody().readUtf8();
@@ -127,7 +127,7 @@ class ChatAgentClientTest {
                 .setBody("data: ok\n\n")
                 .setResponseCode(200));
 
-        adapter.stream("근처 체육시설", 2L, 20L, 37.5665, 126.9780).collectList().block();
+        adapter.stream("근처 체육시설", 2L, 20L, 37.5665, 126.9780, java.util.List.of()).collectList().block();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         String body = recorded.getBody().readUtf8();
@@ -143,6 +143,48 @@ class ChatAgentClientTest {
     }
 
     @Test
+    @DisplayName("stream() - history가 \"history\" 배열로 직렬화되고 각 항목이 {role,content} 소문자 role로 전송된다")
+    void stream_history_serializedAsArray() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: ok\n\n")
+                .setResponseCode(200));
+
+        List<dev.jazzybyte.onseoul.chat.domain.ChatTurn> history = List.of(
+                new dev.jazzybyte.onseoul.chat.domain.ChatTurn("user", "강남구 문화행사 알려줘"),
+                new dev.jazzybyte.onseoul.chat.domain.ChatTurn("assistant", "강남구 문화행사 5건을 안내합니다."));
+
+        adapter.stream("그 중 무료인 것만", 5L, 7L, null, null, history).collectList().block();
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        JsonNode json = new ObjectMapper().readTree(recorded.getBody().readUtf8());
+
+        assertThat(json.get("history").isArray()).isTrue();
+        assertThat(json.get("history")).hasSize(2);
+        assertThat(json.get("history").get(0).get("role").asText()).isEqualTo("user");
+        assertThat(json.get("history").get(0).get("content").asText()).isEqualTo("강남구 문화행사 알려줘");
+        assertThat(json.get("history").get(1).get("role").asText()).isEqualTo("assistant");
+        assertThat(json.get("history").get(1).get("content").asText()).isEqualTo("강남구 문화행사 5건을 안내합니다.");
+    }
+
+    @Test
+    @DisplayName("stream() - history가 비어 있으면 \"history\"는 빈 배열로 직렬화된다")
+    void stream_emptyHistory_serializedAsEmptyArray() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: ok\n\n")
+                .setResponseCode(200));
+
+        adapter.stream("질문", 1L, 10L, null, null, java.util.List.of()).collectList().block();
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        JsonNode json = new ObjectMapper().readTree(recorded.getBody().readUtf8());
+
+        assertThat(json.get("history").isArray()).isTrue();
+        assertThat(json.get("history")).isEmpty();
+    }
+
+    @Test
     @DisplayName("stream() - 요청이 /chat/stream 경로로 POST 전송된다")
     void stream_requestSentToCorrectPath() throws Exception {
         mockWebServer.enqueue(new MockResponse()
@@ -150,7 +192,7 @@ class ChatAgentClientTest {
                 .setBody("data: ok\n\n")
                 .setResponseCode(200));
 
-        adapter.stream("질문", 1L, 10L, null, null).collectList().block();
+        adapter.stream("질문", 1L, 10L, null, null, java.util.List.of()).collectList().block();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getMethod()).isEqualTo("POST");

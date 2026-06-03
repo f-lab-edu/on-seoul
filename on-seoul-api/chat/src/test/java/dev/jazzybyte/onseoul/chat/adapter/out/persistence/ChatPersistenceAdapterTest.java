@@ -226,4 +226,56 @@ class ChatPersistenceAdapterTest {
         assertThat(result.get(1).getSeq()).isEqualTo(seq2);
         assertThat(result.get(2).getSeq()).isEqualTo(seq3);
     }
+
+    // ── findRecentByRoomIdOrderBySeqAsc ───────────────────────────
+
+    @Test
+    @DisplayName("findRecentByRoomIdOrderBySeqAsc() — 최신 N개만 seq ASC(과거→최신)로 반환")
+    void findRecentByRoomIdOrderBySeqAsc_returnsLatestNInAscOrder() {
+        ChatRoom room = adapter.save(ChatRoom.create(50L, "윈도우 테스트"));
+
+        // 6개 메시지를 seq 순서대로 저장
+        Long[] seqs = new Long[6];
+        for (int i = 0; i < 6; i++) {
+            seqs[i] = adapter.nextSeq();
+            ChatMessageRole role = (i % 2 == 0) ? ChatMessageRole.USER : ChatMessageRole.ASSISTANT;
+            adapter.save(ChatMessage.create(room.getId(), seqs[i], role, "메시지 " + i));
+        }
+
+        // 최신 4개만 윈도우 조회
+        List<ChatMessage> result = adapter.findRecentByRoomIdOrderBySeqAsc(room.getId(), 4);
+
+        assertThat(result).hasSize(4);
+        // 과거 → 최신 순서: seq[2], seq[3], seq[4], seq[5]
+        assertThat(result.get(0).getSeq()).isEqualTo(seqs[2]);
+        assertThat(result.get(1).getSeq()).isEqualTo(seqs[3]);
+        assertThat(result.get(2).getSeq()).isEqualTo(seqs[4]);
+        assertThat(result.get(3).getSeq()).isEqualTo(seqs[5]);
+    }
+
+    @Test
+    @DisplayName("findRecentByRoomIdOrderBySeqAsc() — 메시지가 limit보다 적으면 전부 ASC로 반환")
+    void findRecentByRoomIdOrderBySeqAsc_fewerThanLimit_returnsAll() {
+        ChatRoom room = adapter.save(ChatRoom.create(51L, "소량 테스트"));
+        Long s1 = adapter.nextSeq();
+        Long s2 = adapter.nextSeq();
+        adapter.save(ChatMessage.create(room.getId(), s1, ChatMessageRole.USER, "첫 번째"));
+        adapter.save(ChatMessage.create(room.getId(), s2, ChatMessageRole.ASSISTANT, "두 번째"));
+
+        List<ChatMessage> result = adapter.findRecentByRoomIdOrderBySeqAsc(room.getId(), 10);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getSeq()).isEqualTo(s1);
+        assertThat(result.get(1).getSeq()).isEqualTo(s2);
+    }
+
+    @Test
+    @DisplayName("findRecentByRoomIdOrderBySeqAsc() — 새 방(메시지 없음)이면 빈 리스트")
+    void findRecentByRoomIdOrderBySeqAsc_noMessages_returnsEmpty() {
+        ChatRoom room = adapter.save(ChatRoom.create(52L, "빈 방"));
+
+        List<ChatMessage> result = adapter.findRecentByRoomIdOrderBySeqAsc(room.getId(), 10);
+
+        assertThat(result).isEmpty();
+    }
 }

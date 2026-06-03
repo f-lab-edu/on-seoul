@@ -22,7 +22,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -46,11 +49,16 @@ class NotificationTxHelperTest {
 
     private NotificationTxHelper txHelper;
 
+    /** 종료 서비스 제외 D-day 기준을 결정적으로 만들기 위한 고정 UTC Clock. */
+    private static final Instant FIXED_NOW = Instant.parse("2026-05-22T09:00:00Z");
+    private static final LocalDate TODAY = LocalDate.ofInstant(FIXED_NOW, ZoneOffset.UTC);
+
     @BeforeEach
     void setUp() {
         txHelper = new NotificationTxHelper(
                 loadServiceChangePort, loadDispatchPort, saveDispatchPort,
-                saveSubscriptionPort, subscriptionFilterParserPort);
+                saveSubscriptionPort, subscriptionFilterParserPort,
+                Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────
@@ -119,7 +127,7 @@ class NotificationTxHelperTest {
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse("{}")).thenReturn(SubscriptionFilter.empty());
-        when(loadServiceChangePort.loadFiltered(SubscriptionFilter.empty(), null, BATCH_STARTED))
+        when(loadServiceChangePort.loadFiltered(SubscriptionFilter.empty(), null, BATCH_STARTED, TODAY))
                 .thenReturn(List.of(change));
         when(saveDispatchPort.saveIfAbsent(any())).thenReturn(Optional.of(pendingDispatch()));
 
@@ -137,7 +145,7 @@ class NotificationTxHelperTest {
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse("{}")).thenReturn(SubscriptionFilter.empty());
-        when(loadServiceChangePort.loadFiltered(SubscriptionFilter.empty(), null, BATCH_STARTED))
+        when(loadServiceChangePort.loadFiltered(SubscriptionFilter.empty(), null, BATCH_STARTED, TODAY))
                 .thenReturn(List.of(change));
         when(saveDispatchPort.saveIfAbsent(any())).thenReturn(Optional.of(pendingDispatch()));
 
@@ -159,7 +167,7 @@ class NotificationTxHelperTest {
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse(any())).thenReturn(SubscriptionFilter.empty());
-        when(loadServiceChangePort.loadFiltered(any(), any(), any())).thenReturn(List.of());
+        when(loadServiceChangePort.loadFiltered(any(), any(), any(), any())).thenReturn(List.of());
 
         NotificationTxHelper.TxAResult result = txHelper.txA(TEST_BATCH, sub);
 
@@ -176,7 +184,7 @@ class NotificationTxHelperTest {
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse(any())).thenReturn(SubscriptionFilter.empty());
-        when(loadServiceChangePort.loadFiltered(any(), any(), any())).thenReturn(List.of(change));
+        when(loadServiceChangePort.loadFiltered(any(), any(), any(), any())).thenReturn(List.of(change));
         when(saveDispatchPort.saveIfAbsent(any())).thenReturn(Optional.empty());
 
         NotificationTxHelper.TxAResult result = txHelper.txA(TEST_BATCH, sub);
@@ -193,13 +201,13 @@ class NotificationTxHelperTest {
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse("{\"statuses\":[\"RECEIVING\"]}")).thenReturn(parsed);
-        when(loadServiceChangePort.loadFiltered(parsed, null, BATCH_STARTED))
+        when(loadServiceChangePort.loadFiltered(parsed, null, BATCH_STARTED, TODAY))
                 .thenReturn(List.of());
 
         txHelper.txA(TEST_BATCH, sub);
 
         verify(subscriptionFilterParserPort).parse("{\"statuses\":[\"RECEIVING\"]}");
-        verify(loadServiceChangePort).loadFiltered(parsed, null, BATCH_STARTED);
+        verify(loadServiceChangePort).loadFiltered(parsed, null, BATCH_STARTED, TODAY);
     }
 
     @Test
@@ -211,11 +219,11 @@ class NotificationTxHelperTest {
 
         when(loadDispatchPort.existsDeadDispatchBySubscriptionId(1L)).thenReturn(false);
         when(subscriptionFilterParserPort.parse(any())).thenReturn(SubscriptionFilter.empty());
-        when(loadServiceChangePort.loadFiltered(any(), any(), any())).thenReturn(List.of());
+        when(loadServiceChangePort.loadFiltered(any(), any(), any(), any())).thenReturn(List.of());
 
         txHelper.txA(customBatch, sub);
 
-        verify(loadServiceChangePort).loadFiltered(any(), any(), eq(customStarted));
+        verify(loadServiceChangePort).loadFiltered(any(), any(), eq(customStarted), eq(TODAY));
     }
 
     // ── TX B 성공 ────────────────────────────────────────────────────────
@@ -292,7 +300,9 @@ class NotificationTxHelperTest {
 
         // FAILED dispatch (id=99, generatedTitle/Body/Source 이미 저장된 상태)
         NotificationDispatch dispatch = new NotificationDispatch(
-                99L, 1L, sub.getId(), DispatchStatus.FAILED,
+                99L, 1L, sub.getId(),
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.CHANGE, null, null,
+                DispatchStatus.FAILED,
                 null, "재시도 제목", "재시도 본문", TemplateSource.AI,
                 "이전 오류", 2,
                 null, Instant.now(), Instant.now());
@@ -325,7 +335,9 @@ class NotificationTxHelperTest {
         NotificationSubscription sub = subscriptionWithLastNotifiedAt(original);
 
         NotificationDispatch dispatch = new NotificationDispatch(
-                99L, 1L, sub.getId(), DispatchStatus.FAILED,
+                99L, 1L, sub.getId(),
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.CHANGE, null, null,
+                DispatchStatus.FAILED,
                 null, "제목", "본문", TemplateSource.AI,
                 "오류", 3,
                 null, Instant.now(), Instant.now());
@@ -350,7 +362,9 @@ class NotificationTxHelperTest {
     @DisplayName("txBRetryFailure — DEAD 상태 dispatch도 저장 가능")
     void txBRetryFailure_withDeadDispatch_savesDeadStatus() {
         NotificationDispatch dispatch = new NotificationDispatch(
-                99L, 1L, 1L, DispatchStatus.FAILED,
+                99L, 1L, 1L,
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.CHANGE, null, null,
+                DispatchStatus.FAILED,
                 null, "제목", "본문", TemplateSource.AI,
                 "오류", 4,
                 null, Instant.now(), Instant.now());

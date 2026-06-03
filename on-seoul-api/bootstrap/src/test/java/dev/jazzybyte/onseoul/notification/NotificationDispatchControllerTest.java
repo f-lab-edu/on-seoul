@@ -43,7 +43,9 @@ class NotificationDispatchControllerTest {
     @DisplayName("GET /api/notifications/dispatches — 인증된 사용자 → 200")
     void list_authenticated_returns200() throws Exception {
         NotificationDispatch d = new NotificationDispatch(
-                1234L, 1L, 12L, DispatchStatus.SUCCESS,
+                1234L, 1L, 12L,
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.CHANGE, null, null,
+                DispatchStatus.SUCCESS,
                 Instant.parse("2026-05-26T14:30:00Z"), "title", "body",
                 null, null, 0, null, Instant.now(), Instant.now());
         when(listDispatchesUseCase.list(eq(1L), eq(null), eq(20)))

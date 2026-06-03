@@ -19,3 +19,5 @@ query	intent	sub_intent	notes
 강서구에서 자연 관찰할 수 있는 프로그램 있어?	VECTOR_SEARCH	semantic	area+자연(post-filter)
 종로구에서 가족 단위로 갈 수 있는 박물관 프로그램	VECTOR_SEARCH	semantic	area+가족+박물관(post-filter)
 성동구에서 초등학생 대상 교육 프로그램 알려줘	VECTOR_SEARCH	semantic	area+초등+교육(post-filter)
+강남구 무료 문화행사 알려줘	SQL_SEARCH		area+category+payment(무료)
+마포구 유료 체육시설	SQL_SEARCH		area+category+payment(유료)

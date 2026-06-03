@@ -8,9 +8,22 @@
   내부 AgentState.answer와 동일한 개념이며, 요청 필드 message와의 혼동을 피하기 위해 다른 이름을 사용한다.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from schemas.state import IntentType
+
+
+class HistoryTurn(BaseModel):
+    """API 서비스가 chat_messages 테이블에서 조립하여 전달하는 단일 발화 턴.
+
+    role: "user" | "assistant" (소문자. LLM 컨벤션)
+    content: 메시지 원문. API 서비스가 최대 1000자로 잘라 전달.
+    """
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=0, max_length=1000)
 
 
 class ChatRequest(BaseModel):
@@ -23,6 +36,9 @@ class ChatRequest(BaseModel):
     # 범위 제한: 범위 외 값은 ll_to_earth()에서 DB 오류를 유발하므로 422로 차단한다.
     lat: float | None = Field(default=None, ge=-90.0, le=90.0)  # 위도 (latitude)
     lng: float | None = Field(default=None, ge=-180.0, le=180.0)  # 경도 (longitude)
+    # 직전 N턴(USER+ASSISTANT 쌍). API 서비스가 chat_messages에서 조립.
+    # seq 오름차순(과거→최신). 없으면 빈 배열. null 미전송.
+    history: list[HistoryTurn] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):

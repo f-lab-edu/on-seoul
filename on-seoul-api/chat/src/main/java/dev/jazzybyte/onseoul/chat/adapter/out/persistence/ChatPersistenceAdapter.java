@@ -11,8 +11,11 @@ import dev.jazzybyte.onseoul.chat.port.out.SaveChatRoomPort;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Component
 public class ChatPersistenceAdapter implements SaveChatRoomPort, LoadChatRoomPort, SaveChatMessagePort,
@@ -77,6 +80,18 @@ public class ChatPersistenceAdapter implements SaveChatRoomPort, LoadChatRoomPor
                 .stream()
                 .map(ChatMessageJpaEntity::toDomain)
                 .toList();
+    }
+
+    @Override
+    public List<ChatMessage> findRecentByRoomIdOrderBySeqAsc(Long roomId, int limit) {
+        // 최신 N개를 seq DESC로 읽은 뒤, 과거 → 최신 순서로 뒤집어 반환한다.
+        List<ChatMessage> recentDesc = chatMessageJpaRepository
+                .findByRoomIdOrderBySeqDesc(roomId, PageRequest.of(0, limit))
+                .stream()
+                .map(ChatMessageJpaEntity::toDomain)
+                .collect(Collectors.toCollection(ArrayList::new));
+        Collections.reverse(recentDesc);
+        return recentDesc;
     }
 
     @Override

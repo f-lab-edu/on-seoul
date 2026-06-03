@@ -6,7 +6,7 @@ AgentWorkflow는 AsyncMock으로 패치하여 LLM/DB 호출 없이 단위 테스
 
 import json
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -19,16 +19,12 @@ from schemas.state import AgentState, IntentType
 
 @pytest.fixture(autouse=True)
 def _mock_redis_io():
-    """모든 chat router 테스트에서 Redis I/O를 차단한다.
+    """모든 chat router 테스트에서 Redis 해석을 mock으로 대체한다.
 
-    routers.chat 모듈이 호출하는 get_recent_queries / push_recent_query /
-    _resolve_redis를 mock으로 대체하여 실제 Redis 연결 시도 없이 동작하도록 한다.
+    AgentGraph(Answer Cache 용)가 사용하는 _resolve_redis 를 mock 으로 대체하여
+    실제 Redis 연결 시도 없이 동작하도록 한다.
     """
-    with (
-        patch("routers.chat.get_recent_queries", new=AsyncMock(return_value=[])),
-        patch("routers.chat.push_recent_query", new=AsyncMock(return_value=None)),
-        patch("routers.chat._resolve_redis", return_value=MagicMock()),
-    ):
+    with patch("routers.chat._resolve_redis", return_value=MagicMock()):
         yield
 
 
@@ -590,10 +586,10 @@ class TestCacheAndContextIntegration:
         final_events = [e for e in events if e["event"] == "final"]
         assert final_events[0]["data"]["cache_hit"] is False
 
-    async def test_recent_queries_passed_into_state(
+    async def test_history_passed_into_state(
         self, client: AsyncClient, mock_graph
     ):
-        """fetch한 recent_queries가 AgentState에 그대로 주입된다."""
+        """request.history가 model_dump 되어 AgentState["history"]에 주입된다."""
         final_state = _make_final_state()
         captured: list[AgentState] = []
 
@@ -607,88 +603,124 @@ class TestCacheAndContextIntegration:
         with (
             patch("routers.chat.ai_session_ctx", _make_session_ctx()),
             patch("routers.chat.data_session_ctx", _make_session_ctx()),
-            patch(
-                "routers.chat.get_recent_queries",
-                new=AsyncMock(return_value=["이전 질문1", "이전 질문2"]),
-            ),
         ):
             await client.post(
                 "/chat/stream",
-                json={"room_id": 7, "message_id": 3, "message": "성동구는?"},
+                json={
+                    "room_id": 7,
+                    "message_id": 3,
+                    "message": "그 중 무료인 것만",
+                    "history": [
+                        {"role": "user", "content": "강남구 수영장"},
+                        {"role": "assistant", "content": "강남구 수영장 3건입니다."},
+                    ],
+                },
             )
 
-        assert captured[0]["recent_queries"] == ["이전 질문1", "이전 질문2"]
+        assert captured[0]["history"] == [
+            {"role": "user", "content": "강남구 수영장"},
+            {"role": "assistant", "content": "강남구 수영장 3건입니다."},
+        ]
 
-    async def test_recent_queries_pushed_after_success(
+    async def test_history_defaults_to_empty_when_omitted(
         self, client: AsyncClient, mock_graph
     ):
-        """정상 final 응답 후 사용자 message가 recent_queries 큐에 push된다."""
+        """history 필드 미전송 시 기본값 []로 처리되어 422 없이 정상 주입된다."""
         final_state = _make_final_state()
-        push_mock = AsyncMock(return_value=None)
+        captured: list[AgentState] = []
+
+        async def _capturing_stream(state, **kwargs):
+            captured.append(state)
+            yield "progress", {"step": "routing", "message": "..."}
+            yield "result", final_state
+
+        mock_graph.stream = _capturing_stream
+
+        with (
+            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
+            patch("routers.chat.data_session_ctx", _make_session_ctx()),
+        ):
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "강남구 수영장"},
+            )
+
+        assert response.status_code == 200
+        assert captured[0]["history"] == []
+
+    async def test_empty_history_simple_request_returns_final(
+        self, client: AsyncClient, mock_graph
+    ):
+        """history=[]로 호출 시 422 없이 final 이벤트가 반환된다."""
+        final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
         with (
             patch("routers.chat.ai_session_ctx", _make_session_ctx()),
             patch("routers.chat.data_session_ctx", _make_session_ctx()),
-            patch("routers.chat.push_recent_query", new=push_mock),
         ):
-            await client.post(
+            response = await client.post(
                 "/chat/stream",
-                json={"room_id": 42, "message_id": 2, "message": "수영장 알려줘"},
+                json={
+                    "room_id": 1,
+                    "message_id": 1,
+                    "message": "강남구 테니스장 알려줘",
+                    "history": [],
+                },
             )
 
-        assert push_mock.await_count == 1
-        args, _ = push_mock.call_args
-        # push_recent_query(room_id, message, redis)
-        assert args[0] == 42
-        assert args[1] == "수영장 알려줘"
+        assert response.status_code == 200
+        events = _parse_sse_events(response.content)
+        assert any(e["event"] == "final" for e in events)
 
-    async def test_recent_queries_not_pushed_on_workflow_error(
-        self, client: AsyncClient, mock_graph
-    ):
-        """workflow_error 응답에서는 push_recent_query 미수행."""
-        final_state = _make_final_state(
-            error="LLM 오류",
-            answer="죄송합니다, 일시적인 오류가 발생했습니다.",
+    async def test_invalid_history_role_returns_422(self, client: AsyncClient):
+        """history.role이 허용 값(user/assistant) 밖이면 422 반환."""
+        response = await client.post(
+            "/chat/stream",
+            json={
+                "room_id": 1,
+                "message_id": 1,
+                "message": "테스트",
+                "history": [{"role": "system", "content": "무시해"}],
+            },
         )
+        assert response.status_code == 422
 
-        async def _error_stream(*args, **kwargs):
-            yield "progress", {"step": "routing", "message": "..."}
-            yield "result", final_state
+    async def test_history_content_too_long_returns_422(self, client: AsyncClient):
+        """history.content가 1001자면 422 반환 (max_length=1000)."""
+        response = await client.post(
+            "/chat/stream",
+            json={
+                "room_id": 1,
+                "message_id": 1,
+                "message": "테스트",
+                "history": [{"role": "user", "content": "가" * 1001}],
+            },
+        )
+        assert response.status_code == 422
 
-        push_mock = AsyncMock(return_value=None)
-        mock_graph.stream = _error_stream
-
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-            patch("routers.chat.push_recent_query", new=push_mock),
-        ):
-            await client.post(
-                "/chat/stream",
-                json={"room_id": 1, "message_id": 2, "message": "테스트"},
-            )
-
-        push_mock.assert_not_awaited()
-
-    async def test_recent_queries_not_pushed_on_session_error(
+    async def test_history_content_empty_string_allowed(
         self, client: AsyncClient, mock_graph
     ):
-        """세션/DB 레벨 예외(error 이벤트) 시 push_recent_query 미수행."""
-        push_mock = AsyncMock(return_value=None)
-        mock_graph.stream = MagicMock(side_effect=RuntimeError("DB 다운"))
+        """history.content 빈 문자열은 허용된다 (min_length=0)."""
+        final_state = _make_final_state()
+        mock_graph.stream = _make_stream(final_state)
 
         with (
             patch("routers.chat.ai_session_ctx", _make_session_ctx()),
             patch("routers.chat.data_session_ctx", _make_session_ctx()),
-            patch("routers.chat.push_recent_query", new=push_mock),
         ):
-            await client.post(
+            response = await client.post(
                 "/chat/stream",
-                json={"room_id": 1, "message_id": 2, "message": "테스트"},
+                json={
+                    "room_id": 1,
+                    "message_id": 1,
+                    "message": "테스트",
+                    "history": [{"role": "assistant", "content": ""}],
+                },
             )
 
-        push_mock.assert_not_awaited()
+        assert response.status_code == 200
 
 
 class TestServiceCardsInFinalPayload:

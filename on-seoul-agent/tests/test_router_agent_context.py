@@ -1,4 +1,4 @@
-"""Router Agent — recent_queries 주입 분기 검증.
+"""Router Agent — history 주입 분기 검증.
 
 LLM 호출은 mock하고, 프롬프트에 컨텍스트가 들어갔는지 검증한다.
 """
@@ -7,7 +7,6 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from agents.router_agent import SEOUL_DISTRICTS, RouterAgent, _IntentOutput
-from core.config import settings
 from schemas.state import IntentType
 
 
@@ -22,56 +21,48 @@ def _make_agent(intent: IntentType) -> RouterAgent:
     return agent
 
 
+def _prompt_text(agent: RouterAgent) -> str:
+    """ainvoke에 전달된 메시지 시퀀스를 단일 문자열로 합친다."""
+    structured = agent._llm.with_structured_output.return_value
+    messages = structured.ainvoke.call_args.args[0]
+    return "\n".join(
+        m.content if hasattr(m, "content") else str(m) for m in messages
+    )
+
+
 class TestRouterContextInjection:
-    async def test_recent_queries_in_prompt(self):
-        """recent_queries가 있으면 system prompt에 컨텍스트 섹션이 포함된다."""
+    async def test_history_in_prompt(self):
+        """history가 있으면 system prompt에 컨텍스트 섹션이 포함된다."""
         agent = _make_agent(IntentType.VECTOR_SEARCH)
 
         await agent.classify(
             message="성동구는?",
-            recent_queries=["테니스장 보여줘"],
+            history=[
+                {"role": "user", "content": "테니스장 보여줘"},
+                {"role": "assistant", "content": "강남구 테니스장 5건입니다."},
+            ],
         )
 
-        # ainvoke에 전달된 메시지 시퀀스를 추출
-        structured = agent._llm.with_structured_output.return_value
-        call_args = structured.ainvoke.call_args
-        messages = call_args.args[0]
-        prompt_text = "\n".join(
-            m.content if hasattr(m, "content") else str(m) for m in messages
-        )
+        prompt_text = _prompt_text(agent)
+        assert "이전 대화 이력" in prompt_text
+        assert "[사용자] 테니스장 보여줘" in prompt_text
+        assert "[어시스턴트] 강남구 테니스장 5건입니다." in prompt_text
 
-        assert "이전 사용자 발화" in prompt_text
-        assert "테니스장 보여줘" in prompt_text
-
-    async def test_empty_recent_queries_omits_section(self):
-        """recent_queries가 비어있으면 컨텍스트 섹션이 출력되지 않는다."""
+    async def test_empty_history_omits_section(self):
+        """history가 비어있으면 컨텍스트 섹션이 출력되지 않는다."""
         agent = _make_agent(IntentType.FALLBACK)
 
-        await agent.classify(message="안녕", recent_queries=[])
+        await agent.classify(message="안녕", history=[])
 
-        structured = agent._llm.with_structured_output.return_value
-        call_args = structured.ainvoke.call_args
-        messages = call_args.args[0]
-        prompt_text = "\n".join(
-            m.content if hasattr(m, "content") else str(m) for m in messages
-        )
+        assert "이전 대화 이력" not in _prompt_text(agent)
 
-        assert "이전 사용자 발화" not in prompt_text
-
-    async def test_none_recent_queries_omits_section(self):
-        """recent_queries가 None(기본값)이면 컨텍스트 섹션이 출력되지 않는다."""
+    async def test_none_history_omits_section(self):
+        """history가 None(기본값)이면 컨텍스트 섹션이 출력되지 않는다."""
         agent = _make_agent(IntentType.FALLBACK)
 
         await agent.classify(message="안녕")
 
-        structured = agent._llm.with_structured_output.return_value
-        call_args = structured.ainvoke.call_args
-        messages = call_args.args[0]
-        prompt_text = "\n".join(
-            m.content if hasattr(m, "content") else str(m) for m in messages
-        )
-
-        assert "이전 사용자 발화" not in prompt_text
+        assert "이전 대화 이력" not in _prompt_text(agent)
 
     async def test_build_context_block_empty(self):
         """_build_context_block: 빈 입력은 빈 문자열을 반환한다."""
@@ -79,42 +70,26 @@ class TestRouterContextInjection:
         assert agent._build_context_block(None) == ""
         assert agent._build_context_block([]) == ""
 
-    async def test_build_context_block_lists_queries(self):
-        """_build_context_block: 입력된 질의를 bullet list로 포함한다."""
+    async def test_build_context_block_lists_turns(self):
+        """_build_context_block: USER/ASSISTANT 턴을 라벨링하여 포함한다."""
         agent = _make_agent(IntentType.FALLBACK)
-        block = agent._build_context_block(["q1", "q2"])
-        assert "이전 사용자 발화" in block
-        assert "- q1" in block
-        assert "- q2" in block
+        block = agent._build_context_block(
+            [
+                {"role": "user", "content": "강남구 수영장"},
+                {"role": "assistant", "content": "3건입니다."},
+            ]
+        )
+        assert "이전 대화 이력" in block
+        assert "- [사용자] 강남구 수영장" in block
+        assert "- [어시스턴트] 3건입니다." in block
 
-    async def test_build_context_block_truncates_to_settings_max(self, monkeypatch):
-        """recent_queries는 settings.recent_queries_max 만큼만 사용된다.
-
-        기본값(5) 가정 없이 monkeypatch로 명시 후 검증한다.
-        core/recent_queries.py의 LPUSH/LTRIM/LRANGE와 동일 설정으로
-        의도 통일을 보장한다.
-        """
-        monkeypatch.setattr(settings, "recent_queries_max", 5)
+    async def test_orphan_user_turn_included(self):
+        """ASSISTANT 응답 없는 USER 단독 턴도 방어적으로 포함된다."""
         agent = _make_agent(IntentType.FALLBACK)
-        block = agent._build_context_block([f"q{i}" for i in range(7)])
-        # q0..q4는 포함, q5/q6은 제외
-        for i in range(5):
-            assert f"- q{i}" in block
-        assert "- q5" not in block
-        assert "- q6" not in block
-
-    async def test_build_context_block_respects_changed_max(self, monkeypatch):
-        """settings.recent_queries_max를 3으로 바꾸면 7개 입력에서 3개만 포함된다.
-
-        운영자가 max를 변경해도 Router 주입 개수가 일관되게 따라가야 한다 (회귀).
-        """
-        monkeypatch.setattr(settings, "recent_queries_max", 3)
-        agent = _make_agent(IntentType.FALLBACK)
-        block = agent._build_context_block([f"q{i}" for i in range(7)])
-        for i in range(3):
-            assert f"- q{i}" in block
-        for i in range(3, 7):
-            assert f"- q{i}" not in block
+        block = agent._build_context_block(
+            [{"role": "user", "content": "마포구 풋살장"}]
+        )
+        assert "- [사용자] 마포구 풋살장" in block
 
     async def test_refined_query_returned_when_present(self):
         """LLM이 refined_query를 채워 반환하면 classify 결과에도 포함된다."""
@@ -132,7 +107,7 @@ class TestRouterContextInjection:
 
         result = await agent.classify(
             message="성동구는?",
-            recent_queries=["테니스장 보여줘"],
+            history=[{"role": "user", "content": "테니스장 보여줘"}],
         )
 
         assert result.intent == IntentType.VECTOR_SEARCH
@@ -226,21 +201,63 @@ class TestRouterContextInjection:
         rq = _IntentOutput(intent=IntentType.SQL_SEARCH, area_name=district)
         assert rq.area_name == district
 
-    async def test_long_queries_compose_without_error(self, monkeypatch):
-        """매우 긴 query 5개가 들어가도 prompt 합성에 실패하지 않는다.
+    async def test_payment_type_free_normalized(self):
+        """무료/공짜/free 류는 payment_type="무료"로 정규화된다."""
+        for raw in ("무료", "공짜", "free", "FREE", "무료로"):
+            rq = _IntentOutput(intent=IntentType.SQL_SEARCH, payment_type=raw)
+            assert rq.payment_type == "무료", raw
 
-        recent_queries_max 기본값(5)에 의존하므로 monkeypatch로 명시한다.
-        """
-        monkeypatch.setattr(settings, "recent_queries_max", 5)
-        agent = _make_agent(IntentType.VECTOR_SEARCH)
-        long_queries = ["가" * 500 for _ in range(5)]
-        await agent.classify(message="후속", recent_queries=long_queries)
+    async def test_payment_type_paid_normalized(self):
+        """유료/요금/paid 류는 payment_type="유료"로 정규화된다."""
+        for raw in ("유료", "요금", "paid", "유료(요금안내문의)"):
+            rq = _IntentOutput(intent=IntentType.SQL_SEARCH, payment_type=raw)
+            assert rq.payment_type == "유료", raw
 
-        structured = agent._llm.with_structured_output.return_value
-        messages = structured.ainvoke.call_args.args[0]
-        prompt_text = "\n".join(
-            m.content if hasattr(m, "content") else str(m) for m in messages
+    async def test_payment_type_noise_normalized_to_none(self):
+        """알 수 없는 값/잡음은 None으로 정규화된다."""
+        for raw in ("아무거나", "", "회원제"):
+            rq = _IntentOutput(intent=IntentType.SQL_SEARCH, payment_type=raw)
+            assert rq.payment_type is None, raw
+
+    async def test_payment_type_none_preserved(self):
+        """payment_type=None은 None으로 유지된다."""
+        rq = _IntentOutput(intent=IntentType.SQL_SEARCH, payment_type=None)
+        assert rq.payment_type is None
+
+    async def test_context_inheritance_prompt_present(self):
+        """history+payment follow-up 시 system prompt에 상속 지시가 실린다."""
+        agent = _make_agent(IntentType.SQL_SEARCH)
+        await agent.classify(
+            message="그 중에서 무료인 것만 보여줘",
+            history=[
+                {"role": "user", "content": "강남구 문화행사 알려줘"},
+                {"role": "assistant", "content": "강남구 문화행사 5건을 안내합니다."},
+            ],
         )
-        assert "이전 사용자 발화" in prompt_text
-        # 모든 5개 항목이 포함됨
-        assert prompt_text.count("- " + "가" * 500) == 5
+        text = _prompt_text(agent)
+        # 상속 규칙 + payment 규칙이 프롬프트에 존재
+        assert "상속" in text
+        assert "payment_type" in text
+        assert "[사용자] 강남구 문화행사 알려줘" in text
+
+    async def test_payment_few_shot_examples_present(self):
+        """payment 추출·맥락 상속 few-shot 예시가 포함된다."""
+        from llm.prompts.router import ROUTER_FEW_SHOT_EXAMPLES
+
+        joined = "\n".join(e["message"] + e["output"] for e in ROUTER_FEW_SHOT_EXAMPLES)
+        assert "강남구 무료 문화행사" in joined
+        assert '"payment_type": "무료"' in joined
+        # 멀티턴 상속 예시 (직전 강남구 문화행사 + 그 중 무료)
+        assert "그 중에서 무료인 것만" in joined
+
+    async def test_long_history_compose_without_error(self):
+        """매우 긴 turn content가 들어가도 prompt 합성에 실패하지 않는다."""
+        agent = _make_agent(IntentType.VECTOR_SEARCH)
+        long_history = [
+            {"role": "user", "content": "가" * 1000} for _ in range(5)
+        ]
+        await agent.classify(message="후속", history=long_history)
+
+        prompt_text = _prompt_text(agent)
+        assert "이전 대화 이력" in prompt_text
+        assert prompt_text.count("- [사용자] " + "가" * 1000) == 5

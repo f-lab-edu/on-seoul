@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -33,6 +34,13 @@ class ServiceChangePersistenceAdapterTest {
 
     @Autowired private ServiceChangePersistenceAdapter adapter;
     @Autowired private DSLContext dsl;
+
+    /**
+     * 종료 서비스 제외(D-day) 기준 today — 운영 경로와 동일한 UTC 달력 날짜.
+     * 대부분의 테스트는 receipt_end_dt 가 NULL 이라 today 값과 무관하나,
+     * 종료 필터 테스트(아래)는 now(UTC) 상대 날짜를 쓰므로 동일 기준이어야 결정적이다.
+     */
+    private static final LocalDate TODAY = LocalDate.now(ZoneOffset.UTC);
 
     @BeforeEach
     void cleanup() {
@@ -95,7 +103,7 @@ class ServiceChangePersistenceAdapterTest {
         insertChange("OA-2269", "UPDATED", "service_name", "구", "신", now.minusHours(1));
         insertChange("OA-2266", "NEW", null, null, null, now);
 
-        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null);
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
         // serviceId pin이 제거되어 빈 필터는 모든 변경(전체 구독)을 매칭한다.
         assertThat(result).hasSize(3);
@@ -112,7 +120,7 @@ class ServiceChangePersistenceAdapterTest {
         insertChange("OA-2269", "UPDATED", "service_name", "구", "신", base.plusHours(1));
 
         Instant since = base.toInstant();
-        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), since, null);
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), since, null, TODAY);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).fieldName()).isEqualTo("service_name");
@@ -129,7 +137,7 @@ class ServiceChangePersistenceAdapterTest {
 
         // 상한: base+1h (inclusive) → f1, f2만 포함되어야 한다
         Instant before = base.plusHours(1).toInstant();
-        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, before);
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, before, TODAY);
 
         assertThat(result).hasSize(2);
         assertThat(result).extracting(ServiceChange::fieldName).containsExactly("f1", "f2");
@@ -141,7 +149,7 @@ class ServiceChangePersistenceAdapterTest {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
-        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null);
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
         assertThat(result).isEmpty();
     }
@@ -153,7 +161,7 @@ class ServiceChangePersistenceAdapterTest {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
-        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null);
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
         assertThat(result).isEmpty();
     }
@@ -168,7 +176,7 @@ class ServiceChangePersistenceAdapterTest {
         // CLOSED는 필터(RECEIVING)에 매칭 안됨
         List<ServiceChange> filtered = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of("RECEIVING"), Set.of(), Set.of(), Set.of()),
-                null, null);
+                null, null, TODAY);
         assertThat(filtered).isEmpty();
 
         // RECEIVING으로 변경하면 매칭
@@ -178,7 +186,7 @@ class ServiceChangePersistenceAdapterTest {
                 .execute();
         List<ServiceChange> matched = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of("RECEIVING"), Set.of(), Set.of(), Set.of()),
-                null, null);
+                null, null, TODAY);
         assertThat(matched).hasSize(1);
     }
 
@@ -191,12 +199,12 @@ class ServiceChangePersistenceAdapterTest {
 
         List<ServiceChange> miss = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of("송파구"), Set.of(), Set.of()),
-                null, null);
+                null, null, TODAY);
         assertThat(miss).isEmpty();
 
         List<ServiceChange> hit = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of("강남구"), Set.of(), Set.of()),
-                null, null);
+                null, null, TODAY);
         assertThat(hit).hasSize(1);
     }
 
@@ -209,12 +217,12 @@ class ServiceChangePersistenceAdapterTest {
 
         List<ServiceChange> miss = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of("체육시설"), Set.of()),
-                null, null);
+                null, null, TODAY);
         assertThat(miss).isEmpty();
 
         List<ServiceChange> hit = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of("문화행사"), Set.of()),
-                null, null);
+                null, null, TODAY);
         assertThat(hit).hasSize(1);
     }
 
@@ -229,7 +237,7 @@ class ServiceChangePersistenceAdapterTest {
 
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("수영")),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).serviceId()).isEqualTo("OA-1");
@@ -244,7 +252,7 @@ class ServiceChangePersistenceAdapterTest {
 
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("수영")),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).serviceId()).isEqualTo("OA-1");
@@ -263,7 +271,7 @@ class ServiceChangePersistenceAdapterTest {
 
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("수영", "요가")),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).extracting(ServiceChange::serviceId)
                 .containsExactlyInAnyOrder("OA-1", "OA-2");
@@ -282,7 +290,7 @@ class ServiceChangePersistenceAdapterTest {
         // "%" 리터럴을 포함한 OA-2만 매칭되어야 한다.
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("%")),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).serviceId()).isEqualTo("OA-2");
@@ -301,7 +309,7 @@ class ServiceChangePersistenceAdapterTest {
 
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("A_B")),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).serviceId()).isEqualTo("OA-2");
@@ -319,7 +327,7 @@ class ServiceChangePersistenceAdapterTest {
         // 키워드 "a\b" — '\' 가 이스케이프되지 않으면 LIKE 가 다음 문자를 이스케이프해 매칭이 깨진다.
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("a\\b")),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).serviceId()).isEqualTo("OA-2");
@@ -337,7 +345,7 @@ class ServiceChangePersistenceAdapterTest {
         // 한글 부분 문자열 매칭 — collation 무관하게 ILIKE '%수영%' 로 OA-1만 매칭
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("수영")),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).serviceId()).isEqualTo("OA-1");
@@ -360,7 +368,7 @@ class ServiceChangePersistenceAdapterTest {
 
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of("RECEIVING"), Set.of(), Set.of(), Set.of("수영")),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).serviceId()).isEqualTo("OA-2");
@@ -381,7 +389,7 @@ class ServiceChangePersistenceAdapterTest {
 
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("수영", "요가", "독서")),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).extracting(ServiceChange::serviceId)
                 .containsExactlyInAnyOrder("OA-1", "OA-2", "OA-3");
@@ -399,7 +407,7 @@ class ServiceChangePersistenceAdapterTest {
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("수영"),
                         Set.of(dev.jazzybyte.onseoul.notification.domain.KeywordTarget.PLACE_NAME)),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).extracting(ServiceChange::serviceId).containsExactly("OA-2");
     }
@@ -416,7 +424,7 @@ class ServiceChangePersistenceAdapterTest {
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("수영"),
                         Set.of(dev.jazzybyte.onseoul.notification.domain.KeywordTarget.SERVICE_NAME)),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).extracting(ServiceChange::serviceId).containsExactly("OA-1");
     }
@@ -433,7 +441,7 @@ class ServiceChangePersistenceAdapterTest {
         // 4-인자 생성자 → keywordTargets 빈 집합 → 어댑터가 serverDefaults로 fallback
         List<ServiceChange> result = adapter.loadFiltered(
                 new SubscriptionFilter(Set.of(), Set.of(), Set.of(), Set.of("수영")),
-                null, null);
+                null, null, TODAY);
 
         assertThat(result).extracting(ServiceChange::serviceId)
                 .containsExactlyInAnyOrder("OA-1", "OA-2");
@@ -448,7 +456,7 @@ class ServiceChangePersistenceAdapterTest {
         insertChange("OA-2269", "UPDATED", "f2", null, null, base.plusHours(1));
         insertChange("OA-2269", "UPDATED", "f3", null, null, base);
 
-        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null);
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
         assertThat(result).extracting(ServiceChange::fieldName)
                 .containsExactly("f3", "f2", "f1");
@@ -457,8 +465,9 @@ class ServiceChangePersistenceAdapterTest {
     @Test
     @DisplayName("예약 메타(serviceName/url/place 등)와 receipt 날짜가 ServiceChange에 매핑된다")
     void loadFiltered_mapsReservationMetaAndReceiptDates() {
-        OffsetDateTime start = utc(2026, 5, 1, 9, 0);
-        OffsetDateTime end = utc(2026, 5, 31, 18, 0);
+        // 종료 제외 필터 추가 이후: receipt_end_dt 는 미래여야 결과에 포함된다.
+        OffsetDateTime start = OffsetDateTime.now(ZoneOffset.UTC).plusDays(1);
+        OffsetDateTime end = OffsetDateTime.now(ZoneOffset.UTC).plusDays(30);
         dsl.insertInto(PUBLIC_SERVICE_RESERVATIONS)
                 .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_ID, "OA-META")
                 .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_NAME, "수영교실")
@@ -475,7 +484,7 @@ class ServiceChangePersistenceAdapterTest {
         insertChange("OA-META", "UPDATED", "service_status", "RECEIVING", "CLOSED",
                 OffsetDateTime.now(ZoneOffset.UTC));
 
-        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null);
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
         assertThat(result).hasSize(1);
         ServiceChange c = result.get(0);
@@ -490,6 +499,104 @@ class ServiceChangePersistenceAdapterTest {
         assertThat(c.receiptEndDt()).isEqualTo(end.toString());
     }
 
+    // ── 종료 서비스 제외 필터 (모델 B) ──────────────────────────────────
+
+    private void insertReservationWithEnd(String serviceId, OffsetDateTime receiptEnd) {
+        dsl.insertInto(PUBLIC_SERVICE_RESERVATIONS)
+                .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_ID, serviceId)
+                .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_NAME, serviceId)
+                .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_STATUS, "RECEIVING")
+                .set(PUBLIC_SERVICE_RESERVATIONS.RECEIPT_END_DT, receiptEnd)
+                .execute();
+    }
+
+    @Test
+    @DisplayName("receipt_end_dt가 어제 이전이면 종료된 서비스로 보고 변경 알림에서 제외된다")
+    void loadFiltered_endedService_excluded() {
+        insertReservationWithEnd("OA-ENDED", OffsetDateTime.now(ZoneOffset.UTC).minusDays(2));
+        insertChange("OA-ENDED", "UPDATED", "service_status", "RECEIVING", "CLOSED",
+                OffsetDateTime.now(ZoneOffset.UTC));
+
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("receipt_end_dt가 미래면 진행 중으로 보고 변경 알림에 포함된다")
+    void loadFiltered_futureEnd_included() {
+        insertReservationWithEnd("OA-OPEN", OffsetDateTime.now(ZoneOffset.UTC).plusDays(3));
+        insertChange("OA-OPEN", "UPDATED", "service_status", "RECEIVING", "CLOSED",
+                OffsetDateTime.now(ZoneOffset.UTC));
+
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
+
+        assertThat(result).extracting(ServiceChange::serviceId).containsExactly("OA-OPEN");
+    }
+
+    @Test
+    @DisplayName("[QA] receipt_end_dt가 오늘 정오면 종료로 보지 않고 포함된다 (>= today 00:00 UTC, inclusive)")
+    void loadFiltered_endToday_included() {
+        // 계획: "receipt_end_dt 당일까지는 종료로 보지 않는다". 오늘 마감인 서비스의 변경도 알림 대상.
+        // 오늘 정오 >= today 00:00 UTC 이므로 포함된다(UTC instant 비교, 세션 TZ 비의존).
+        OffsetDateTime todayNoon = OffsetDateTime.now(ZoneOffset.UTC)
+                .toLocalDate().atTime(12, 0).atOffset(ZoneOffset.UTC);
+        insertReservationWithEnd("OA-ENDTODAY", todayNoon);
+        insertChange("OA-ENDTODAY", "UPDATED", "service_status", "RECEIVING", "CLOSED",
+                OffsetDateTime.now(ZoneOffset.UTC));
+
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
+
+        assertThat(result).extracting(ServiceChange::serviceId).containsExactly("OA-ENDTODAY");
+    }
+
+    @Test
+    @DisplayName("[QA] receipt_end_dt가 어제 정오면 종료로 보고 제외된다 (< today 00:00 UTC)")
+    void loadFiltered_endYesterday_excluded() {
+        // 어제 정오 < today 00:00 UTC 이므로 종료로 보고 제외된다.
+        // today 는 호출자가 넘긴 UTC 달력 날짜 — PG 세션 TimeZone GUC(CURRENT_DATE)에 의존하지 않는다.
+        OffsetDateTime yesterdayNoon = OffsetDateTime.now(ZoneOffset.UTC)
+                .toLocalDate().minusDays(1).atTime(12, 0).atOffset(ZoneOffset.UTC);
+        insertReservationWithEnd("OA-ENDYDAY", yesterdayNoon);
+        insertChange("OA-ENDYDAY", "UPDATED", "service_status", "RECEIVING", "CLOSED",
+                OffsetDateTime.now(ZoneOffset.UTC));
+
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("[D-day] today 인자가 종료 경계를 결정한다 — 주입한 today 00:00 UTC 기준으로 포함/제외가 갈린다")
+    void loadFiltered_todayArgumentDrivesBoundary() {
+        // 고정 receipt_end_dt = 2026-05-20 00:00 UTC.
+        // today=2026-05-20 → end >= today00:00 → 포함. today=2026-05-21 → end < today00:00 → 제외.
+        // PG CURRENT_DATE/세션 TZ 비의존 — 주입한 UTC today 만으로 경계가 결정됨을 증명한다.
+        OffsetDateTime end = utc(2026, 5, 20, 0, 0);
+        insertReservationWithEnd("OA-BOUNDARY", end);
+        insertChange("OA-BOUNDARY", "UPDATED", "service_status", "RECEIVING", "CLOSED", utc(2026, 5, 20, 1, 0));
+
+        List<ServiceChange> included =
+                adapter.loadFiltered(SubscriptionFilter.empty(), null, null, LocalDate.of(2026, 5, 20));
+        assertThat(included).extracting(ServiceChange::serviceId).containsExactly("OA-BOUNDARY");
+
+        List<ServiceChange> excluded =
+                adapter.loadFiltered(SubscriptionFilter.empty(), null, null, LocalDate.of(2026, 5, 21));
+        assertThat(excluded).isEmpty();
+    }
+
+    @Test
+    @DisplayName("receipt_end_dt가 NULL(마감 미정)이면 진행 중으로 보고 포함된다")
+    void loadFiltered_nullEnd_included() {
+        insertReservationWithEnd("OA-NULLEND", null);
+        insertChange("OA-NULLEND", "UPDATED", "service_status", "RECEIVING", "CLOSED",
+                OffsetDateTime.now(ZoneOffset.UTC));
+
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
+
+        assertThat(result).extracting(ServiceChange::serviceId).containsExactly("OA-NULLEND");
+    }
+
     @Test
     @DisplayName("receipt 날짜가 NULL이면 ServiceChange의 receiptStartDt/EndDt도 null")
     void loadFiltered_nullReceiptDates_mappedAsNull() {
@@ -497,7 +604,7 @@ class ServiceChangePersistenceAdapterTest {
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED",
                 OffsetDateTime.now(ZoneOffset.UTC));
 
-        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null);
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).receiptStartDt()).isNull();
@@ -511,7 +618,7 @@ class ServiceChangePersistenceAdapterTest {
         OffsetDateTime insertedAt = utc(2026, 5, 1, 12, 0);
         insertChange("OA-2269", "NEW", "service_status", null, "RECEIVING", insertedAt);
 
-        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null);
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
         assertThat(result.get(0).changedAt()).isEqualTo(insertedAt.toInstant());
     }
@@ -529,7 +636,7 @@ class ServiceChangePersistenceAdapterTest {
         // 하한은 exclusive(changed_at > since), 상한은 inclusive(changed_at <= before)
         // changed_at = base, since = base → changed_at > since 는 false → 결과 없음
         Instant pivot = base.toInstant();
-        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), pivot, pivot);
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), pivot, pivot, TODAY);
 
         assertThat(result).isEmpty();
     }
@@ -545,7 +652,7 @@ class ServiceChangePersistenceAdapterTest {
         Instant changedAtBefore = base.toInstant();           // 상한이 하한보다 이전
 
         List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(),
-                lastNotified, changedAtBefore);
+                lastNotified, changedAtBefore, TODAY);
 
         assertThat(result).isEmpty();
     }
@@ -564,7 +671,7 @@ class ServiceChangePersistenceAdapterTest {
         Instant lower = base.toInstant();
         Instant upper = base.plusHours(2).toInstant();
 
-        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), lower, upper);
+        List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), lower, upper, TODAY);
 
         assertThat(result).hasSize(2);
         assertThat(result).extracting(ServiceChange::fieldName).containsExactly("in_range", "at_upper");

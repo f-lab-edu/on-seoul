@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 
 import dev.jazzybyte.onseoul.notification.domain.DispatchStatus;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
+import dev.jazzybyte.onseoul.notification.domain.TriggerType;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -11,6 +12,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 @Entity
 @Table(name = "notification_dispatches")
@@ -27,6 +29,16 @@ public class NotificationDispatchJpaEntity {
 
     @Column(name = "subscription_id", nullable = false)
     private Long subscriptionId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "trigger_type", nullable = false, length = 20)
+    private TriggerType triggerType;
+
+    @Column(name = "dispatch_date")
+    private LocalDate dispatchDate;
+
+    @Column(name = "service_id", length = 30)
+    private String serviceId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 10)
@@ -65,6 +77,20 @@ public class NotificationDispatchJpaEntity {
     NotificationDispatchJpaEntity(Long batchId, Long subscriptionId) {
         this.batchId = batchId;
         this.subscriptionId = subscriptionId;
+        this.triggerType = TriggerType.CHANGE;
+        this.status = DispatchStatus.PENDING;
+        this.attemptCount = 0;
+        this.updatedAt = Instant.now();
+    }
+
+    /** 시점 트리거 dispatch INSERT 용 — service_id + dispatch_date 를 채운다. */
+    NotificationDispatchJpaEntity(Long batchId, Long subscriptionId,
+                                  TriggerType triggerType, String serviceId, LocalDate dispatchDate) {
+        this.batchId = batchId;
+        this.subscriptionId = subscriptionId;
+        this.triggerType = triggerType;
+        this.serviceId = serviceId;
+        this.dispatchDate = dispatchDate;
         this.status = DispatchStatus.PENDING;
         this.attemptCount = 0;
         this.updatedAt = Instant.now();

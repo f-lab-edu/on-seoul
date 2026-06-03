@@ -3,6 +3,7 @@ package dev.jazzybyte.onseoul.notification.domain;
 import lombok.Getter;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 /**
  * 배치 × 구독 단위 알림 발송 이력 (ADR-0004).
@@ -18,6 +19,20 @@ public class NotificationDispatch {
     private Long id;
     private Long batchId;
     private Long subscriptionId;
+    /**
+     * 발송 트리거 종류. 기존 CHANGE 경로는 {@link TriggerType#CHANGE} 로 유지된다(기본값).
+     * 시점 트리거(OPEN_DAY/BEFORE_RECEIPT_D1/DEADLINE_DDAY)는 service_id 단위로 발행된다.
+     */
+    private TriggerType triggerType = TriggerType.CHANGE;
+    /**
+     * 시점 트리거 dispatch 의 dedup 기준일(발송 대상 달력 날짜). CHANGE 는 null.
+     * DATE 타입 — 타임존 변환 없이 "날짜" 단위로 다룬다.
+     */
+    private LocalDate dispatchDate;
+    /**
+     * 시점 트리거 대상 서비스 ID. CHANGE 는 여러 service 를 payload 에 묶으므로 null.
+     */
+    private String serviceId;
     private DispatchStatus status;
     private Instant sentAt;
     private String generatedTitle;
@@ -36,6 +51,7 @@ public class NotificationDispatch {
 
     /** Reconstitute from persistence. */
     public NotificationDispatch(Long id, Long batchId, Long subscriptionId,
+                                TriggerType triggerType, LocalDate dispatchDate, String serviceId,
                                 DispatchStatus status,
                                 Instant sentAt, String generatedTitle, String generatedBody,
                                 TemplateSource templateSource, String lastError,
@@ -44,6 +60,9 @@ public class NotificationDispatch {
         this.id = id;
         this.batchId = batchId;
         this.subscriptionId = subscriptionId;
+        this.triggerType = triggerType == null ? TriggerType.CHANGE : triggerType;
+        this.dispatchDate = dispatchDate;
+        this.serviceId = serviceId;
         this.status = status;
         this.sentAt = sentAt;
         this.generatedTitle = generatedTitle;
@@ -58,11 +77,50 @@ public class NotificationDispatch {
 
     private NotificationDispatch() {}
 
-    /** Factory: 신규 PENDING dispatch 생성. */
+    /**
+     * Factory: 신규 PENDING CHANGE dispatch 생성(기존 동작).
+     * triggerType=CHANGE, serviceId=null, dispatchDate=null.
+     */
     public static NotificationDispatch create(Long batchId, Long subscriptionId) {
         NotificationDispatch d = new NotificationDispatch();
         d.batchId = batchId;
         d.subscriptionId = subscriptionId;
+        d.triggerType = TriggerType.CHANGE;
+        d.status = DispatchStatus.PENDING;
+        d.attemptCount = 0;
+        Instant now = Instant.now();
+        d.createdAt = now;
+        d.updatedAt = now;
+        return d;
+    }
+
+    /**
+     * Factory: 신규 PENDING 시점 트리거 dispatch 생성.
+     * service_id 단위로 발행되며 (subscription_id, service_id, dispatch_date) 로 dedup 된다.
+     *
+     * @param triggerType  시점 트리거(OPEN_DAY/BEFORE_RECEIPT_D1/DEADLINE_DDAY) — CHANGE 전달 금지
+     * @param serviceId    대상 서비스 ID (필수)
+     * @param dispatchDate 발송 대상 달력 날짜 (dedup 기준, 필수)
+     */
+    public static NotificationDispatch createScheduled(Long batchId, Long subscriptionId,
+                                                       TriggerType triggerType,
+                                                       String serviceId, LocalDate dispatchDate) {
+        if (triggerType == null || triggerType.isChange()) {
+            throw new IllegalArgumentException(
+                    "createScheduled 는 시점 트리거만 허용한다: " + triggerType);
+        }
+        if (serviceId == null || serviceId.isBlank()) {
+            throw new IllegalArgumentException("시점 트리거 dispatch 는 serviceId 가 필수다");
+        }
+        if (dispatchDate == null) {
+            throw new IllegalArgumentException("시점 트리거 dispatch 는 dispatchDate 가 필수다");
+        }
+        NotificationDispatch d = new NotificationDispatch();
+        d.batchId = batchId;
+        d.subscriptionId = subscriptionId;
+        d.triggerType = triggerType;
+        d.serviceId = serviceId;
+        d.dispatchDate = dispatchDate;
         d.status = DispatchStatus.PENDING;
         d.attemptCount = 0;
         Instant now = Instant.now();

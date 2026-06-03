@@ -55,6 +55,13 @@ _STRUCT_CARD_LIST = """\
        · "광진구에서 이용할 수 있는 풋살장을 정리해드릴게요."
        · "말씀하신 조건에 맞는 시설이 몇 곳 있네요. 아래에서 확인해보세요."
        · "지금 접수 중인 수영장 위주로 골라봤어요."
+   - 사용자 질문이 '장소', '곳', '공간'처럼 장소 자체를 찾는 뉘앙스이고 결과가
+     1건 이상이면, 이 서비스가 안내하는 건 장소 그 자체가 아니라 관련 공공서비스·
+     시설 예약 정보라는 점을 도입문 앞에 한 문장으로 자연스럽게 덧붙인 뒤 목록을
+     안내하세요. 아래는 톤 참고용일 뿐 그대로 복사하지 말고 질문 맥락에 맞게
+     변형하세요:
+       · "장소 자체를 안내해드리는 건 아니지만, 관련된 공공서비스·시설 예약 정보를 정리해드릴게요!"
+       · "딱 그 장소는 아니어도, 관련해서 예약할 수 있는 시설들을 찾아봤어요."
    - 결과가 0건이면 "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다." 만 출력.
 
 2) 시설명 목록 (전달된 결과의 시설명만 한 줄씩 나열. 상세 줄은 출력 금지.
@@ -149,6 +156,14 @@ _CLAUSE_REFINE_HINT = """\
 특정 자치구(예: 강남구, 마포구)나 요금 조건(무료/유료)을 함께 알려주시면 더 정확하게 찾아드릴 수 있어요.
 원하시는 지역이나 무료/유료 여부를 알려주시면 더 좁혀서 찾아드릴게요."""
 
+# 0건 완화 재시도(retry_relaxed) 시 추가되는 절.
+# payment_type 등 일부 조건을 완화해 결과를 보여줄 때, 완화 사실을 반드시 명시한다.
+# (무료 요청에 유료 결과를 무료라고 오안내하지 않도록 강제)
+_CLAUSE_RELAXED_NOTICE = """\
+요청하신 조건(예: 무료)에 정확히 맞는 결과가 없어, 결제 유형 조건을 완화한 결과를 보여드립니다.
+답변 첫머리에 "요청하신 조건에 맞는 결과가 없어 조건을 완화한 결과입니다"와 같이 완화 사실을 반드시 안내하고,
+유료 시설을 무료라고 표현하지 마세요. 각 카드의 실제 요금 정보를 그대로 전달하세요."""
+
 
 def _compose(*blocks: str) -> str:
     """비어있지 않은 블록들을 빈 줄로 연결한다."""
@@ -172,16 +187,30 @@ def _has_district_in_message(message: str) -> bool:
     return any(district in message for district in SEOUL_DISTRICTS)
 
 
-def _build_card_system(message: str, results: list[dict]) -> str:
+def _build_card_system(
+    message: str,
+    results: list[dict],
+    area_name: str | None,
+    *,
+    retry_relaxed: bool = False,
+) -> str:
     """카드형(SQL/VECTOR) intent의 시스템 프롬프트를 런타임에 조립한다.
 
     조건부 절:
     - _CLAUSE_RESERVATION_GUIDE: 결과 중 service_status="접수중" 시설이 있을 때만 추가.
-    - _CLAUSE_REFINE_HINT: 사용자 질문에 공식 자치구명이 없을 때만 추가.
+    - _CLAUSE_REFINE_HINT: 자치구가 아직 해소되지 않았을 때만 추가.
+
+    area_name 게이트:
+        Router가 이미 해소한 state["area_name"](현재 질문 또는 history 병합)을
+        우선 확인한다. area_name이 채워져 있으면 follow-up("그 중 무료인 것만")
+        에서도 refine hint를 생략하여 이미 지정한 자치구를 다시 묻지 않는다.
+        _has_district_in_message는 area_name 미해소 시의 보조 fallback이다
+        (원본 message에 비공식 표기가 있어도 area_name이 None일 수 있으므로).
 
     Args:
-        message: 사용자 원본 발화 (자치구 명시 여부 판단용).
+        message: 사용자 원본 발화 (자치구 명시 여부 fallback 판단용).
         results: 정규화 이전 또는 이후 결과 목록 (service_status 키 접근).
+        area_name: Router가 해소한 자치구명. 해소 실패 시 None.
 
     Returns:
         조립된 시스템 프롬프트 문자열.
@@ -189,7 +218,10 @@ def _build_card_system(message: str, results: list[dict]) -> str:
     blocks = [_ROLE, _STRUCT_CARD_LIST]
     if any(r.get("service_status") == "접수중" for r in results):
         blocks.append(_CLAUSE_RESERVATION_GUIDE)
-    if not _has_district_in_message(message):
+    # 완화 재시도 결과(0건 후 조건 완화)이고 표시할 결과가 있으면 완화 안내 절을 추가한다.
+    if retry_relaxed and results:
+        blocks.append(_CLAUSE_RELAXED_NOTICE)
+    if not area_name and not _has_district_in_message(message):
         blocks.append(_CLAUSE_REFINE_HINT)
     blocks.append(_OUTPUT_RULES)
     return _compose(*blocks)
@@ -352,7 +384,12 @@ class AnswerAgent:
                 system_prompt = self._static_prompts[IntentType.MAP.value]
             else:
                 # Tier 2: 카드형 (SQL_SEARCH / VECTOR_SEARCH / None)
-                system_prompt = _build_card_system(message, display)
+                system_prompt = _build_card_system(
+                    message,
+                    display,
+                    state.get("area_name"),
+                    retry_relaxed=bool(state.get("retry_relaxed")),
+                )
 
             answer_text = await self._answer_chain.ainvoke(
                 {

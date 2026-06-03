@@ -26,7 +26,7 @@ public class ChatStreamService implements QueryAndStreamUseCase {
 
         return aiServiceStreamPort.stream(
                         command.question(), prepared.roomId(), prepared.messageId(),
-                        command.lat(), command.lng())
+                        command.lat(), command.lng(), prepared.history())
                 .publishOn(Schedulers.boundedElastic())  // Netty 이벤트 루프 → boundedElastic 전환(블로킹 작업 허용 및 직렬 실행 보장)
                 .doOnNext(buffer::append)                // 단일 스레드 직렬 실행 → StringBuilder 안전
                 .doOnComplete(() -> {

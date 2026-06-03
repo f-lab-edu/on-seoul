@@ -68,7 +68,9 @@ class DispatchRetrySchedulerTest {
 
     private NotificationDispatch failedDispatch(Long id, int attemptCount, String payload) {
         return new NotificationDispatch(
-                id, 1L, SUB_ID, DispatchStatus.FAILED,
+                id, 1L, SUB_ID,
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.CHANGE, null, null,
+                DispatchStatus.FAILED,
                 null, "재시도 제목", "재시도 본문", TemplateSource.AI,
                 "이전 오류", attemptCount, payload,
                 Instant.now(), Instant.now());
