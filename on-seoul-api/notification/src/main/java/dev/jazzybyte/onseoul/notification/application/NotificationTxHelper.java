@@ -17,7 +17,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 
@@ -37,6 +40,13 @@ public class NotificationTxHelper {
     private final SaveDispatchPort saveDispatchPort;
     private final SaveSubscriptionPort saveSubscriptionPort;
     private final SubscriptionFilterParserPort subscriptionFilterParserPort;
+
+    /**
+     * 종료 서비스 제외(D-day) 기준 today 를 결정하는 Clock.
+     * 시점 트리거 스케줄러({@code ScheduledTriggerScheduler})와 동일한 UTC Clock({@code NotificationClockConfig})을
+     * 주입받아 두 알림 경로의 D-day 경계를 일치시킨다.
+     */
+    private final Clock clock;
 
     /**
      * TX A: subscription.filter를 SubscriptionFilter로 역직렬화한 뒤
@@ -62,8 +72,10 @@ public class NotificationTxHelper {
 
         SubscriptionFilter filter = subscriptionFilterParserPort.parse(sub.getFilter());
 
+        // 종료 서비스 제외(모델 B) D-day 기준 = UTC 달력 날짜. 시점 트리거 스케줄러와 동일 Clock 사용.
+        LocalDate today = LocalDate.now(clock.withZone(ZoneOffset.UTC));
         List<ServiceChange> changes = loadServiceChangePort.loadFiltered(
-                filter, sub.getLastNotifiedAt(), batch.getStartedAt());
+                filter, sub.getLastNotifiedAt(), batch.getStartedAt(), today);
 
         if (changes.isEmpty()) {
             return new TxAResult(List.of(), Optional.empty());
@@ -120,6 +132,37 @@ public class NotificationTxHelper {
 
         sub.markNotified(retryStartedAt);
         saveSubscriptionPort.save(sub);
+    }
+
+    /**
+     * 시점 트리거 dispatch 멱등 INSERT (service_id 단위 dedup).
+     * uq_nd_scheduled_dedup 충돌 시 empty 를 반환한다(이미 그날 같은 구독·서비스에 발행됨).
+     *
+     * @return INSERT 된 dispatch. 중복이면 empty.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Optional<NotificationDispatch> saveScheduledIfAbsent(NotificationDispatch dispatch) {
+        return saveDispatchPort.saveScheduledIfAbsent(dispatch);
+    }
+
+    /**
+     * 시점 트리거 TX B 성공: dispatch SUCCESS 갱신만 한다.
+     * CHANGE 와 달리 last_notified_at 커서를 전진시키지 않는다 — 시점 트리거는
+     * change_log 커서와 무관하며, dedup 은 (subscription_id, service_id, dispatch_date) 가 담당한다.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void txBScheduledSuccess(NotificationDispatch dispatch,
+                                    String title, String body, TemplateSource source) {
+        dispatch.markSuccess(title, body, source);
+        saveDispatchPort.save(dispatch);
+    }
+
+    /** 시점 트리거 TX B 실패: dispatch FAILED + title/body/source 저장(재시도 스케줄러 재사용). */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void txBScheduledFailure(NotificationDispatch dispatch,
+                                    String title, String body, TemplateSource source, String error) {
+        dispatch.markFailed(error, title, body, source);
+        saveDispatchPort.save(dispatch);
     }
 
     /**

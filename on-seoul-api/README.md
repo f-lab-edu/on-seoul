@@ -151,7 +151,7 @@ curl http://localhost:8080/actuator/health
 
 | Method | Path | 설명 | 인증 |
 |---|---|---|---|
-| POST | `/api/chat/query` | 챗봇 질의 (AI 서비스 위임, SSE) | O |
+| POST | `/api/chat/query` | 챗봇 질의 (AI 서비스 위임, SSE) — 직전 5턴 history를 body로 전달해 멀티턴 맥락 유지 | O |
 | GET | `/api/chat/rooms` | 대화방 목록 조회 (cursor 페이지네이션) | O |
 | GET | `/api/chat/rooms/{roomId}/messages` | 대화방 메시지 이력 조회 | O |
 | DELETE | `/api/chat/rooms/{roomId}` | 대화방 삭제 (soft delete) | O |

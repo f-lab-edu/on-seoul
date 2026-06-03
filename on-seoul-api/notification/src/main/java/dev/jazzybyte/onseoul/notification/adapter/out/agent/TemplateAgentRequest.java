@@ -12,6 +12,7 @@ import java.util.List;
  * 와이어 포맷은 snake_case이며 null 필드는 직렬화에서 제외한다.
  */
 record TemplateAgentRequest(
+        @JsonProperty("trigger_type") String triggerType,
         @JsonProperty("services") List<ServiceChangeGroup> services
 ) {
     @JsonInclude(JsonInclude.Include.NON_NULL)

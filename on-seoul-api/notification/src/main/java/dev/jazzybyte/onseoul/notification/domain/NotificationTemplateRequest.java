@@ -10,10 +10,17 @@ import java.util.List;
  * 각 그룹은 해당 서비스의 메타(serviceName/serviceUrl 등)와 변경 목록을 함께 담는다.
  */
 public record NotificationTemplateRequest(
+        TriggerType triggerType,
         List<ServiceChangeGroup> services
 ) {
     public NotificationTemplateRequest {
+        triggerType = triggerType == null ? TriggerType.CHANGE : triggerType;
         services = services == null ? List.of() : List.copyOf(services);
+    }
+
+    /** 기존 CHANGE 경로 편의 생성자 — triggerType=CHANGE. */
+    public NotificationTemplateRequest(List<ServiceChangeGroup> services) {
+        this(TriggerType.CHANGE, services);
     }
 
     /** 한 service_id에 대한 메타 + 변경 목록. */
