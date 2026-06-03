@@ -62,7 +62,7 @@ class KnockNotificationAdapterTest {
         NotificationContent content = new NotificationContent(
                 "변경 알림", "1개 서비스 변경",
                 java.util.List.of(new NotificationContent.ServiceCard(
-                        "수영교실", "접수중", "강남구", "강남센터", "성인",
+                        "OA-SECRET-1", "수영교실", "접수중", "강남구", "강남센터", "성인",
                         "2026-05-01", "2026-05-31",
                         "https://ex.com/1", "https://ex.com/img.png",
                         java.util.List.of(new NotificationContent.ChangeLine("모집상태", "접수중", "예약마감")))));
@@ -91,6 +91,9 @@ class KnockNotificationAdapterTest {
         assertThat(body).contains("\"label\"").contains("모집상태");
         assertThat(body).contains("\"old\"").contains("\"new\"");
         assertThat(body).doesNotContain("serviceStatus");
+        // serviceId 는 payload 내부 식별자 — Knock wire 에 노출되지 않아야 한다("service_id 비노출").
+        assertThat(body).doesNotContain("serviceId");
+        assertThat(body).doesNotContain("OA-SECRET-1");
     }
 
     @Test
@@ -101,7 +104,7 @@ class KnockNotificationAdapterTest {
         NotificationContent content = new NotificationContent(
                 "제목", "요약",
                 java.util.List.of(new NotificationContent.ServiceCard(
-                        "행사", null, null, null, null, null, null, null, null,
+                        "OA-2", "행사", null, null, null, null, null, null, null, null,
                         java.util.List.of())));
 
         adapter.send(FULL_CONTACT, content, 901L, Set.of(NotificationChannel.EMAIL));

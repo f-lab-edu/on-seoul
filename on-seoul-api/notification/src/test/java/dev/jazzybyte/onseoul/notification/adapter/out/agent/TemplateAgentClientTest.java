@@ -227,6 +227,9 @@ class TemplateAgentClientTest {
         assertThat(body).contains("\"field_name\"");
         assertThat(body).contains("\"old_value\"");
         assertThat(body).contains("\"new_value\"");
+        // AI 와이어는 snake_case service_id 만 쓴다. ServiceCard 내부 식별자(camelCase "serviceId")는
+        // 이 경로에 들어오면 안 된다("service_id 비노출"의 camelCase 누수 방어).
+        assertThat(body).doesNotContain("\"serviceId\"");
     }
 
     @Test

@@ -35,6 +35,12 @@ dependencies {
     testRuntimeOnly 'com.h2database:h2'
     testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
     testImplementation 'io.projectreactor:reactor-test'
+
+    // Testcontainers — cross-dedup JSONB containment(@>) 를 실제 PostgreSQL 로 검증(M2).
+    // 버전은 Spring Boot BOM 이 관리한다. Docker 미가용 시 IT 는 graceful skip 한다.
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
 }
 
 // ── jOOQ 코드 생성 ──────────────────────────────────────────────────────────

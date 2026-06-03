@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.notification.adapter.out.persistence;
 
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import dev.jazzybyte.onseoul.notification.domain.DispatchStatus;
 import dev.jazzybyte.onseoul.notification.domain.NotificationDispatch;
 import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
@@ -12,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -36,8 +38,9 @@ class NotificationDispatchPersistenceAdapter
     @Override
     public Optional<NotificationDispatch> saveIfAbsent(NotificationDispatch dispatch) {
         try {
+            // CHANGE dispatch 도 dispatch_date(UTC today)를 채운다 — cross-trigger dedup 선조회 기준.
             NotificationDispatchJpaEntity entity = new NotificationDispatchJpaEntity(
-                    dispatch.getBatchId(), dispatch.getSubscriptionId());
+                    dispatch.getBatchId(), dispatch.getSubscriptionId(), dispatch.getDispatchDate());
             return Optional.of(mapper.toDomain(repository.saveAndFlush(entity)));
         } catch (DataIntegrityViolationException e) {
             return Optional.empty();
@@ -135,5 +138,37 @@ class NotificationDispatchPersistenceAdapter
     @Transactional(readOnly = true, propagation = Propagation.REQUIRED)
     public boolean existsDeadDispatchBySubscriptionId(Long subscriptionId) {
         return repository.existsBySubscriptionIdAndStatus(subscriptionId, DispatchStatus.DEAD);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean existsChangeDispatchForServiceToday(Long subscriptionId, String serviceId,
+                                                       LocalDate dispatchDate) {
+        if (subscriptionId == null || serviceId == null || serviceId.isBlank() || dispatchDate == null) {
+            return false;
+        }
+        return repository.existsChangeDispatchCoveringService(
+                subscriptionId, dispatchDate, servicesContainmentLiteral(serviceId));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean existsScheduledDispatch(Long subscriptionId, String serviceId, LocalDate dispatchDate) {
+        if (subscriptionId == null || serviceId == null || serviceId.isBlank() || dispatchDate == null) {
+            return false;
+        }
+        return repository.existsBySubscriptionIdAndServiceIdAndDispatchDate(
+                subscriptionId, serviceId, dispatchDate);
+    }
+
+    /**
+     * JSONB containment 우변 리터럴 {@code [{"serviceId":"<sid>"}]} 을 만든다.
+     * serviceId 의 따옴표/제어문자를 안전하게 이스케이프하기 위해 JsonNode 직렬화로 구성한다
+     * (배열 안 객체여야 payload->'services'(배열) 와 {@code @>} 비교가 성립한다).
+     */
+    static String servicesContainmentLiteral(String serviceId) {
+        return JsonNodeFactory.instance.arrayNode()
+                .add(JsonNodeFactory.instance.objectNode().put("serviceId", serviceId))
+                .toString();
     }
 }

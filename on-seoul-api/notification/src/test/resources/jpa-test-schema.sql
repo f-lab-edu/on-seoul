@@ -95,9 +95,19 @@ CREATE TABLE IF NOT EXISTS notification_dispatches
 -- H2 는 부분 인덱스를 지원하지 않으므로 일반 unique 인덱스로 대체한다.
 -- CHANGE dispatch 는 service_id=NULL 이고 unique 제약에서 NULL 은 서로 구별되므로
 -- (여러 NULL 허용) 부분 인덱스와 동일하게 동작한다 — 테스트 데이터 기준 등가.
--- [경고] 이 등가는 CHANGE dispatch 의 dispatch_date 가 항상 NULL 이라는 전제에 의존한다.
---   만약 CHANGE 경로가 dispatch_date 를 채우게 되면(service_id 는 여전히 NULL),
---   H2 일반 인덱스는 (NULL, NULL, date) 조합에서 NULL 을 구별하지만 PG 부분 인덱스는
---   WHERE service_id IS NOT NULL 로 해당 row 를 아예 색인하지 않으므로 H2/PG 등가가 깨진다.
+-- [migration 12 이후] CHANGE 경로가 dispatch_date(UTC today)를 채우게 되었다(service_id 는 여전히 NULL).
+--   H2 일반 unique 인덱스는 (subscription_id, NULL, date) 행에서 service_id 가 NULL 이라
+--   서로 구별(SQL 표준: unique 인덱스의 NULL 은 distinct)하므로 같은 (sub, date) 의 CHANGE 행
+--   다중 INSERT 를 막지 않는다 — PG 부분 인덱스(WHERE service_id IS NOT NULL, CHANGE 행 미색인)와
+--   동일하게 CHANGE 행에는 dedup 제약이 걸리지 않는다. 따라서 H2/PG 등가는 유지된다.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_nd_scheduled_dedup
     ON notification_dispatches (subscription_id, service_id, dispatch_date);
+
+-- migration 12: CHANGE↔시점 cross-trigger dedup 선조회 가속(부분 B-tree, GIN 아님).
+-- PG: CREATE INDEX idx_nd_change_crossdedup ON notification_dispatches (subscription_id, dispatch_date)
+--       WHERE trigger_type = 'CHANGE';
+-- H2 는 부분 인덱스를 지원하지 않으므로 WHERE 술어 없이 일반(비-unique) 인덱스로 둔다(정합성 무관, 성능 힌트).
+-- [주의] cross-dedup 선조회 쿼리(notification_payload->'services' @> CAST(? AS jsonb))는
+--   PostgreSQL JSONB 연산자라 H2 에서는 동작하지 않는다 — 해당 경로는 QA 가 PG 로 검증한다.
+CREATE INDEX IF NOT EXISTS idx_nd_change_crossdedup
+    ON notification_dispatches (subscription_id, dispatch_date);
