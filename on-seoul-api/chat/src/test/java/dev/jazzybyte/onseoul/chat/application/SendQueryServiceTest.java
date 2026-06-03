@@ -72,6 +72,7 @@ class SendQueryServiceTest {
 
         assertThat(result.roomId()).isEqualTo(10L);
         assertThat(result.messageId()).isEqualTo(1L);
+        assertThat(result.created()).isTrue();
 
         ArgumentCaptor<ChatRoom> roomCaptor = ArgumentCaptor.forClass(ChatRoom.class);
         verify(saveChatRoomPort).save(roomCaptor.capture());
@@ -120,6 +121,7 @@ class SendQueryServiceTest {
 
         assertThat(result.roomId()).isEqualTo(existingRoomId);
         assertThat(result.messageId()).isEqualTo(2L);
+        assertThat(result.created()).isFalse();
         verify(saveChatRoomPort, never()).save(any());
 
         ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);

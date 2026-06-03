@@ -162,6 +162,68 @@ class SocialLoginServiceTest {
     }
 
     @Test
+    @DisplayName("이메일 충돌 — 다른 벤더로 이미 가입된 이메일이면 EMAIL_ALREADY_REGISTERED를 던지고 저장하지 않는다")
+    void socialLogin_emailRegisteredWithOtherProvider_throwsConflict() {
+        SocialLoginCommand cmd = command("kakao", "kakao-conflict-001"); // email=user@example.com
+        User existingGoogleUser = activeUser(99L, "google", "google-xyz");
+
+        when(loadUserPort.findByProviderAndProviderId("kakao", "kakao-conflict-001"))
+                .thenReturn(Optional.empty());
+        when(loadUserPort.findByEmail("user@example.com"))
+                .thenReturn(Optional.of(existingGoogleUser));
+
+        assertThatThrownBy(() -> service.socialLogin(cmd))
+                .isInstanceOf(OnSeoulApiException.class)
+                .satisfies(ex -> {
+                    OnSeoulApiException apiEx = (OnSeoulApiException) ex;
+                    assertThat(apiEx.getErrorCode()).isEqualTo(ErrorCode.EMAIL_ALREADY_REGISTERED);
+                    assertThat(apiEx.getMessage()).contains("google");
+                });
+
+        verify(saveUserPort, never()).save(any(User.class));
+        verifyNoInteractions(tokenIssuerPort, refreshTokenStorePort);
+    }
+
+    @Test
+    @DisplayName("이메일이 null인 카카오 신규 로그인 — 선검사를 건너뛰고 정상 가입한다")
+    void socialLogin_nullEmail_skipsPrecheckAndCreates() {
+        SocialLoginCommand cmd = new SocialLoginCommand("kakao", "kakao-noemail", null, "익명");
+        User savedUser = activeUser(30L, "kakao", "kakao-noemail");
+
+        when(loadUserPort.findByProviderAndProviderId("kakao", "kakao-noemail"))
+                .thenReturn(Optional.empty());
+        when(saveUserPort.save(any(User.class))).thenReturn(savedUser);
+        when(tokenIssuerPort.generateAccessToken(30L)).thenReturn("at");
+        when(tokenIssuerPort.generateRefreshToken(30L)).thenReturn("rt");
+        when(tokenIssuerPort.getRefreshTokenMinutes()).thenReturn(10080L);
+
+        service.socialLogin(cmd);
+
+        verify(loadUserPort, never()).findByEmail(any());
+        verify(saveUserPort).save(any(User.class));
+    }
+
+    @Test
+    @DisplayName("경쟁 조건 — INSERT 단계에서 email_hash 유니크 위반 시 EMAIL_ALREADY_REGISTERED로 변환한다")
+    void socialLogin_dataIntegrityViolation_convertedToConflict() {
+        SocialLoginCommand cmd = command("kakao", "kakao-race-001");
+
+        when(loadUserPort.findByProviderAndProviderId("kakao", "kakao-race-001"))
+                .thenReturn(Optional.empty());
+        when(loadUserPort.findByEmail("user@example.com")).thenReturn(Optional.empty());
+        when(saveUserPort.save(any(User.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("uq_users_email_hash"));
+
+        assertThatThrownBy(() -> service.socialLogin(cmd))
+                .isInstanceOf(OnSeoulApiException.class)
+                .satisfies(ex ->
+                        assertThat(((OnSeoulApiException) ex).getErrorCode())
+                                .isEqualTo(ErrorCode.EMAIL_ALREADY_REGISTERED));
+
+        verifyNoInteractions(tokenIssuerPort, refreshTokenStorePort);
+    }
+
+    @Test
     @DisplayName("DELETED 유저는 FORBIDDEN 예외를 발생시킨다")
     void socialLogin_deletedUser_throwsForbidden() {
         SocialLoginCommand cmd = command("google", "google-deleted");

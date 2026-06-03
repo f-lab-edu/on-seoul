@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.chat.adapter.out.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.jazzybyte.onseoul.chat.port.out.AiStreamEvent;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import okhttp3.mockwebserver.MockResponse;
@@ -48,11 +49,12 @@ class ChatAgentClientTest {
                 .setBody("data: 안녕\n\ndata: 하세요\n\n")
                 .setResponseCode(200));
 
-        List<String> tokens = adapter.stream("서울 문화행사 알려줘", 1L, 10L, null, null, java.util.List.of())
+        List<AiStreamEvent> events = adapter.stream("서울 문화행사 알려줘", 1L, 10L, null, null, java.util.List.of())
                 .collectList()
                 .block();
 
-        assertThat(tokens).containsExactly("안녕", "하세요");
+        assertThat(events).extracting(AiStreamEvent::raw).containsExactly("안녕", "하세요");
+        assertThat(events).noneMatch(AiStreamEvent::isFinal);
     }
 
     @Test
@@ -91,11 +93,11 @@ class ChatAgentClientTest {
                 .setBody(": keep-alive\n\ndata: 토큰\n\n")
                 .setResponseCode(200));
 
-        List<String> tokens = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of())
+        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of())
                 .collectList()
                 .block();
 
-        assertThat(tokens).containsExactly("토큰");
+        assertThat(events).extracting(AiStreamEvent::raw).containsExactly("토큰");
     }
 
     @Test
@@ -182,6 +184,61 @@ class ChatAgentClientTest {
 
         assertThat(json.get("history").isArray()).isTrue();
         assertThat(json.get("history")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("stream() - answer 키가 있고 error 키가 없는 data는 final 이벤트로 인식되고 answer가 추출된다")
+    void stream_finalEvent_extractsAnswer() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"stage\":\"routing\"}\n\n"
+                        + "data: {\"message_id\":84,\"answer\":\"강남구 문화행사 안내\",\"intent\":\"SQL_SEARCH\"}\n\n")
+                .setResponseCode(200));
+
+        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of())
+                .collectList()
+                .block();
+
+        assertThat(events).hasSize(2);
+        assertThat(events.get(0).isFinal()).isFalse();
+        assertThat(events.get(1).isFinal()).isTrue();
+        assertThat(events.get(1).finalAnswer()).isEqualTo("강남구 문화행사 안내");
+        // 원본 data는 양쪽 모두 그대로 보존된다(프론트 relay용)
+        assertThat(events.get(1).raw()).contains("\"message_id\":84");
+    }
+
+    @Test
+    @DisplayName("stream() - error 키가 함께 있는 data(workflow_error)는 final로 저장되지 않는다(relay 전용)")
+    void stream_workflowError_notTreatedAsFinal() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"answer\":\"폴백 답변\",\"error\":\"처리 중 오류\"}\n\n")
+                .setResponseCode(200));
+
+        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of())
+                .collectList()
+                .block();
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).isFinal()).isFalse();
+        assertThat(events.get(0).raw()).contains("폴백 답변");
+    }
+
+    @Test
+    @DisplayName("stream() - answer가 null인 final data는 빈 문자열로 추출된다")
+    void stream_finalWithNullAnswer_extractsEmptyString() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"message_id\":1,\"answer\":null,\"intent\":\"MAP\"}\n\n")
+                .setResponseCode(200));
+
+        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of())
+                .collectList()
+                .block();
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).isFinal()).isTrue();
+        assertThat(events.get(0).finalAnswer()).isEmpty();
     }
 
     @Test
