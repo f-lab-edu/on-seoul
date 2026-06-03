@@ -70,6 +70,20 @@ class NotificationDispatchPersistenceAdapterTest {
     }
 
     @Test
+    @DisplayName("saveIfAbsent() — CHANGE dispatch 의 dispatch_date(UTC today)가 저장된다 (cross-dedup 기준 컬럼)")
+    void saveIfAbsent_changeDispatch_persistsDispatchDate() {
+        java.time.LocalDate today = java.time.LocalDate.of(2026, 6, 3);
+        NotificationDispatch dispatch = NotificationDispatch.create(batchId, subscriptionId, today);
+
+        Optional<NotificationDispatch> result = dispatchAdapter.saveIfAbsent(dispatch);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getDispatchDate()).isEqualTo(today);
+        // serviceId 는 CHANGE 이므로 여전히 null.
+        assertThat(result.get().getServiceId()).isNull();
+    }
+
+    @Test
     @DisplayName("saveIfAbsent() 동일 (batch_id, subscription_id) 중복 → empty 반환 (멱등성)")
     void saveIfAbsent_duplicateDispatch_returnsEmpty() {
         dispatchAdapter.saveIfAbsent(NotificationDispatch.create(batchId, subscriptionId));
@@ -511,6 +525,80 @@ class NotificationDispatchPersistenceAdapterTest {
         // 둘 다 발행됨 — DB 레벨 cross dedup 부재(설계상 best-effort) 를 회귀 고정.
         assertThat(change).isPresent();
         assertThat(scheduled).isPresent();
+    }
+
+    @Test
+    @DisplayName("existsScheduledDispatch() — 오늘 같은 구독·서비스 시점 dispatch 가 있으면 true (없으면 false)")
+    void existsScheduledDispatch_detectsSameSubServiceDay() {
+        java.time.LocalDate today = java.time.LocalDate.of(2026, 6, 3);
+        assertThat(dispatchAdapter.existsScheduledDispatch(subscriptionId, "OA-1", today)).isFalse();
+
+        dispatchAdapter.saveScheduledIfAbsent(NotificationDispatch.createScheduled(
+                batchId, subscriptionId,
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.OPEN_DAY, "OA-1", today));
+
+        assertThat(dispatchAdapter.existsScheduledDispatch(subscriptionId, "OA-1", today)).isTrue();
+        // 다른 서비스/다른 날짜는 미존재.
+        assertThat(dispatchAdapter.existsScheduledDispatch(subscriptionId, "OA-2", today)).isFalse();
+        assertThat(dispatchAdapter.existsScheduledDispatch(subscriptionId, "OA-1", today.plusDays(1))).isFalse();
+    }
+
+    @Test
+    @DisplayName("existsScheduledDispatch() — null/blank 인자는 방어적으로 false")
+    void existsScheduledDispatch_nullArgs_returnsFalse() {
+        java.time.LocalDate today = java.time.LocalDate.of(2026, 6, 3);
+        assertThat(dispatchAdapter.existsScheduledDispatch(null, "OA-1", today)).isFalse();
+        assertThat(dispatchAdapter.existsScheduledDispatch(subscriptionId, null, today)).isFalse();
+        assertThat(dispatchAdapter.existsScheduledDispatch(subscriptionId, "  ", today)).isFalse();
+        assertThat(dispatchAdapter.existsScheduledDispatch(subscriptionId, "OA-1", null)).isFalse();
+    }
+
+    @Test
+    @DisplayName("existsChangeDispatchForServiceToday() — null/blank 인자는 쿼리 없이 false (JSONB @> 는 PG 전용, QA가 PG로 매칭 검증)")
+    void existsChangeDispatchForServiceToday_nullArgs_returnsFalse() {
+        java.time.LocalDate today = java.time.LocalDate.of(2026, 6, 3);
+        assertThat(dispatchAdapter.existsChangeDispatchForServiceToday(null, "OA-1", today)).isFalse();
+        assertThat(dispatchAdapter.existsChangeDispatchForServiceToday(subscriptionId, null, today)).isFalse();
+        assertThat(dispatchAdapter.existsChangeDispatchForServiceToday(subscriptionId, "  ", today)).isFalse();
+        assertThat(dispatchAdapter.existsChangeDispatchForServiceToday(subscriptionId, "OA-1", null)).isFalse();
+    }
+
+    @Test
+    @DisplayName("servicesContainmentLiteral() — JSON 배열 안 객체 [{\"serviceId\":\"...\"}] 형태로, 특수문자도 안전 이스케이프")
+    void servicesContainmentLiteral_buildsEscapedJsonArray() {
+        assertThat(NotificationDispatchPersistenceAdapter.servicesContainmentLiteral("OA-2269"))
+                .isEqualTo("[{\"serviceId\":\"OA-2269\"}]");
+        // 따옴표 포함 식별자도 깨지지 않고 이스케이프된다(SQL 인젝션/JSON 파손 방어).
+        assertThat(NotificationDispatchPersistenceAdapter.servicesContainmentLiteral("a\"b"))
+                .isEqualTo("[{\"serviceId\":\"a\\\"b\"}]");
+        // 백슬래시/제어문자도 JSON 안전 이스케이프된다 — 이 리터럴이 CAST(? AS jsonb) 우변으로 PG 에 바인딩되므로
+        // JSON 파손/이스케이프 누락은 PG 에서 쿼리 실패로 이어진다(H2 미평가라 리터럴 정확성으로 방어).
+        assertThat(NotificationDispatchPersistenceAdapter.servicesContainmentLiteral("a\\b\tc"))
+                .isEqualTo("[{\"serviceId\":\"a\\\\b\\tc\"}]");
+    }
+
+    @Test
+    @DisplayName("dispatch_date UTC 일관성 — CHANGE dispatch 가 채운 dispatch_date 와 같은 달력일의 시점 dispatch 가 동일 키로 인식된다")
+    void dispatchDate_changeAndScheduled_sameUtcDay_keyAligned() {
+        // CHANGE 경로와 시점 경로는 동일 UTC Clock 의 today(LocalDate)를 바인딩한다.
+        // 같은 LocalDate 로 저장된 행이 같은 dispatch_date 키로 조회됨을 확인(오프바이원/TZ 변환 없음).
+        java.time.LocalDate utcToday = java.time.LocalDate.of(2026, 6, 3);
+
+        // CHANGE dispatch: dispatch_date 채움, service_id=null (별도 batch).
+        NotificationBatch changeBatch = batchAdapter.insertRunning(NotificationBatch.start());
+        Optional<NotificationDispatch> change = dispatchAdapter.saveIfAbsent(
+                NotificationDispatch.create(changeBatch.getId(), subscriptionId, utcToday));
+        assertThat(change).isPresent();
+        assertThat(change.get().getDispatchDate()).isEqualTo(utcToday);
+
+        // 같은 달력일의 시점 dispatch 도 같은 dispatch_date 로 저장 → 시점-시점 선조회가 매칭.
+        NotificationBatch schedBatch = batchAdapter.insertRunning(NotificationBatch.start());
+        dispatchAdapter.saveScheduledIfAbsent(NotificationDispatch.createScheduled(
+                schedBatch.getId(), subscriptionId,
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.DEADLINE_DDAY, "OA-9", utcToday));
+        assertThat(dispatchAdapter.existsScheduledDispatch(subscriptionId, "OA-9", utcToday)).isTrue();
+        // 자정 경계: 하루 차이는 다른 키 → 매칭되지 않는다.
+        assertThat(dispatchAdapter.existsScheduledDispatch(subscriptionId, "OA-9", utcToday.minusDays(1))).isFalse();
     }
 
     @Test

@@ -128,7 +128,7 @@ class DispatchRetrySchedulerTest {
         NotificationContent original = new NotificationContent(
                 "구독하신 2개 서비스 변경 알림", "구독하신 2개 서비스에 변경이 감지되었습니다.",
                 List.of(new NotificationContent.ServiceCard(
-                        "강남 수영교실", "예약마감", "강남구", "강남센터", "성인",
+                        "OA-2269", "강남 수영교실", "예약마감", "강남구", "강남센터", "성인",
                         "2026-05-01", "2026-05-31",
                         "https://ex.com/1", "https://ex.com/img.png",
                         List.of(new NotificationContent.ChangeLine("모집상태", "접수중", "예약마감")))));

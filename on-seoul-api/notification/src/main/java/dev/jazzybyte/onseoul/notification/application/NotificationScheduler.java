@@ -338,8 +338,10 @@ public class NotificationScheduler {
                             .toList();
                     String name = (g.serviceName() != null && !g.serviceName().isBlank())
                             ? g.serviceName() : g.serviceId();
+                    // serviceId 는 payload 내부 식별자(cross-trigger dedup 선조회용)로만 보관한다.
+                    // Knock wire/AI 요청에는 노출하지 않는다(toServiceMap/TemplateAgentDtoMapper 미반영).
                     return new NotificationContent.ServiceCard(
-                            name, g.serviceStatus(), g.areaName(), g.placeName(),
+                            g.serviceId(), name, g.serviceStatus(), g.areaName(), g.placeName(),
                             g.targetInfo(), g.receiptStartDt(), g.receiptEndDt(),
                             g.serviceUrl(), g.imageUrl(), lines);
                 })

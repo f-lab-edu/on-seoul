@@ -10,6 +10,7 @@ import dev.jazzybyte.onseoul.notification.domain.SubscriptionFilter;
 import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
 import dev.jazzybyte.onseoul.notification.domain.TriggerType;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
+import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadScheduledTriggerPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
@@ -38,25 +39,33 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 충분히 끝난 뒤(기본 09:30) 실행되도록 시각을 늦춰 <b>CHANGE 가 먼저 dispatch 를 선점</b>하게 한다.
  * 이 실행 순서가 cross-trigger dedup(CHANGE 우선)의 1차 보장이다.
  *
- * <p><b>dedup</b>:
+ * <p><b>dedup (모두 batch 생성 전 선조회 — 빈 batch 미생성)</b>:
  * <ul>
- *   <li>시점-vs-시점: {@code saveScheduledIfAbsent} 가 부분 unique 인덱스
- *       {@code uq_nd_scheduled_dedup (subscription_id, service_id, dispatch_date)} 로 강제 — 하루 1건.</li>
- *   <li>CHANGE-vs-시점: <b>best-effort</b>. CHANGE dispatch 는 service_id=NULL 이고 여러 service 를
- *       payload 에 묶으므로 DB 제약으로 cross dedup 을 강제할 수 없다. 실행 순서(CHANGE 먼저)로
- *       완화하며, 같은 service 에 대해 같은 날 CHANGE 알림과 시점 알림이 모두 나갈 수 있는
- *       경계 케이스가 이론적으로 존재한다(아래 [한계] 참조).</li>
+ *   <li>CHANGE-vs-시점: dispatch 생성 전 {@code existsChangeDispatchForServiceToday} 로
+ *       "오늘 같은 구독의 CHANGE payload 가 이 service 를 이미 커버하는가"를 JSONB containment
+ *       ({@code notification_payload->'services' @> '[{"serviceId":"X"}]'}, idx_nd_change_crossdedup)
+ *       로 확인해, 커버하면 시점 발행을 skip 한다(CHANGE 우선). 이로써 cross-trigger dedup 을
+ *       <b>DB 조회로 실제 강제</b>한다(과거 "실행 순서 best-effort"에서 강화).</li>
+ *   <li>시점-vs-시점: dispatch 생성 전 {@code existsScheduledDispatch}
+ *       (subscription_id, service_id, dispatch_date) 로 존재 확인 후 없을 때만 발행한다.
+ *       부분 unique 인덱스 {@code uq_nd_scheduled_dedup} 의 ON CONFLICT 멱등
+ *       ({@code saveScheduledIfAbsent})은 race-safety 백업으로 유지한다.</li>
  * </ul>
  *
- * <p>[한계] CHANGE 와 시점 알림이 같은 날 같은 service 에 중복 발송될 수 있다.
- * 정확한 cross dedup 을 하려면 CHANGE dispatch 에도 service_id 단위 발행(또는 dispatch_target
- * 연관 테이블)이 필요하나, 이는 이번 범위(시점 3종 추가) 대비 변경 폭이 과대하여 보류했다
- * (migration 11 [핵심 설계 결정] 옵션 (b) 참조).
+ * <p>두 dedup 선조회를 batch 생성 <b>이전</b>으로 옮겨, skip 케이스에서 batch 를 만들지 않는다
+ * → 빈 {@code notification_batch} row 가 누적되지 않는다(이전 한계 해소).
+ *
+ * <p><b>전제</b>: CHANGE dispatch 가 dispatch_date(UTC today)와 payload.services[].serviceId 를
+ * 채운다(NotificationScheduler/NotificationTxHelper, migration 12). 두 알림 경로의 today 는 동일
+ * UTC Clock({@code NotificationClockConfig}) 기준이라 dispatch_date 가 일치한다.
  *
  * <p>처리 흐름(구독 청크 순회, service 단위):
  * <ol>
  *   <li>구독 filter 파싱 → 3개 트리거 조회(status 필터 무시, 지역/카테고리/키워드만)</li>
- *   <li>매칭 service 마다 {@code saveScheduledIfAbsent} 로 PENDING dispatch 멱등 INSERT</li>
+ *   <li>매칭 service 마다 (a) CHANGE cross-dedup, (b) 시점-시점 dedup 선조회 — 둘 중 하나라도
+ *       히트하면 batch 생성 없이 skip</li>
+ *   <li>둘 다 통과한 service 만 batch INSERT → {@code saveScheduledIfAbsent} 로 PENDING dispatch
+ *       멱등 INSERT(race-safety 백업)</li>
  *   <li>INSERT 성공분만 템플릿 생성(trigger_type 전달) → 콘텐츠 조립 → 푸시 발송</li>
  *   <li>결과를 dispatch 에 기록(SUCCESS/FAILED). last_notified_at 커서는 건드리지 않는다.</li>
  * </ol>
@@ -69,6 +78,7 @@ public class ScheduledTriggerScheduler {
 
     private final LoadSubscriptionPort loadSubscriptionPort;
     private final LoadScheduledTriggerPort loadScheduledTriggerPort;
+    private final LoadDispatchPort loadDispatchPort;
     private final SubscriptionFilterParserPort filterParser;
     private final LoadUserContactPort loadUserContactPort;
     private final TemplateGenerationPort templateGenerationPort;
@@ -84,6 +94,7 @@ public class ScheduledTriggerScheduler {
     public ScheduledTriggerScheduler(
             final LoadSubscriptionPort loadSubscriptionPort,
             final LoadScheduledTriggerPort loadScheduledTriggerPort,
+            final LoadDispatchPort loadDispatchPort,
             final SubscriptionFilterParserPort filterParser,
             final LoadUserContactPort loadUserContactPort,
             final TemplateGenerationPort templateGenerationPort,
@@ -94,6 +105,7 @@ public class ScheduledTriggerScheduler {
             final Clock clock) {
         this.loadSubscriptionPort = loadSubscriptionPort;
         this.loadScheduledTriggerPort = loadScheduledTriggerPort;
+        this.loadDispatchPort = loadDispatchPort;
         this.filterParser = filterParser;
         this.loadUserContactPort = loadUserContactPort;
         this.templateGenerationPort = templateGenerationPort;
@@ -187,26 +199,38 @@ public class ScheduledTriggerScheduler {
     /**
      * service 1건 → dispatch 1건 발행 + 발송.
      *
+     * <p>batch 생성 <b>전</b>에 두 dedup 을 선조회한다 → skip 시 빈 batch 를 만들지 않는다:
+     * <ol>
+     *   <li>CHANGE cross-dedup: 오늘 같은 구독의 CHANGE 가 이 service 를 이미 커버하면 skip(CHANGE 우선).</li>
+     *   <li>시점-시점 dedup: 오늘 같은 구독·서비스에 시점 dispatch 가 이미 있으면 skip.</li>
+     * </ol>
+     * 둘 다 통과하면 batch INSERT 후 {@code saveScheduledIfAbsent}(ON CONFLICT 멱등 = race-safety 백업)로 발행한다.
+     *
      * @return 발송 성공 시 true, dedup 으로 skip 또는 발송 실패 시 false.
      */
     private boolean dispatchOne(NotificationSubscription sub, TriggerType triggerType,
                                 ScheduledServiceMatch match, LocalDate today) {
+        // 1) CHANGE↔시점 cross-dedup: 오늘 같은 구독의 CHANGE payload 가 이 service 를 이미 커버하면 skip.
+        if (loadDispatchPort.existsChangeDispatchForServiceToday(sub.getId(), match.serviceId(), today)) {
+            return false;
+        }
+        // 2) 시점-시점 dedup: 오늘 같은 구독·서비스에 시점 dispatch 가 이미 있으면 skip.
+        if (loadDispatchPort.existsScheduledDispatch(sub.getId(), match.serviceId(), today)) {
+            return false;
+        }
+
         // batch_id 는 NOT NULL + FK(notification_batch) + uq_nd_batch_subscription(batch_id, subscription_id).
         // 한 구독이 같은 run 에서 service N건을 발행하므로 (batch_id, subscription_id) 충돌을 피하려면
         // service-dispatch 마다 별도 batch row 가 필요하다(migration 11 [batch 운용 규칙]).
-        // 시점 dispatch 의 진짜 dedup 키는 uq_nd_scheduled_dedup (subscription_id, service_id, dispatch_date) 다.
+        // 선조회를 통과한 service 만 여기 도달하므로 빈 batch 는 만들어지지 않는다.
         NotificationBatch batch = saveBatchPort.insertRunning(NotificationBatch.start());
         NotificationDispatch dispatch = NotificationDispatch.createScheduled(
                 batch.getId(), sub.getId(), triggerType, match.serviceId(), today);
 
         Optional<NotificationDispatch> inserted = txHelper.saveScheduledIfAbsent(dispatch);
         if (inserted.isEmpty()) {
-            // 이미 그날 같은 구독·서비스에 시점 dispatch 발행됨 → 방금 만든 빈 batch 는 SUCCESS(0건)로 마감.
-            // [한계/보류] dedup-skip 케이스마다 빈 notification_batch row 가 누적된다.
-            //   이를 피하려면 batch 생성 전에 (subscription_id, service_id, dispatch_date) 존재 여부를
-            //   선조회하는 새 포트(LoadDispatchPort.existsScheduled...)가 필요한데, 부분 unique 인덱스
-            //   술어를 그대로 반영한 쿼리 + 어댑터 + 테스트 추가가 필요해 이번 범위 대비 변경 폭이 크다.
-            //   빈 batch 는 SUCCESS(0/0)로 마감되어 무해(에러 아님)하므로 이번 라운드는 현행 유지한다.
+            // race-safety 백업: 선조회 이후 동시 INSERT 로 uq_nd_scheduled_dedup 충돌(드묾).
+            // 이 경우에만 빈 batch 가 생기며 SUCCESS(0/0)로 마감한다 — 정상 경로에선 발생하지 않는다.
             batch.complete(0, 0);
             safeUpdateBatch(batch);
             return false;
@@ -231,7 +255,7 @@ public class ScheduledTriggerScheduler {
         NotificationContent content = new NotificationContent(
                 template.title(), template.summary(),
                 List.of(new NotificationContent.ServiceCard(
-                        name, match.serviceStatus(), match.areaName(), match.placeName(),
+                        match.serviceId(), name, match.serviceStatus(), match.areaName(), match.placeName(),
                         match.targetInfo(), match.receiptStartDt(), match.receiptEndDt(),
                         match.serviceUrl(), match.imageUrl(), List.of())));
 

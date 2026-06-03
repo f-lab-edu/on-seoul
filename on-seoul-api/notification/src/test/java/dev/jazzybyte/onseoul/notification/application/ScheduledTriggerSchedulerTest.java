@@ -14,6 +14,7 @@ import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
 import dev.jazzybyte.onseoul.notification.domain.TriggerType;
 import dev.jazzybyte.onseoul.notification.domain.UserContact;
+import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadScheduledTriggerPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
@@ -52,6 +53,7 @@ class ScheduledTriggerSchedulerTest {
 
     @Mock private LoadSubscriptionPort loadSubscriptionPort;
     @Mock private LoadScheduledTriggerPort loadScheduledTriggerPort;
+    @Mock private LoadDispatchPort loadDispatchPort;
     @Mock private SubscriptionFilterParserPort filterParser;
     @Mock private LoadUserContactPort loadUserContactPort;
     @Mock private TemplateGenerationPort templateGenerationPort;
@@ -67,12 +69,17 @@ class ScheduledTriggerSchedulerTest {
     @BeforeEach
     void setUp() {
         scheduler = new ScheduledTriggerScheduler(
-                loadSubscriptionPort, loadScheduledTriggerPort, filterParser,
+                loadSubscriptionPort, loadScheduledTriggerPort, loadDispatchPort, filterParser,
                 loadUserContactPort, templateGenerationPort, pushNotificationPort,
                 new NotificationContentSerializer(new com.fasterxml.jackson.databind.ObjectMapper()),
                 saveBatchPort, txHelper, Clock.systemUTC());
 
         lenient().when(filterParser.parse(any())).thenReturn(SubscriptionFilter.empty());
+        // 기본: 두 dedup 선조회 모두 미존재(발행 진행).
+        lenient().when(loadDispatchPort.existsChangeDispatchForServiceToday(anyLong(), any(), any()))
+                .thenReturn(false);
+        lenient().when(loadDispatchPort.existsScheduledDispatch(anyLong(), any(), any()))
+                .thenReturn(false);
         lenient().when(loadUserContactPort.loadContact(anyLong())).thenReturn(Optional.of(CONTACT));
         lenient().when(loadScheduledTriggerPort.loadOpeningToday(any(), any())).thenReturn(List.of());
         lenient().when(loadScheduledTriggerPort.loadReceiptStartTomorrow(any(), any())).thenReturn(List.of());
@@ -128,6 +135,41 @@ class ScheduledTriggerSchedulerTest {
 
         verifyNoInteractions(pushNotificationPort, templateGenerationPort);
         verify(txHelper, never()).txBScheduledSuccess(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("CHANGE cross-dedup 히트 → 시점 발행 skip (batch 미생성, 발송 없음)")
+    void crossDedupHit_skipsWithoutBatch() {
+        NotificationSubscription s = sub(1L);
+        when(loadSubscriptionPort.loadChunk(eq(0L), anyInt())).thenReturn(List.of(s));
+        when(loadScheduledTriggerPort.loadDeadlineToday(any(), eq(TODAY)))
+                .thenReturn(List.of(match("OA-1")));
+        when(loadDispatchPort.existsChangeDispatchForServiceToday(eq(1L), eq("OA-1"), eq(TODAY)))
+                .thenReturn(true);
+
+        scheduler.processAll(TODAY);
+
+        // batch 를 만들지 않고, dispatch 발행/발송도 하지 않는다(빈 batch 미생성).
+        verifyNoInteractions(pushNotificationPort, templateGenerationPort);
+        verify(saveBatchPort, never()).insertRunning(any());
+        verify(txHelper, never()).saveScheduledIfAbsent(any());
+    }
+
+    @Test
+    @DisplayName("시점-시점 dedup 선조회 히트 → 시점 발행 skip (batch 미생성)")
+    void scheduledDedupHit_skipsWithoutBatch() {
+        NotificationSubscription s = sub(1L);
+        when(loadSubscriptionPort.loadChunk(eq(0L), anyInt())).thenReturn(List.of(s));
+        when(loadScheduledTriggerPort.loadDeadlineToday(any(), eq(TODAY)))
+                .thenReturn(List.of(match("OA-1")));
+        when(loadDispatchPort.existsScheduledDispatch(eq(1L), eq("OA-1"), eq(TODAY)))
+                .thenReturn(true);
+
+        scheduler.processAll(TODAY);
+
+        verifyNoInteractions(pushNotificationPort, templateGenerationPort);
+        verify(saveBatchPort, never()).insertRunning(any());
+        verify(txHelper, never()).saveScheduledIfAbsent(any());
     }
 
     @Test

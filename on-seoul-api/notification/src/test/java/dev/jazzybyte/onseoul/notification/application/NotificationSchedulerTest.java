@@ -748,6 +748,8 @@ class NotificationSchedulerTest {
         assertThat(sent.services()).hasSize(1);
 
         NotificationContent.ServiceCard card = sent.services().get(0);
+        // serviceId 는 cross-trigger dedup 선조회용 내부 식별자로 카드에 보존된다.
+        assertThat(card.serviceId()).isEqualTo("OA-2269");
         assertThat(card.name()).isEqualTo("강남 수영교실");
         assertThat(card.status()).isEqualTo("RECEIVING");
         assertThat(card.area()).isEqualTo("강남구");

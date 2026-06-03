@@ -75,9 +75,18 @@ public class NotificationDispatchJpaEntity {
     private Instant updatedAt;
 
     NotificationDispatchJpaEntity(Long batchId, Long subscriptionId) {
+        this(batchId, subscriptionId, (LocalDate) null);
+    }
+
+    /**
+     * CHANGE dispatch INSERT 용 — service_id 는 null 이지만 dispatch_date 를 채운다.
+     * CHANGE↔시점 cross-trigger dedup 선조회의 "오늘 범위" 기준 컬럼(migration 12).
+     */
+    NotificationDispatchJpaEntity(Long batchId, Long subscriptionId, LocalDate dispatchDate) {
         this.batchId = batchId;
         this.subscriptionId = subscriptionId;
         this.triggerType = TriggerType.CHANGE;
+        this.dispatchDate = dispatchDate;
         this.status = DispatchStatus.PENDING;
         this.attemptCount = 0;
         this.updatedAt = Instant.now();

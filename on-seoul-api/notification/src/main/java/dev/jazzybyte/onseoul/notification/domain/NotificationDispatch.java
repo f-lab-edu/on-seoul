@@ -82,10 +82,22 @@ public class NotificationDispatch {
      * triggerType=CHANGE, serviceId=null, dispatchDate=null.
      */
     public static NotificationDispatch create(Long batchId, Long subscriptionId) {
+        return create(batchId, subscriptionId, null);
+    }
+
+    /**
+     * Factory: 신규 PENDING CHANGE dispatch 생성 + dispatch_date 지정.
+     *
+     * <p>serviceId 는 여전히 null(CHANGE 는 여러 서비스를 payload.services[] 에 묶음)이지만,
+     * CHANGE↔시점 cross-trigger dedup 선조회의 "오늘 범위" 기준 컬럼인 dispatch_date 는 채운다.
+     * 값은 배치의 UTC today(시점 잡과 동일 달력일)다. dispatchDate 가 null 이면 기존 동작과 동일하다.
+     */
+    public static NotificationDispatch create(Long batchId, Long subscriptionId, LocalDate dispatchDate) {
         NotificationDispatch d = new NotificationDispatch();
         d.batchId = batchId;
         d.subscriptionId = subscriptionId;
         d.triggerType = TriggerType.CHANGE;
+        d.dispatchDate = dispatchDate;
         d.status = DispatchStatus.PENDING;
         d.attemptCount = 0;
         Instant now = Instant.now();

@@ -20,8 +20,17 @@ public record NotificationContent(
         services = services == null ? List.of() : List.copyOf(services);
     }
 
-    /** 한 서비스의 결정적 사실 카드. 변경 라인은 한글 라벨로 표기된 {@link ChangeLine} 목록이다. */
+    /**
+     * 한 서비스의 결정적 사실 카드. 변경 라인은 한글 라벨로 표기된 {@link ChangeLine} 목록이다.
+     *
+     * <p>{@code serviceId}는 <b>내부 식별자</b>다(payload JSONB 직렬화 시 {@code "serviceId"}로 포함).
+     * CHANGE↔시점 cross-trigger dedup 선조회가 {@code notification_payload->'services' @>
+     * '[{"serviceId":"X"}]'} JSONB containment 로 "오늘 이 구독의 CHANGE 가 이 서비스를 이미
+     * 커버하는지"를 판정하는 데 쓴다. <b>Knock wire 매핑(KnockNotificationAdapter)과 AI 요청에는
+     * 절대 노출하지 않는다</b> — "service_id 비노출" 원칙 유지.
+     */
     public record ServiceCard(
+            String serviceId,
             String name,
             String status,
             String area,
