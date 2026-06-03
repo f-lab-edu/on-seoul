@@ -148,6 +148,74 @@ class TestSqlSearchFilters:
         assert bind["top_k"] == 5
 
 
+class TestSqlSearchPaymentFilter:
+    async def test_free_exact_match_bind(self):
+        """payment_type="무료" → bind 값 '무료' (정확 매칭)."""
+        session = _make_session([])
+        await sql_search(session, payment_type="무료")
+        bind = session.execute.call_args[0][1]
+        assert bind["payment_type"] == "무료"
+
+    async def test_free_exact_match_sql_text(self):
+        """payment_type="무료" → '=' 정확 매칭 조건."""
+        executed: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed.append(str(stmt))
+            m = MagicMock()
+            m.keys.return_value = []
+            m.fetchall.return_value = []
+            return m
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+        await sql_search(session, payment_type="무료")
+        assert "payment_type = :payment_type" in executed[0]
+        assert "LIKE" not in executed[0]
+
+    async def test_paid_prefix_match_bind(self):
+        """payment_type="유료" → bind 값 '유료%' (접두 매칭)."""
+        session = _make_session([])
+        await sql_search(session, payment_type="유료")
+        bind = session.execute.call_args[0][1]
+        assert bind["payment_type"] == "유료%"
+
+    async def test_paid_prefix_match_sql_text(self):
+        """payment_type="유료" → LIKE 접두 매칭 + ESCAPE."""
+        executed: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed.append(str(stmt))
+            m = MagicMock()
+            m.keys.return_value = []
+            m.fetchall.return_value = []
+            return m
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+        await sql_search(session, payment_type="유료")
+        assert "payment_type LIKE :payment_type ESCAPE" in executed[0]
+
+    async def test_none_payment_no_condition(self):
+        """payment_type=None → 조건/bind 미포함."""
+        executed: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed.append(str(stmt))
+            m = MagicMock()
+            m.keys.return_value = []
+            m.fetchall.return_value = []
+            return m
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+        await sql_search(session)
+        bind = session.execute.call_args[0][1]
+        assert "payment_type" not in bind
+        # payment_type 은 SELECT 컬럼이므로 WHERE 조건(바인드 참조)이 없는지로 검증한다.
+        assert ":payment_type" not in executed[0]
+
+
 class TestSqlSearchAllFilters:
     async def test_all_filters_combined_in_bind(self):
         """모든 필터를 동시에 전달하면 bind에 모두 포함된다."""

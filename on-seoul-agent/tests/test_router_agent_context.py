@@ -201,6 +201,55 @@ class TestRouterContextInjection:
         rq = _IntentOutput(intent=IntentType.SQL_SEARCH, area_name=district)
         assert rq.area_name == district
 
+    async def test_payment_type_free_normalized(self):
+        """무료/공짜/free 류는 payment_type="무료"로 정규화된다."""
+        for raw in ("무료", "공짜", "free", "FREE", "무료로"):
+            rq = _IntentOutput(intent=IntentType.SQL_SEARCH, payment_type=raw)
+            assert rq.payment_type == "무료", raw
+
+    async def test_payment_type_paid_normalized(self):
+        """유료/요금/paid 류는 payment_type="유료"로 정규화된다."""
+        for raw in ("유료", "요금", "paid", "유료(요금안내문의)"):
+            rq = _IntentOutput(intent=IntentType.SQL_SEARCH, payment_type=raw)
+            assert rq.payment_type == "유료", raw
+
+    async def test_payment_type_noise_normalized_to_none(self):
+        """알 수 없는 값/잡음은 None으로 정규화된다."""
+        for raw in ("아무거나", "", "회원제"):
+            rq = _IntentOutput(intent=IntentType.SQL_SEARCH, payment_type=raw)
+            assert rq.payment_type is None, raw
+
+    async def test_payment_type_none_preserved(self):
+        """payment_type=None은 None으로 유지된다."""
+        rq = _IntentOutput(intent=IntentType.SQL_SEARCH, payment_type=None)
+        assert rq.payment_type is None
+
+    async def test_context_inheritance_prompt_present(self):
+        """history+payment follow-up 시 system prompt에 상속 지시가 실린다."""
+        agent = _make_agent(IntentType.SQL_SEARCH)
+        await agent.classify(
+            message="그 중에서 무료인 것만 보여줘",
+            history=[
+                {"role": "user", "content": "강남구 문화행사 알려줘"},
+                {"role": "assistant", "content": "강남구 문화행사 5건을 안내합니다."},
+            ],
+        )
+        text = _prompt_text(agent)
+        # 상속 규칙 + payment 규칙이 프롬프트에 존재
+        assert "상속" in text
+        assert "payment_type" in text
+        assert "[사용자] 강남구 문화행사 알려줘" in text
+
+    async def test_payment_few_shot_examples_present(self):
+        """payment 추출·맥락 상속 few-shot 예시가 포함된다."""
+        from llm.prompts.router import ROUTER_FEW_SHOT_EXAMPLES
+
+        joined = "\n".join(e["message"] + e["output"] for e in ROUTER_FEW_SHOT_EXAMPLES)
+        assert "강남구 무료 문화행사" in joined
+        assert '"payment_type": "무료"' in joined
+        # 멀티턴 상속 예시 (직전 강남구 문화행사 + 그 중 무료)
+        assert "그 중에서 무료인 것만" in joined
+
     async def test_long_history_compose_without_error(self):
         """매우 긴 turn content가 들어가도 prompt 합성에 실패하지 않는다."""
         agent = _make_agent(IntentType.VECTOR_SEARCH)

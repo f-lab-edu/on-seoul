@@ -925,6 +925,108 @@ class TestSelfCorrectionInfiniteLoopRegression:
         state_after_retry = {**state_empty_answer, "retry_count": 1}
         assert graph._nodes.self_correction_edge(state_after_retry) == "end_normal"
 
+    async def test_self_correction_edge_zero_hits_triggers_retry(self):
+        """SQL/VECTOR 하드 필터 0건이면 answer가 있어도 1회 재시도(케이스1 안전망)."""
+        graph = AgentGraph(answer_agent=_answer_agent())
+
+        zero_hits: AgentState = {
+            **_state(),
+            "intent": IntentType.SQL_SEARCH,
+            "answer": "조건에 맞는 결과가 없어요.",
+            "hydrated_services": [],
+            "sql_results": [],
+            "vector_results": None,
+            "retry_count": 0,
+        }
+        assert graph._nodes.self_correction_edge(zero_hits) == "retry_prep_node"
+
+    async def test_self_correction_edge_zero_hits_capped_after_retry(self):
+        """0건이라도 retry_count>=1이면 무한루프 방지 — end_normal."""
+        graph = AgentGraph(answer_agent=_answer_agent())
+        zero_hits: AgentState = {
+            **_state(),
+            "intent": IntentType.VECTOR_SEARCH,
+            "answer": "결과 없음",
+            "hydrated_services": [],
+            "retry_count": 1,
+        }
+        assert graph._nodes.self_correction_edge(zero_hits) == "end_normal"
+
+    async def test_self_correction_edge_zero_hits_only_for_search_intents(self):
+        """FALLBACK 등 비검색 intent는 0건이어도 재시도하지 않는다."""
+        graph = AgentGraph(answer_agent=_answer_agent())
+        state = {
+            **_state(),
+            "intent": IntentType.FALLBACK,
+            "answer": "안내드립니다.",
+            "hydrated_services": [],
+            "retry_count": 0,
+        }
+        assert graph._nodes.self_correction_edge(state) == "end_normal"
+
+    async def test_self_correction_edge_with_hits_no_retry(self):
+        """결과가 있으면 재시도하지 않는다."""
+        graph = AgentGraph(answer_agent=_answer_agent())
+        state = {
+            **_state(),
+            "intent": IntentType.SQL_SEARCH,
+            "answer": "5건 안내",
+            "hydrated_services": [{"service_id": "S1"}],
+            "retry_count": 0,
+        }
+        assert graph._nodes.self_correction_edge(state) == "end_normal"
+
+    async def test_retry_prep_node_relaxes_payment_and_sets_flag(self):
+        """retry_prep_node가 payment_type을 드롭하고 retry_relaxed=True를 세팅한다."""
+        _, data_session = _sql_agent([])
+        graph = AgentGraph(answer_agent=_answer_agent())
+        graph._nodes.prepare(data_session, _ai_session())
+
+        stale: AgentState = {
+            **_state(),
+            "retry_count": 0,
+            "payment_type": "무료",
+            "hydrated_services": [],
+        }
+        result = await graph._nodes.retry_prep_node(stale)
+        assert result["payment_type"] is None
+        assert result["retry_relaxed"] is True
+
+    async def test_router_node_propagates_payment_type(self):
+        """router_node 반환 update에 payment_type이 포함된다."""
+        router = RouterAgent.__new__(RouterAgent)
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(
+            return_value=_IntentOutput(
+                intent=IntentType.SQL_SEARCH,
+                refined_query="강남구 무료 문화행사",
+                max_class_name="문화체험",
+                area_name="강남구",
+                payment_type="무료",
+            )
+        )
+        llm = MagicMock()
+        llm.with_structured_output = MagicMock(return_value=structured)
+        router._llm = llm
+
+        graph = AgentGraph(router=router, answer_agent=_answer_agent())
+        update = await graph._nodes.router_node(_state(message="강남구 무료 문화행사"))
+        assert update["payment_type"] == "무료"
+
+    async def test_router_node_omits_payment_type_when_none(self):
+        """payment 미언급 시 payment_type 키를 update에 포함하지 않는다."""
+        router = RouterAgent.__new__(RouterAgent)
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(
+            return_value=_IntentOutput(intent=IntentType.SQL_SEARCH)
+        )
+        llm = MagicMock()
+        llm.with_structured_output = MagicMock(return_value=structured)
+        router._llm = llm
+        graph = AgentGraph(router=router, answer_agent=_answer_agent())
+        update = await graph._nodes.router_node(_state())
+        assert "payment_type" not in update
+
 
 # ---------------------------------------------------------------------------
 # 7b. Router refined_query 산출 → state 전파 회귀

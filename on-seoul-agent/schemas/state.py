@@ -29,6 +29,7 @@ class AgentState(TypedDict):
     max_class_name: str | None  # 체육시설·문화행사·시설대관·교육·진료 중 하나
     area_name: str | None  # 서울 자치구명 (예: 강남구)
     service_status: str | None  # 접수중·예약마감·접수종료·예약일시중지·안내중 중 하나
+    payment_type: str | None  # 결제 유형 필터 ("무료"/"유료"). 무료=정확, 유료=접두 매칭
     sql_results: list[dict[str, Any]] | None  # SQL Agent 결과
     sql_keyword: str | None  # SqlAgent가 LLM으로 추출한 키워드 (search_channels 적재용)
     vector_sub_intent: (
@@ -68,6 +69,9 @@ class AgentState(TypedDict):
     # LangGraph 자기 교정(Self-Correction) 루프 카운터.
     # answer가 비어 있거나 error가 있을 때 최대 1회 재검색을 허용한다.
     retry_count: int  # 재시도 횟수 (0 = 아직 재시도 없음)
+    # 하드 필터 0건으로 인한 완화 재시도 신호. retry_prep_node 가 0건 재시도 시 True 로 세팅.
+    # AnswerAgent 가 완화 사실(예: payment_type 드롭)을 답변에 명시하는 데 사용한다.
+    retry_relaxed: bool
     # Router 컨텍스트 / Answer Cache 흐름
     # API 서비스가 chat_messages에서 조립한 직전 N턴 대화 이력.
     # ChatRequest.history에서 주입. 없으면 []. Router 에이전트가 맥락으로 활용.

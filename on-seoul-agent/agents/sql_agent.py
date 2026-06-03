@@ -14,7 +14,7 @@ from langchain_core.prompts import ChatPromptTemplate, FewShotChatMessagePromptT
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agents.router_agent import SEOUL_DISTRICTS
+from agents.router_agent import _ALLOWED_PAYMENT_TYPES, SEOUL_DISTRICTS
 from llm.client import get_chat_model
 from llm.prompts.sql_extraction import (
     SQL_EXTRACTION_FEW_SHOT_EXAMPLES,
@@ -32,6 +32,7 @@ _ALLOWED_MAX_CLASS_NAMES: frozenset[str] = frozenset(
 _ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(
     ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
 )
+# payment_type 정규값은 router_agent 단일 정의를 재사용 (eval-운영 정합성).
 
 
 class _SqlParams(BaseModel):
@@ -42,6 +43,7 @@ class _SqlParams(BaseModel):
     max_class_name: str | None = None
     area_name: str | None = None
     service_status: str | None = None
+    payment_type: str | None = None
     keyword: str | None = None
     receipt_date_from: date | None = None
     receipt_date_to: date | None = None
@@ -66,6 +68,13 @@ class _SqlParams(BaseModel):
         if v is None:
             return None
         return v if v in _ALLOWED_SERVICE_STATUSES else None  # type: ignore[return-value]
+
+    @field_validator("payment_type", mode="before")
+    @classmethod
+    def _validate_payment_type(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        return v if v in _ALLOWED_PAYMENT_TYPES else None  # type: ignore[return-value]
 
 
 class SqlAgent:
@@ -133,16 +142,19 @@ class SqlAgent:
             max_class_name = state.get("max_class_name")
             area_name = state.get("area_name")
             service_status = state.get("service_status")
+            payment_type = state.get("payment_type")
         else:
             max_class_name = params.max_class_name
             area_name = params.area_name
             service_status = params.service_status
+            payment_type = params.payment_type
 
         rows = await sql_search(
             session,
             max_class_name=max_class_name,
             area_name=area_name,
             service_status=service_status,
+            payment_type=payment_type,
             keyword=params.keyword,
             receipt_date_from=params.receipt_date_from,
             receipt_date_to=params.receipt_date_to,

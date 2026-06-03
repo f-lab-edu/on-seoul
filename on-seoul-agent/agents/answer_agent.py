@@ -156,6 +156,14 @@ _CLAUSE_REFINE_HINT = """\
 특정 자치구(예: 강남구, 마포구)나 요금 조건(무료/유료)을 함께 알려주시면 더 정확하게 찾아드릴 수 있어요.
 원하시는 지역이나 무료/유료 여부를 알려주시면 더 좁혀서 찾아드릴게요."""
 
+# 0건 완화 재시도(retry_relaxed) 시 추가되는 절.
+# payment_type 등 일부 조건을 완화해 결과를 보여줄 때, 완화 사실을 반드시 명시한다.
+# (무료 요청에 유료 결과를 무료라고 오안내하지 않도록 강제)
+_CLAUSE_RELAXED_NOTICE = """\
+요청하신 조건(예: 무료)에 정확히 맞는 결과가 없어, 결제 유형 조건을 완화한 결과를 보여드립니다.
+답변 첫머리에 "요청하신 조건에 맞는 결과가 없어 조건을 완화한 결과입니다"와 같이 완화 사실을 반드시 안내하고,
+유료 시설을 무료라고 표현하지 마세요. 각 카드의 실제 요금 정보를 그대로 전달하세요."""
+
 
 def _compose(*blocks: str) -> str:
     """비어있지 않은 블록들을 빈 줄로 연결한다."""
@@ -179,7 +187,13 @@ def _has_district_in_message(message: str) -> bool:
     return any(district in message for district in SEOUL_DISTRICTS)
 
 
-def _build_card_system(message: str, results: list[dict], area_name: str | None) -> str:
+def _build_card_system(
+    message: str,
+    results: list[dict],
+    area_name: str | None,
+    *,
+    retry_relaxed: bool = False,
+) -> str:
     """카드형(SQL/VECTOR) intent의 시스템 프롬프트를 런타임에 조립한다.
 
     조건부 절:
@@ -204,6 +218,9 @@ def _build_card_system(message: str, results: list[dict], area_name: str | None)
     blocks = [_ROLE, _STRUCT_CARD_LIST]
     if any(r.get("service_status") == "접수중" for r in results):
         blocks.append(_CLAUSE_RESERVATION_GUIDE)
+    # 완화 재시도 결과(0건 후 조건 완화)이고 표시할 결과가 있으면 완화 안내 절을 추가한다.
+    if retry_relaxed and results:
+        blocks.append(_CLAUSE_RELAXED_NOTICE)
     if not area_name and not _has_district_in_message(message):
         blocks.append(_CLAUSE_REFINE_HINT)
     blocks.append(_OUTPUT_RULES)
@@ -368,7 +385,10 @@ class AnswerAgent:
             else:
                 # Tier 2: 카드형 (SQL_SEARCH / VECTOR_SEARCH / None)
                 system_prompt = _build_card_system(
-                    message, display, state.get("area_name")
+                    message,
+                    display,
+                    state.get("area_name"),
+                    retry_relaxed=bool(state.get("retry_relaxed")),
                 )
 
             answer_text = await self._answer_chain.ainvoke(

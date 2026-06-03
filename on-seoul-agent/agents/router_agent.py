@@ -30,6 +30,11 @@ _ALLOWED_MAX_CLASS_NAMES: frozenset[str] = frozenset(
 _ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(
     ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
 )
+# payment_type 정규값 — 원천 데이터의 "유료(요금안내문의)" 변형은 sql_search 매칭에서
+# 접두("유료%")로 처리하므로, Router 산출값은 "무료"/"유료" 두 정규값만 허용한다.
+# DB distinct 확인(2026-06-03): {"유료","무료","유료(요금안내문의)"} — "유료%" 접두가
+# 두 유료 변형을 모두 포괄함을 검증함.
+_ALLOWED_PAYMENT_TYPES: frozenset[str] = frozenset({"무료", "유료"})
 
 # 서울특별시 25개 자치구 공식 명칭 화이트리스트.
 # LLM이 "강남" / "강 남구" / "Gangnam" 등 비표준 형식을 반환하면
@@ -80,6 +85,8 @@ class _IntentOutput(BaseModel):
     max_class_name: str | None = None
     area_name: str | None = None
     service_status: str | None = None
+    # 결제 유형 post-filter — "무료"/"유료" 정규값 또는 None.
+    payment_type: str | None = None
     # VECTOR_SEARCH 전용 서브 의도 — RRF 가중치 프로파일 선택에 사용.
     # intent가 VECTOR_SEARCH가 아니면 None. 허용 값 외 → None으로 정규화.
     vector_sub_intent: Literal["identification", "detail", "semantic"] | None = None
@@ -109,6 +116,28 @@ class _IntentOutput(BaseModel):
             return None
         if v in _ALLOWED_SERVICE_STATUSES:
             return v  # type: ignore[return-value]
+        return None
+
+    @field_validator("payment_type", mode="before")
+    @classmethod
+    def _validate_payment_type(cls, v: object) -> str | None:
+        """LLM 출력을 "무료"/"유료" 정규값으로 강제한다.
+
+        - 무료/free/공짜 류 → "무료"
+        - 유료/paid/요금 류 (원천값 "유료(요금안내문의)" 포함) → "유료"
+        - 그 외 / 추출 실패 → None (필터 미적용)
+        """
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            return None
+        normalized = v.strip().lower()
+        if not normalized:
+            return None
+        if "무료" in normalized or "free" in normalized or "공짜" in normalized:
+            return "무료"
+        if "유료" in normalized or "paid" in normalized or "요금" in normalized:
+            return "유료"
         return None
 
     @field_validator("vector_sub_intent", mode="before")

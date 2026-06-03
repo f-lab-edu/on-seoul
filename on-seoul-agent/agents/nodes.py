@@ -149,6 +149,8 @@ class GraphNodes:
                 update["area_name"] = result.area_name
             if result.service_status is not None:
                 update["service_status"] = result.service_status
+            if result.payment_type is not None:
+                update["payment_type"] = result.payment_type
             if result.vector_sub_intent is not None:
                 update["vector_sub_intent"] = result.vector_sub_intent
             logger.info(
@@ -195,6 +197,10 @@ class GraphNodes:
             "max_class_name": None,
             "area_name": None,
             "service_status": None,
+            # payment_type 완화 — 0건 재시도 시 결제 유형 필터를 드롭한다.
+            # AnswerAgent 가 retry_relaxed 로 완화 사실을 답변에 명시한다.
+            "payment_type": None,
+            "retry_relaxed": True,
             # RESET_CHANNELS sentinel — 이전 시도 채널 데이터를 지워
             # UNIQUE (message_id, channel) 위반을 방지한다.
             # 빈 dict({}) 는 더 이상 리셋 신호가 아니라 no-op 이므로 sentinel 필수.
@@ -221,6 +227,7 @@ class GraphNodes:
                         "max_class_name": state.get("max_class_name"),
                         "area_name": state.get("area_name"),
                         "service_status": state.get("service_status"),
+                        "payment_type": state.get("payment_type"),
                         "keyword": keyword,
                         "top_k": _SQL_TOP_K,
                     },
@@ -589,18 +596,40 @@ class GraphNodes:
     def self_correction_edge(self, state: AgentState) -> str:
         """answer_node 완료 후 자기 교정 여부를 결정한다.
 
-        answer가 비어 있고 retry_count == 0이면 retry_prep_node → router_node 경로를 탄다.
-        retry_prep_node가 retry_count를 1로 올리므로 다음 순회에서는 이 분기에 진입하지 않는다.
-        재시도 여부 판단은 state["retry_count"]만으로 자기 완결된다.
+        재시도 트리거 (retry_count == 0 캡, 최대 1회):
+          1. answer 가 비어 있음 (기존 동작).
+          2. intent 가 SQL_SEARCH/VECTOR_SEARCH 이고 하드 필터 적용 결과가 0건
+             (hydrated_services/sql_results/vector_results 모두 빈) — 케이스1 안전망.
+
+        retry_prep_node 가 retry_count 를 1 로 올리므로 다음 순회에서는 이 분기에
+        진입하지 않는다(무한 루프 방지). 재시도 판단은 state["retry_count"] 로 자기 완결된다.
         """
         retry_count = state.get("retry_count", 0)
         answer = state.get("answer") or ""
 
-        needs_retry = not answer.strip() and retry_count == 0
+        if retry_count != 0:
+            return "end_normal"
 
-        if needs_retry:
+        # 트리거 1: 빈 답변.
+        if not answer.strip():
             return "retry_prep_node"
+
+        # 트리거 2: SQL/VECTOR 하드 필터 0건.
+        intent = state.get("intent")
+        if intent in (IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH):
+            if self._hard_filter_zero_hits(state):
+                return "retry_prep_node"
+
         return "end_normal"
+
+    @staticmethod
+    def _hard_filter_zero_hits(state: AgentState) -> bool:
+        """검색·하이드레이션 슬롯이 모두 비어 있는지(0건) 판정한다."""
+        return not (
+            state.get("hydrated_services")
+            or state.get("sql_results")
+            or state.get("vector_results")
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +687,7 @@ class CacheCheckNode:
         max_class_name = state.get("max_class_name")
         area_name = state.get("area_name")
         service_status = state.get("service_status")
+        payment_type = state.get("payment_type")
 
         envelope = await get_cached_answer(
             refined,
@@ -665,6 +695,7 @@ class CacheCheckNode:
             max_class_name=max_class_name,
             area_name=area_name,
             service_status=service_status,
+            payment_type=payment_type,
         )
         if envelope is None:
             logger.info(
@@ -699,6 +730,7 @@ class CacheCheckNode:
             "max_class_name": snap.get("max_class_name"),
             "area_name": snap.get("area_name"),
             "service_status": snap.get("service_status"),
+            "payment_type": snap.get("payment_type"),
             "cache_hit": True,
         }
 
@@ -728,6 +760,7 @@ class CacheWriteNode:
         max_class_name = state.get("max_class_name")
         area_name = state.get("area_name")
         service_status = state.get("service_status")
+        payment_type = state.get("payment_type")
 
         payload = {
             "message_id": state.get("message_id"),
@@ -744,6 +777,7 @@ class CacheWriteNode:
             "max_class_name": max_class_name,
             "area_name": area_name,
             "service_status": service_status,
+            "payment_type": payment_type,
             "vector_results": state.get("vector_results"),
             "sql_results": state.get("sql_results"),
             # HydrationNode 가 채운 통합 슬롯 — cache hit 시 hydration 라운드트립 절감.
@@ -757,6 +791,7 @@ class CacheWriteNode:
             max_class_name=max_class_name,
             area_name=area_name,
             service_status=service_status,
+            payment_type=payment_type,
         )
         empty = not snap["vector_results"] and not snap["sql_results"]
         logger.info("cache.write intent=%s empty=%s", intent.value, empty)

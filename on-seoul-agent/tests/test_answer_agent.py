@@ -24,6 +24,7 @@ from agents.answer_agent import (
     _STRUCT_MAP,
     _CLAUSE_RESERVATION_GUIDE,
     _CLAUSE_REFINE_HINT,
+    _CLAUSE_RELAXED_NOTICE,
     _FALLBACK_GUARDRAILS,
 )
 from schemas.state import AgentState, IntentType
@@ -676,6 +677,49 @@ class TestBuildCardSystem:
         prompt = _build_card_system("수영장", [], None)
 
         assert _CLAUSE_RESERVATION_GUIDE not in prompt
+
+
+class TestRelaxedNoticeGate:
+    """0건 완화 재시도(retry_relaxed) 시 완화 고지 절 게이트 (§3c / §6).
+
+    완화 사실은 결과가 1건 이상 노출될 때만 명시해야 하며,
+    완화하지 않았거나(retry_relaxed=False) 완화 후에도 0건이면 노출하지 않는다
+    (유료를 무료라고 오안내하거나 빈 결과에 무의미한 고지를 붙이지 않도록).
+    """
+
+    def test_relaxed_with_results_includes_notice(self):
+        """retry_relaxed=True + 결과 있음 → 완화 고지 절 포함."""
+        results = [{"service_status": "예약마감", "payment_type": "유료"}]
+        prompt = _build_card_system(
+            "강남구 무료 문화행사", results, "강남구", retry_relaxed=True
+        )
+        assert _CLAUSE_RELAXED_NOTICE in prompt
+
+    def test_relaxed_with_zero_results_excludes_notice(self):
+        """retry_relaxed=True 라도 결과 0건이면 완화 고지 미포함(빈 결과 오고지 방지)."""
+        prompt = _build_card_system(
+            "강남구 무료 문화행사", [], "강남구", retry_relaxed=True
+        )
+        assert _CLAUSE_RELAXED_NOTICE not in prompt
+
+    def test_not_relaxed_excludes_notice(self):
+        """기본(retry_relaxed=False) 경로 — 결과가 있어도 완화 고지 미포함."""
+        results = [{"service_status": "예약마감", "payment_type": "무료"}]
+        prompt = _build_card_system("강남구 무료 문화행사", results, "강남구")
+        assert _CLAUSE_RELAXED_NOTICE not in prompt
+
+    async def test_answer_passes_retry_relaxed_to_card_system(self):
+        """answer()가 state['retry_relaxed']를 _build_card_system으로 전달해 고지 절이 실린다."""
+        agent = _make_agent("완화 결과 안내입니다.")
+        state = _make_state(
+            hydrated_services=[
+                {"service_id": "P1", "service_name": "유료시설", "payment_type": "유료"}
+            ],
+            retry_relaxed=True,
+        )
+        await agent.answer(state)
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        assert _CLAUSE_RELAXED_NOTICE in call_kwargs["system"]
 
 
 class TestStructCardListPlaceFraming:

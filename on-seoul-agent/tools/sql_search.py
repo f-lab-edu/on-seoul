@@ -49,6 +49,7 @@ async def sql_search(
     max_class_name: str | None = None,
     area_name: str | None = None,
     service_status: str | None = None,
+    payment_type: str | None = None,
     keyword: str | None = None,
     receipt_date_from: date | None = None,
     receipt_date_to: date | None = None,
@@ -68,6 +69,11 @@ async def sql_search(
         서울 자치구 이름 필터 (예: 강남구). None이면 미적용.
     service_status:
         예약 상태 필터 (접수중·예약마감·접수종료·예약일시중지·안내중). None이면 미적용.
+    payment_type:
+        결제 유형 필터. "무료"이면 payment_type = '무료' 정확 매칭.
+        "유료"이면 payment_type LIKE '유료%' 접두 매칭(원천 데이터의
+        "유료"·"유료(요금안내문의)"를 모두 포괄). None이면 미적용.
+        DB distinct 확인(2026-06-03): {"유료","무료","유료(요금안내문의)"}.
     keyword:
         service_name 또는 place_name에 대한 ILIKE 검색 키워드. None이면 미적용.
     receipt_date_from:
@@ -98,6 +104,15 @@ async def sql_search(
     if service_status is not None:
         conditions.append("service_status = :service_status")
         bind["service_status"] = service_status
+
+    # payment_type: 무료=정확 매칭, 유료=접두("유료%") 매칭.
+    # 접두는 "유료"·"유료(요금안내문의)" 변형을 모두 포괄한다. bind only(인젝션 방지).
+    if payment_type == "무료":
+        conditions.append("payment_type = :payment_type")
+        bind["payment_type"] = "무료"
+    elif payment_type == "유료":
+        conditions.append("payment_type LIKE :payment_type ESCAPE '\\'")
+        bind["payment_type"] = "유료%"
 
     if keyword is not None:
         # 인덱스 식과 일치하는 연결 표현식으로 ILIKE 적용.

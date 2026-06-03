@@ -14,6 +14,7 @@ import pytest
 from agents.hydration_node import (
     HydrationNode,
     _extract_service_ids,
+    _filter_by_payment,
     _merge_search_meta,
 )
 from schemas.state import IntentType
@@ -120,6 +121,54 @@ class TestMergeSearchMeta:
 # ---------------------------------------------------------------------------
 # HydrationNode.__call__
 # ---------------------------------------------------------------------------
+
+
+_PAY_ROWS = [
+    {"service_id": "F1", "payment_type": "무료"},
+    {"service_id": "P1", "payment_type": "유료"},
+    {"service_id": "P2", "payment_type": "유료(요금안내문의)"},
+]
+
+
+class TestFilterByPayment:
+    def test_none_passes_through(self):
+        assert _filter_by_payment(_PAY_ROWS, None) == _PAY_ROWS
+
+    def test_free_exact_only(self):
+        out = _filter_by_payment(_PAY_ROWS, "무료")
+        assert [r["service_id"] for r in out] == ["F1"]
+
+    def test_paid_prefix_includes_variants(self):
+        """유료=접두 — '유료'·'유료(요금안내문의)' 포함, '무료' 제외."""
+        out = _filter_by_payment(_PAY_ROWS, "유료")
+        assert [r["service_id"] for r in out] == ["P1", "P2"]
+
+    def test_missing_payment_column_excluded_on_filter(self):
+        rows = [{"service_id": "X"}]  # payment_type 키 없음
+        assert _filter_by_payment(rows, "무료") == []
+
+
+class TestHydrationVectorPaymentFilter:
+    async def test_vector_path_applies_payment_filter(self):
+        """VECTOR 경로 hydration 직후 payment_type='무료' post-filter 적용."""
+        vector_results = [{"service_id": "F1"}, {"service_id": "P1"}]
+        hydrated_rows = [
+            {"service_id": "F1", "payment_type": "무료"},
+            {"service_id": "P1", "payment_type": "유료"},
+        ]
+        state = {
+            "intent": IntentType.VECTOR_SEARCH,
+            "vector_results": vector_results,
+            "payment_type": "무료",
+        }
+        node = HydrationNode()
+        with patch(
+            "agents.hydration_node.hydrate_services",
+            new=AsyncMock(return_value=hydrated_rows),
+        ):
+            update = await node(state, MagicMock())
+        ids = [r["service_id"] for r in update["hydrated_services"]]
+        assert ids == ["F1"]
 
 
 class TestHydrationNodeCall:
