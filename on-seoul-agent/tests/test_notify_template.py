@@ -423,6 +423,36 @@ class TestServiceSerialization:
         assert "SVC-AAA" not in text
         assert "SVC-BBB" not in text
 
+    async def test_scheduled_trigger_omits_change_block(self):
+        """시점 트리거(빈 changes)는 "- 변경:" 블록 없이 메타만 직렬화한다."""
+        from routers.notification import _format_group, _format_services
+        from schemas.notification import (
+            NotificationTemplateRequest,
+            ServiceChangeGroup,
+        )
+
+        group = ServiceChangeGroup(
+            service_id="S1",
+            service_name="마포 봄꽃 문화행사",
+            area_name="마포구",
+            service_status="접수중",
+            changes=[],
+        )
+        text = _format_group(1, group)
+        assert "- 변경:" not in text
+        assert "마포 봄꽃 문화행사" in text
+        assert "마포구" in text
+        assert "접수중" in text
+        assert "S1" not in text
+
+        req = NotificationTemplateRequest(
+            trigger_type="DEADLINE_DDAY",
+            services=[group],
+        )
+        services_text = _format_services(req)
+        assert "- 변경:" not in services_text
+        assert "마포 봄꽃 문화행사" in services_text
+
     async def test_meta_reaches_llm_input_not_just_echoed(self, client: AsyncClient):
         """직렬화된 서비스 메타가 LLM에 전달된 메시지 안에 실제로 들어가는지 확인.
 
@@ -450,3 +480,145 @@ class TestServiceSerialization:
         last_human = captured["messages"][-1]
         assert "OO수영장 자유수영" in last_human.content
         assert "SVC001" not in last_human.content  # service_id 미노출
+
+
+# ---------------------------------------------------------------------------
+# trigger_type (시점 트리거) 케이스
+# ---------------------------------------------------------------------------
+
+
+def _scheduled_group(service_id: str = "SVC001", **overrides) -> dict:
+    """changes 빈 배열을 가진 시점 트리거용 서비스 그룹을 생성한다."""
+    group = {
+        "service_id": service_id,
+        "service_name": "마포 봄꽃 문화행사",
+        "area_name": "마포구",
+        "service_status": "접수중",
+        "changes": [],
+    }
+    group.update(overrides)
+    return group
+
+
+class TestTriggerType:
+    @pytest.mark.parametrize(
+        "trigger_type",
+        ["CHANGE", "OPEN_DAY", "BEFORE_RECEIPT_D1", "DEADLINE_DDAY"],
+    )
+    async def test_each_trigger_type_returns_200(
+        self, client: AsyncClient, trigger_type: str
+    ):
+        """4종 trigger_type 모두 정상 200."""
+        llm_mock, _ = _make_llm_mock(summary="요약입니다.")
+        if trigger_type == "CHANGE":
+            body = {"trigger_type": trigger_type, **_single_group()}
+        else:
+            body = {"trigger_type": trigger_type, "services": [_scheduled_group()]}
+
+        with patch("routers.notification.get_chat_model", return_value=llm_mock):
+            response = await client.post("/notification/template", json=body)
+
+        assert response.status_code == 200
+        assert response.json()["summary"] == "요약입니다."
+
+    async def test_invalid_trigger_type_returns_422(self, client: AsyncClient):
+        """enum 외 trigger_type → 422."""
+        body = {"trigger_type": "WEEKLY", **_single_group()}
+        response = await client.post("/notification/template", json=body)
+        assert response.status_code == 422
+
+    async def test_scheduled_trigger_with_empty_changes_returns_200(
+        self, client: AsyncClient
+    ):
+        """시점 트리거 + changes:[] → 200 (빈 changes 허용)."""
+        llm_mock, _ = _make_llm_mock()
+        body = {"trigger_type": "OPEN_DAY", "services": [_scheduled_group()]}
+        with patch("routers.notification.get_chat_model", return_value=llm_mock):
+            response = await client.post("/notification/template", json=body)
+        assert response.status_code == 200
+
+    async def test_change_trigger_with_empty_changes_returns_422(
+        self, client: AsyncClient
+    ):
+        """CHANGE + changes:[] → 422 (CHANGE는 changes 필수)."""
+        body = {"trigger_type": "CHANGE", "services": [_scheduled_group()]}
+        response = await client.post("/notification/template", json=body)
+        assert response.status_code == 422
+
+    async def test_missing_trigger_type_defaults_to_change(
+        self, client: AsyncClient
+    ):
+        """trigger_type 누락 → CHANGE 기본 동작(하위호환)."""
+        llm_mock, _ = _make_llm_mock()
+        # trigger_type 없이 changes 있는 기존 본문 → 정상
+        with patch("routers.notification.get_chat_model", return_value=llm_mock):
+            response = await client.post(
+                "/notification/template", json=_single_group()
+            )
+        assert response.status_code == 200
+
+    async def test_missing_trigger_type_enforces_change_rules(
+        self, client: AsyncClient
+    ):
+        """trigger_type 누락 + changes:[] → CHANGE 규칙 적용으로 422."""
+        body = {"services": [_scheduled_group()]}
+        response = await client.post("/notification/template", json=body)
+        assert response.status_code == 422
+
+
+class TestTriggerHintInjection:
+    """_build_messages가 trigger_type별 _TRIGGER_HINTS를 주입하는지 단위 검증."""
+
+    @pytest.mark.parametrize(
+        "trigger_type",
+        ["OPEN_DAY", "BEFORE_RECEIPT_D1", "DEADLINE_DDAY"],
+    )
+    def test_scheduled_trigger_injects_hint(self, trigger_type: str):
+        from llm.prompts.notification import _TRIGGER_HINTS
+        from routers.notification import _build_messages
+        from schemas.notification import NotificationTemplateRequest
+
+        req = NotificationTemplateRequest(
+            trigger_type=trigger_type,
+            services=[
+                {
+                    "service_id": "S1",
+                    "service_name": "테스트 서비스",
+                    "changes": [],
+                }
+            ],
+        )
+        messages = _build_messages(req)
+        system = messages[0].content
+        assert _TRIGGER_HINTS[trigger_type] in system
+
+    def test_change_trigger_uses_base_system_unchanged(self):
+        """CHANGE는 빈 힌트이므로 SystemMessage가 기본 프롬프트 그대로다."""
+        from llm.prompts.notification import NOTIFICATION_SYSTEM
+        from routers.notification import _build_messages
+        from schemas.notification import NotificationTemplateRequest
+
+        req = NotificationTemplateRequest(
+            trigger_type="CHANGE",
+            services=[
+                {
+                    "service_id": "S1",
+                    "changes": [{"change_type": "NEW"}],
+                }
+            ],
+        )
+        messages = _build_messages(req)
+        assert messages[0].content == NOTIFICATION_SYSTEM
+
+    def test_scheduled_hint_not_present_for_change(self):
+        """CHANGE의 SystemMessage에는 시점 힌트 문구가 없어야 한다."""
+        from llm.prompts.notification import _TRIGGER_HINTS
+        from routers.notification import _build_messages
+        from schemas.notification import NotificationTemplateRequest
+
+        req = NotificationTemplateRequest(
+            trigger_type="CHANGE",
+            services=[{"service_id": "S1", "changes": [{"change_type": "NEW"}]}],
+        )
+        system = _build_messages(req)[0].content
+        assert _TRIGGER_HINTS["DEADLINE_DDAY"] not in system

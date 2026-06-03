@@ -21,7 +21,11 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from llm.client import get_chat_model
-from llm.prompts.notification import NOTIFICATION_FEW_SHOT_EXAMPLES, NOTIFICATION_SYSTEM
+from llm.prompts.notification import (
+    NOTIFICATION_FEW_SHOT_EXAMPLES,
+    NOTIFICATION_SYSTEM,
+    _TRIGGER_HINTS,
+)
 from schemas.notification import (
     NotificationTemplateRequest,
     NotificationTemplateResponse,
@@ -62,7 +66,12 @@ _META_FIELDS = (
 
 
 def _format_group(index: int, group: ServiceChangeGroup) -> str:
-    """서비스 그룹 1개를 LLM 입력용 블록 텍스트로 변환한다."""
+    """서비스 그룹 1개를 LLM 입력용 블록 텍스트로 변환한다.
+
+    시점 트리거는 changes가 빈 배열이므로 "- 변경:" 블록을 찍지 않고 메타만
+    직렬화한다(빈 changes 블록이 모델을 혼란시키지 않도록). "오늘/내일" 긴박감은
+    날짜 계산이 아니라 _TRIGGER_HINTS 문구가 전달한다.
+    """
     # service_id는 LLM 입력에 절대 넣지 않는다(출력 누출 구조적 차단).
     # 서비스 구분은 [서비스 N] 인덱스만으로 충분하다.
     lines = [f"[서비스 {index}]"]
@@ -70,6 +79,8 @@ def _format_group(index: int, group: ServiceChangeGroup) -> str:
         value = getattr(group, attr)
         if value:
             lines.append(f"- {label}: {value}")
+    if not group.changes:
+        return "\n".join(lines)
     lines.append("- 변경:")
     for c in group.changes:
         parts = [c.change_type]
@@ -94,9 +105,15 @@ def _format_services(req: NotificationTemplateRequest) -> str:
 def _build_messages(
     req: NotificationTemplateRequest,
 ) -> list[SystemMessage | HumanMessage | AIMessage]:
-    """시스템 프롬프트 + few-shot + 실제 입력 메시지 목록을 구성한다."""
+    """시스템 프롬프트 + few-shot + 실제 입력 메시지 목록을 구성한다.
+
+    req.trigger_type에 맞는 _TRIGGER_HINTS를 SystemMessage에 덧붙인다.
+    CHANGE는 빈 문자열 힌트이므로 기존 동작과 동일하다.
+    """
+    hint = _TRIGGER_HINTS.get(req.trigger_type, "")
+    system = NOTIFICATION_SYSTEM + (f"\n\n{hint}" if hint else "")
     messages: list[SystemMessage | HumanMessage | AIMessage] = [
-        SystemMessage(content=NOTIFICATION_SYSTEM)
+        SystemMessage(content=system)
     ]
     for example in NOTIFICATION_FEW_SHOT_EXAMPLES:
         messages.append(HumanMessage(content=example["input"]))
