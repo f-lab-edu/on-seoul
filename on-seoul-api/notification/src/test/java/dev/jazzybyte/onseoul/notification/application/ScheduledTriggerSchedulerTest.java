@@ -150,12 +150,15 @@ class ScheduledTriggerSchedulerTest {
         when(loadScheduledTriggerPort.loadDeadlineToday(any(), eq(TODAY)))
                 .thenReturn(List.of(match("OA-1"), match("OA-2")));
 
-        scheduler.processAll(TODAY);
+        ScheduledTriggerScheduler.RunResult result = scheduler.processAll(TODAY);
 
         verify(pushNotificationPort, org.mockito.Mockito.times(2))
                 .send(any(UserContact.class), any(NotificationContent.class), any(), any());
         verify(txHelper, org.mockito.Mockito.times(2))
                 .txBScheduledSuccess(any(), eq("제목"), eq("요약"), eq(TemplateSource.AI));
+        // 집계: 두 service 모두 발송 → sent==2, skipped==0.
+        assertThat(result.sent()).isEqualTo(2);
+        assertThat(result.skipped()).isZero();
     }
 
     @Test
@@ -183,12 +186,15 @@ class ScheduledTriggerSchedulerTest {
         when(loadDispatchPort.existsChangeDispatchForServiceToday(eq(1L), eq("OA-1"), eq(TODAY)))
                 .thenReturn(true);
 
-        scheduler.processAll(TODAY);
+        ScheduledTriggerScheduler.RunResult result = scheduler.processAll(TODAY);
 
         // batch 를 만들지 않고, dispatch 발행/발송도 하지 않는다(빈 batch 미생성).
         verifyNoInteractions(pushNotificationPort, templateGenerationPort);
         verify(saveBatchPort, never()).insertRunning(any());
         verify(txHelper, never()).saveScheduledIfAbsent(any());
+        // 집계: cross-dedup 히트는 skipped==1, sent==0 으로 잡힌다.
+        assertThat(result.skipped()).isEqualTo(1);
+        assertThat(result.sent()).isZero();
     }
 
     @Test
@@ -201,11 +207,14 @@ class ScheduledTriggerSchedulerTest {
         when(loadDispatchPort.existsScheduledDispatch(eq(1L), eq("OA-1"), eq(TODAY)))
                 .thenReturn(true);
 
-        scheduler.processAll(TODAY);
+        ScheduledTriggerScheduler.RunResult result = scheduler.processAll(TODAY);
 
         verifyNoInteractions(pushNotificationPort, templateGenerationPort);
         verify(saveBatchPort, never()).insertRunning(any());
         verify(txHelper, never()).saveScheduledIfAbsent(any());
+        // 집계: 시점-시점 dedup 선조회 히트도 skipped==1, sent==0.
+        assertThat(result.skipped()).isEqualTo(1);
+        assertThat(result.sent()).isZero();
     }
 
     @Test

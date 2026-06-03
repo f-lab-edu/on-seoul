@@ -37,10 +37,13 @@ class ServiceChangePersistenceAdapterTest {
 
     /**
      * 종료 서비스 제외(D-day) 기준 today — 운영 경로와 동일한 UTC 달력 날짜.
-     * 대부분의 테스트는 receipt_end_dt 가 NULL 이라 today 값과 무관하나,
-     * 종료 필터 테스트(아래)는 now(UTC) 상대 날짜를 쓰므로 동일 기준이어야 결정적이다.
+     * 비결정성 제거: now(UTC) 가 아니라 고정 앵커 날짜를 쓴다. 종료 필터 테스트는
+     * 이 앵커({@link #NOW})를 기준으로 상대 날짜를 계산하므로 벽시계와 무관하게 결정적이다.
      */
-    private static final LocalDate TODAY = LocalDate.now(ZoneOffset.UTC);
+    private static final LocalDate TODAY = LocalDate.of(2026, 6, 3);
+
+    /** TODAY 00:00 UTC 고정 앵커 — 종료 필터 테스트의 상대 시각 계산 기준(now(UTC) 대체). */
+    private static final OffsetDateTime NOW = TODAY.atStartOfDay().atOffset(ZoneOffset.UTC);
 
     @BeforeEach
     void cleanup() {
@@ -98,7 +101,7 @@ class ServiceChangePersistenceAdapterTest {
         insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사");
         insertReservation("OA-2266", "RECEIVING", "송파구", "체육시설");
 
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", now.minusHours(2));
         insertChange("OA-2269", "UPDATED", "service_name", "구", "신", now.minusHours(1));
         insertChange("OA-2266", "NEW", null, null, null, now);
@@ -146,7 +149,7 @@ class ServiceChangePersistenceAdapterTest {
     @Test
     @DisplayName("public_service_reservations에 매칭 row 없으면 빈 결과 (JOIN 실패)")
     void loadFiltered_noMatchingReservation_returnsEmpty() {
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
         List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
@@ -157,8 +160,8 @@ class ServiceChangePersistenceAdapterTest {
     @Test
     @DisplayName("deleted_at이 NULL이 아니면 결과에서 제외된다")
     void loadFiltered_softDeletedReservation_excluded() {
-        insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사", OffsetDateTime.now(ZoneOffset.UTC));
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사", NOW);
+        OffsetDateTime now = NOW;
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
         List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
@@ -170,7 +173,7 @@ class ServiceChangePersistenceAdapterTest {
     @DisplayName("statuses 필터 — service_status가 IN 절에 포함되는 row만 반환")
     void loadFiltered_statusesFilter_filtersOut() {
         insertReservation("OA-2269", "CLOSED", "강남구", "문화행사");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
         // CLOSED는 필터(RECEIVING)에 매칭 안됨
@@ -194,7 +197,7 @@ class ServiceChangePersistenceAdapterTest {
     @DisplayName("areaNames 필터 — area_name이 매칭하지 않으면 제외")
     void loadFiltered_areaNamesFilter_filtersOut() {
         insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
         List<ServiceChange> miss = adapter.loadFiltered(
@@ -212,7 +215,7 @@ class ServiceChangePersistenceAdapterTest {
     @DisplayName("maxClassNames 필터 — max_class_name이 매칭하지 않으면 제외")
     void loadFiltered_maxClassNamesFilter_filtersOut() {
         insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
         List<ServiceChange> miss = adapter.loadFiltered(
@@ -231,7 +234,7 @@ class ServiceChangePersistenceAdapterTest {
     void loadFiltered_keyword_matchesServiceName() {
         insertReservationWithNames("OA-1", "여름 수영 강습", "강남스포츠센터");
         insertReservationWithNames("OA-2", "요가 클래스", "송파문화회관");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
         insertChange("OA-2", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
@@ -247,7 +250,7 @@ class ServiceChangePersistenceAdapterTest {
     @DisplayName("keywords 필터 — place_name에만 포함돼도 매칭 (service_name/place_name OR)")
     void loadFiltered_keyword_matchesPlaceName() {
         insertReservationWithNames("OA-1", "문화 강좌", "강남수영장");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "service_status", "RECEIVING", "CLOSED", now);
 
         List<ServiceChange> result = adapter.loadFiltered(
@@ -264,7 +267,7 @@ class ServiceChangePersistenceAdapterTest {
         insertReservationWithNames("OA-1", "여름 수영 강습", "강남센터");
         insertReservationWithNames("OA-2", "요가 클래스", "송파회관");
         insertReservationWithNames("OA-3", "독서 모임", "마포도서관");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "f", null, null, now);
         insertChange("OA-2", "UPDATED", "f", null, null, now);
         insertChange("OA-3", "UPDATED", "f", null, null, now);
@@ -282,7 +285,7 @@ class ServiceChangePersistenceAdapterTest {
     void loadFiltered_keyword_escapesWildcard() {
         insertReservationWithNames("OA-1", "여름 수영 강습", "강남센터");
         insertReservationWithNames("OA-2", "100% 환불 행사", "송파회관");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "f", null, null, now);
         insertChange("OA-2", "UPDATED", "f", null, null, now);
 
@@ -303,7 +306,7 @@ class ServiceChangePersistenceAdapterTest {
         // 이스케이프되면 리터럴 '_' 를 포함한 OA-2만 매칭되어야 한다.
         insertReservationWithNames("OA-1", "AxB 강좌", "강남센터");
         insertReservationWithNames("OA-2", "A_B 강좌", "송파회관");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "f", null, null, now);
         insertChange("OA-2", "UPDATED", "f", null, null, now);
 
@@ -320,7 +323,7 @@ class ServiceChangePersistenceAdapterTest {
     void loadFiltered_keyword_escapesBackslash() {
         insertReservationWithNames("OA-1", "정상 강좌", "강남센터");
         insertReservationWithNames("OA-2", "a\\b 강좌", "송파회관");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "f", null, null, now);
         insertChange("OA-2", "UPDATED", "f", null, null, now);
 
@@ -338,7 +341,7 @@ class ServiceChangePersistenceAdapterTest {
     void loadFiltered_keyword_koreanUnicodeIlike() {
         insertReservationWithNames("OA-1", "여름 수영 강습", "강남스포츠센터");
         insertReservationWithNames("OA-2", "겨울 스키 캠프", "송파문화회관");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "f", null, null, now);
         insertChange("OA-2", "UPDATED", "f", null, null, now);
 
@@ -362,7 +365,7 @@ class ServiceChangePersistenceAdapterTest {
                 .execute();
         // 키워드·상태 모두 만족 → 포함
         insertReservationWithNames("OA-2", "여름 수영 교실", "송파센터"); // status=RECEIVING (helper 기본)
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "f", null, null, now);
         insertChange("OA-2", "UPDATED", "f", null, null, now);
 
@@ -381,7 +384,7 @@ class ServiceChangePersistenceAdapterTest {
         insertReservationWithNames("OA-2", "요가 클래스", "송파회관");
         insertReservationWithNames("OA-3", "독서 모임", "마포도서관");
         insertReservationWithNames("OA-4", "축구 교실", "은평구장");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "f", null, null, now);
         insertChange("OA-2", "UPDATED", "f", null, null, now);
         insertChange("OA-3", "UPDATED", "f", null, null, now);
@@ -400,7 +403,7 @@ class ServiceChangePersistenceAdapterTest {
     void loadFiltered_keywordTargetPlaceNameOnly_doesNotMatchServiceName() {
         insertReservationWithNames("OA-1", "여름 수영 강습", "강남센터");   // service_name에만 "수영"
         insertReservationWithNames("OA-2", "요가 클래스", "송파수영장");     // place_name에만 "수영"
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "f", null, null, now);
         insertChange("OA-2", "UPDATED", "f", null, null, now);
 
@@ -417,7 +420,7 @@ class ServiceChangePersistenceAdapterTest {
     void loadFiltered_keywordTargetServiceNameOnly_doesNotMatchPlaceName() {
         insertReservationWithNames("OA-1", "여름 수영 강습", "강남센터");
         insertReservationWithNames("OA-2", "요가 클래스", "송파수영장");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "f", null, null, now);
         insertChange("OA-2", "UPDATED", "f", null, null, now);
 
@@ -434,7 +437,7 @@ class ServiceChangePersistenceAdapterTest {
     void loadFiltered_emptyTargets_fallsBackToBoth() {
         insertReservationWithNames("OA-1", "여름 수영 강습", "강남센터");
         insertReservationWithNames("OA-2", "요가 클래스", "송파수영장");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = NOW;
         insertChange("OA-1", "UPDATED", "f", null, null, now);
         insertChange("OA-2", "UPDATED", "f", null, null, now);
 
@@ -466,8 +469,8 @@ class ServiceChangePersistenceAdapterTest {
     @DisplayName("예약 메타(serviceName/url/place 등)와 receipt 날짜가 ServiceChange에 매핑된다")
     void loadFiltered_mapsReservationMetaAndReceiptDates() {
         // 종료 제외 필터 추가 이후: receipt_end_dt 는 미래여야 결과에 포함된다.
-        OffsetDateTime start = OffsetDateTime.now(ZoneOffset.UTC).plusDays(1);
-        OffsetDateTime end = OffsetDateTime.now(ZoneOffset.UTC).plusDays(30);
+        OffsetDateTime start = NOW.plusDays(1);
+        OffsetDateTime end = NOW.plusDays(30);
         dsl.insertInto(PUBLIC_SERVICE_RESERVATIONS)
                 .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_ID, "OA-META")
                 .set(PUBLIC_SERVICE_RESERVATIONS.SERVICE_NAME, "수영교실")
@@ -482,7 +485,7 @@ class ServiceChangePersistenceAdapterTest {
                 .set(PUBLIC_SERVICE_RESERVATIONS.RECEIPT_END_DT, end)
                 .execute();
         insertChange("OA-META", "UPDATED", "service_status", "RECEIVING", "CLOSED",
-                OffsetDateTime.now(ZoneOffset.UTC));
+                NOW);
 
         List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
@@ -513,9 +516,9 @@ class ServiceChangePersistenceAdapterTest {
     @Test
     @DisplayName("receipt_end_dt가 어제 이전이면 종료된 서비스로 보고 변경 알림에서 제외된다")
     void loadFiltered_endedService_excluded() {
-        insertReservationWithEnd("OA-ENDED", OffsetDateTime.now(ZoneOffset.UTC).minusDays(2));
+        insertReservationWithEnd("OA-ENDED", NOW.minusDays(2));
         insertChange("OA-ENDED", "UPDATED", "service_status", "RECEIVING", "CLOSED",
-                OffsetDateTime.now(ZoneOffset.UTC));
+                NOW);
 
         List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
@@ -525,9 +528,9 @@ class ServiceChangePersistenceAdapterTest {
     @Test
     @DisplayName("receipt_end_dt가 미래면 진행 중으로 보고 변경 알림에 포함된다")
     void loadFiltered_futureEnd_included() {
-        insertReservationWithEnd("OA-OPEN", OffsetDateTime.now(ZoneOffset.UTC).plusDays(3));
+        insertReservationWithEnd("OA-OPEN", NOW.plusDays(3));
         insertChange("OA-OPEN", "UPDATED", "service_status", "RECEIVING", "CLOSED",
-                OffsetDateTime.now(ZoneOffset.UTC));
+                NOW);
 
         List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
@@ -539,11 +542,11 @@ class ServiceChangePersistenceAdapterTest {
     void loadFiltered_endToday_included() {
         // 계획: "receipt_end_dt 당일까지는 종료로 보지 않는다". 오늘 마감인 서비스의 변경도 알림 대상.
         // 오늘 정오 >= today 00:00 UTC 이므로 포함된다(UTC instant 비교, 세션 TZ 비의존).
-        OffsetDateTime todayNoon = OffsetDateTime.now(ZoneOffset.UTC)
+        OffsetDateTime todayNoon = NOW
                 .toLocalDate().atTime(12, 0).atOffset(ZoneOffset.UTC);
         insertReservationWithEnd("OA-ENDTODAY", todayNoon);
         insertChange("OA-ENDTODAY", "UPDATED", "service_status", "RECEIVING", "CLOSED",
-                OffsetDateTime.now(ZoneOffset.UTC));
+                NOW);
 
         List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
@@ -555,11 +558,11 @@ class ServiceChangePersistenceAdapterTest {
     void loadFiltered_endYesterday_excluded() {
         // 어제 정오 < today 00:00 UTC 이므로 종료로 보고 제외된다.
         // today 는 호출자가 넘긴 UTC 달력 날짜 — PG 세션 TimeZone GUC(CURRENT_DATE)에 의존하지 않는다.
-        OffsetDateTime yesterdayNoon = OffsetDateTime.now(ZoneOffset.UTC)
+        OffsetDateTime yesterdayNoon = NOW
                 .toLocalDate().minusDays(1).atTime(12, 0).atOffset(ZoneOffset.UTC);
         insertReservationWithEnd("OA-ENDYDAY", yesterdayNoon);
         insertChange("OA-ENDYDAY", "UPDATED", "service_status", "RECEIVING", "CLOSED",
-                OffsetDateTime.now(ZoneOffset.UTC));
+                NOW);
 
         List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
@@ -590,7 +593,7 @@ class ServiceChangePersistenceAdapterTest {
     void loadFiltered_nullEnd_included() {
         insertReservationWithEnd("OA-NULLEND", null);
         insertChange("OA-NULLEND", "UPDATED", "service_status", "RECEIVING", "CLOSED",
-                OffsetDateTime.now(ZoneOffset.UTC));
+                NOW);
 
         List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 
@@ -602,7 +605,7 @@ class ServiceChangePersistenceAdapterTest {
     void loadFiltered_nullReceiptDates_mappedAsNull() {
         insertReservation("OA-2269", "RECEIVING", "강남구", "문화행사");
         insertChange("OA-2269", "UPDATED", "service_status", "RECEIVING", "CLOSED",
-                OffsetDateTime.now(ZoneOffset.UTC));
+                NOW);
 
         List<ServiceChange> result = adapter.loadFiltered(SubscriptionFilter.empty(), null, null, TODAY);
 

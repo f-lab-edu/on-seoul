@@ -232,8 +232,6 @@ class NotificationTxHelperTest {
     @DisplayName("TX B 성공 — last_notified_at은 batch.startedAt으로 전진한다 (change.changedAt 아님)")
     void txBSuccess_advancesLastNotifiedAtToBatchStartedAt() {
         Instant batchStarted = Instant.parse("2026-05-15T09:00:00Z");
-        // change는 batchStarted보다 빠른 시각이라도 batch.startedAt이 커서가 된다.
-        Instant changedAt = Instant.parse("2026-05-15T08:30:00Z");
         NotificationSubscription sub = subscriptionWithLastNotifiedAt(null);
         NotificationBatch batch = batchStartedAt(batchStarted);
         NotificationDispatch dispatch = pendingDispatch();
@@ -243,9 +241,9 @@ class NotificationTxHelperTest {
 
         txHelper.txBSuccess(dispatch, sub, batch, "제목", "본문", TemplateSource.AI);
 
+        // 커서가 batch.startedAt 으로 전진함이 주 단정 — equals(batchStarted) 가 곧
+        // "change.changedAt(다른 시각)이 아님"을 함의하므로 별도 부정 단정은 두지 않는다.
         assertThat(sub.getLastNotifiedAt()).isEqualTo(batchStarted);
-        // 부수적으로 changedAt이 사용되지 않음을 확인
-        assertThat(sub.getLastNotifiedAt()).isNotEqualTo(changedAt);
     }
 
     @Test

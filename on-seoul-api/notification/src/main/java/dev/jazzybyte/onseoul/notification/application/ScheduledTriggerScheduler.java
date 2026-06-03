@@ -141,8 +141,10 @@ public class ScheduledTriggerScheduler {
      * {@code running} 가드를 공유하므로 스케줄/수동 호출 간 중복 실행을 유발하지 않는다.
      * 이미 실행 중이면 {@link ManualRunResult#SKIPPED_ALREADY_RUNNING}을 반환한다.
      *
-     * @return 실행 여부. {@code processAll}은 void이므로 카운트는 노출하지 않는다
-     *         (발송 결과는 {@code notification_batch}/{@code notification_dispatch} row로 기록된다).
+     * @return 실행 여부({@link ManualRunResult}). {@code processAll}은 sent/skipped 집계를
+     *         {@link RunResult}로 반환하지만(테스트가 skip 집계를 단정), 수동 실행 API 는 발송 결과를
+     *         {@code notification_batch}/{@code notification_dispatch} row 로 기록하므로 카운트를
+     *         외부로 노출하지 않고 실행 여부만 돌려준다.
      */
     public ManualRunResult runManually() {
         if (!running.compareAndSet(false, true)) {
@@ -163,8 +165,21 @@ public class ScheduledTriggerScheduler {
         SKIPPED_ALREADY_RUNNING
     }
 
-    /** 패키지 가시성: 테스트에서 today 를 주입해 호출한다. */
-    void processAll(LocalDate today) {
+    /**
+     * 시점 트리거 배치 1회 실행 결과 집계.
+     *
+     * @param sent    발송 성공한 dispatch 수.
+     * @param skipped dedup(cross/시점-시점) 또는 발송 실패로 발행되지 않은 service 수.
+     */
+    record RunResult(int sent, int skipped) {}
+
+    /**
+     * 패키지 가시성: 테스트에서 today 를 주입해 호출한다.
+     *
+     * @return 이번 배치의 sent/skipped 집계({@link RunResult}). {@link #run()}/{@link #runManually()}
+     *         는 이 값을 로그로만 남기지만, 테스트는 반환값으로 skip 집계를 직접 단정한다.
+     */
+    RunResult processAll(LocalDate today) {
         log.debug("[ScheduledTriggerScheduler] 시점 트리거 배치 시작: today={}", today);
         int sent = 0;
         int skipped = 0;
@@ -195,6 +210,7 @@ public class ScheduledTriggerScheduler {
             afterId = chunk.get(chunk.size() - 1).getId();
         }
         log.info("[ScheduledTriggerScheduler] 시점 트리거 배치 완료: sent={}, skippedOrDup={}", sent, skipped);
+        return new RunResult(sent, skipped);
     }
 
     /** @return [sent, skipped] 카운트. */
