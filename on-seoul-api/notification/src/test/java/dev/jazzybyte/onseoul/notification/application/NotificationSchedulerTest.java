@@ -111,6 +111,48 @@ class NotificationSchedulerTest {
         return new NotificationTxHelper.TxAResult(changes, Optional.ofNullable(dispatch));
     }
 
+    // ── 동시성 가드 공유 (이벤트 vs 수동) ──────────────────────────────
+
+    @Test
+    @DisplayName("동시성 가드: 이벤트 핸들러 실행 중이면 runManually()는 배치 재진입 없이 SKIPPED")
+    void runManually_whileEventRunning_skipsWithoutReentry() throws Exception {
+        // onEmbeddingSyncCompleted 가 잡은 running 플래그를 수동 호출이 공유하는지 검증한다.
+        // insertRunning 안에서 latch로 블로킹하여 running=true 상태를 유지한다.
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger chunkCalls = new java.util.concurrent.atomic.AtomicInteger();
+
+        // insertRunning(default 스텁) 이후 첫 loadChunk(0,*) 안에서 블로킹하여 running=true 유지.
+        when(loadSubscriptionPort.loadChunk(eq(0L), anyInt())).thenAnswer(inv -> {
+            chunkCalls.incrementAndGet();
+            entered.countDown();
+            release.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            return List.of();
+        });
+
+        Thread eventThread = new Thread(
+                () -> scheduler.onEmbeddingSyncCompleted(
+                        new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent()),
+                "embedding-event");
+        eventThread.start();
+        assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+        // 이벤트 핸들러가 배치 처리 중인 동안 수동 호출 시도
+        NotificationScheduler.ManualRunResult result = scheduler.runManually();
+
+        assertThat(result).isEqualTo(NotificationScheduler.ManualRunResult.SKIPPED_ALREADY_RUNNING);
+        // 가드 우회로 인한 배치 재진입(=두 번째 loadChunk(0,*))이 없어야 한다.
+        assertThat(chunkCalls.get()).isEqualTo(1);
+
+        release.countDown();
+        eventThread.join(5_000);
+
+        // 첫 배치 종료 후 플래그 해제 → 다음 수동 실행은 RAN
+        assertThat(scheduler.runManually())
+                .isEqualTo(NotificationScheduler.ManualRunResult.RAN);
+        assertThat(chunkCalls.get()).isEqualTo(2);
+    }
+
     // ── 배치 INSERT/UPDATE 흐름 ─────────────────────────────────────────
 
     @Test

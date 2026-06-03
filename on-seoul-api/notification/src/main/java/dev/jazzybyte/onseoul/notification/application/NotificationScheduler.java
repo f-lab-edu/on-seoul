@@ -129,6 +129,33 @@ public class NotificationScheduler {
         }
     }
 
+    /**
+     * 수동 1회 실행(임시 관리 API용). 이벤트 핸들러({@link #onEmbeddingSyncCompleted})와 동일한
+     * {@code running} 가드를 공유하므로 스케줄/수동 호출 간 중복 실행을 유발하지 않는다.
+     * 이미 실행 중이면 {@link ManualRunResult#SKIPPED_ALREADY_RUNNING}을 반환한다.
+     *
+     * @return 실행 여부. {@code processAllSubscriptions()}는 void이므로 카운트는 노출하지 않는다
+     *         (배치 결과는 {@code notification_batch} row로 기록된다).
+     */
+    public ManualRunResult runManually() {
+        if (!running.compareAndSet(false, true)) {
+            log.warn("[NotificationScheduler] 수동 실행 요청 — 이미 실행 중이므로 skip");
+            return ManualRunResult.SKIPPED_ALREADY_RUNNING;
+        }
+        try {
+            processAllSubscriptions();
+            return ManualRunResult.RAN;
+        } finally {
+            running.set(false);
+        }
+    }
+
+    /** 수동 실행 결과. */
+    public enum ManualRunResult {
+        RAN,
+        SKIPPED_ALREADY_RUNNING
+    }
+
     void processAllSubscriptions() {
         log.debug("[NotificationScheduler] 배치 실행 시작");
 

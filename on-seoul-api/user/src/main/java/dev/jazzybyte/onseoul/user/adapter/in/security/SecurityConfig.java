@@ -76,6 +76,11 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/health", "/error").permitAll()
                         .requestMatchers("/auth/token/refresh", "/auth/logout").permitAll()
                         .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**").permitAll()
+                        // ⚠️ 임시/개발용 — 운영 배포 전 인증 적용 또는 제거 필요.
+                        // TODO(SECURITY): 알림 배치 수동 실행 관리 API(NotificationBatchAdminController).
+                        // 로컬/개발에서 스케줄을 기다리지 않고 즉시 배치를 돌려보기 위한 임시 permitAll.
+                        // 운영 배포 전 이 라인을 제거하거나 관리자 인증/내부망 제한으로 교체할 것.
+                        .requestMatchers("/internal/notifications/batch/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .oauth2Login(oauth2 -> oauth2

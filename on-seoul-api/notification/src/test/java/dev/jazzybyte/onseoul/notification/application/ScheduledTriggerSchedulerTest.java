@@ -107,6 +107,42 @@ class ScheduledTriggerSchedulerTest {
     }
 
     @Test
+    @DisplayName("동시성 가드: 스케줄 run()이 실행 중이면 runManually()는 processAll 재진입 없이 SKIPPED")
+    void runManually_whileScheduledRunning_skipsWithoutReentry() throws Exception {
+        // run() 진입점이 보유한 running 플래그를 수동 호출이 공유하는지 검증한다.
+        // 첫 스레드를 loadChunk(0,*) 안에서 latch로 블로킹하여 running=true 상태를 유지한다.
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger loadChunkCalls = new java.util.concurrent.atomic.AtomicInteger();
+
+        when(loadSubscriptionPort.loadChunk(eq(0L), anyInt())).thenAnswer(inv -> {
+            loadChunkCalls.incrementAndGet();
+            entered.countDown();
+            release.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            return List.of();
+        });
+
+        Thread scheduled = new Thread(scheduler::run, "scheduled-run");
+        scheduled.start();
+        assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+        // run()이 running 플래그를 잡고 processAll 내부에 머무는 동안 수동 호출 시도
+        ScheduledTriggerScheduler.ManualRunResult result = scheduler.runManually();
+
+        assertThat(result).isEqualTo(ScheduledTriggerScheduler.ManualRunResult.SKIPPED_ALREADY_RUNNING);
+        // 가드 우회로 인한 processAll 재진입(=두 번째 loadChunk(0,*))이 없어야 한다.
+        assertThat(loadChunkCalls.get()).isEqualTo(1);
+
+        release.countDown();
+        scheduled.join(5_000);
+
+        // 첫 배치 종료 후 플래그가 해제되어 다음 수동 실행은 RAN 으로 진입 가능
+        assertThat(scheduler.runManually())
+                .isEqualTo(ScheduledTriggerScheduler.ManualRunResult.RAN);
+        assertThat(loadChunkCalls.get()).isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("매칭 service마다 시점 dispatch를 발행하고 푸시 발송한다")
     void dispatchesPerMatchedService() {
         NotificationSubscription s = sub(1L);

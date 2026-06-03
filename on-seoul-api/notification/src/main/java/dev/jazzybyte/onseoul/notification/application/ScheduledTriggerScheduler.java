@@ -136,6 +136,33 @@ public class ScheduledTriggerScheduler {
         }
     }
 
+    /**
+     * 수동 1회 실행(임시 관리 API용). {@code @Scheduled} 진입점({@link #run()})과 동일한
+     * {@code running} 가드를 공유하므로 스케줄/수동 호출 간 중복 실행을 유발하지 않는다.
+     * 이미 실행 중이면 {@link ManualRunResult#SKIPPED_ALREADY_RUNNING}을 반환한다.
+     *
+     * @return 실행 여부. {@code processAll}은 void이므로 카운트는 노출하지 않는다
+     *         (발송 결과는 {@code notification_batch}/{@code notification_dispatch} row로 기록된다).
+     */
+    public ManualRunResult runManually() {
+        if (!running.compareAndSet(false, true)) {
+            log.warn("[ScheduledTriggerScheduler] 수동 실행 요청 — 이미 실행 중이므로 skip");
+            return ManualRunResult.SKIPPED_ALREADY_RUNNING;
+        }
+        try {
+            processAll(LocalDate.now(clock.withZone(ZoneOffset.UTC)));
+            return ManualRunResult.RAN;
+        } finally {
+            running.set(false);
+        }
+    }
+
+    /** 수동 실행 결과. */
+    public enum ManualRunResult {
+        RAN,
+        SKIPPED_ALREADY_RUNNING
+    }
+
     /** 패키지 가시성: 테스트에서 today 를 주입해 호출한다. */
     void processAll(LocalDate today) {
         log.debug("[ScheduledTriggerScheduler] 시점 트리거 배치 시작: today={}", today);
