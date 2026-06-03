@@ -230,6 +230,44 @@ class TemplateAgentClientTest {
     }
 
     @Test
+    @DisplayName("generate() - 요청 JSON에 trigger_type(CHANGE 기본)이 직렬화된다")
+    void generate_requestBody_includesTriggerType() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"title\":\"t\",\"summary\":\"b\"}"));
+
+        client.generate(singleChangeRequest("SVC-001", "status", "열림", "닫힘"));
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        String body = recorded.getBody().readUtf8();
+        assertThat(body).contains("\"trigger_type\"");
+        assertThat(body).contains("CHANGE");
+    }
+
+    @Test
+    @DisplayName("generate() - 시점 트리거 요청은 trigger_type=DEADLINE_DDAY + changes 빈 배열로 직렬화된다")
+    void generate_scheduledTrigger_serializesTriggerTypeAndEmptyChanges() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"title\":\"t\",\"summary\":\"b\"}"));
+
+        NotificationTemplateRequest request = new NotificationTemplateRequest(
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.DEADLINE_DDAY,
+                List.of(new NotificationTemplateRequest.ServiceChangeGroup(
+                        "SVC-D", "마감임박교실", null, null, null, null, "RECEIVING", null,
+                        null, "2026-06-03T00:00Z", List.of())));
+        client.generate(request);
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        String body = recorded.getBody().readUtf8();
+        assertThat(body).contains("\"trigger_type\"");
+        assertThat(body).contains("DEADLINE_DDAY");
+        assertThat(body).contains("\"changes\"");
+    }
+
+    @Test
     @DisplayName("generate() - 그룹 메타가 null이면 @JsonInclude(NON_NULL)로 직렬화에서 제외된다")
     void generate_nullMetaFields_omittedBySerialization() throws Exception {
         mockWebServer.enqueue(new MockResponse()

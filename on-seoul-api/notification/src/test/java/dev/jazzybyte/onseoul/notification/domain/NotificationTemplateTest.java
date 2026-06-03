@@ -68,7 +68,55 @@ class NotificationTemplateTest {
 
         assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
         assertThat(result.title()).startsWith("[서울공공서비스]");
-        assertThat(result.summary()).contains("변경이 감지");
+        assertThat(result.title()).contains("변경");
+        assertThat(result.summary()).contains("변경");
+    }
+
+    // ── 시점 트리거 fallback 문구 분기 (모델 B) ──────────────────────────────
+
+    @Test
+    @DisplayName("render() - OPEN_DAY 트리거는 '서비스 개시' 문구를 사용한다")
+    void render_openDay_usesOpeningWording() {
+        TemplateResult result = NotificationTemplate.render(new NotificationTemplateRequest(
+                TriggerType.OPEN_DAY, List.of(group("SVC-1", "강남 수영교실"))));
+
+        assertThat(result.source()).isEqualTo(TemplateSource.FALLBACK);
+        assertThat(result.title()).contains("서비스 개시");
+        assertThat(result.title()).contains("강남 수영교실");
+        assertThat(result.summary()).contains("서비스 개시");
+    }
+
+    @Test
+    @DisplayName("render() - BEFORE_RECEIPT_D1 트리거는 '접수 시작 예정' 문구를 사용한다")
+    void render_beforeReceiptD1_usesReceiptStartWording() {
+        TemplateResult result = NotificationTemplate.render(new NotificationTemplateRequest(
+                TriggerType.BEFORE_RECEIPT_D1, List.of(group("SVC-1", "강남 수영교실"))));
+
+        assertThat(result.title()).contains("접수 시작 예정");
+        assertThat(result.summary()).contains("접수 시작 예정");
+    }
+
+    @Test
+    @DisplayName("render() - DEADLINE_DDAY 트리거는 '접수 마감 임박' 문구를 사용한다")
+    void render_deadlineDday_usesDeadlineWording() {
+        TemplateResult result = NotificationTemplate.render(new NotificationTemplateRequest(
+                TriggerType.DEADLINE_DDAY, List.of(group("SVC-1", "강남 수영교실"))));
+
+        assertThat(result.title()).contains("접수 마감 임박");
+        assertThat(result.summary()).contains("접수 마감 임박");
+    }
+
+    @Test
+    @DisplayName("render() - 시점 트리거는 changes 빈 배열(변경 없음)이어도 문구를 만든다")
+    void render_scheduledTrigger_emptyChanges_stillRenders() {
+        NotificationTemplateRequest.ServiceChangeGroup g =
+                new NotificationTemplateRequest.ServiceChangeGroup(
+                        "SVC-1", "강남 수영교실", null, null, null, null, null, null, null, null, List.of());
+        TemplateResult result = NotificationTemplate.render(new NotificationTemplateRequest(
+                TriggerType.DEADLINE_DDAY, List.of(g)));
+
+        assertThat(result.isValid()).isTrue();
+        assertThat(result.title()).contains("접수 마감 임박");
     }
 
     // ── 한글 라벨 매핑 (Knock changes[].label 재사용) ──────────────────────

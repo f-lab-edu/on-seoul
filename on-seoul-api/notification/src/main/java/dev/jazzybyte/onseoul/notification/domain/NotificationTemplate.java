@@ -61,30 +61,45 @@ public class NotificationTemplate {
     /**
      * Fallback: AI 호출 실패 시 결정적 title + summary를 만든다.
      * 구독 1건에 매칭된 서비스 그룹 목록을 받는다.
-     * 사실 표/카드는 Knock이 그리므로 summary는 변경 서비스 개수 안내 수준이면 충분하다.
+     * 사실 표/카드는 Knock이 그리므로 summary는 트리거 맥락 + 서비스 개수 안내 수준이면 충분하다.
+     *
+     * <p>trigger_type별 문구 분기: 시점 트리거(개시/D-1/마감)는 "변경" 표현 대신
+     * 각 트리거 맥락에 맞는 안내 문구를 사용한다(시점 트리거는 변경 라인이 없을 수 있음).
      */
     public static TemplateResult render(NotificationTemplateRequest req) {
         List<NotificationTemplateRequest.ServiceChangeGroup> services = req.services();
+        TriggerType trigger = req.triggerType();
+        String noun = nounFor(trigger);   // 예: "변경", "접수 시작", "접수 마감", "서비스 개시"
 
         if (services.isEmpty()) {
             return new TemplateResult(
-                    "[서울공공서비스] 변경 알림",
-                    "구독하신 서비스에 변경이 감지되었습니다.",
+                    "[서울공공서비스] " + noun + " 알림",
+                    "구독하신 서비스의 " + noun + " 소식이 있습니다.",
                     TemplateSource.FALLBACK);
         }
 
         if (services.size() == 1) {
             String label = displayName(services.get(0));
             return new TemplateResult(
-                    "[서울공공서비스] " + label + " 변경 알림",
-                    label + " 서비스에 변경이 감지되었습니다.",
+                    "[서울공공서비스] " + label + " " + noun + " 알림",
+                    label + " 서비스의 " + noun + " 소식이 있습니다.",
                     TemplateSource.FALLBACK);
         }
 
         return new TemplateResult(
-                "[서울공공서비스] 구독하신 " + services.size() + "개 서비스 변경 알림",
-                "구독하신 " + services.size() + "개 서비스에 변경이 감지되었습니다.",
+                "[서울공공서비스] 구독하신 " + services.size() + "개 서비스 " + noun + " 알림",
+                "구독하신 " + services.size() + "개 서비스의 " + noun + " 소식이 있습니다.",
                 TemplateSource.FALLBACK);
+    }
+
+    /** trigger_type 별 한글 명사 라벨 (fallback 문구용). */
+    private static String nounFor(TriggerType trigger) {
+        return switch (trigger) {
+            case CHANGE -> "변경";
+            case OPEN_DAY -> "서비스 개시";
+            case BEFORE_RECEIPT_D1 -> "접수 시작 예정";
+            case DEADLINE_DDAY -> "접수 마감 임박";
+        };
     }
 
     /** serviceName이 있으면 우선, 없으면 serviceId로 표기. */
