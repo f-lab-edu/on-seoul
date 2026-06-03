@@ -678,6 +678,40 @@ class TestBuildCardSystem:
         assert _CLAUSE_RESERVATION_GUIDE not in prompt
 
 
+class TestStructCardListPlaceFraming:
+    """장소 프레이밍 지시 회귀 테스트.
+
+    이 서비스의 데이터는 '장소' 자체가 아니라 공공서비스·시설 예약 정보다.
+    사용자가 '장소/곳/공간'을 직접 요구할 때 도입문에서 그 점을 짚어주도록
+    지시하는 문구가 _STRUCT_CARD_LIST(및 조립 결과)에 고정되어 있는지 검증한다.
+    문구가 통째로 삭제되면 RED.
+    """
+
+    def test_struct_card_list_mentions_place_keywords(self):
+        """_STRUCT_CARD_LIST에 '장소' 프레이밍 키워드가 들어있다.
+
+        '곳'은 기존 톤 예시("몇 곳 있네요")로도 충족되어 단독으로는 false-GREEN
+        소지가 있으므로, 신규 블록 고유 토큰('장소'·'공간')으로 고정한다.
+        """
+        assert "장소" in _STRUCT_CARD_LIST
+        assert "공간" in _STRUCT_CARD_LIST
+
+    def test_struct_card_list_instructs_not_a_place_framing(self):
+        """장소 자체가 아니라 공공서비스·시설 예약 정보임을 짚으라는 취지 문구가 있다."""
+        assert "장소 자체" in _STRUCT_CARD_LIST
+        assert "공공서비스" in _STRUCT_CARD_LIST
+
+    def test_struct_card_list_keeps_zero_result_message(self):
+        """0건 안내 기존 문구는 그대로 유지된다."""
+        assert "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다." in _STRUCT_CARD_LIST
+
+    def test_build_card_system_includes_place_framing_instruction(self):
+        """_build_card_system 조립 결과에도 장소 프레이밍 지시가 실린다."""
+        prompt = _build_card_system("한강에서 촬영할 수 있는 장소", [], None)
+
+        assert "장소 자체" in prompt
+
+
 class TestStaticPrompts:
     """_static_prompts Tier 1 골든 테스트.
 
