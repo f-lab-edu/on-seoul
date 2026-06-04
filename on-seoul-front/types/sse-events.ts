@@ -1,23 +1,19 @@
 /**
- * SSE 이벤트 타입 — 백엔드 정본 미러.
- * 백엔드 스키마가 변경되면 이 파일을 동기화한다. 어긋나면 frontend-qa가 차단.
+ * Chat SSE 이벤트 타입 — 정본 미러.
+ * 정본: on-seoul-front/docs/chat-sse-event-catalog.md
+ *   (API 서비스 `ChatController` 가 프론트로 내보내는 SSE 스트림 카탈로그)
+ *   - init/error: API 서비스 소유(named 이벤트)
+ *   - step/final/workflow_error: AI 서비스(on-seoul-agent) 소유, API가 name 없는 data로 relay
  *
- * 정본:
- *   - on-seoul-agent/schemas/events.py (이벤트 타입)
- *   - on-seoul-agent/schemas/state.py AgentState.service_cards (ServiceCard 필드)
- *   - on-seoul-agent/agents/answer_agent.py _normalize() (ServiceCard 정규화)
- *
- * 백엔드는 두 가지 discriminant를 혼용한다:
- *   - `step` : 진행 상태 메시지 (예: routing, searching …)
- *   - `type` : 토큰·완료·에러 등 구조적 이벤트
+ * 식별 규칙(카탈로그 §4):
+ *   - name 없는 data 이벤트는 payload 키로 구분한다.
+ *   - `answer` 있고 `error` 없음 → final
+ *   - `answer` + `error` → workflow_error (종료)
+ *   - 그 외(step 등) → 진행(progress)
+ *   개별 type 이름에 의존하지 않으므로 미등재/신규 이벤트도 진행으로 안전하게 흡수된다.
  */
 
-export type AgentName = "router" | "sql" | "vector" | "answer";
-
-export type ToolName = "sql_search" | "vector_search" | "map_search";
-
-/** 백엔드가 step 필드로 보내는 진행 상태 메시지. */
-export type SseProgressEvent = { step: string; message: string };
+export type AgentIntent = "SQL_SEARCH" | "VECTOR_SEARCH" | "MAP" | "FALLBACK" | null;
 
 /**
  * 시설/서비스 카드 — `final` 이벤트의 `service_cards` 배열 원소.
@@ -38,35 +34,47 @@ export type ServiceCard = {
   service_url: string;
 };
 
-/** 백엔드가 type 필드로 보내는 구조적 이벤트. */
-export type SseTypedEvent =
-  | { type: "agent_start"; agent: AgentName }
-  | { type: "tool_call"; tool: ToolName; args: unknown }
-  | { type: "token"; delta: string }
-  | { type: "done"; messageId: number }
-  | {
-      type: "final";
-      message_id: number;
-      answer: string;
-      intent: "SQL_SEARCH" | "VECTOR_SEARCH" | "MAP" | "FALLBACK" | null;
-      title: string | null;
-      cache_hit: boolean;
-      service_cards: ServiceCard[];
-    }
-  | {
-      type: "workflow_error";
-      message_id: number;
-      answer: string;
-      error: string;
-      intent?: string;
-      title?: string;
-      // 백엔드가 service_cards 를 함께 보낼 수 있으나 §8에 따라 무시 — 타입에 포함하지 않음.
-    }
-  | { type: "error"; message: string };
+/**
+ * API 서비스가 스트림 첫머리에 1회 emit하는 방 메타 (`event:init`).
+ * 프론트는 room_id로 URL 전환/스레딩을 즉시 시작한다(답변 완료 대기 X).
+ */
+export type SseInitEvent = { type: "init"; room_id: number; created: boolean };
 
-export type SseEvent = SseProgressEvent | SseTypedEvent;
+/** AI 서비스 진행 메시지(name 없는 data, `step` 키 보유). */
+export type SseProgressEvent = { step: string; message: string };
 
-/** step 기반 이벤트인지 판별하는 타입 가드. */
-export function isSseProgressEvent(e: SseEvent): e is SseProgressEvent {
-  return "step" in e;
+/** 정상 종료 — `answer` 있고 `error` 없음. */
+export type SseFinalEvent = {
+  type: "final";
+  message_id: number;
+  answer: string;
+  intent: AgentIntent;
+  title: string | null;
+  cache_hit: boolean;
+  service_cards: ServiceCard[];
+};
+
+/** 워크플로우 오류 — `answer`와 `error`를 함께 가진 종료 이벤트(이력 저장 제외). */
+export type SseWorkflowErrorEvent = {
+  type: "workflow_error";
+  answer: string;
+  error: string;
+};
+
+/**
+ * API 서비스 레벨 오류(`event:error`).
+ * data는 평문 문자열이며 파서가 `message`로 래핑한다(카탈로그 §5).
+ */
+export type SseErrorEvent = { type: "error"; message: string };
+
+export type SseEvent =
+  | SseInitEvent
+  | SseProgressEvent
+  | SseFinalEvent
+  | SseWorkflowErrorEvent
+  | SseErrorEvent;
+
+/** step 기반 진행 이벤트인지 판별. */
+export function isSseProgressEvent(e: { step?: unknown }): e is SseProgressEvent {
+  return typeof e.step === "string";
 }
