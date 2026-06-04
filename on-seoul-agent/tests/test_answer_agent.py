@@ -14,6 +14,7 @@ from agents.answer_agent import (
     _TitleOutput,
     _build_card_system,
     _compose,
+    _more_notice,
     _has_district_in_message,
     _FALLBACK_URL,
     _OUTPUT_RULES,
@@ -87,7 +88,7 @@ class TestAnswerAgent:
         assert result["title"] == "수영장 안내"
 
     async def test_answer_chain_receives_message_and_results(self):
-        """answer_chain에 message, results_json, extra_count가 전달된다."""
+        """answer_chain에 message, results_json, more_notice가 전달된다."""
         agent = _make_agent()
         rows = [{"service_name": "수영장", "service_url": "https://example.com"}]
         state = _make_state(message="수영장", sql_results=rows)
@@ -97,7 +98,8 @@ class TestAnswerAgent:
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         assert call_kwargs["message"] == "수영장"
         assert "수영장" in call_kwargs["results_json"]
-        assert call_kwargs["extra_count"] == 0
+        # extra_count=0 → more_notice는 금지 지시 문구이며 렌더 가능한 "0"이 없다.
+        assert call_kwargs["more_notice"] == _more_notice(0)
 
     async def test_collect_results_merges_sql_and_vector(self):
         """sql_results와 vector_results가 모두 있으면 합쳐서 전달된다."""
@@ -356,7 +358,7 @@ class TestAnswerAgentDisplaySlice:
         displayed = json.loads(call_kwargs["results_json"])
         assert isinstance(displayed, list)
         assert len(displayed) == 4
-        assert call_kwargs["extra_count"] == 0
+        assert call_kwargs["more_notice"] == _more_notice(0)
 
     async def test_exactly_display_limit_no_extra(self):
         """결과가 정확히 DISPLAY_LIMIT(5)건이면 슬라이스 손실 없이 extra_count=0."""
@@ -368,10 +370,10 @@ class TestAnswerAgentDisplaySlice:
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         displayed = json.loads(call_kwargs["results_json"])
         assert len(displayed) == _DISPLAY_LIMIT
-        assert call_kwargs["extra_count"] == 0
+        assert call_kwargs["more_notice"] == _more_notice(0)
 
     async def test_six_results_sliced_to_five_with_extra_one(self):
-        """결과 6건이면 상위 5건만 results_json에, extra_count=1이 전달된다."""
+        """결과 6건이면 상위 5건만 results_json에, more_notice는 '외 1건' 지시."""
         agent = _make_agent()
         state = _make_state(sql_results=self._make_rows(6))
 
@@ -381,10 +383,10 @@ class TestAnswerAgentDisplaySlice:
         displayed = json.loads(call_kwargs["results_json"])
         assert len(displayed) == _DISPLAY_LIMIT
         assert displayed[0]["service_id"] == "S001"  # RRF 순위 첫 번째 보존
-        assert call_kwargs["extra_count"] == 1
+        assert call_kwargs["more_notice"] == _more_notice(1)
 
     async def test_ten_results_sliced_to_five_with_extra_five(self):
-        """결과 10건이면 extra_count=5."""
+        """결과 10건이면 more_notice는 '외 5건' 지시."""
         agent = _make_agent()
         state = _make_state(sql_results=self._make_rows(10))
 
@@ -392,17 +394,17 @@ class TestAnswerAgentDisplaySlice:
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         assert len(json.loads(call_kwargs["results_json"])) == _DISPLAY_LIMIT
-        assert call_kwargs["extra_count"] == 5
+        assert call_kwargs["more_notice"] == _more_notice(5)
 
     async def test_empty_results_extra_count_zero(self):
-        """결과 0건이면 extra_count=0."""
+        """결과 0건이면 more_notice는 금지 지시 문구."""
         agent = _make_agent()
         state = _make_state(sql_results=[])
 
         await agent.answer(state)
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
-        assert call_kwargs["extra_count"] == 0
+        assert call_kwargs["more_notice"] == _more_notice(0)
 
     async def test_service_cards_populated_in_state(self):
         """answer() 호출 후 service_cards 슬롯에 LLM 컨텍스트와 동일한 dict 리스트가 담긴다."""
@@ -431,7 +433,7 @@ class TestAnswerAgentDisplaySlice:
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         assert len(result["service_cards"]) == _DISPLAY_LIMIT
-        assert call_kwargs["extra_count"] == 5
+        assert call_kwargs["more_notice"] == _more_notice(5)
 
     async def test_service_cards_at_display_limit_boundary(self):
         """경계 회귀: 입력이 정확히 _DISPLAY_LIMIT(5) 건 → service_cards 5건, extra_count=0.
@@ -445,7 +447,7 @@ class TestAnswerAgentDisplaySlice:
 
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
         assert len(result["service_cards"]) == _DISPLAY_LIMIT
-        assert call_kwargs["extra_count"] == 0
+        assert call_kwargs["more_notice"] == _more_notice(0)
 
     async def test_service_cards_empty_when_no_results(self):
         """검색 결과 0건 → service_cards == [] (None 이 아닌 빈 배열)."""
@@ -568,7 +570,84 @@ class TestAnswerAgentDisplaySlice:
         service_names = [r["service_name"] for r in displayed]
         assert "근처체육관" in service_names
         assert "근처수영장" in service_names
-        assert call_kwargs["extra_count"] == 0
+        assert call_kwargs["more_notice"] == _more_notice(0)
+
+
+class TestMoreNoticeRendering:
+    """'외 0건' 오출력 회귀 (코드 수준 결정적 처리).
+
+    렌더 가능한 숫자 "0"을 LLM에 노출하지 않는다. extra_count 값에 따라
+    human 입력 {more_notice} 문구를 코드에서 분기한다. LLM은 mock이므로
+    프롬프트 입력 수준에서 단언한다.
+    """
+
+    def _make_rows(self, n: int) -> list[dict]:
+        return [
+            {"service_id": f"S{i:03d}", "service_name": f"시설{i}", "service_url": None}
+            for i in range(1, n + 1)
+        ]
+
+    def test_more_notice_zero_has_no_renderable_zero(self):
+        """extra_count=0 → 렌더 가능한 '0' 미표시 건수가 없고 '외' 금지 취지 문구."""
+        notice = _more_notice(0)
+        assert "0건" not in notice
+        assert "외 N건" in notice
+        assert "하지 마세요" in notice or "금지" in notice
+
+    def test_more_notice_positive_instructs_extra_count(self):
+        """extra_count>0 → '외 {n}건' 표기 지시 포함."""
+        notice = _more_notice(3)
+        assert "외 3건" in notice
+        assert "반드시 표기" in notice
+
+    async def test_exactly_five_results_more_notice_forbids_oe_n(self):
+        """결과 정확히 5건(extra_count=0) → human 메시지에 '0건' 없고 '외' 금지 취지 문구."""
+        agent = _make_agent()
+        state = _make_state(sql_results=self._make_rows(5))
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        notice = call_kwargs["more_notice"]
+        # 렌더 가능한 "0" (예: "외 0건", "미표시 건수: 0")이 LLM 입력에 없어야 한다.
+        assert "0건" not in notice
+        assert "0" not in notice
+        assert "모든 결과를 표시했습니다" in notice
+
+    async def test_six_results_more_notice_instructs_oe_one(self):
+        """결과 6건(extra_count>0) → '외 1건' 표기 지시가 human 메시지에 포함."""
+        agent = _make_agent()
+        state = _make_state(sql_results=self._make_rows(6))
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        assert "외 1건" in call_kwargs["more_notice"]
+
+    async def test_analytics_more_notice_forbids_oe_n(self):
+        """ANALYTICS 경로도 extra_count=0 → '외' 금지 문구, 렌더 가능한 '0' 미노출."""
+        agent = _make_agent()
+        state = make_agent_state(
+            intent=IntentType.ANALYTICS,
+            analytics_results=[{"group_value": "체육시설", "count": 150}],
+        )
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        assert call_kwargs["more_notice"] == _more_notice(0)
+        assert "0" not in call_kwargs["more_notice"]
+
+    async def test_fallback_more_notice_forbids_oe_n(self):
+        """FALLBACK 경로도 extra_count=0 → '외' 금지 문구, 렌더 가능한 '0' 미노출."""
+        agent = _make_agent()
+        state = make_agent_state(intent=IntentType.FALLBACK)
+
+        await agent.answer(state)
+
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        assert call_kwargs["more_notice"] == _more_notice(0)
+        assert "0" not in call_kwargs["more_notice"]
 
 
 class TestHasDistrictInMessage:

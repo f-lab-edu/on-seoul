@@ -65,7 +65,10 @@ _STRUCT_CARD_LIST = """\
    - 결과가 0건이면 "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다." 만 출력.
 
 2) 시설명 목록 (전달된 결과의 시설명만 한 줄씩 나열. 상세 줄은 출력 금지.
-   "추가 미표시 건수"가 0보다 크면 목록 끝에 "외 N건" 표기)
+   미표시 건수 안내는 입력의 "미표시 건수 안내" 문장 지시를 그대로 따르세요.
+   해당 문장이 "외 N건"을 표기하라고 하면 목록 끝 줄에 표기하고,
+   표기하지 말라고 하면 "외 N건" 류 표기를 절대 하지 마세요.
+   입력에 숫자가 없으면 임의로 "외 0건" 같은 표기를 만들지 마세요)
 
 3) 마무리 안내 (아래 _CLAUSE_RESERVATION_GUIDE / _CLAUSE_REFINE_HINT 절 참조)
 
@@ -233,15 +236,38 @@ def _build_card_system(
 
 # 모든 intent 공용 human 템플릿.
 # {system}은 intent별로 _compose()가 조립한 시스템 프롬프트를 runtime에 주입받는다.
-# ANALYTICS intent도 이 템플릿을 사용하며, extra_count=0을 함께 전달한다.
-# (집계 행에는 "추가 미표시 건수: 0" 이 LLM 컨텍스트에 노출되나 결과에 무해)
+# {more_notice}는 extra_count로부터 _more_notice()가 코드에서 생성한 안내 문구다.
+# extra_count(렌더 가능한 숫자, 특히 0)를 LLM에 직접 노출하지 않기 위해 결정적으로
+# 분기한 문장만 주입한다. ANALYTICS/FALLBACK 경로도 동일 템플릿을 사용하며
+# extra_count=0 → "외 N건" 금지 문구가 들어간다.
 _ANSWER_HUMAN = """\
 사용자 질문: {message}
 
 검색 결과:
 {results_json}
 
-추가 미표시 건수: {extra_count}"""
+{more_notice}"""
+
+
+def _more_notice(extra_count: int) -> str:
+    """extra_count로부터 미표시 건수 안내 문구를 결정적으로 생성한다.
+
+    LLM에 렌더 가능한 숫자 "0"을 노출하지 않기 위해 extra_count 값에 따라
+    분기한다. extra_count가 0이면 "외 0건" 류 오출력을 막는 금지 지시를,
+    0보다 크면 "외 N건"을 반드시 표기하라는 명시 지시를 반환한다.
+
+    Args:
+        extra_count: _DISPLAY_LIMIT 초과로 표시되지 않은 시설 건수 (>= 0).
+
+    Returns:
+        human 메시지 {more_notice} 자리에 주입할 안내 문장.
+    """
+    if extra_count > 0:
+        return (
+            f"표시되지 않은 시설이 {extra_count}건 더 있습니다. "
+            f"목록 맨 끝 줄에 '외 {extra_count}건'을 반드시 표기하세요."
+        )
+    return "모든 결과를 표시했습니다. '외 N건' 류 표기를 절대 하지 마세요."
 
 # ---------------------------------------------------------------------------
 # 제목 생성 프롬프트
@@ -301,8 +327,9 @@ class AnswerAgent:
         llm = model or get_chat_model()
 
         # system 메시지를 {system} 변수로 파라미터화: intent별 프롬프트를 runtime에 주입.
-        # human 메시지는 기존 {message}/{results_json}/{extra_count} 변수를 유지하여
-        # 기존 단위 테스트(ainvoke call_args 검사)와의 호환성을 보장한다.
+        # human 메시지는 {message}/{results_json}/{more_notice} 변수를 사용한다.
+        # {more_notice}는 _more_notice(extra_count)로 코드에서 생성해 주입한다
+        # (렌더 가능한 숫자 0을 LLM에 노출하지 않기 위함).
         answer_prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", "{system}"),
@@ -346,8 +373,7 @@ class AnswerAgent:
 
         if intent == IntentType.ANALYTICS:
             # ANALYTICS: analytics_results를 직접 LLM에 전달. _normalize 미경유.
-            # extra_count=0을 함께 전달하여 _ANSWER_HUMAN 템플릿 변수 충족.
-            # (집계 행은 카드가 아니므로 "추가 미표시 건수: 0"은 LLM 컨텍스트에 무해)
+            # 카드 미표시 개념이 없으므로 _more_notice(0)('외 N건' 금지 문구)을 주입한다.
             system_prompt = self._static_prompts[IntentType.ANALYTICS.value]
             raw_analytics = state.get("analytics_results") or []
             results_json = json.dumps(raw_analytics, ensure_ascii=False, default=str)
@@ -356,7 +382,7 @@ class AnswerAgent:
                     "system": system_prompt,
                     "message": message,
                     "results_json": results_json,
-                    "extra_count": 0,
+                    "more_notice": _more_notice(0),
                 }
             )
             updates: dict = {"answer": answer_text, "service_cards": []}
@@ -368,7 +394,7 @@ class AnswerAgent:
                     "system": system_prompt,
                     "message": message,
                     "results_json": "[]",
-                    "extra_count": 0,
+                    "more_notice": _more_notice(0),
                 }
             )
             updates = {"answer": answer_text, "service_cards": []}
@@ -396,7 +422,7 @@ class AnswerAgent:
                     "system": system_prompt,
                     "message": message,
                     "results_json": results_json,
-                    "extra_count": extra_count,
+                    "more_notice": _more_notice(extra_count),
                 }
             )
 
