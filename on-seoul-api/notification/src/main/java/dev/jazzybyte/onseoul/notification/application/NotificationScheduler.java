@@ -63,6 +63,9 @@ public class NotificationScheduler {
 
     private static final int CONCURRENCY = 4;
 
+    /** 이메일 본문에 렌더링할 서비스 카드 최대 건수. title/summary는 실제 전체 건수를 유지한다. */
+    private static final int MAX_SERVICE_CARDS_PER_MAIL = 20;
+
     /**
      * 한 번에 DB에서 읽어 올 구독 청크 크기.
      * keyset 페이지네이션에서 각 청크는 {@code id > lastId ORDER BY id ASC LIMIT CHUNK_SIZE} 쿼리로 조회한다.
@@ -266,8 +269,18 @@ public class NotificationScheduler {
                 .increment();
 
         // 사실 데이터(서비스 카드)는 결정적으로 조립한다. AI는 summary만 생성한다.
+        // 이메일은 최대 MAX_SERVICE_CARDS_PER_MAIL건까지만 렌더링한다.
+        // title/summary는 실제 전체 건수를 유지하고, 초과 시 summary에 안내 문구를 append한다.
+        int totalCount = groups.size();
+        List<NotificationTemplateRequest.ServiceChangeGroup> cappedGroups =
+                totalCount > MAX_SERVICE_CARDS_PER_MAIL
+                        ? groups.subList(0, MAX_SERVICE_CARDS_PER_MAIL)
+                        : groups;
+        String summary = totalCount > MAX_SERVICE_CARDS_PER_MAIL
+                ? template.summary() + " 메일은 최대 " + MAX_SERVICE_CARDS_PER_MAIL + "개까지만 보여줄 수 있습니다."
+                : template.summary();
         NotificationContent content = new NotificationContent(
-                template.title(), template.summary(), toServiceCards(groups));
+                template.title(), summary, toServiceCards(cappedGroups));
 
         // 발송 직전: content를 JSON 직렬화하여 dispatch에 보관(재시도 무손실 복원).
         // 직렬화 자체는 어댑터/매퍼 계층(contentSerializer) 책임 — 도메인/스케줄러는 raw String만 다룬다.
