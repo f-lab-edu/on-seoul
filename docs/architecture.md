@@ -52,55 +52,51 @@ ai-service/
 ## API Service (Spring Boot)
 > 인증, 데이터 수집, 변경 이력 관리, 알림 발송, 대화 이력을 담당한다.
 
-헥사고날 아키텍처(Ports & Adapters)를 적용한 Gradle 멀티모듈 구성이다.
+헥사고날 아키텍처(Ports & Adapters)를 **Bounded Context별 수직 분할**한 Gradle 멀티모듈 구성이다.  
+각 BC(user / chat / collection / notification)가 자신의 `domain` / `application` / `port` / `adapter`를 **독립적으로 보유**하는 수직 구조를 형성된다. BC 간 결합은 `bootstrap`에서만 조립하며, 도메인 경계가 모듈 경계와 일치한다.
 
 ```
 on-seoul-api/
-├── common/          # 전역 예외(ErrorCode, OnSeoulApiException), 공용 유틸
-├── domain/          # 순수 도메인 (프레임워크 무의존)
-│   ├── model/       # 도메인 POJO — User, ChatRoom, PublicServiceReservation 등
-│   └── port/
-│       ├── in/      # 유스케이스 인터페이스 — SocialLoginUseCase, RefreshTokenUseCase,
-│       │            #                          CollectDatasetUseCase 등
-│       └── out/     # 외부 의존성 인터페이스 — LoadUserPort, SaveUserPort,
-│                    #                           TokenIssuerPort, RefreshTokenStorePort,
-│                    #                           SeoulDatasetFetchPort, GeocodingPort 등
-├── application/     # 유스케이스 구현체 (spring-tx만 의존)
-│   └── service/     # SocialLoginService, RefreshTokenService, LogoutService,
-│                    # CollectDatasetService, GeocodingService, UpsertService
-├── adapter/         # 모든 어댑터 (Spring/JPA/Redis/WebClient 의존 OK)
-│   ├── in/
-│   │   ├── web/     # AuthController, CollectionController, ChatController, GlobalExceptionHandler
-│   │   └── security/# SecurityConfig, OAuth2LoginSuccessHandler,
-│   │                # JjwtTokenIssuer(TokenIssuerPort 구현), JwtAuthenticationFilter
-│   └── out/
-│       ├── persistence/ # JPA 엔티티 + Spring Data Repository + PersistenceAdapter
-│       │                # (User, ChatRoom, PublicServiceReservation,
-│       │                #  ApiSourceCatalog, CollectionHistory, ServiceChangeLog)
-│       ├── redis/   # RefreshTokenRedisAdapter (RefreshTokenStorePort 구현)
-│       ├── seoulapi/# SeoulOpenApiAdapter (SeoulDatasetFetchPort 구현)
-│       ├── kakao/   # KakaoGeocodingAdapter (GeocodingPort 구현)
-│       └── aiservice/ # AiServiceAdapter (AI 서비스 /chat/stream WebClient 호출)
-├── bootstrap/       # Web API 부트스트랩 — OnSeoulApiApplication.java + application.yml
-└── collector/       # 수집 배치 부트스트랩 — CollectorApplication.java + CollectionScheduler (@Scheduled 매일 08시)
+├── common/         # 전역 예외(ErrorCode, OnSeoulApiException), 공용 유틸. 모든 모듈 의존 가능
+├── user/           # 인증 BC — OAuth2 로그인, JWT(Access/Refresh), 사용자 프로필
+├── chat/           # 채팅 BC — ChatRoom/ChatMessage, AI 서비스 SSE 릴레이
+├── collection/     # 수집 BC — 서울 Open API 수집, ServiceChangeLog, 임베딩 동기화
+├── notification/   # 알림 BC — 구독, Knock 발송(SMS/이메일), 템플릿 생성, 시점 트리거
+├── bootstrap/      # Web API 부트스트랩 — OnSeoulApiApplication + SecurityConfig 조합
+├── docs/           # ADR, 구현 목록
+└── schema/         # DB 마이그레이션 스크립트
 ```
 
-### 의존 방향
+각 BC 모듈 내부는 동일한 수직 구조를 따른다.
 
 ```
-adapter ──▶ application ──▶ domain
-   │                          ▲
-   └──────────────────────────┘  (adapter.out이 domain.port.out 구현)
+<bc>/
+├── domain/         # 순수 도메인 (프레임워크 무의존)
+├── application/    # 유스케이스 구현체 (spring-tx만 허용)
+├── port/
+│   ├── in/         # 인바운드 포트 — UseCase 인터페이스
+│   └── out/        # 아웃바운드 포트 — LoadXxxPort, SaveXxxPort 등
+└── adapter/
+    ├── in/         # REST 컨트롤러, Security 필터, @Scheduled 스케줄러
+    └── out/        # JPA, Redis, WebClient(서울 Open API·AI 서비스·Knock) 어댑터
 ```
 
-ArchUnit으로 두 가지 경계를 자동 검증한다: `domain`→Spring/JPA 의존 금지, `application`→`adapter` 의존 금지.
+### 모듈 의존 관계
+
+```
+bootstrap
+  ├── user         ──▶ common
+  ├── chat         ──▶ common, collection
+  ├── collection   ──▶ common
+  └── notification ──▶ common
+```
 
 ### 주요 설계 사항
 
-**인증 흐름**: OAuth2 Code Flow(Google/Kakao) → `OAuth2LoginSuccessHandler`가 `SocialLoginUseCase`를 호출 → users upsert + JWT 발급 + Redis에 RT 저장 → JSON 응답. API 인증은 `JwtAuthenticationFilter`가 Bearer 토큰을 파싱해 SecurityContext에 주입.
+**인증**: OAuth2 소셜 로그인으로 사용자를 식별하고 JWT(Access/Refresh)를 발급한다. Refresh Token은 Redis에 저장해 회전(rotation)·강제 만료를 제어한다. (user BC)
 
-**Token Rotation**: `POST /auth/token/refresh` 호출 시 기존 Refresh Token을 Redis에서 즉시 삭제하고 새 토큰 쌍을 발급한다. 탈취된 RT는 1회 사용 후 무효화된다.
+**데이터 수집**: 스케줄러가 주기적으로 서울 Open API를 수집하고, 기존 데이터와 비교해 변경을 감지·기록한다. (collection BC)
 
-**데이터 수집 흐름**: `collector` 부트의 `CollectionScheduler`가 매일 08시 트리거 → `CollectDatasetUseCase`(전체 갱신 + staging 비교 + diff 감지) → DB Upsert. `@Transactional`은 application 서비스에서 관리한다. `bootstrap`(Web API)과 `collector`(배치)는 별도 프로세스로 기동하며 동일 헥사고날 코어(`domain/application/adapter`)를 공유한다.
+**챗봇 SSE 릴레이 & 책임 분리**: AI 서비스의 스트리밍 응답을 프론트엔드로 릴레이하며, 클라이언트가 끊겨도 최종 답변을 저장한다. 대화 이력과 추론 trace는 저장 책임을 분리한다. (chat BC)
 
-**ChatController의 SSE 릴레이 역할**: 프론트엔드의 SSE 요청을 받아 AI 서비스에 전달하고, AI 서비스의 스트리밍 응답을 `SseEmitter`로 그대로 릴레이한다. 스트림 완료 후 질문과 최종 응답을 `ChatRoom`/`ChatMessage`에 저장한다.
+**모듈간 의존**: adapter → application → domain 단방향으로 의존하도록 설계한다. ArchUnit으로 검증한다.

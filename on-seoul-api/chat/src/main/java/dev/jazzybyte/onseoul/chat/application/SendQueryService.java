@@ -68,9 +68,22 @@ public class SendQueryService implements SendQueryUseCase {
     @Override
     @Transactional
     public void saveAnswer(long roomId, String answer) {
+        // 멱등 가드: 직전 USER 메시지 이후 ASSISTANT가 이미 있으면(= 마지막 메시지가 ASSISTANT) 저장 생략.
+        // 재시도/중복 요청/모든-종료-경로-저장이 겹쳐도 같은 턴에 ASSISTANT가 중복 INSERT되지 않게 한다.
+        // 스키마 무변경 — 메시지 유무(role)로만 판정한다.
+        if (lastMessageIsAssistant(roomId)) {
+            log.debug("[Chat] ASSISTANT 응답 이미 존재 - 중복 저장 생략: roomId={}", roomId);
+            return;
+        }
         Long seq = saveChatMessagePort.nextSeq();
         ChatMessage assistantMessage = ChatMessage.create(roomId, seq, ChatMessageRole.ASSISTANT, answer);
         saveChatMessagePort.save(assistantMessage);
+    }
+
+    private boolean lastMessageIsAssistant(long roomId) {
+        List<ChatMessage> recent = loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1);
+        return !recent.isEmpty()
+                && recent.get(recent.size() - 1).getRole() == ChatMessageRole.ASSISTANT;
     }
 
     private ChatRoom resolveRoom(SendQueryCommand command) {

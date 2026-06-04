@@ -9,7 +9,11 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.scheduling.annotation.Scheduled;
 
+import java.lang.reflect.Method;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
@@ -54,5 +58,25 @@ class CollectionSchedulerTest {
 
         // finally 블록: 예외와 무관하게 이벤트 발행 보장
         verify(eventPublisher).publishEvent(org.mockito.ArgumentMatchers.any(CollectionCompletedEvent.class));
+    }
+
+    /**
+     * QA 회귀 가드: 수집 스케줄러는 KST 08:00에 고정되어야 한다(커밋 e90246d).
+     *
+     * <p>JVM 기본 타임존은 UTC로 강제되므로({@code OnSeoulApiApplication.init()}),
+     * {@code @Scheduled}에 {@code zone="Asia/Seoul"}가 없으면 08:00 UTC(=17:00 KST)에 돈다.
+     * 이 테스트는 cron과 zone 메타데이터를 직접 단정해 zone 누락 회귀를 막는다.
+     */
+    @Test
+    @DisplayName("scheduledCollect @Scheduled 어노테이션은 cron=0 0 8 * * *, zone=Asia/Seoul 이어야 한다")
+    void scheduledCollect_annotation_isPinnedToKst0800() throws NoSuchMethodException {
+        Method method = CollectionScheduler.class.getDeclaredMethod("scheduledCollect");
+        Scheduled scheduled = method.getAnnotation(Scheduled.class);
+
+        assertThat(scheduled).as("@Scheduled 어노테이션이 존재해야 한다").isNotNull();
+        assertThat(scheduled.cron()).as("매일 08:00 cron").isEqualTo("0 0 8 * * *");
+        assertThat(scheduled.zone())
+                .as("JVM 기본 존(UTC)과 무관하게 한국시간 08:00 고정 — zone 누락 시 17:00 KST 회귀")
+                .isEqualTo("Asia/Seoul");
     }
 }

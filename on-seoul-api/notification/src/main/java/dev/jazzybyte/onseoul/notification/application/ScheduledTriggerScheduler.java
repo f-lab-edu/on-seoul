@@ -117,8 +117,11 @@ public class ScheduledTriggerScheduler {
     }
 
     /**
-     * 매일 09:30(KST 가정은 배포 타임존에 따름)에 시점 트리거 알림을 발송한다.
-     * CHANGE 배치보다 늦게 실행되도록 시각을 늦춘다(실행 순서 = cross dedup 1차 보장).
+     * 매일 09:30 UTC(= 18:30 KST)에 시점 트리거 알림을 발송한다.
+     * JVM 기본 존이 OnSeoulApiApplication.init()에서 UTC로 강제되므로 zone 미지정 cron은 UTC 기준이다.
+     * today/dispatch_date도 UTC 달력 기준이라 발화 존과 정합된다.
+     * CHANGE 배치(CollectionScheduler 08:00 KST = 23:00 UTC 전일)보다 늦게 실행되도록 시각을 늦춘다
+     * (실행 순서 = cross dedup 1차 보장).
      */
     @Scheduled(cron = "${notification.scheduled-trigger.cron:0 30 9 * * *}")
     public void run() {
