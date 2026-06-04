@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     seq         BIGINT NOT NULL,
     role        VARCHAR(20) NOT NULL,
     content     CLOB NOT NULL,
+    service_cards JSON,
     created_at  TIMESTAMP WITH TIME ZONE NOT NULL
 );
 

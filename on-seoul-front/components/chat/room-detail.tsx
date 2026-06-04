@@ -21,9 +21,9 @@ interface RoomDetailProps {
 }
 
 /**
- * 대화방 화면(`/chat/[roomId]`). 과거 메시지(텍스트만, service_cards 없음 — 가이드 §3.2)를
+ * 대화방 화면(`/chat/[roomId]`). 과거 메시지(ASSISTANT는 저장된 service_cards 포함)를
  * 시드해 ChatConversation에 넘기고, 같은 roomId로 "이어서 대화하기"를 지원한다.
- * 실시간 응답의 service_cards는 SSE final에서 오므로 그대로 렌더된다(이력 카드 미저장과 무관).
+ * 이력의 카드는 스트리밍 final의 카드와 동일한 형태로 그대로 렌더된다.
  */
 export function RoomDetail({ roomId }: RoomDetailProps) {
   const router = useRouter();
@@ -37,6 +37,7 @@ export function RoomDetail({ roomId }: RoomDetailProps) {
       id: `seq-${m.seq}`,
       role: m.role,
       content: m.content,
+      serviceCards: m.service_cards ?? undefined,
     }));
   }, [history.data]);
 

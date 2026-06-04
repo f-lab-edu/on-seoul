@@ -374,7 +374,7 @@ class SendQueryServiceTest {
         when(saveChatMessagePort.nextSeq()).thenReturn(6L);
         when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.saveAnswer(roomId, answer);
+        service.saveAnswer(roomId, answer, null);
 
         ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
         verify(saveChatMessagePort).save(captor.capture());
@@ -382,6 +382,54 @@ class SendQueryServiceTest {
         assertThat(captor.getValue().getContent()).isEqualTo(answer);
         assertThat(captor.getValue().getRoomId()).isEqualTo(roomId);
         assertThat(captor.getValue().getSeq()).isEqualTo(6L);
+    }
+
+    @Test
+    @DisplayName("saveAnswer() - serviceCardsJson이 주어지면 ASSISTANT 메시지에 그대로 전달되어 저장된다")
+    void saveAnswer_withServiceCards_passesThrough() {
+        Long roomId = 10L;
+        String cardsJson = "[{\"service_id\":\"S1\",\"name\":\"강남 음악회 🎵\"}]";
+
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1))
+                .thenReturn(List.of(msg(roomId, 5L, ChatMessageRole.USER, "질문")));
+        when(saveChatMessagePort.nextSeq()).thenReturn(6L);
+        when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.saveAnswer(roomId, "강남구 안내", cardsJson);
+
+        ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
+        verify(saveChatMessagePort).save(captor.capture());
+        assertThat(captor.getValue().getRole()).isEqualTo(ChatMessageRole.ASSISTANT);
+        assertThat(captor.getValue().getServiceCards()).isEqualTo(cardsJson);
+    }
+
+    @Test
+    @DisplayName("saveAnswer() - serviceCardsJson이 null이면 ASSISTANT 메시지의 serviceCards도 null")
+    void saveAnswer_nullServiceCards_storesNull() {
+        Long roomId = 10L;
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1))
+                .thenReturn(List.of(msg(roomId, 5L, ChatMessageRole.USER, "질문")));
+        when(saveChatMessagePort.nextSeq()).thenReturn(6L);
+        when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.saveAnswer(roomId, "답변", null);
+
+        ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
+        verify(saveChatMessagePort).save(captor.capture());
+        assertThat(captor.getValue().getServiceCards()).isNull();
+    }
+
+    @Test
+    @DisplayName("saveAnswer() - 멱등 가드는 service_cards가 있어도 동작: 직전이 ASSISTANT면 카드 동반이어도 저장 생략")
+    void saveAnswer_assistantAlreadyExists_skipsSave_evenWithCards() {
+        Long roomId = 10L;
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1))
+                .thenReturn(List.of(msg(roomId, 6L, ChatMessageRole.ASSISTANT, "이미 저장된 답변")));
+
+        service.saveAnswer(roomId, "중복 답변", "[{\"service_id\":\"S1\"}]");
+
+        verify(saveChatMessagePort, never()).save(any(ChatMessage.class));
+        verify(saveChatMessagePort, never()).nextSeq();
     }
 
     @Test
@@ -393,7 +441,7 @@ class SendQueryServiceTest {
         when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1))
                 .thenReturn(List.of(msg(roomId, 6L, ChatMessageRole.ASSISTANT, "이미 저장된 답변")));
 
-        service.saveAnswer(roomId, "중복 답변");
+        service.saveAnswer(roomId, "중복 답변", null);
 
         verify(saveChatMessagePort, never()).save(any(ChatMessage.class));
         verify(saveChatMessagePort, never()).nextSeq();
@@ -407,7 +455,7 @@ class SendQueryServiceTest {
         when(saveChatMessagePort.nextSeq()).thenReturn(1L);
         when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.saveAnswer(roomId, "답변");
+        service.saveAnswer(roomId, "답변", null);
 
         verify(saveChatMessagePort).save(any(ChatMessage.class));
     }

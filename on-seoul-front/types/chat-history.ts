@@ -8,6 +8,8 @@
  * (여기는 `roomId`/`seq`/`titleGenerated`) 별도 파일로 분리한다.
  */
 
+import type { ServiceCard } from "@/types/sse-events";
+
 export type ChatRole = "USER" | "ASSISTANT";
 
 /** GET /api/chat/rooms 응답의 대화방 요약 항목. */
@@ -31,6 +33,8 @@ export interface ChatMessageItem {
   seq: number;
   role: ChatRole;
   content: string;
+  /** ASSISTANT 메시지에만 존재. 스트리밍 final 이벤트와 동일한 카드 배열. USER/카드 미동반 시 null. */
+  service_cards: ServiceCard[] | null;
   createdAt: string; // ISO 8601 (UTC)
 }
 

@@ -80,7 +80,11 @@ public class ChatAgentClient implements AiServiceStreamPort {
             JsonNode node = OBJECT_MAPPER.readTree(data);
             if (node.isObject() && node.has("answer") && !node.has("error")) {
                 JsonNode answer = node.get("answer");
-                return AiStreamEvent.finalEvent(data, answer.isNull() ? "" : answer.asText());
+                JsonNode cards = node.get("service_cards");
+                String serviceCardsJson = (cards == null || cards.isNull())
+                        ? null
+                        : OBJECT_MAPPER.writeValueAsString(cards);
+                return AiStreamEvent.finalEvent(data, answer.isNull() ? "" : answer.asText(), serviceCardsJson);
             }
         } catch (Exception e) {
             // JSON이 아니거나 파싱 실패 — relay 전용 이벤트로 취급(프론트 스트림에는 영향 없음).

@@ -242,6 +242,103 @@ class ChatAgentClientTest {
     }
 
     @Test
+    @DisplayName("stream() - final 이벤트에 service_cards 배열이 있으면 그 배열이 compact JSON으로 직렬화된다")
+    void stream_finalWithServiceCards_serializesArray() throws Exception {
+        String finalData = "{\"message_id\":84,\"answer\":\"강남구 문화행사 안내\","
+                + "\"service_cards\":["
+                + "{\"service_id\":\"S1\",\"name\":\"강남 음악회 🎵\",\"area\":\"강남구\"},"
+                + "{\"service_id\":\"S2\",\"name\":\"미술 전시\",\"area\":\"강남구\"}"
+                + "]}";
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: " + finalData + "\n\n")
+                .setResponseCode(200));
+
+        List<AiStreamEvent> events = adapter.stream("강남구 문화행사", 1L, 84L, null, null, java.util.List.of())
+                .collectList()
+                .block();
+
+        assertThat(events).hasSize(1);
+        AiStreamEvent fin = events.get(0);
+        assertThat(fin.isFinal()).isTrue();
+        assertThat(fin.finalAnswer()).isEqualTo("강남구 문화행사 안내");
+
+        // service_cards는 배열 그대로 직렬화되어야 한다(앞뒤가 [ ] 이고, 문자열로 escape되지 않음).
+        String cards = fin.finalServiceCards();
+        assertThat(cards).isNotNull();
+        assertThat(cards).startsWith("[").endsWith("]");
+        // compact: writeValueAsString 결과는 다시 파싱 가능한 배열이어야 한다.
+        JsonNode parsed = new ObjectMapper().readTree(cards);
+        assertThat(parsed.isArray()).isTrue();
+        assertThat(parsed).hasSize(2);
+        assertThat(parsed.get(0).get("service_id").asText()).isEqualTo("S1");
+        // 한글/이모지 보존
+        assertThat(parsed.get(0).get("name").asText()).isEqualTo("강남 음악회 🎵");
+    }
+
+    @Test
+    @DisplayName("stream() - final 이벤트에 service_cards 키가 없으면 finalServiceCards는 null")
+    void stream_finalWithoutServiceCardsKey_nullCards() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"message_id\":1,\"answer\":\"답변\",\"intent\":\"SQL_SEARCH\"}\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of())
+                .blockLast();
+
+        assertThat(fin.isFinal()).isTrue();
+        assertThat(fin.finalServiceCards()).isNull();
+    }
+
+    @Test
+    @DisplayName("stream() - final 이벤트의 service_cards가 명시적 null이면 finalServiceCards는 null")
+    void stream_finalWithNullServiceCards_nullCards() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"message_id\":1,\"answer\":\"답변\",\"service_cards\":null}\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of())
+                .blockLast();
+
+        assertThat(fin.isFinal()).isTrue();
+        assertThat(fin.finalServiceCards()).isNull();
+    }
+
+    @Test
+    @DisplayName("stream() - final 이벤트의 service_cards가 빈 배열이면 finalServiceCards는 \"[]\" (명시적 빈 배열은 보존)")
+    void stream_finalWithEmptyServiceCards_preservesEmptyArray() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"message_id\":1,\"answer\":\"답변\",\"service_cards\":[]}\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of())
+                .blockLast();
+
+        assertThat(fin.isFinal()).isTrue();
+        assertThat(fin.finalServiceCards()).isEqualTo("[]");
+    }
+
+    @Test
+    @DisplayName("stream() - answer와 error가 함께 있으면 final이 아니므로 service_cards도 캡처되지 않는다")
+    void stream_answerWithError_notFinal_noCards() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"answer\":\"폴백 답변\",\"error\":\"오류\","
+                        + "\"service_cards\":[{\"service_id\":\"S1\"}]}\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of())
+                .blockLast();
+
+        assertThat(ev.isFinal()).isFalse();
+        // final이 아니면 finalServiceCards는 null (relay 전용)
+        assertThat(ev.finalServiceCards()).isNull();
+    }
+
+    @Test
     @DisplayName("stream() - 요청이 /chat/stream 경로로 POST 전송된다")
     void stream_requestSentToCorrectPath() throws Exception {
         mockWebServer.enqueue(new MockResponse()
