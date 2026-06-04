@@ -29,9 +29,16 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.support.CronExpression;
 
+import java.lang.reflect.Method;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -297,5 +304,62 @@ class ScheduledTriggerSchedulerTest {
 
         assertThat(persisted.getNotificationPayload()).isNotNull();
         assertThat(persisted.getNotificationPayload()).contains("\"services\"");
+    }
+
+    // ── cross-dedup 실행 순서 불변식(회귀 가드) ──────────────────────────────
+    // 커밋 e90246d(수집 KST 08:00 고정)이 cross-dedup 선후 관계를 깨지 않는지 코드로 고정한다.
+    // 불변식: 수집(CHANGE 배치 dispatch 선점) → 시점 트리거 발행 순으로 매일 실행되어야 한다.
+    //   - JVM 기본 타임존은 UTC로 강제됨(OnSeoulApiApplication.init()).
+    //   - 수집  : @Scheduled(cron="0 0 8 * * *", zone="Asia/Seoul") → 08:00 KST = 23:00 UTC(전일).
+    //   - 시점  : @Scheduled(cron="...0 30 9 * * *", zone 미지정) → JVM UTC 기준 09:30 UTC.
+    // 따라서 같은 "UTC 달력일 D"의 09:30 UTC 시점 트리거보다, 그 전일 23:00 UTC에 돈 수집이
+    // 항상 선행한다(약 10.5시간 마진). 이 마진이 무너지면 시점 트리거가 CHANGE보다 먼저 dispatch를
+    // 선점해 cross-dedup(CHANGE 우선)이 깨진다.
+
+    @Test
+    @DisplayName("시점 트리거 @Scheduled는 09:30 cron이며 zone 미지정(JVM UTC 기본)이다")
+    void scheduledTrigger_annotation_isNinethirtyNoExplicitZone() throws NoSuchMethodException {
+        Method run = ScheduledTriggerScheduler.class.getDeclaredMethod("run");
+        Scheduled scheduled = run.getAnnotation(Scheduled.class);
+
+        assertThat(scheduled).isNotNull();
+        // 기본 cron 표현식(프로퍼티 미설정 시): 0 30 9 * * *
+        assertThat(scheduled.cron()).isEqualTo("${notification.scheduled-trigger.cron:0 30 9 * * *}");
+        // zone 미지정 → JVM 기본 타임존(UTC)을 따른다. zone 추가는 시점 트리거를 KST로 당겨
+        // 수집(23:00 UTC 전일)보다 앞당겨 cross-dedup 순서를 깰 수 있으므로 의도적으로 비워둔다.
+        assertThat(scheduled.zone()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("수집(08:00 KST)은 같은 UTC일의 시점 트리거(09:30 UTC)보다 항상 선행한다 — cross-dedup 순서 불변식")
+    void collection0800Kst_precedes_scheduledTrigger0930Utc_onSameUtcDay() {
+        // 주의: 이 테스트는 기본 cron(0 30 9 / 0 0 8)에 대한 *코드 회귀* 가드다.
+        // 시점 트리거 cron은 notification.scheduled-trigger.cron 프로퍼티로 런타임 오버라이드 가능하므로,
+        // 운영에서 트리거 시각을 앞당기면 이 테스트는 그대로 통과해도 순서가 깨질 수 있다(런타임 cron 미검증).
+        // 임의의 기준 UTC 날짜(달력일 D)를 잡는다.
+        ZoneId utc = ZoneOffset.UTC;
+        ZoneId kst = ZoneId.of("Asia/Seoul");
+
+        // 시점 트리거: 09:30 UTC (zone 미지정 → JVM UTC 기준 cron 다음 발화)
+        CronExpression triggerCron = CronExpression.parse("0 30 9 * * *");
+        ZonedDateTime baseUtc = ZonedDateTime.of(LocalDateTime.of(2026, 6, 3, 0, 0), utc);
+        ZonedDateTime triggerFire = triggerCron.next(baseUtc.minusSeconds(1));
+        assertThat(triggerFire.toLocalTime().toString()).isEqualTo("09:30");
+
+        // 수집: 08:00 KST를 cron(zone=Asia/Seoul)으로 계산 → UTC로 환산하면 23:00 UTC(전일).
+        CronExpression collectCron = CronExpression.parse("0 0 8 * * *");
+        ZonedDateTime collectBaseKst = triggerFire.withZoneSameInstant(kst).toLocalDate()
+                .atStartOfDay(kst).minusSeconds(1);
+        ZonedDateTime collectFireKst = collectCron.next(collectBaseKst);
+        ZonedDateTime collectFireUtc = collectFireKst.withZoneSameInstant(utc);
+        assertThat(collectFireUtc.toLocalTime().toString()).isEqualTo("23:00");
+
+        // 핵심 불변식: 같은 UTC 달력일 D의 시점 트리거 발화 시점보다 수집(그 직전 23:00 UTC)이 선행.
+        assertThat(collectFireUtc)
+                .as("수집(23:00 UTC 전일)이 시점 트리거(09:30 UTC)보다 선행해야 cross-dedup(CHANGE 우선) 성립")
+                .isBefore(triggerFire);
+        // 마진은 약 10.5시간(과거 08:00 UTC 수집의 1.5시간보다 넉넉해졌다).
+        assertThat(java.time.Duration.between(collectFireUtc, triggerFire).toHours())
+                .isGreaterThanOrEqualTo(10L);
     }
 }

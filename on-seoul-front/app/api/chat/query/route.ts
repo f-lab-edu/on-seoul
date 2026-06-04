@@ -17,6 +17,15 @@ const QueryBodySchema = z.object({
   lng: z.number().optional(),
 });
 
+/** 업스트림 비정상 상태코드를 사용자 친화 한국어 메시지로 매핑. */
+function upstreamErrorMessage(status: number): string {
+  // 429 CHAT_CONCURRENCY_LIMIT — 동시 생성 cap 초과.
+  if (status === 429) {
+    return "지금은 처리 중인 대화가 많아요. 잠시 후 다시 시도해 주세요.";
+  }
+  return "일시적인 오류가 발생했어요. 잠시 후 다시 시도해 주세요.";
+}
+
 /** SSE `event: error` 단일 이벤트를 담은 ReadableStream을 반환한다. */
 function sseErrorStream(message: string): ReadableStream<Uint8Array> {
   const payload = JSON.stringify({ type: "error", message });
@@ -72,8 +81,8 @@ export async function POST(req: NextRequest) {
   }
 
   if (!upstream.ok || !upstream.body) {
-    // 백엔드 5xx / 타임아웃 — SSE error 이벤트 1건 emit 후 스트림 종료 (절대규칙 B.4).
-    return new Response(sseErrorStream(`Upstream error: ${upstream.status}`), {
+    // 백엔드 4xx(429 동시성)/5xx/타임아웃 — SSE error 이벤트 1건 emit 후 스트림 종료 (절대규칙 B.4).
+    return new Response(sseErrorStream(upstreamErrorMessage(upstream.status)), {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache, no-transform",

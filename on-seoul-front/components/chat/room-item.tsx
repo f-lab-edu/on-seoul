@@ -19,7 +19,7 @@ export function RoomItem({ room, onDelete }: RoomItemProps) {
   return (
     <div className="flex items-center gap-2 rounded-md border border-border transition-colors hover:bg-accent/40">
       <Link
-        href={`/chat/history/${room.roomId}`}
+        href={`/chat/${room.roomId}`}
         className="flex min-w-0 flex-1 flex-col gap-1 px-3 py-3"
       >
         <span className="truncate text-sm font-medium text-foreground">{room.title}</span>

@@ -2,82 +2,48 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { ChatInput } from "@/components/chat/chat-input";
+import { ChatConversation } from "@/components/chat/chat-conversation";
 import { DeleteRoomDialog } from "@/components/chat/delete-room-dialog";
 import { MessageList, type DisplayMessage } from "@/components/chat/message-list";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChatHistory } from "@/hooks/useChatHistory";
-import { useChatStream } from "@/hooks/useChatStream";
 import { useDeleteChatRoom } from "@/hooks/useDeleteChatRoom";
 import { ApiError } from "@/lib/api-client";
 import { chatHistoryErrorMessage } from "@/lib/api-error-message";
-import { extractChatContent } from "@/lib/extract-chat-content";
 
 interface RoomDetailProps {
   roomId: number;
 }
 
 /**
- * 대화방 상세. 과거 메시지(텍스트만, service_cards 없음 — 가이드 §3.2)를 시드한 뒤,
- * 같은 roomId로 후속 질의를 스트리밍해 "이어서 대화하기"를 지원한다.
- * 실시간 응답의 service_cards는 SSE final에서 오므로 그대로 렌더(이력 카드 미저장과 무관).
+ * 대화방 화면(`/chat/[roomId]`). 과거 메시지(텍스트만, service_cards 없음 — 가이드 §3.2)를
+ * 시드해 ChatConversation에 넘기고, 같은 roomId로 "이어서 대화하기"를 지원한다.
+ * 실시간 응답의 service_cards는 SSE final에서 오므로 그대로 렌더된다(이력 카드 미저장과 무관).
  */
 export function RoomDetail({ roomId }: RoomDetailProps) {
   const router = useRouter();
   const history = useChatHistory(roomId);
-  const { state, send, cancel, retry } = useChatStream();
   const deleteRoom = useDeleteChatRoom();
-
-  const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const seededRef = useRef(false);
-  const lastCommittedDoneId = useRef<number | null>(null);
 
-  // 이력이 처음 로드되면 messages에 1회 시드. 이후 후속 대화로 누적된 메시지는 보존.
-  useEffect(() => {
-    if (seededRef.current || !history.data) return;
-    seededRef.current = true;
-    setMessages(
-      history.data.messages.map((m) => ({
-        id: `seq-${m.seq}`,
-        role: m.role,
-        // 백엔드 버그 임시 방어: content에 SSE 스트림 전체가 저장된 경우 answer 필드만 추출.
-        // @todo 백엔드 수정 후 extractChatContent 제거.
-        content: extractChatContent(m.content),
-      })),
-    );
+  const messages = useMemo<DisplayMessage[]>(() => {
+    if (!history.data) return [];
+    return history.data.messages.map((m) => ({
+      id: `seq-${m.seq}`,
+      role: m.role,
+      content: m.content,
+    }));
   }, [history.data]);
 
-  const doneMessageId = state.phase === "done" ? state.messageId : null;
-  const doneContent = state.phase === "done" ? state.content : null;
-  const doneServiceCards = state.phase === "done" ? state.serviceCards : null;
-  useEffect(() => {
-    if (doneMessageId === null) return;
-    if (lastCommittedDoneId.current === doneMessageId) return;
-    lastCommittedDoneId.current = doneMessageId;
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `assistant-${doneMessageId}`,
-        role: "ASSISTANT",
-        content: doneContent ?? "",
-        serviceCards: doneServiceCards ?? [],
-      },
-    ]);
-  }, [doneMessageId, doneContent, doneServiceCards]);
-
-  function handleSubmit(question: string) {
-    setMessages((prev) => [
-      ...prev,
-      { id: `user-${Date.now()}`, role: "USER", content: question },
-    ]);
-    void send({ question, roomId });
-  }
+  // 재진입 시 마지막이 USER인데 ASSISTANT가 아직 없으면 답변 생성 중(백엔드 disconnect 내성).
+  // 이 동안 입력을 막고 useChatHistory 폴링으로 답이 채워지길 기다린다(useChatHistory가 자동 폴링).
+  const pending =
+    messages.length > 0 && messages[messages.length - 1]?.role === "USER";
 
   function handleConfirmDelete() {
     deleteRoom.mutate(roomId, {
@@ -111,18 +77,12 @@ export function RoomDetail({ roomId }: RoomDetailProps) {
         <p className="text-sm text-muted-foreground">
           {notFound ? "대화방을 찾을 수 없습니다." : chatHistoryErrorMessage(history.error)}
         </p>
-        <Link
-          href="/chat/history"
-          className={buttonVariants({ variant: "outline", size: "sm" })}
-        >
+        <Link href="/chat/history" className={buttonVariants({ variant: "outline", size: "sm" })}>
           대화 이력으로 돌아가기
         </Link>
       </section>
     );
   }
-
-  const streaming = state.phase === "streaming";
-  const errored = state.phase === "error";
 
   return (
     <>
@@ -134,9 +94,7 @@ export function RoomDetail({ roomId }: RoomDetailProps) {
         >
           <ArrowLeft className="size-4" aria-hidden="true" />
         </Link>
-        <h2 className="min-w-0 flex-1 truncate text-sm font-medium">
-          {history.data?.title}
-        </h2>
+        <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{history.data?.title}</h2>
         <button
           type="button"
           aria-label="이 대화 삭제"
@@ -147,25 +105,25 @@ export function RoomDetail({ roomId }: RoomDetailProps) {
         </button>
       </div>
 
-      <section className="flex-1 overflow-y-auto px-4 py-4">
-        <MessageList messages={messages} streamState={state} />
-
-        {errored && (
+      {pending ? (
+        // 답변 생성 중 — 읽기 전용. useChatHistory 폴링으로 ASSISTANT가 채워지면 아래 분기로 전환된다.
+        <section className="flex-1 overflow-y-auto px-4 py-4">
+          <MessageList messages={messages} streamState={{ phase: "idle" }} />
           <div
-            role="alert"
-            className="mt-3 flex flex-col gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+            role="status"
+            aria-live="polite"
+            className="mt-3 flex items-center gap-2 text-sm text-muted-foreground"
           >
-            <p>응답을 받지 못했습니다: {state.message}</p>
-            <div>
-              <Button variant="outline" size="sm" onClick={() => void retry()}>
-                다시 시도
-              </Button>
-            </div>
+            <span
+              aria-hidden="true"
+              className="size-3 rounded-full border-2 border-muted-foreground/30 border-t-foreground motion-safe:animate-spin"
+            />
+            답변을 작성하고 있어요…
           </div>
-        )}
-      </section>
-
-      <ChatInput onSubmit={handleSubmit} onCancel={cancel} streaming={streaming} />
+        </section>
+      ) : (
+        <ChatConversation roomId={roomId} initialMessages={messages} />
+      )}
 
       <DeleteRoomDialog
         title={history.data?.title ?? null}
