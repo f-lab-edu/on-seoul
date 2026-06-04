@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { LogOut, Menu, MessageSquarePlus, Bell } from "lucide-react";
+import { LogOut, Menu, MessageSquarePlus, MessagesSquare, Bell } from "lucide-react";
 
 import {
   Sheet,
@@ -34,6 +34,7 @@ type NavItem = {
 
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { href: "/chat", label: "새 채팅", pageTitle: "온 에이전트", icon: MessageSquarePlus, exact: true },
+  { href: "/chat/history", label: "대화 이력", icon: MessagesSquare },
   { href: "/settings/notifications", label: "구독 관리", icon: Bell, exact: true },
 ];
 

@@ -78,6 +78,26 @@ class TestCacheKey:
             "테니스장", max_class_name=None, area_name=None, service_status=None
         )
 
+    def test_different_payment_type_produces_different_key(self):
+        """동일 query라도 payment_type이 다르면 다른 키여야 한다.
+
+        "강남구 문화행사"와 "강남구 무료 문화행사"가 같은 키로 충돌하지 않도록 한다.
+        """
+        from core.cache import _cache_key
+
+        k_none = _cache_key("강남구 문화행사", area_name="강남구")
+        k_free = _cache_key("강남구 무료 문화행사", area_name="강남구", payment_type="무료")
+        k_paid = _cache_key("강남구 유료 문화행사", area_name="강남구", payment_type="유료")
+        assert k_none != k_free
+        assert k_free != k_paid
+
+    def test_payment_type_none_equals_empty(self):
+        from core.cache import _cache_key
+
+        assert _cache_key("테니스장", payment_type=None) == _cache_key(
+            "테니스장", payment_type=""
+        )
+
 
 class TestGetCachedAnswer:
     async def test_miss_returns_none(self, mock_redis):

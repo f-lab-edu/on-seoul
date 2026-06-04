@@ -95,7 +95,7 @@ export function SubscriptionCreateDialog({ open, onOpenChange }: Props) {
           </p>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="gap-1 sm:gap-1">
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}

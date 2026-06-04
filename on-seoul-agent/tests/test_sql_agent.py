@@ -106,6 +106,35 @@ class TestSqlAgent:
         assert bind.get("area_name") == "마포구"
         assert bind.get("service_status") == "접수중"
 
+    async def test_payment_type_from_state_when_refined_present(self):
+        """refined_query가 있으면 state.payment_type를 sql_search로 전달한다."""
+        agent, session = _make_agent(_SqlParams(payment_type="유료"), [])
+        state = _make_state("강남구 무료 문화행사")
+        state["refined_query"] = "강남구 무료 문화행사"
+        state["payment_type"] = "무료"
+
+        await agent.search(state, session)
+
+        bind = session.execute.call_args[0][1]
+        # LLM 반환(유료)이 아닌 state 값(무료=정확매칭)이 사용된다
+        assert bind.get("payment_type") == "무료"
+
+    async def test_payment_type_from_llm_when_no_refined(self):
+        """refined_query가 없으면 LLM 추출 payment_type을 사용한다."""
+        agent, session = _make_agent(_SqlParams(payment_type="유료"), [])
+        state = _make_state("강남구 유료 체육시설")
+
+        await agent.search(state, session)
+
+        bind = session.execute.call_args[0][1]
+        assert bind.get("payment_type") == "유료%"
+
+    async def test_payment_type_validator_normalizes(self):
+        """_SqlParams payment_type validator: 무료/유료만 통과, 그 외 None."""
+        assert _SqlParams(payment_type="무료").payment_type == "무료"
+        assert _SqlParams(payment_type="유료").payment_type == "유료"
+        assert _SqlParams(payment_type="회원제").payment_type is None
+
     async def test_query_builds_category_filter(self):
         """max_class_name 파라미터가 있으면 WHERE에 포함된다."""
         agent, session = _make_agent(_SqlParams(max_class_name="체육시설"), [])

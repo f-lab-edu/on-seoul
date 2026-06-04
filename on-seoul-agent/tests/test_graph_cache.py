@@ -36,7 +36,7 @@ def base_state() -> AgentState:
         trace=None,
         error=None,
         retry_count=0,
-        recent_queries=[],
+        history=[],
         cache_hit=False,
     )
 
@@ -374,7 +374,7 @@ class TestGraphRouting:
             trace=None,
             error=None,
             retry_count=0,
-            recent_queries=[],
+            history=[],
             cache_hit=False,
         )
 

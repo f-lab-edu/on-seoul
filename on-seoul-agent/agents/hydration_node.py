@@ -57,6 +57,32 @@ def _extract_service_ids(state: AgentState) -> list[str]:
     return [r["service_id"] for r in rows if r.get("service_id")]
 
 
+def _payment_matches(row_value: object, payment_type: str) -> bool:
+    """payment_type 매칭 규칙 — 무료=정확, 유료=접두("유료"로 시작).
+
+    원천 데이터의 "유료(요금안내문의)" 변형은 접두 매칭으로 포괄한다.
+    """
+    if not isinstance(row_value, str):
+        return False
+    if payment_type == "무료":
+        return row_value == "무료"
+    if payment_type == "유료":
+        return row_value.startswith("유료")
+    return True
+
+
+def _filter_by_payment(rows: list[dict], payment_type: str | None) -> list[dict]:
+    """hydrated 원본 행을 payment_type 으로 post-filter 한다.
+
+    벡터 검색 metadata 에는 payment_type 이 포함되지 않으므로(재임베딩 회피),
+    hydration 직후 원본 컬럼(payment_type)으로 정확히 거른다.
+    payment_type 이 None 이면 필터를 적용하지 않고 그대로 반환한다.
+    """
+    if payment_type is None:
+        return rows
+    return [r for r in rows if _payment_matches(r.get("payment_type"), payment_type)]
+
+
 def _merge_search_meta(hydrated: list[dict], source_rows: list[dict]) -> list[dict]:
     """검색 단계가 함께 산출한 메타데이터(rrf_score 등)를 원본 행과 머지.
 
@@ -124,6 +150,15 @@ class HydrationNode:
                 return {"hydrated_services": []}
             source_rows = state.get("vector_results") or []
             hydrated = _merge_search_meta(hydrated, source_rows)
+            # 벡터 경로 payment 필터 — metadata 에 payment_type 이 없으므로
+            # hydration 직후 원본 컬럼으로 post-filter (무료=정확/유료=접두).
+            #
+            # recall 주의: 이 필터는 vector_node 의 rrf_top_k_final 절단 "이후"에
+            # 적용된다. 상위 후보 대부분이 반대 결제유형이면 카드가 top_k 보다 적게
+            # 남는 recall 손실이 발생할 수 있다. 현재는 동작을 단순하게 유지하고
+            # (절단 전 넉넉히 확보 후 필터링하는 방식은 범위가 커 후속 과제로 남김),
+            # payment 필터가 결과 수를 줄일 수 있음을 명시만 한다.
+            hydrated = _filter_by_payment(hydrated, state.get("payment_type"))
             return {"hydrated_services": hydrated}
 
         # MAP / FALLBACK — hydration 대상 아님 (MAP 은 GeoJSON 구조라 별도 처리).

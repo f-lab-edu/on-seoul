@@ -24,6 +24,7 @@ from agents.answer_agent import (
     _STRUCT_MAP,
     _CLAUSE_RESERVATION_GUIDE,
     _CLAUSE_REFINE_HINT,
+    _CLAUSE_RELAXED_NOTICE,
     _FALLBACK_GUARDRAILS,
 )
 from schemas.state import AgentState, IntentType
@@ -604,15 +605,15 @@ class TestBuildCardSystem:
     def test_reservation_only_includes_reservation_guide(self):
         """접수중 시설 있음 + 자치구 명시 → CLAUSE_RESERVATION_GUIDE 포함, CLAUSE_REFINE_HINT 미포함."""
         results = [{"service_status": "접수중"}, {"service_status": "예약마감"}]
-        prompt = _build_card_system("광진구 수영장", results)
+        prompt = _build_card_system("광진구 수영장", results, None)
 
         assert _CLAUSE_RESERVATION_GUIDE in prompt
         assert _CLAUSE_REFINE_HINT not in prompt
 
     def test_no_reservation_no_district_includes_refine_hint(self):
-        """접수중 없음 + 자치구 미명시 → CLAUSE_REFINE_HINT 포함, CLAUSE_RESERVATION_GUIDE 미포함."""
+        """접수중 없음 + 자치구 미명시(area_name None) → CLAUSE_REFINE_HINT 포함."""
         results = [{"service_status": "예약마감"}]
-        prompt = _build_card_system("수영장 알려줘", results)
+        prompt = _build_card_system("수영장 알려줘", results, None)
 
         assert _CLAUSE_REFINE_HINT in prompt
         assert _CLAUSE_RESERVATION_GUIDE not in prompt
@@ -620,7 +621,7 @@ class TestBuildCardSystem:
     def test_both_conditions_includes_both_clauses(self):
         """접수중 있음 + 자치구 미명시 → 두 절 모두 포함."""
         results = [{"service_status": "접수중"}]
-        prompt = _build_card_system("수영장 알려줘", results)
+        prompt = _build_card_system("수영장 알려줘", results, None)
 
         assert _CLAUSE_RESERVATION_GUIDE in prompt
         assert _CLAUSE_REFINE_HINT in prompt
@@ -628,29 +629,131 @@ class TestBuildCardSystem:
     def test_no_conditions_excludes_both_clauses(self):
         """접수중 없음 + 자치구 명시 → 두 절 모두 미포함."""
         results = [{"service_status": "예약마감"}]
-        prompt = _build_card_system("강남구 수영장", results)
+        prompt = _build_card_system("강남구 수영장", results, None)
 
         assert _CLAUSE_RESERVATION_GUIDE not in prompt
         assert _CLAUSE_REFINE_HINT not in prompt
 
+    def test_resolved_area_name_suppresses_refine_hint(self):
+        """area_name이 해소돼 있으면(follow-up) message에 자치구 없어도 refine hint 생략.
+
+        §3e 핵심: raw message에 "강남구" 문자열이 없어도 Router가 area_name을
+        채웠으면(현재 질문 또는 history 병합) 이미 지정한 자치구를 다시 묻지 않는다.
+        """
+        results = [{"service_status": "예약마감"}]
+        prompt = _build_card_system("그 중 무료인 것만", results, "강남구")
+
+        assert _CLAUSE_REFINE_HINT not in prompt
+
+    def test_no_area_name_no_district_includes_refine_hint(self):
+        """area_name=None + message에 자치구 없음 → refine hint 포함."""
+        results = [{"service_status": "예약마감"}]
+        prompt = _build_card_system("무료인 것만", results, None)
+
+        assert _CLAUSE_REFINE_HINT in prompt
+
+    def test_message_district_fallback_suppresses_hint_when_area_none(self):
+        """area_name=None이어도 message에 공식 자치구명 있으면 fallback으로 hint 생략."""
+        results = [{"service_status": "예약마감"}]
+        prompt = _build_card_system("강남구 수영장", results, None)
+
+        assert _CLAUSE_REFINE_HINT not in prompt
+
     def test_always_includes_role_and_output_rules(self):
         """어떤 조건에서도 _ROLE과 _OUTPUT_RULES는 항상 포함된다."""
-        prompt = _build_card_system("수영장", [])
+        prompt = _build_card_system("수영장", [], None)
 
         assert _ROLE in prompt
         assert _OUTPUT_RULES in prompt
 
     def test_always_includes_struct_card_list(self):
         """카드형 구조 블록(_STRUCT_CARD_LIST)은 항상 포함된다."""
-        prompt = _build_card_system("수영장", [])
+        prompt = _build_card_system("수영장", [], None)
 
         assert _STRUCT_CARD_LIST[:30] in prompt  # 블록 도입부로 포함 여부 확인
 
     def test_empty_results_no_reservation_guide(self):
         """결과가 빈 리스트면 접수중 없음으로 처리 → CLAUSE_RESERVATION_GUIDE 미포함."""
-        prompt = _build_card_system("수영장", [])
+        prompt = _build_card_system("수영장", [], None)
 
         assert _CLAUSE_RESERVATION_GUIDE not in prompt
+
+
+class TestRelaxedNoticeGate:
+    """0건 완화 재시도(retry_relaxed) 시 완화 고지 절 게이트 (§3c / §6).
+
+    완화 사실은 결과가 1건 이상 노출될 때만 명시해야 하며,
+    완화하지 않았거나(retry_relaxed=False) 완화 후에도 0건이면 노출하지 않는다
+    (유료를 무료라고 오안내하거나 빈 결과에 무의미한 고지를 붙이지 않도록).
+    """
+
+    def test_relaxed_with_results_includes_notice(self):
+        """retry_relaxed=True + 결과 있음 → 완화 고지 절 포함."""
+        results = [{"service_status": "예약마감", "payment_type": "유료"}]
+        prompt = _build_card_system(
+            "강남구 무료 문화행사", results, "강남구", retry_relaxed=True
+        )
+        assert _CLAUSE_RELAXED_NOTICE in prompt
+
+    def test_relaxed_with_zero_results_excludes_notice(self):
+        """retry_relaxed=True 라도 결과 0건이면 완화 고지 미포함(빈 결과 오고지 방지)."""
+        prompt = _build_card_system(
+            "강남구 무료 문화행사", [], "강남구", retry_relaxed=True
+        )
+        assert _CLAUSE_RELAXED_NOTICE not in prompt
+
+    def test_not_relaxed_excludes_notice(self):
+        """기본(retry_relaxed=False) 경로 — 결과가 있어도 완화 고지 미포함."""
+        results = [{"service_status": "예약마감", "payment_type": "무료"}]
+        prompt = _build_card_system("강남구 무료 문화행사", results, "강남구")
+        assert _CLAUSE_RELAXED_NOTICE not in prompt
+
+    async def test_answer_passes_retry_relaxed_to_card_system(self):
+        """answer()가 state['retry_relaxed']를 _build_card_system으로 전달해 고지 절이 실린다."""
+        agent = _make_agent("완화 결과 안내입니다.")
+        state = _make_state(
+            hydrated_services=[
+                {"service_id": "P1", "service_name": "유료시설", "payment_type": "유료"}
+            ],
+            retry_relaxed=True,
+        )
+        await agent.answer(state)
+        call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
+        assert _CLAUSE_RELAXED_NOTICE in call_kwargs["system"]
+
+
+class TestStructCardListPlaceFraming:
+    """장소 프레이밍 지시 회귀 테스트.
+
+    이 서비스의 데이터는 '장소' 자체가 아니라 공공서비스·시설 예약 정보다.
+    사용자가 '장소/곳/공간'을 직접 요구할 때 도입문에서 그 점을 짚어주도록
+    지시하는 문구가 _STRUCT_CARD_LIST(및 조립 결과)에 고정되어 있는지 검증한다.
+    문구가 통째로 삭제되면 RED.
+    """
+
+    def test_struct_card_list_mentions_place_keywords(self):
+        """_STRUCT_CARD_LIST에 '장소' 프레이밍 키워드가 들어있다.
+
+        '곳'은 기존 톤 예시("몇 곳 있네요")로도 충족되어 단독으로는 false-GREEN
+        소지가 있으므로, 신규 블록 고유 토큰('장소'·'공간')으로 고정한다.
+        """
+        assert "장소" in _STRUCT_CARD_LIST
+        assert "공간" in _STRUCT_CARD_LIST
+
+    def test_struct_card_list_instructs_not_a_place_framing(self):
+        """장소 자체가 아니라 공공서비스·시설 예약 정보임을 짚으라는 취지 문구가 있다."""
+        assert "장소 자체" in _STRUCT_CARD_LIST
+        assert "공공서비스" in _STRUCT_CARD_LIST
+
+    def test_struct_card_list_keeps_zero_result_message(self):
+        """0건 안내 기존 문구는 그대로 유지된다."""
+        assert "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다." in _STRUCT_CARD_LIST
+
+    def test_build_card_system_includes_place_framing_instruction(self):
+        """_build_card_system 조립 결과에도 장소 프레이밍 지시가 실린다."""
+        prompt = _build_card_system("한강에서 촬영할 수 있는 장소", [], None)
+
+        assert "장소 자체" in prompt
 
 
 class TestStaticPrompts:

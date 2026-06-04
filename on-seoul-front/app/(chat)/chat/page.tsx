@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ChatInput } from "@/components/chat/chat-input";
 import { MessageList, type DisplayMessage } from "@/components/chat/message-list";
+import { WelcomeMessage } from "@/components/chat/welcome-message";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { useChatStream } from "@/hooks/useChatStream";
@@ -65,6 +66,9 @@ export default function ChatPage() {
       )}
 
       <section className="flex-1 overflow-y-auto px-4 py-4">
+        {messages.length === 0 && state.phase === "idle" && (
+          <WelcomeMessage onQuestion={handleSubmit} />
+        )}
         <MessageList messages={messages} streamState={state} />
 
         {errored && (

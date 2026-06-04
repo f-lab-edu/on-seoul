@@ -184,13 +184,7 @@ class TestFixtureCompatibility:
     @pytest.fixture()
     def _local_mock_redis_io(self):
         """test_chat_router.py의 _mock_redis_io와 동일한 패치 셋."""
-        from unittest.mock import AsyncMock
-
-        with (
-            patch("routers.chat.get_recent_queries", new=AsyncMock(return_value=[])),
-            patch("routers.chat.push_recent_query", new=AsyncMock(return_value=None)),
-            patch("routers.chat._resolve_redis", return_value=MagicMock()),
-        ):
+        with patch("routers.chat._resolve_redis", return_value=MagicMock()):
             yield
 
     def test_mock_graph_and_mock_redis_io_do_not_conflict(
@@ -201,7 +195,7 @@ class TestFixtureCompatibility:
 
         두 fixture는 서로 다른 심볼을 패치하므로 충돌하지 않는다.
         - mock_graph: routers.chat._resolve_graph
-        - _mock_redis_io: routers.chat._resolve_redis, get_recent_queries, push_recent_query
+        - _mock_redis_io: routers.chat._resolve_redis
         """
         # mock_graph fixture가 올바른 MagicMock을 반환하는지 확인
         assert mock_graph is not None

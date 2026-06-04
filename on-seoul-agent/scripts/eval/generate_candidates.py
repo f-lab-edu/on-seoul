@@ -48,6 +48,7 @@ sys.path.insert(0, str(_ROOT))
 from langchain_core.embeddings import Embeddings
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from agents.hydration_node import _filter_by_payment
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.sql_agent import SqlAgent
 from core.config import settings
@@ -91,6 +92,7 @@ class QueryResult:
     extracted_max_class_name: str = ""
     extracted_area_name: str = ""
     extracted_service_status: str = ""
+    extracted_payment_type: str = ""
     # SqlAgent가 추출한 keyword (SQL_SEARCH 전용)
     sql_keyword: str = ""
     candidates: list[Candidate] = field(default_factory=list)
@@ -113,11 +115,14 @@ async def _run_vector(
     refined = intent_output.refined_query or query
     vec = await embedder.aembed_query(refined)
 
+    # vector_search 는 metadata 에 payment_type 이 없으므로 post-filter 인자로 받지 않는다.
+    # payment_type 은 hydration 직후 원본 컬럼으로 거른다(운영 hydration_node 와 동일 규칙).
     filters = dict(
         max_class_name=intent_output.max_class_name,
         area_name=intent_output.area_name,
         service_status=intent_output.service_status,
     )
+    payment_type = intent_output.payment_type
 
     # Track A — identity, post-filter 적용
     try:
@@ -199,6 +204,11 @@ async def _run_vector(
 
     hydrated = await hydrate_services(data_session, service_ids)
 
+    # payment post-filter (무료=정확/유료=접두) — 운영 hydration_node 와 동일 규칙.
+    # recall 주의: merged[:_EVAL_TOP_K] 절단 "이후"에 필터하므로, 상위 후보가
+    # 반대 결제유형으로 채워지면 후보 수가 _EVAL_TOP_K 보다 줄 수 있다(운영과 동일 동작).
+    hydrated = _filter_by_payment(hydrated, payment_type)
+
     candidates = []
     for row in hydrated:
         sid = row["service_id"]
@@ -245,6 +255,7 @@ async def _run_sql(
         "max_class_name": None,
         "area_name": None,
         "service_status": None,
+        "payment_type": None,
     }
     result_state = await sql_agent.search(  # type: ignore[arg-type]
         state, data_session, top_k=_EVAL_TOP_K
@@ -306,6 +317,7 @@ async def run_query(
         extracted_max_class_name=intent_output.max_class_name or "",
         extracted_area_name=intent_output.area_name or "",
         extracted_service_status=intent_output.service_status or "",
+        extracted_payment_type=intent_output.payment_type or "",
         sql_keyword=sql_keyword,
         candidates=candidates,
     )
@@ -530,6 +542,7 @@ async def batch_run(
                 extracted_max_class_name=intent_output.max_class_name or "",
                 extracted_area_name=intent_output.area_name or "",
                 extracted_service_status=intent_output.service_status or "",
+                extracted_payment_type=intent_output.payment_type or "",
                 candidates=[],
             )
 
@@ -610,6 +623,7 @@ def _write_query_conditions(results: list[QueryResult], path: Path) -> None:
         "extracted_max_class_name",
         "extracted_area_name",
         "extracted_service_status",
+        "extracted_payment_type",
         "sql_keyword",
         "candidate_count",
     ]
@@ -627,6 +641,7 @@ def _write_query_conditions(results: list[QueryResult], path: Path) -> None:
                     "extracted_max_class_name": r.extracted_max_class_name,
                     "extracted_area_name": r.extracted_area_name,
                     "extracted_service_status": r.extracted_service_status,
+                    "extracted_payment_type": r.extracted_payment_type,
                     "sql_keyword": r.sql_keyword,
                     "candidate_count": len(r.candidates),
                 }

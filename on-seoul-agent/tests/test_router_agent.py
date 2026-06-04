@@ -61,8 +61,8 @@ class TestRouterAgent:
         human_texts = [m.content for m in messages if m.type == "human"]
         assert any("마포구 문화행사" in t for t in human_texts)
 
-    async def test_recent_queries_optional(self):
-        """recent_queries는 기본값 None으로 생략 가능하다."""
+    async def test_history_optional(self):
+        """history는 기본값 None으로 생략 가능하다."""
         agent = _make_agent(IntentType.SQL_SEARCH)
 
         result = await agent.classify("수영장")

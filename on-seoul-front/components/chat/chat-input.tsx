@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -13,12 +13,11 @@ interface ChatInputProps {
 }
 
 /**
- * 채팅 입력. Enter 전송, Shift+Enter 줄바꿈, IME 조합 중에는 전송 차단.
- * streaming 중에는 입력 비활성화 + 취소 버튼 표시.
+ * 채팅 입력. Enter는 항상 줄바꿈(textarea 기본 동작).
+ * 전송은 전송 버튼으로만 가능. streaming 중에는 입력 비활성화 + 취소 버튼 표시.
  */
 export function ChatInput({ onSubmit, onCancel, streaming, disabled }: ChatInputProps) {
   const [value, setValue] = useState("");
-  const [composing, setComposing] = useState(false);
 
   function trySubmit() {
     const q = value.trim();
@@ -28,14 +27,6 @@ export function ChatInput({ onSubmit, onCancel, streaming, disabled }: ChatInput
   }
 
   function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    trySubmit();
-  }
-
-  function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key !== "Enter") return;
-    if (e.shiftKey) return;
-    if (composing || e.nativeEvent.isComposing) return;
     e.preventDefault();
     trySubmit();
   }
@@ -50,10 +41,7 @@ export function ChatInput({ onSubmit, onCancel, streaming, disabled }: ChatInput
       <textarea
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        onKeyDown={handleKeyDown}
-        onCompositionStart={() => setComposing(true)}
-        onCompositionEnd={() => setComposing(false)}
-        placeholder={streaming ? "응답을 받는 중입니다…" : "메시지를 입력하세요 (Shift+Enter 줄바꿈)"}
+        placeholder={streaming ? "응답을 받는 중입니다…" : "메시지를 입력하세요"}
         rows={2}
         disabled={streaming || disabled}
         // iOS Safari가 16px 미만 input에 자동 줌인하는 것을 막기 위해 모바일에서 text-base 강제.

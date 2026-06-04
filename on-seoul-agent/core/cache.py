@@ -28,6 +28,7 @@ def _cache_key(
     max_class_name: str | None = None,
     area_name: str | None = None,
     service_status: str | None = None,
+    payment_type: str | None = None,
 ) -> str:
     """합성 키 — refined_query + post-filter 조합.
 
@@ -40,6 +41,7 @@ def _cache_key(
         f"max={max_class_name or ''}",
         f"area={area_name or ''}",
         f"status={service_status or ''}",
+        f"pay={payment_type or ''}",
     ]
     composite = "|".join(parts)
     # 64-bit(16 hex) 잘라내기 — 동시 키 규모 O(1000)에서 충돌 확률 무시 가능.
@@ -59,6 +61,7 @@ async def get_cached_answer(
     max_class_name: str | None = None,
     area_name: str | None = None,
     service_status: str | None = None,
+    payment_type: str | None = None,
 ) -> dict | None:
     """캐시된 envelope({payload, state})를 반환. miss/장애 시 None."""
     if not settings.answer_cache_enabled:
@@ -70,6 +73,7 @@ async def get_cached_answer(
                 max_class_name=max_class_name,
                 area_name=area_name,
                 service_status=service_status,
+                payment_type=payment_type,
             )
         )
         if raw is None:
@@ -89,6 +93,7 @@ async def set_cached_answer(
     max_class_name: str | None = None,
     area_name: str | None = None,
     service_status: str | None = None,
+    payment_type: str | None = None,
 ) -> None:
     """payload + state 일부를 envelope로 저장. 장애 시 무시."""
     if not settings.answer_cache_enabled:
@@ -106,6 +111,7 @@ async def set_cached_answer(
                 max_class_name=max_class_name,
                 area_name=area_name,
                 service_status=service_status,
+                payment_type=payment_type,
             ),
             json.dumps(envelope, ensure_ascii=False, default=str),
             ex=ttl,
