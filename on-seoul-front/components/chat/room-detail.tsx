@@ -16,6 +16,7 @@ import { useChatStream } from "@/hooks/useChatStream";
 import { useDeleteChatRoom } from "@/hooks/useDeleteChatRoom";
 import { ApiError } from "@/lib/api-client";
 import { chatHistoryErrorMessage } from "@/lib/api-error-message";
+import { extractChatContent } from "@/lib/extract-chat-content";
 
 interface RoomDetailProps {
   roomId: number;
@@ -45,7 +46,9 @@ export function RoomDetail({ roomId }: RoomDetailProps) {
       history.data.messages.map((m) => ({
         id: `seq-${m.seq}`,
         role: m.role,
-        content: m.content,
+        // 백엔드 버그 임시 방어: content에 SSE 스트림 전체가 저장된 경우 answer 필드만 추출.
+        // @todo 백엔드 수정 후 extractChatContent 제거.
+        content: extractChatContent(m.content),
       })),
     );
   }, [history.data]);
