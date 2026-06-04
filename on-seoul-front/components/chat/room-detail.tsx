@@ -8,14 +8,13 @@ import { toast } from "sonner";
 
 import { ChatConversation } from "@/components/chat/chat-conversation";
 import { DeleteRoomDialog } from "@/components/chat/delete-room-dialog";
-import type { DisplayMessage } from "@/components/chat/message-list";
+import { MessageList, type DisplayMessage } from "@/components/chat/message-list";
 import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChatHistory } from "@/hooks/useChatHistory";
 import { useDeleteChatRoom } from "@/hooks/useDeleteChatRoom";
 import { ApiError } from "@/lib/api-client";
 import { chatHistoryErrorMessage } from "@/lib/api-error-message";
-import { extractChatContent } from "@/lib/extract-chat-content";
 
 interface RoomDetailProps {
   roomId: number;
@@ -32,16 +31,19 @@ export function RoomDetail({ roomId }: RoomDetailProps) {
   const deleteRoom = useDeleteChatRoom();
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const initialMessages = useMemo<DisplayMessage[]>(() => {
+  const messages = useMemo<DisplayMessage[]>(() => {
     if (!history.data) return [];
     return history.data.messages.map((m) => ({
       id: `seq-${m.seq}`,
       role: m.role,
-      // 백엔드 버그 임시 방어: content에 SSE 스트림 전체가 저장된 경우 answer 필드만 추출.
-      // @todo 백엔드 수정 후 extractChatContent 제거.
-      content: extractChatContent(m.content),
+      content: m.content,
     }));
   }, [history.data]);
+
+  // 재진입 시 마지막이 USER인데 ASSISTANT가 아직 없으면 답변 생성 중(백엔드 disconnect 내성).
+  // 이 동안 입력을 막고 useChatHistory 폴링으로 답이 채워지길 기다린다(useChatHistory가 자동 폴링).
+  const pending =
+    messages.length > 0 && messages[messages.length - 1]?.role === "USER";
 
   function handleConfirmDelete() {
     deleteRoom.mutate(roomId, {
@@ -103,7 +105,25 @@ export function RoomDetail({ roomId }: RoomDetailProps) {
         </button>
       </div>
 
-      <ChatConversation roomId={roomId} initialMessages={initialMessages} />
+      {pending ? (
+        // 답변 생성 중 — 읽기 전용. useChatHistory 폴링으로 ASSISTANT가 채워지면 아래 분기로 전환된다.
+        <section className="flex-1 overflow-y-auto px-4 py-4">
+          <MessageList messages={messages} streamState={{ phase: "idle" }} />
+          <div
+            role="status"
+            aria-live="polite"
+            className="mt-3 flex items-center gap-2 text-sm text-muted-foreground"
+          >
+            <span
+              aria-hidden="true"
+              className="size-3 rounded-full border-2 border-muted-foreground/30 border-t-foreground motion-safe:animate-spin"
+            />
+            답변을 작성하고 있어요…
+          </div>
+        </section>
+      ) : (
+        <ChatConversation roomId={roomId} initialMessages={messages} />
+      )}
 
       <DeleteRoomDialog
         title={history.data?.title ?? null}
