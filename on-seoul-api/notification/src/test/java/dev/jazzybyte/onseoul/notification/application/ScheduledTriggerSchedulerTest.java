@@ -333,6 +333,9 @@ class ScheduledTriggerSchedulerTest {
     @Test
     @DisplayName("수집(08:00 KST)은 같은 UTC일의 시점 트리거(09:30 UTC)보다 항상 선행한다 — cross-dedup 순서 불변식")
     void collection0800Kst_precedes_scheduledTrigger0930Utc_onSameUtcDay() {
+        // 주의: 이 테스트는 기본 cron(0 30 9 / 0 0 8)에 대한 *코드 회귀* 가드다.
+        // 시점 트리거 cron은 notification.scheduled-trigger.cron 프로퍼티로 런타임 오버라이드 가능하므로,
+        // 운영에서 트리거 시각을 앞당기면 이 테스트는 그대로 통과해도 순서가 깨질 수 있다(런타임 cron 미검증).
         // 임의의 기준 UTC 날짜(달력일 D)를 잡는다.
         ZoneId utc = ZoneOffset.UTC;
         ZoneId kst = ZoneId.of("Asia/Seoul");
