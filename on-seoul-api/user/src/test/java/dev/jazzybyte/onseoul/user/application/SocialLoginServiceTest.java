@@ -8,9 +8,11 @@ import dev.jazzybyte.onseoul.user.port.out.LoadUserPort;
 import dev.jazzybyte.onseoul.user.port.out.RefreshTokenStorePort;
 import dev.jazzybyte.onseoul.user.port.out.SaveUserPort;
 import dev.jazzybyte.onseoul.user.port.out.TokenIssuerPort;
+import dev.jazzybyte.onseoul.exception.EmailConflictException;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -31,6 +33,7 @@ class SocialLoginServiceTest {
 
     @Mock private LoadUserPort loadUserPort;
     @Mock private SaveUserPort saveUserPort;
+    @Mock private NewUserRegistrar newUserRegistrar;
     @Mock private TokenIssuerPort tokenIssuerPort;
     @Mock private RefreshTokenStorePort refreshTokenStorePort;
 
@@ -38,7 +41,8 @@ class SocialLoginServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new SocialLoginService(loadUserPort, saveUserPort, tokenIssuerPort, refreshTokenStorePort);
+        service = new SocialLoginService(
+                loadUserPort, saveUserPort, newUserRegistrar, tokenIssuerPort, refreshTokenStorePort);
     }
 
     private SocialLoginCommand command(String provider, String providerId) {
@@ -63,7 +67,7 @@ class SocialLoginServiceTest {
 
         when(loadUserPort.findByProviderAndProviderId("google", "google-new-001"))
                 .thenReturn(Optional.empty());
-        when(saveUserPort.save(any(User.class))).thenReturn(savedUser);
+        when(newUserRegistrar.register(cmd)).thenReturn(savedUser);
         when(tokenIssuerPort.generateAccessToken(10L)).thenReturn("access-token");
         when(tokenIssuerPort.generateRefreshToken(10L)).thenReturn("refresh-token");
         when(tokenIssuerPort.getRefreshTokenMinutes()).thenReturn(10080L);
@@ -74,31 +78,30 @@ class SocialLoginServiceTest {
         assertThat(result.accessToken()).isEqualTo("access-token");
         assertThat(result.refreshToken()).isEqualTo("refresh-token");
 
-        verify(saveUserPort).save(any(User.class));
+        verify(newUserRegistrar).register(cmd);
         verify(loadUserPort).findByProviderAndProviderId("google", "google-new-001");
     }
 
     @Test
-    @DisplayName("신규 유저 — 저장된 User 객체는 ACTIVE 상태, 전달된 provider/providerId를 갖는다")
+    @DisplayName("신규 유저 — 신규 등록기에 전달되는 command는 전달된 provider/providerId를 갖는다")
     void socialLogin_newUser_savedUserHasCorrectFields() {
         SocialLoginCommand cmd = command("kakao", "kakao-999");
         User savedUser = activeUser(20L, "kakao", "kakao-999");
 
         when(loadUserPort.findByProviderAndProviderId("kakao", "kakao-999"))
                 .thenReturn(Optional.empty());
-        when(saveUserPort.save(any(User.class))).thenReturn(savedUser);
+        when(newUserRegistrar.register(any(SocialLoginCommand.class))).thenReturn(savedUser);
         when(tokenIssuerPort.generateAccessToken(anyLong())).thenReturn("at");
         when(tokenIssuerPort.generateRefreshToken(anyLong())).thenReturn("rt");
         when(tokenIssuerPort.getRefreshTokenMinutes()).thenReturn(10080L);
 
         service.socialLogin(cmd);
 
-        ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
-        verify(saveUserPort).save(userCaptor.capture());
-        User capturedUser = userCaptor.getValue();
-        assertThat(capturedUser.getProvider()).isEqualTo("kakao");
-        assertThat(capturedUser.getProviderId()).isEqualTo("kakao-999");
-        assertThat(capturedUser.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        ArgumentCaptor<SocialLoginCommand> cmdCaptor = ArgumentCaptor.forClass(SocialLoginCommand.class);
+        verify(newUserRegistrar).register(cmdCaptor.capture());
+        SocialLoginCommand captured = cmdCaptor.getValue();
+        assertThat(captured.provider()).isEqualTo("kakao");
+        assertThat(captured.providerId()).isEqualTo("kakao-999");
     }
 
     @Test
@@ -130,7 +133,7 @@ class SocialLoginServiceTest {
 
         when(loadUserPort.findByProviderAndProviderId("google", "google-rt-001"))
                 .thenReturn(Optional.empty());
-        when(saveUserPort.save(any())).thenReturn(savedUser);
+        when(newUserRegistrar.register(cmd)).thenReturn(savedUser);
         when(tokenIssuerPort.generateAccessToken(7L)).thenReturn("at");
         when(tokenIssuerPort.generateRefreshToken(7L)).thenReturn("rt-value");
         when(tokenIssuerPort.getRefreshTokenMinutes()).thenReturn(10080L);
@@ -173,14 +176,42 @@ class SocialLoginServiceTest {
                 .thenReturn(Optional.of(existingGoogleUser));
 
         assertThatThrownBy(() -> service.socialLogin(cmd))
-                .isInstanceOf(OnSeoulApiException.class)
+                .isInstanceOf(EmailConflictException.class)
                 .satisfies(ex -> {
-                    OnSeoulApiException apiEx = (OnSeoulApiException) ex;
-                    assertThat(apiEx.getErrorCode()).isEqualTo(ErrorCode.EMAIL_ALREADY_REGISTERED);
-                    assertThat(apiEx.getMessage()).contains("google");
+                    EmailConflictException conflict = (EmailConflictException) ex;
+                    assertThat(conflict.getErrorCode()).isEqualTo(ErrorCode.EMAIL_ALREADY_REGISTERED);
+                    // provider는 메시지가 아니라 구조적 필드로 전달된다.
+                    assertThat(conflict.getExistingProvider()).isEqualTo("google");
                 });
 
-        verify(saveUserPort, never()).save(any(User.class));
+        verify(newUserRegistrar, never()).register(any(SocialLoginCommand.class));
+        verifyNoInteractions(tokenIssuerPort, refreshTokenStorePort);
+    }
+
+    @Test
+    @DisplayName("이메일 충돌 — 같은 벤더 + 다른 providerId + 같은 이메일이면 일반 메시지로 충돌(existingProvider=같은벤더)")
+    void socialLogin_sameProviderDifferentProviderIdSameEmail_throwsConflict() {
+        // findByProviderAndProviderId는 (provider, providerId) 복합키로 조회하므로 다른 providerId면 빈 결과 →
+        // registerNewUser 진입 후 findByEmail이 같은 벤더의 기존 유저를 잡아낸다(이메일 1개=계정 1개 정책).
+        SocialLoginCommand cmd = command("google", "google-new-different-id"); // email=user@example.com
+        User existingGoogleUser = activeUser(77L, "google", "google-old-id");
+
+        when(loadUserPort.findByProviderAndProviderId("google", "google-new-different-id"))
+                .thenReturn(Optional.empty());
+        when(loadUserPort.findByEmail("user@example.com"))
+                .thenReturn(Optional.of(existingGoogleUser));
+
+        assertThatThrownBy(() -> service.socialLogin(cmd))
+                .isInstanceOf(EmailConflictException.class)
+                .satisfies(ex -> {
+                    EmailConflictException conflict = (EmailConflictException) ex;
+                    assertThat(conflict.getErrorCode()).isEqualTo(ErrorCode.EMAIL_ALREADY_REGISTERED);
+                    assertThat(conflict.getExistingProvider()).isEqualTo("google");
+                    // 같은 벤더이므로 벤더명 노출 없는 일반 메시지.
+                    assertThat(conflict.getMessage()).isEqualTo("이미 가입된 이메일입니다.");
+                });
+
+        verify(newUserRegistrar, never()).register(any(SocialLoginCommand.class));
         verifyNoInteractions(tokenIssuerPort, refreshTokenStorePort);
     }
 
@@ -192,7 +223,7 @@ class SocialLoginServiceTest {
 
         when(loadUserPort.findByProviderAndProviderId("kakao", "kakao-noemail"))
                 .thenReturn(Optional.empty());
-        when(saveUserPort.save(any(User.class))).thenReturn(savedUser);
+        when(newUserRegistrar.register(cmd)).thenReturn(savedUser);
         when(tokenIssuerPort.generateAccessToken(30L)).thenReturn("at");
         when(tokenIssuerPort.generateRefreshToken(30L)).thenReturn("rt");
         when(tokenIssuerPort.getRefreshTokenMinutes()).thenReturn(10080L);
@@ -200,25 +231,28 @@ class SocialLoginServiceTest {
         service.socialLogin(cmd);
 
         verify(loadUserPort, never()).findByEmail(any());
-        verify(saveUserPort).save(any(User.class));
+        verify(newUserRegistrar).register(cmd);
     }
 
     @Test
-    @DisplayName("경쟁 조건 — INSERT 단계에서 email_hash 유니크 위반 시 EMAIL_ALREADY_REGISTERED로 변환한다")
+    @DisplayName("경쟁 조건 — 신규 등록기의 DataIntegrityViolation을 provider 없는 EmailConflictException으로 변환한다")
     void socialLogin_dataIntegrityViolation_convertedToConflict() {
         SocialLoginCommand cmd = command("kakao", "kakao-race-001");
 
         when(loadUserPort.findByProviderAndProviderId("kakao", "kakao-race-001"))
                 .thenReturn(Optional.empty());
         when(loadUserPort.findByEmail("user@example.com")).thenReturn(Optional.empty());
-        when(saveUserPort.save(any(User.class)))
-                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("uq_users_email_hash"));
+        when(newUserRegistrar.register(cmd))
+                .thenThrow(new DataIntegrityViolationException("uq_users_email_hash"));
 
         assertThatThrownBy(() -> service.socialLogin(cmd))
-                .isInstanceOf(OnSeoulApiException.class)
-                .satisfies(ex ->
-                        assertThat(((OnSeoulApiException) ex).getErrorCode())
-                                .isEqualTo(ErrorCode.EMAIL_ALREADY_REGISTERED));
+                .isInstanceOf(EmailConflictException.class)
+                .satisfies(ex -> {
+                    EmailConflictException conflict = (EmailConflictException) ex;
+                    assertThat(conflict.getErrorCode()).isEqualTo(ErrorCode.EMAIL_ALREADY_REGISTERED);
+                    // 경쟁 조건에서는 기존 벤더를 알 수 없으므로 null.
+                    assertThat(conflict.getExistingProvider()).isNull();
+                });
 
         verifyNoInteractions(tokenIssuerPort, refreshTokenStorePort);
     }

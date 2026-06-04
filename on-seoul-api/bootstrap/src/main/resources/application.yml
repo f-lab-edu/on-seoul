@@ -108,6 +108,14 @@ chat:
     max-turns: 5
     # 메시지당 content 길이 캡(초과 시 truncate).
     max-chars-per-message: 1000
+  concurrency:
+    # 사용자당 동시 진행 가능한 생성(LLM 호출) 수. 초과 시 429(CHAT_CONCURRENCY_LIMIT).
+    per-user: 2
+    # 전역 동시 진행 가능한 생성 수(총량 상한). 비용/DoS 방어 핵심.
+    global: 50
+    # 저장 구독(백그라운드 소비)의 상한 타임아웃(초). 클라 끊김과 무관하게 적용.
+    # ai.service.stream-timeout-seconds(120)와 정합되도록 동일/유사 값으로 둔다.
+    background-timeout-seconds: 120
 
 management:
   endpoints:
@@ -148,6 +156,11 @@ resilience4j:
         register-health-indicator: true
 
 logging:
+  # 로그 타임스탬프만 Asia/Seoul로 렌더링한다. JVM 기본 타임존/DB(SET TIME ZONE 'UTC')와
+  # 비즈니스 로직(notification은 UTC Clock 명시)은 UTC를 유지한다 — 사람이 읽는 로그만 KST.
+  # logback %d 컨버터의 2번째 인자(타임존)에 주입되는 방식.
+  pattern:
+    dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSS, Asia/Seoul"
   level:
     dev.jazzybyte: debug
     # [PII 보호] reactor.netty 이하를 DEBUG 이하로 설정하면 KnockNotificationAdapter의

@@ -4,18 +4,21 @@ import dev.jazzybyte.onseoul.user.port.in.SocialLoginCommand;
 import dev.jazzybyte.onseoul.user.port.in.SocialLoginUseCase;
 import dev.jazzybyte.onseoul.user.port.in.TokenResponse;
 import dev.jazzybyte.onseoul.user.port.out.TokenIssuerPort;
+import dev.jazzybyte.onseoul.exception.EmailConflictException;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.ResponseCookie;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -86,7 +89,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
 
         if (providerId == null) {
             log.warn("[Security] OAuth2 로그인 실패: providerId 누락 - (provider={})", provider);
-            response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=server_error");
+            response.sendRedirect(callbackUrl().queryParam("error", "server_error").toUriString());
             return;
         }
 
@@ -109,53 +112,46 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
             response.addHeader("Set-Cookie", buildAccessCookie(tokenResponse.accessToken()).toString());
             response.addHeader("Set-Cookie", buildRefreshCookie(tokenResponse.refreshToken()).toString());
             log.info("[Security] OAuth2 로그인 성공: provider={}, providerId={}", provider, providerId);
-            response.sendRedirect(frontendBaseUrl + "/oauth/callback?status=success");
+            response.sendRedirect(callbackUrl().queryParam("status", "success").toUriString());
 
         } catch (OnSeoulApiException ex) {
             log.warn("[Security] OAuth2 로그인 실패: provider={}, providerId={}, error={}",
                     provider, providerId, ex.getMessage());
-            response.sendRedirect(frontendBaseUrl + "/oauth/callback?" + errorQuery(ex));
-        } catch (org.springframework.dao.DataAccessException ex) {
+            response.sendRedirect(errorRedirect(ex));
+        } catch (DataAccessException ex) {
             // Redis timeout(QueryTimeoutException) 등 데이터 접근 오류.
             // catch하지 않으면 500으로 죽어 프론트 리다이렉트가 수행되지 않는다.
             log.error("[Security] OAuth2 로그인 중 데이터 접근 오류: provider={}, error={}", provider, ex.getMessage());
-            response.sendRedirect(frontendBaseUrl + "/oauth/callback?error=server_error");
+            response.sendRedirect(callbackUrl().queryParam("error", "server_error").toUriString());
         }
+    }
+
+    /** 프론트 콜백 베이스 URL 빌더. 모든 리다이렉트는 이 빌더를 거쳐 쿼리 파라미터 인코딩을 보장한다. */
+    private UriComponentsBuilder callbackUrl() {
+        return UriComponentsBuilder.fromUriString(frontendBaseUrl).path("/oauth/callback");
     }
 
     /**
-     * OnSeoulApiException을 프론트 콜백 쿼리스트링으로 매핑한다.
+     * OnSeoulApiException을 프론트 콜백 리다이렉트 URL로 매핑한다(쿼리는 UriComponentsBuilder로 인코딩).
      * <ul>
      *   <li>FORBIDDEN(SUSPENDED/DELETED) → {@code error=forbidden}</li>
-     *   <li>EMAIL_ALREADY_REGISTERED → {@code error=email_conflict}, 기존 가입 provider를 알면 {@code &provider=...} 추가</li>
+     *   <li>EMAIL_ALREADY_REGISTERED → {@code error=email_conflict}, 기존 가입 provider를 알면 {@code &provider=...} 추가
+     *       (provider는 {@link EmailConflictException#getExistingProvider()} 구조적 필드에서 읽음 — 메시지 스캔 안 함)</li>
      *   <li>그 외 → {@code error=server_error}</li>
      * </ul>
      */
-    private String errorQuery(OnSeoulApiException ex) {
+    private String errorRedirect(OnSeoulApiException ex) {
         if (ex.getErrorCode() == ErrorCode.FORBIDDEN) {
-            return "error=forbidden";
+            return callbackUrl().queryParam("error", "forbidden").toUriString();
         }
-        if (ex.getErrorCode() == ErrorCode.EMAIL_ALREADY_REGISTERED) {
-            String existingProvider = extractExistingProvider(ex.getMessage());
-            return existingProvider != null
-                    ? "error=email_conflict&provider=" + existingProvider
-                    : "error=email_conflict";
+        if (ex instanceof EmailConflictException conflict) {
+            UriComponentsBuilder builder = callbackUrl().queryParam("error", "email_conflict");
+            if (conflict.getExistingProvider() != null) {
+                builder.queryParam("provider", conflict.getExistingProvider());
+            }
+            return builder.toUriString();
         }
-        return "error=server_error";
-    }
-
-    /** 예외 메시지에서 기존 가입 provider를 추출한다. 못 찾으면 null. */
-    private String extractExistingProvider(String message) {
-        if (message == null) {
-            return null;
-        }
-        if (message.contains("google")) {
-            return "google";
-        }
-        if (message.contains("kakao")) {
-            return "kakao";
-        }
-        return null;
+        return callbackUrl().queryParam("error", "server_error").toUriString();
     }
 
     /**

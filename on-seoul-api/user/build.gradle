@@ -21,4 +21,9 @@ dependencies {
 
     testImplementation 'org.springframework.security:spring-security-test'
     testRuntimeOnly 'com.h2database:h2'
+
+    // Testcontainers — OAuth 이메일 충돌(REQUIRES_NEW 격리)을 실제 PostgreSQL 23505 로 검증.
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
 }

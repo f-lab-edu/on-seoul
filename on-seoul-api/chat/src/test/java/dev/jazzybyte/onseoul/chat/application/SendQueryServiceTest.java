@@ -364,12 +364,14 @@ class SendQueryServiceTest {
     }
 
     @Test
-    @DisplayName("saveAnswer() - ASSISTANT 메시지를 저장한다")
-    void saveAnswer_savesAssistantMessage() {
+    @DisplayName("saveAnswer() - 마지막 메시지가 USER이면 ASSISTANT 메시지를 저장한다")
+    void saveAnswer_lastMessageIsUser_savesAssistantMessage() {
         Long roomId = 10L;
         String answer = "서울 문화행사는 다음과 같습니다.";
 
-        when(saveChatMessagePort.nextSeq()).thenReturn(3L);
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1))
+                .thenReturn(List.of(msg(roomId, 5L, ChatMessageRole.USER, "질문")));
+        when(saveChatMessagePort.nextSeq()).thenReturn(6L);
         when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
         service.saveAnswer(roomId, answer);
@@ -379,6 +381,34 @@ class SendQueryServiceTest {
         assertThat(captor.getValue().getRole()).isEqualTo(ChatMessageRole.ASSISTANT);
         assertThat(captor.getValue().getContent()).isEqualTo(answer);
         assertThat(captor.getValue().getRoomId()).isEqualTo(roomId);
-        assertThat(captor.getValue().getSeq()).isEqualTo(3L);
+        assertThat(captor.getValue().getSeq()).isEqualTo(6L);
+    }
+
+    @Test
+    @DisplayName("saveAnswer() - 멱등: 직전 USER 이후 이미 ASSISTANT가 있으면 중복 저장하지 않는다")
+    void saveAnswer_assistantAlreadyExists_skipsSave() {
+        Long roomId = 10L;
+
+        // 마지막 메시지가 이미 ASSISTANT → 같은 턴에 대한 중복 저장 방지
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1))
+                .thenReturn(List.of(msg(roomId, 6L, ChatMessageRole.ASSISTANT, "이미 저장된 답변")));
+
+        service.saveAnswer(roomId, "중복 답변");
+
+        verify(saveChatMessagePort, never()).save(any(ChatMessage.class));
+        verify(saveChatMessagePort, never()).nextSeq();
+    }
+
+    @Test
+    @DisplayName("saveAnswer() - 메시지가 하나도 없으면(비정상) 그래도 ASSISTANT를 저장한다")
+    void saveAnswer_noMessages_stillSaves() {
+        Long roomId = 10L;
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1)).thenReturn(List.of());
+        when(saveChatMessagePort.nextSeq()).thenReturn(1L);
+        when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.saveAnswer(roomId, "답변");
+
+        verify(saveChatMessagePort).save(any(ChatMessage.class));
     }
 }
