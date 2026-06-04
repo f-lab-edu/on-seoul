@@ -76,6 +76,8 @@ public class ChatStreamService implements QueryAndStreamUseCase {
 
         // final 이벤트의 answer 보관. final 미수신이면 null로 남고, 그 경우 빈 문자열로 저장한다.
         AtomicReference<String> finalAnswer = new AtomicReference<>(null);
+        // final 이벤트의 service_cards(opaque JSON) 보관. 카드 미동반이면 null로 남고 그대로 null 저장.
+        AtomicReference<String> finalServiceCards = new AtomicReference<>(null);
 
         // relay fan-out 채널. replay().all(): 저장 구독이 즉시 시작해도 클라가 처음부터 토큰을 받도록 버퍼·재생한다.
         Sinks.Many<String> relaySink = Sinks.many().replay().all();
@@ -89,6 +91,7 @@ public class ChatStreamService implements QueryAndStreamUseCase {
                 .doOnNext(event -> {
                     if (event.isFinal()) {
                         finalAnswer.set(event.finalAnswer());
+                        finalServiceCards.set(event.finalServiceCards());
                     }
                     // relay는 best-effort: 구독자가 없거나 버퍼가 차도 저장 흐름은 막지 않는다.
                     relaySink.tryEmitNext(event.raw());
@@ -104,7 +107,8 @@ public class ChatStreamService implements QueryAndStreamUseCase {
                     // 저장 구독은 detach되어 cancel은 사실상 발생하지 않지만, 방어적으로 동일하게 저장한다.
                     try {
                         String answer = finalAnswer.get();
-                        sendQueryUseCase.saveAnswer(prepared.roomId(), answer == null ? "" : answer);
+                        sendQueryUseCase.saveAnswer(prepared.roomId(), answer == null ? "" : answer,
+                                finalServiceCards.get());
                         log.debug("[Chat] 응답 저장 완료 - roomId={}, signal={}", prepared.roomId(), signal);
                     } catch (Exception e) {
                         log.error("[Chat] ASSISTANT 응답 저장 실패 - roomId={}, signal={}",

@@ -15,8 +15,11 @@ public interface SendQueryUseCase {
     /**
      * 스트림 완료 후 ASSISTANT 응답을 저장한다.
      * seq는 내부에서 nextSeq()를 호출해 채번한다.
+     *
+     * @param serviceCardsJson AI final 이벤트의 service_cards 배열(opaque JSON 문자열). 카드가
+     *                         없으면 null. ASSISTANT 메시지에만 채워지며 그대로 저장된다.
      */
-    void saveAnswer(long roomId, String answer);
+    void saveAnswer(long roomId, String answer, String serviceCardsJson);
 
     /**
      * @param created 이번 질의로 새 ChatRoom이 생성되었으면 true, 기존 방이면 false.

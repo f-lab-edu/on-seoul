@@ -97,6 +97,61 @@ class ChatPersistenceAdapterTest {
         assertThat(saved.getContent()).isEqualTo("문화행사 예약은 서울시 공공서비스 예약 포털에서 가능합니다.");
     }
 
+    // ── service_cards round-trip ──────────────────────────────────
+
+    @Test
+    @DisplayName("service_cards — ASSISTANT 메시지의 JSON 배열을 저장 후 로드 시 동일 JSON으로 복원된다")
+    void serviceCards_assistantRoundTrip_restoresSameJson() {
+        ChatRoom room = adapter.save(ChatRoom.create(60L, "카드 라운드트립"));
+        Long seq = adapter.nextSeq();
+        String cardsJson = "[{\"service_id\":\"S1\",\"name\":\"강남 음악회 🎵\",\"area\":\"강남구\"},"
+                + "{\"service_id\":\"S2\",\"name\":\"미술 전시\",\"area\":\"강남구\"}]";
+
+        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.ASSISTANT, "강남구 안내", cardsJson));
+
+        List<ChatMessage> loaded = adapter.findByRoomIdOrderBySeqAsc(room.getId());
+
+        assertThat(loaded).hasSize(1);
+        String restored = loaded.get(0).getServiceCards();
+        assertThat(restored).isNotNull();
+        // 의미적으로 동일한 JSON 트리여야 한다(공백/키순서 차이 허용).
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        try {
+            assertThat(om.readTree(restored)).isEqualTo(om.readTree(cardsJson));
+            // 이스케이프된 문자열(예: "[{...}]")이 아니라 배열로 복원되어야 한다.
+            assertThat(om.readTree(restored).isArray()).isTrue();
+            assertThat(om.readTree(restored).get(0).get("name").asText()).isEqualTo("강남 음악회 🎵");
+        } catch (Exception e) {
+            throw new AssertionError("service_cards 복원 JSON 파싱 실패: " + restored, e);
+        }
+    }
+
+    @Test
+    @DisplayName("service_cards — USER 메시지는 service_cards가 null로 유지된다")
+    void serviceCards_userMessage_remainsNull() {
+        ChatRoom room = adapter.save(ChatRoom.create(61L, "USER 카드 null"));
+        Long seq = adapter.nextSeq();
+
+        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.USER, "질문"));
+
+        List<ChatMessage> loaded = adapter.findByRoomIdOrderBySeqAsc(room.getId());
+        assertThat(loaded).hasSize(1);
+        assertThat(loaded.get(0).getServiceCards()).isNull();
+    }
+
+    @Test
+    @DisplayName("service_cards — 카드 미동반 ASSISTANT 메시지(null)는 null로 유지된다")
+    void serviceCards_assistantWithoutCards_remainsNull() {
+        ChatRoom room = adapter.save(ChatRoom.create(62L, "ASSISTANT 카드 null"));
+        Long seq = adapter.nextSeq();
+
+        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.ASSISTANT, "답변", null));
+
+        List<ChatMessage> loaded = adapter.findByRoomIdOrderBySeqAsc(room.getId());
+        assertThat(loaded).hasSize(1);
+        assertThat(loaded.get(0).getServiceCards()).isNull();
+    }
+
     // ── findActiveByIdAndUserId ───────────────────────────────────
 
     @Test
