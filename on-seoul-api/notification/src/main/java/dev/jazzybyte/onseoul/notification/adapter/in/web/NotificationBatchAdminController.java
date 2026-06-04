@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * ⚠️ 임시/개발용 — 운영 배포 전 인증 적용 또는 제거 필요.
+ *  임시/개발용 — 운영 배포 전 인증 적용 또는 제거 필요.
  *
  * <p>알림 배치를 스케줄(이벤트/cron)을 기다리지 않고 즉시 1회 실행하기 위한 <b>임시 관리 API</b>다.
  * 로컬/개발 환경에서만 사용한다. 경로 {@code /internal/notifications/batch/**}는
@@ -40,7 +40,7 @@ public class NotificationBatchAdminController {
     /** CHANGE 배치(이벤트 기반)를 수동으로 1회 실행한다. */
     @PostMapping("/change")
     public ResponseEntity<BatchRunResponse> runChange() {
-        log.warn("[NotificationBatchAdmin] ⚠️ 임시 API — CHANGE 배치 수동 실행 요청");
+        log.warn("[NotificationBatchAdmin] 임시 API — CHANGE 배치 수동 실행 요청");
         NotificationScheduler.ManualRunResult result = notificationScheduler.runManually();
         return toResponse("CHANGE", result == NotificationScheduler.ManualRunResult.RAN);
     }
@@ -48,7 +48,7 @@ public class NotificationBatchAdminController {
     /** 시점 트리거 배치(cron 기반)를 수동으로 1회 실행한다. */
     @PostMapping("/scheduled")
     public ResponseEntity<BatchRunResponse> runScheduled() {
-        log.warn("[NotificationBatchAdmin] ⚠️ 임시 API — 시점 트리거 배치 수동 실행 요청");
+        log.warn("[NotificationBatchAdmin] 임시 API — 시점 트리거 배치 수동 실행 요청");
         ScheduledTriggerScheduler.ManualRunResult result = scheduledTriggerScheduler.runManually();
         return toResponse("SCHEDULED", result == ScheduledTriggerScheduler.ManualRunResult.RAN);
     }
@@ -56,10 +56,12 @@ public class NotificationBatchAdminController {
     /**
      * 두 배치를 CHANGE → SCHEDULED 순서로 실행한다.
      * 이 순서는 cross-trigger dedup(CHANGE 우선)을 유지하기 위함이다.
+     * # CHANGE → 시점 트리거 순서로 두 배치 모두 수동 실행
+     * curl -i -X POST httpㄴ://api.jazzz.dev/api/internal/notifications/batch/all
      */
     @PostMapping("/all")
     public ResponseEntity<BatchAllRunResponse> runAll() {
-        log.warn("[NotificationBatchAdmin] ⚠️ 임시 API — CHANGE→SCHEDULED 배치 수동 실행 요청");
+        log.warn("[NotificationBatchAdmin] 임시 API — CHANGE→SCHEDULED 배치 수동 실행 요청");
         boolean changeRan = notificationScheduler.runManually() == NotificationScheduler.ManualRunResult.RAN;
         boolean scheduledRan = scheduledTriggerScheduler.runManually() == ScheduledTriggerScheduler.ManualRunResult.RAN;
         return ResponseEntity.ok(new BatchAllRunResponse(
