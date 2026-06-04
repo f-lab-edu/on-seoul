@@ -57,7 +57,6 @@ public class NotificationBatchAdminController {
      * 두 배치를 CHANGE → SCHEDULED 순서로 실행한다.
      * 이 순서는 cross-trigger dedup(CHANGE 우선)을 유지하기 위함이다.
      * # CHANGE → 시점 트리거 순서로 두 배치 모두 수동 실행
-     * curl -i -X POST httpㄴ://api.jazzz.dev/api/internal/notifications/batch/all
      */
     @PostMapping("/all")
     public ResponseEntity<BatchAllRunResponse> runAll() {
