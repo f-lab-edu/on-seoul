@@ -47,10 +47,10 @@ export async function* parseSseStream(
  * SSE 청크에서 event·data 라인을 추출해 JSON 객체로 반환.
  *
  * 정규화 규칙(docs/chat-sse-event-catalog.md):
- * - `event:` 이름이 있는 이벤트(init/error)는 그 이름을 data JSON의 `type`으로 주입한다.
+ * - `event:` 이름이 있는 이벤트(init/error)만 그 이름을 data JSON의 `type`으로 주입한다.
  * - `event:error`의 data는 평문 문자열이므로 `{ type: "error", message: <문자열> }`로 래핑한다.
- * - name 없는 data는 payload 키로 구분: `answer`가 있으면(`error` 동반 여부로) final/workflow_error를 type으로 주입.
- *   그 외(step 등)는 그대로 둔다(호출 측이 진행으로 흡수).
+ * - name 없는 data(step/final/workflow_error)는 그대로 통과시킨다. 종료/진행 식별은
+ *   payload 키(`answer`/`error`)로 useChatStream 한 곳에서 수행한다(식별 단일화).
  */
 function extractChunk(chunk: string): unknown {
   // \r\n 종결 프록시(NGINX 등) 호환을 위해 \r 제거 후 분할.
@@ -85,13 +85,9 @@ function extractChunk(chunk: string): unknown {
   }
 
   const obj = parsed as Record<string, unknown>;
-  if (!("type" in obj) && !("step" in obj)) {
-    if (eventType !== null) {
-      obj.type = eventType;
-    } else if (typeof obj["answer"] === "string") {
-      // 카탈로그 §4: answer 있고 error 없으면 final, error 동반이면 workflow_error.
-      obj.type = obj["error"] != null ? "workflow_error" : "final";
-    }
+  // named 이벤트(init/error)만 type 주입. final/workflow_error는 훅이 키로 식별.
+  if (eventType !== null && !("type" in obj)) {
+    obj.type = eventType;
   }
 
   return obj;

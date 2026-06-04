@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AUTH_LOGOUT_EVENT } from "@/lib/api-client";
 import { parseSseStream } from "@/lib/sse";
-import { isSseProgressEvent } from "@/types/sse-events";
 import type { ServiceCard } from "@/types/sse-events";
 
 export interface ChatStreamInput {
@@ -46,12 +45,9 @@ export interface UseChatStreamResult {
   reset: () => void;
 }
 
-/** 진행(progress) 이벤트의 trace 라벨을 만든다. 표시할 게 없으면 null. */
+/** 진행(progress) 이벤트의 trace 라벨. `message`가 있으면 그것만 쓴다(특정 type에 의존 X). */
 function progressLabel(ev: Record<string, unknown>): string | null {
-  if (typeof ev.message === "string" && ev.message.length > 0) return `⏳ ${ev.message}`;
-  if (ev.type === "agent_start" && typeof ev.agent === "string") return `▶ ${ev.agent}`;
-  if (ev.type === "tool_call" && typeof ev.tool === "string") return `🔧 ${ev.tool}`;
-  return null;
+  return typeof ev.message === "string" && ev.message.length > 0 ? `⏳ ${ev.message}` : null;
 }
 
 /**
@@ -96,7 +92,8 @@ export function useChatStream(options?: UseChatStreamOptions): UseChatStreamResu
       abortRef.current = ctrl;
       lastInputRef.current = input;
 
-      let content = "";
+      // token 누적을 제거해 content는 항상 ""(스트림 미완료 fallback 표시에만 쓰임).
+      const content = "";
       const trace: string[] = [];
       safeSetState({ phase: "streaming", content, trace: [...trace] });
 
@@ -144,6 +141,8 @@ export function useChatStream(options?: UseChatStreamOptions): UseChatStreamResu
           // init — 방 메타. 종료 아님.
           if (ev.type === "init") {
             if (typeof ev.room_id === "number") {
+              // 직전 input에 roomId를 심어 retry()가 같은 방으로 재전송되게 한다(방 중복 생성 방지).
+              if (lastInputRef.current) lastInputRef.current.roomId = ev.room_id;
               onInitRef.current?.({ roomId: ev.room_id, created: ev.created === true });
             }
             continue;
@@ -189,17 +188,10 @@ export function useChatStream(options?: UseChatStreamOptions): UseChatStreamResu
             return;
           }
 
-          // token — 점진 렌더(백엔드가 보낼 경우만). 누적해 표시.
-          if (ev.type === "token" && typeof ev.delta === "string") {
-            content += ev.delta;
-            safeSetState({ phase: "streaming", content, trace: [...trace] });
-            continue;
-          }
-
-          // 그 외(step/progress/미지의 이벤트) — 진행으로 흡수.
-          if (isSseProgressEvent(ev) || ev.type === "agent_start" || ev.type === "tool_call") {
-            const label = progressLabel(ev);
-            if (label) trace.push(label);
+          // 그 외(step 등 미지의 이벤트) — 진행으로 흡수. 개별 type에 의존하지 않는다.
+          const label = progressLabel(ev);
+          if (label) {
+            trace.push(label);
             safeSetState({ phase: "streaming", content, trace: [...trace] });
           }
         }

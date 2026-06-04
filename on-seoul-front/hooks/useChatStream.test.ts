@@ -117,6 +117,36 @@ describe("useChatStream", () => {
     expect(onInit).toHaveBeenCalledWith({ roomId: 42, created: true });
   });
 
+  it("init로 roomId를 받은 뒤 retry는 같은 방으로 재전송된다(방 중복 생성 방지)", async () => {
+    const bodies: string[] = [];
+    // init만 오고 final 없이 종료 → '스트림 미완료' error. retry가 같은 roomId를 실어야 한다.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(typeof init?.body === "string" ? init.body : "");
+        return new Response(
+          rawFrames([`event:init\ndata:${JSON.stringify({ room_id: 7, created: true })}`]),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const { result } = renderHook(() => useChatStream());
+    await act(async () => {
+      await result.current.send({ question: "hi" });
+    });
+    await waitFor(() => {
+      expect(result.current.state.phase).toBe("error");
+    });
+
+    await act(async () => {
+      await result.current.retry();
+    });
+
+    expect(JSON.parse(bodies[0] ?? "{}").roomId).toBeUndefined();
+    expect(JSON.parse(bodies[1] ?? "{}").roomId).toBe(7);
+  });
+
   it("workflow_error(answer+error)는 answer를 메시지로 error 전환된다", async () => {
     const events = [
       JSON.stringify({ message_id: 5, answer: "처리 중 문제가 발생했습니다.", error: "boom", intent: "FALLBACK" }),
