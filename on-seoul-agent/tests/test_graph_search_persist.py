@@ -270,17 +270,22 @@ class TestFallbackIntentPersist:
 
 class TestSelfCorrectionPersistOnlyLastAttempt:
     async def test_retry_resets_channels_before_second_attempt(self):
-        """재시도 시 retry_prep_node 가 channels 를 리셋하므로 queries.sql 행은 1행만."""
+        """재시도(SQL 빈 답변→VECTOR 전환) 시 retry_prep_node 가 channels 를 리셋한다.
+
+        방향성 재시도: SQL_SEARCH 의 재시도는 VECTOR_SEARCH 로 강제 전환된다.
+        1차 SQL 채널은 리셋되고 마지막 시도(VECTOR) 채널만 적재되어 SQL 채널은 0행이다.
+        """
         rows = [{"service_id": "SVC001", "service_name": "수영장"}]
         sql_agent, data_session = make_sql_agent(rows)
         ai_session = make_ai_session()
+        vector_agent = _vector_agent()
 
         agent = AnswerAgent.__new__(AnswerAgent)
         answer_chain = MagicMock()
         answer_chain.ainvoke = AsyncMock(
             side_effect=[
-                "",
-                "수영장 안내입니다.",
+                "",  # 1차 SQL — 빈 답변 → 재시도 트리거
+                "체험관 안내입니다.",  # 2차 VECTOR 전환
             ]
         )
         agent._answer_chain = answer_chain
@@ -288,22 +293,36 @@ class TestSelfCorrectionPersistOnlyLastAttempt:
         title_chain.ainvoke = AsyncMock(return_value=_TitleOutput(title="안내"))
         agent._title_chain = title_chain
 
-        graph = AgentGraph(
-            router=make_router(IntentType.SQL_SEARCH),
-            sql_agent=sql_agent,
-            answer_agent=agent,
-        )
-        result = await graph.run(
-            _state(message_id=50),
-            data_session=data_session,
-            ai_session=ai_session,
-        )
+        vrows = [{"service_id": "VEC001", "service_name": "체험관", "similarity": 0.9}]
+        hydrated = [{"service_id": "VEC001", "service_name": "체험관"}]
+
+        with (
+            patch("agents.vector_agent.vector_search", AsyncMock(return_value=vrows)),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
+            patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
+            patch(
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=hydrated),
+            ),
+        ):
+            graph = AgentGraph(
+                router=make_router(IntentType.SQL_SEARCH),
+                sql_agent=sql_agent,
+                vector_agent=vector_agent,
+                answer_agent=agent,
+            )
+            result = await graph.run(
+                _state(message_id=50),
+                data_session=data_session,
+                ai_session=ai_session,
+            )
 
         assert result["retry_count"] == 1
         query_rows = _get_queries_rows(ai_session)
         assert query_rows is not None
         sql_rows = [r for r in query_rows if r["channel"] == SearchChannel.SQL]
-        assert len(sql_rows) == 1, f"마지막 시도 1행이어야 하지만 {len(sql_rows)}행"
+        # 1차 SQL 채널은 리셋됨 — 마지막 시도는 VECTOR 전환이므로 SQL 0행.
+        assert len(sql_rows) == 0, f"전환 후 SQL 채널은 0행이어야 하지만 {len(sql_rows)}행"
 
 
 # ---------------------------------------------------------------------------

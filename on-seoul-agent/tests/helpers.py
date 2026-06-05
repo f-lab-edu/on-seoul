@@ -37,6 +37,8 @@ def make_agent_state(**overrides: Any) -> AgentState:
         message="수영장 알려줘",
         title_needed=False,
         intent=None,
+        forced_intent=None,
+        retry_radius_m=None,
         user_lat=None,
         user_lng=None,
         refined_query=None,
