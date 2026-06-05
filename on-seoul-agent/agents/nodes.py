@@ -507,6 +507,21 @@ class GraphNodes:
             logger.info(
                 "answer.generated room=%s len=%d", state.get("room_id"), len(answer)
             )
+            # 관측: 검색 결과는 있는데 카드가 비어 있으면 normalize 무음 실패 신호.
+            # 동작은 바꾸지 않고 경고만 남긴다.
+            intent = state.get("intent")
+            if intent in (IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH):
+                hydrated = state.get("hydrated_services") or []
+                sql_results = state.get("sql_results") or []
+                if (hydrated or sql_results) and not new_state.get("service_cards"):
+                    logger.warning(
+                        "answer.cards_empty_with_results room=%s intent=%s "
+                        "hydrated=%d sql=%d",
+                        state.get("room_id"),
+                        getattr(intent, "value", intent),
+                        len(hydrated),
+                        len(sql_results),
+                    )
             return {
                 "answer": new_state.get("answer"),
                 "title": new_state.get("title"),
