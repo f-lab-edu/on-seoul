@@ -1,12 +1,12 @@
 # AI 에이전트 설계
 
-> Phase 17(LangGraph 전환) 완료 기준. 진입 파일은 `agents/graph.py` (`AgentGraph`)이며, 기존 `agents/workflow.py`(LCEL)는 레거시로 유지된다. `AgentState` 입출력 규약은 동일하다.
+> 이 페이지는 사용자 질문이 어떤 과정을 거쳐 응답을 생성하는지, on-seoul-agent의 에이전트/도구/그래프 구조를 중심으로 설명한다.
 
 ---
 
 ## 1. 개요
 
-`on-seoul-agent`는 사용자의 자연어 질문을 받아, 의도를 분류하고 적절한 검색 도구를 호출한 뒤, 자연어 답변과 시설 카드를 생성하는 **멀티 에이전트** 서비스이다. LangGraph `StateGraph` 위에서 노드와 조건부 엣지로 조립된다.
+`on-seoul-agent`는 사용자의 자연어 질문을 받아, 의도를 분류하고 적절한 검색 도구를 호출한 뒤, 자연어 답변과 시설 카드를 생성하는 **멀티 에이전트** 서비스이다. LangGraph `StateGraph` 를 기반으로 노드와 조건부 엣지로 조립된다.
 
 | 구성 요소 | 위치 | 역할 |
 |---|---|---|
@@ -28,8 +28,8 @@ flowchart TD
     MAP["map_node<br/>(map_search)<br/>lat/lng 미제공 시<br/>map_results=None"]
     ANALYTICS["analytics_node<br/>(Analytics Agent)<br/>analytics_search 집계"]
     ANSWER["answer_node<br/>(Answer Agent)"]
-    SELF_CORR{{"self_correction<br/>answer 비고 retry=0?"}}
-    RETRY_PREP["retry_prep_node<br/>(search_channels 리셋)"]
+    SELF_CORR{{"self_correction<br/>빈 답변/intent별 0건?<br/>(retry=0 캡)"}}
+    RETRY_PREP["retry_prep_node<br/>(intent별 분기:<br/>forced_intent 전환 /<br/>ANALYTICS 필터 드롭 /<br/>MAP 반경 확장 ·<br/>search_channels 리셋)"]
     CACHE_WRITE["cache_write_node<br/>(Answer Cache 저장)"]
     SEARCH_PERSIST(["search_persist_node<br/>chat_search_queries +<br/>chat_search_results 적재"])
     TRACE(["trace_node<br/>chat_agent_traces 적재"])
@@ -56,7 +56,7 @@ flowchart TD
     SEARCH_PERSIST --> TRACE
 ```
 
-각 노드는 공유 상태인 **`AgentState`** (TypedDict) 를 입력받아 부분 업데이트 dict를 반환한다. LangGraph가 상태 병합을 담당하므로 노드 내부에서 직접 변이하지 않는다. 그래프 전체에는 `recursion_limit=16`이 적용되어 무한 사이클을 방지한다.
+각 노드는 공유 상태인 **`AgentState`** 를 입력받아 부분 업데이트 dict를 반환한다. LangGraph가 상태 병합을 담당하므로 노드 내부에서 직접 변이하지 않는다. 그래프 전체에는 super-step을 16으로 제한(`recursion_limit=16`)하고 재시도는 1회 캡(`retry_count==0`)을 둬 무한 사이클을 방지한다.
 
 > **종단 체인 일관성**: cache hit 경로도 `search_persist_node` 를 경유한다. 빈 `search_channels` 에서는 즉시 skip 되므로 오버헤드는 없으나, 명시적으로 통과시켜 "cache_write → search_persist → trace" 의 종단 체인 형태를 항상 동일하게 유지한다.
 
@@ -66,7 +66,7 @@ flowchart TD
 
 ### 3-1. Router Agent — 의도 분류
 
-LCEL `prompt | llm.with_structured_output(_IntentOutput)` 으로 사용자 메시지를 `IntentType` 4종 중 하나로 분류한다.
+LCEL `prompt | llm.with_structured_output` 으로 사용자 메시지를 `IntentType` 4종 중 하나로 분류한다.
 
 | 입출력 | 필드 |
 |---|---|
@@ -251,6 +251,8 @@ PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도
 | `room_id`, `message_id`, `message`, `title_needed` | 호출자 | 입력 |
 | `user_lat`, `user_lng` | 호출자 | MAP intent 용 위치 |
 | `intent` | router_node | 분류된 의도 |
+| `forced_intent` | retry_prep_node | 방향성 재시도 시 다음 순회 intent 강제(예: SQL_SEARCH→VECTOR_SEARCH). router_node 가 LLM 분류 skip 후 honor + 즉시 None 소비(1회성). None=일반 분류 |
+| `retry_radius_m` | retry_prep_node | MAP 0건 재시도 시 확장 반경(m). map_node 가 기본 반경 대신 사용. None=기본 1000m |
 | `vector_sub_intent` | router_node | Router가 분류한 벡터 검색 세부 의도 (`identification`/`detail`/`semantic`). VECTOR_SEARCH 전용 |
 | `refined_query` | router_node / vector_node | 벡터 검색용 정제 질의 (router 1차 산출, 미산출 시 vector_node fallback) |
 | `max_class_name`, `area_name`, `service_status` | router_node | post-filter 메타데이터 |
@@ -317,32 +319,40 @@ result = await graph.run(
 | `router_node → ?` | `_route_by_intent` | `intent` 값으로 다음 노드 결정 (`SQL_SEARCH`→sql, `VECTOR_SEARCH`→vector, `MAP`→map, `ANALYTICS`→analytics, `FALLBACK`/그 외→answer). router 예외 시 `error + answer` 가 채워져 있으면 `answer_node` 로 단락. `MAP` 의 lat/lng 미제공 처리는 `map_node` 내부에서 담당한다. |
 | `answer_node → ?` | `_self_correction_edge` | `not answer.strip() and retry_count == 0` 이면 `router_node` 재진입, 아니면 `trace_node` 로 진행. |
 
-### 7-2. Self-Correction 사이클 (Phase 17)
+### 7-2. Self-Correction 사이클 (방향성 재시도)
 
 LangGraph 의 cycle 기능을 활용한 1회 한정 재시도 루프:
 
 ```
-answer_node → [_self_correction_edge]
-                  ├─ needs_retry → router_node (retry_count=1로 증가)
-                  └─ otherwise   → trace_node (종료)
+answer_node → [self_correction_edge]
+                  ├─ retry → retry_prep_node → router_node (retry_count=1로 증가)
+                  └─ 종료  → cache_write_node → search_persist_node → trace_node
 ```
 
-**재진입 감지 (`_router_node`)**: `_node_path`에 정상/예외 경로 어느 것이든 `"router"`로 시작하는 항목이 있으면 재진입으로 간주한다.
+**재시도 트리거 평가 순서 (`self_correction_edge`)** — 다중 조건 동시 참 시 비결정성을 제거하기 위해 위에서부터 먼저 매칭되는 하나만 적용한다(1회 캡):
 
-```python
-is_retry = any(p.startswith("router") for p in self._node_path)
-retry_count = 1 if is_retry else state.get("retry_count", 0)
-```
+1. **`retry_count != 0`** → `end_normal` (이미 1회 소진, 무한 루프 방지).
+2. **빈 답변** (`not answer.strip()`) → `retry_prep_node`. intent 무관 최우선. error + fallback_answer 조합은 answer 가 차있어 통과(재시도 안 함).
+3. **intent별 0건** (상호배타):
+   - `SQL_SEARCH` / `VECTOR_SEARCH` → `_hard_filter_zero_hits` (hydrated/sql/vector 모두 빈).
+   - `ANALYTICS` → `_analytics_zero_hits` (`analytics_results` 0행 또는 `error`).
+   - `MAP` → `_map_zero_hits` (`features=[]` 만 재시도, `map_results=None`(lat/lng 미제공)은 제외).
 
-**재시도 트리거 조건 (`_self_correction_edge`)**:
+**재시도 동작 — 완화(relax)가 아니라 방향성(directed) 전환/완화 (`retry_prep_node`)**: intent별로 분기한다.
 
-```python
-needs_retry = not answer.strip() and retry_count == 0
-```
+| 원 intent | 동작 | 다음 순회 intent | 메커니즘 |
+|---|---|---|---|
+| `SQL_SEARCH` | **강제 전환** | `VECTOR_SEARCH` | `forced_intent` 주입 + 정형 필터 전부 비움(전환 경로 자체 정제). 레지스트리 `_RETRY_FALLBACK_INTENT` 로 확장 가능. |
+| `VECTOR_SEARCH` | 기존 완화 | (재분류) | `refined_query`·필터 None 리셋. |
+| `ANALYTICS` | **필터 1개 드롭** | `ANALYTICS` | `_ANALYTICS_DROP_ORDER`(status→area) 중 첫 비어있지 않은 1개만 드롭. `max_class_name` 유지. `analytics_keyword`는 제외 — `analytics_search`에 전달되는 keyword는 state 슬롯(trace 관측 전용)이 아니라 `AnalyticsAgent.run`이 매 실행 LLM으로 message에서 재추출하는 `params.keyword`라 state 드롭이 무효(0건 재현·무효 재시도 낭비). 드롭할 게 없으면 no-op 후 정직한 0건 안내. |
+| `MAP` | **반경 확장** | `MAP` | `retry_radius_m=3000`(기본 1000). `map_node` 가 이 값을 우선 사용. intent 전환 아님. |
 
-- `answer`가 비어 있을 때만 재검색이 의미 있다. error + fallback_answer 조합은 이미 최선의 응답이므로 재시도하지 않는다.
-- `retry_count >= 1`이면 항상 `trace_node` 로 진행 — 최대 1회 보장.
-- 추가로 그래프 호출 시 `recursion_limit=16`을 명시하여 어떤 경우에도 무한 사이클을 차단한다.
+`forced_intent` 는 `router_node` 가 LLM 재분류를 skip 하고 honor 한 뒤 **즉시 None 으로 소비**(1회성)하므로 무한 전환이 없다. 강제 전환 시 `refined_query=None` 이라 `cache_check` 가 pass-through 되어 0건이던 원 질의의 캐시 오hit 도 없다.
+
+- 모든 분기가 `retry_count` 캡을 동일하게 받아 **최대 1회**. 재시도 후에도 0건이면 정직한 "결과 없음" 안내.
+- 재시도 시 `retry_relaxed=True` 로 `AnswerAgent` 가 완화 사실(예: 조건 완화)을 답변에 반드시 명시한다(과잉완화 노출 가드).
+- 그래프 호출 시 `recursion_limit=16` 으로 무한 사이클을 차단한다(정상 8 + 전환 +6 = 14, MAP +5 모두 수용).
+- 재시도 진입 시 `stream()` 이 `re_searching` progress 이벤트("다른 방식으로 다시 검색하고 있습니다...")를 1회 emit 하고 검색/답변 진행 플래그를 리셋해 전환 경로의 `searching`/`answering` 이벤트가 다시 흐르게 한다.
 
 ---
 
@@ -404,5 +414,6 @@ needs_retry = not answer.strip() and retry_count == 0
 | Phase 18 | 원본 hydration 도입 | `tools/hydrate_services` 신설, VectorAgent에서 RRF 후 `public_service_reservations` 조회. 답변 컨텍스트가 항상 최신 원본 값을 사용하도록 변경. `AnswerAgent._normalize`의 metadata 언팩 분기 제거. |
 | Phase 19 | 검색 채널 적재 (chat-search-persistence) | `chat_search_queries` + `chat_search_results` 두 테이블 도입. `AgentState.search_channels: dict[str, ChannelData]` 필드(reducer 적용) + 종단 `search_persist_node` 신설. sql/vector/map 노드가 채널별 `ChannelData(kind, query, hits)` 를 채우고, `retry_prep_node` 가 재시도 시 `search_channels = {}` 리셋. cache hit 경로도 `search_persist_node` 경유로 종단 체인 일관성 유지. `recursion_limit` 10 → 15 상향. |
 | 2026-05-31 | ANALYTICS intent 신설 (Phase A-E) | `analytics_search` 도구(`tools/analytics_search.py`) 신설 — GROUP BY COUNT / SELECT DISTINCT 집계, 차원 화이트리스트 4종, 전 필터값 bind 파라미터. `AnalyticsAgent`(`agents/analytics_agent.py`) 신설 — LLM 구조화 추출 후 `analytics_search` 호출, hydration 생략. `AgentState`에 `analytics_results` / `analytics_group_by` / `analytics_metric` / `analytics_keyword` 필드 추가. Router에 ANALYTICS 분류 기준 + 경계 케이스 few-shot 추가. Answer Agent에 intent별 2-tier 프롬프트 조립 구조 도입 (Tier 1 정적 캐시, Tier 2 런타임 조건부 조립). AI 서비스 전체. |
+| 2026-06-05 | 방향성 self-correction 재시도 | 재시도가 "router 재분류"(완화)에서 "방향성 전환/완화"로 강화. `AgentState`에 `forced_intent` / `retry_radius_m` 추가. `retry_prep_node` intent별 분기: SQL_SEARCH→VECTOR_SEARCH 강제 전환(레지스트리 `_RETRY_FALLBACK_INTENT`), ANALYTICS 제약 큰 effective 필터 1개 드롭(`_ANALYTICS_DROP_ORDER`=status→area, max_class_name 유지, analytics_keyword는 LLM 재추출이라 제외), MAP 반경 확장(`_MAP_RETRY_RADIUS_M=3000`). `self_correction_edge` 트리거 평가 순서 명문화 + ANALYTICS/MAP 0건 트리거 추가(`_analytics_zero_hits`/`_map_zero_hits`). `router_node` 가 `forced_intent` honor 후 즉시 소비(1회성). `stream()` 재시도 진입 시 `re_searching` progress 1회 emit + 진행 플래그 리셋. 1회 캡·`recursion_limit=16` 유지. |
 
 `AgentState` 입출력 규약을 유지하므로 각 Agent 클래스(`router_agent.py`, `sql_agent.py`, `vector_agent.py`, `answer_agent.py`)는 수정 없이 재사용된다. `agents/workflow.py` (LCEL)는 레거시로 유지된다.
