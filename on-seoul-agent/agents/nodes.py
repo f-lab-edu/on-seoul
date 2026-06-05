@@ -72,6 +72,32 @@ VALUES (:message_id, :kind, :channel, :rank, :service_id, :score, CAST(:meta AS 
 ON CONFLICT (message_id, channel, rank) DO NOTHING
 """
 
+# ---------------------------------------------------------------------------
+# 방향성 self-correction 재시도 레지스트리 (retry_prep_node 분기 제어)
+# ---------------------------------------------------------------------------
+
+# 검색 실패 → 폴백 intent 강제 전환 레지스트리.
+# 0건인 원 intent 가 키에 있으면 value 로 강제 전환한다. 확장은 한 줄.
+_RETRY_FALLBACK_INTENT: dict[IntentType, IntentType] = {
+    IntentType.SQL_SEARCH: IntentType.VECTOR_SEARCH,
+    # IntentType.MAP: IntentType.VECTOR_SEARCH,  # 추후 확장
+}
+
+# ANALYTICS 완화 — 제약 강도 역순 드롭 우선순위. 한 번에 1개만 드롭.
+# max_class_name 은 의미 보존상 유지(드롭 대상 제외).
+# analytics_keyword 는 state 로 제어 불가능한 필드라 드롭 대상에서 제외한다:
+# analytics_search 에 전달되는 keyword 는 state["analytics_keyword"](trace 관측 전용
+# 출력 슬롯)가 아니라 AnalyticsAgent.run 이 매 실행 LLM 으로 message 에서 재추출하는
+# params.keyword 다. 따라서 state 드롭은 무효(재실행 시 동일 keyword 재추출) → 0건
+# 재현·무효 재시도 낭비. 실효성 있는 effective 필터(service_status/area_name)만 드롭한다.
+_ANALYTICS_DROP_ORDER: tuple[str, ...] = (
+    "service_status",
+    "area_name",
+)
+
+# MAP 0건 완화 — 반경 확장(1회). 기본 1000m → 3000m.
+_MAP_RETRY_RADIUS_M: int = 3000
+
 
 class GraphNodes:
     """AgentGraph 노드·엣지 구현.
@@ -130,7 +156,23 @@ class GraphNodes:
         refined_query는 Router가 산출하여 후속 cache_check_node가 정확한
         키 기반 lookup을 수행할 수 있도록 한다. None이면 cache_check는
         pass-through되며 VectorAgent가 자체 refine 체인으로 대체 산출한다.
+
+        forced_intent honor:
+            retry_prep_node 가 방향성 재시도로 intent 를 강제하면 LLM 재분류를
+            skip 하고 그 intent 를 그대로 반환한다. forced_intent 는 즉시 None 으로
+            소비(1회성)하여 무한 전환을 막는다. refined_query/post-filter 는 채우지
+            않으므로 cache_check 는 pass-through 되고(0건이던 원 질의 오hit 방지),
+            전환된 경로(VECTOR)가 자체 정제한다.
         """
+        forced = state.get("forced_intent")
+        if forced is not None:
+            self.node_path.append("router")
+            logger.info(
+                "router.forced room=%s intent=%s",
+                state.get("room_id"),
+                forced.value,
+            )
+            return {"intent": forced, "forced_intent": None}
         try:
             result = await self._router.classify(
                 state["message"],
@@ -173,39 +215,101 @@ class GraphNodes:
             }
 
     async def retry_prep_node(self, state: AgentState) -> dict[str, Any]:
-        """자기 교정 재시도 준비 노드.
+        """자기 교정 재시도 준비 노드 (intent별 방향성 분기).
 
-        _self_correction_edge에서 answer가 비어 재시도가 결정될 때만 실행된다.
-        retry_count를 1 증가시키고 이전 검색 결과를 초기화한다.
-        이 노드에서 초기화가 완료되므로 router_node는 분류에만 집중한다.
+        _self_correction_edge에서 재시도가 결정될 때만 실행된다.
+        retry_count를 1 증가시키고 intent에 따라 전환/완화/반경확장을 수행한다.
+
+        분기:
+          - 케이스 A (전환): _RETRY_FALLBACK_INTENT 키 intent(SQL_SEARCH 등) →
+            forced_intent 세팅 + 정형 필터 전부 비움(전환 경로가 자체 정제).
+          - 케이스 B (ANALYTICS): 가장 제약 큰 effective 필터 1개만 드롭(status→area).
+            max_class_name 은 유지. 드롭할 게 없으면 no-op.
+          - 케이스 D (MAP): retry_radius_m=3000 으로 반경 확장, map_results 리셋.
+          - 케이스 C (기존 완화): VECTOR_SEARCH 0건/빈 답변 등 — 필터·refined_query 리셋.
+
+        모든 분기는 공통 베이스(retry_count 증가 + error 클리어 + retry_relaxed=True +
+        RESET_CHANNELS)를 공유하고 분기별 override 만 더한다. retry_count 캡(최대 1회)을
+        동일하게 받으며 retry_relaxed=True 로 AnswerAgent 가 완화 사실을 답변에 명시한다.
+        RESET_CHANNELS sentinel 로 이전 시도 채널 데이터를 지워
+        UNIQUE (message_id, channel) 위반을 막는다(빈 dict({}) 는 no-op 이라 sentinel 필수).
         """
         new_retry_count = (state.get("retry_count") or 0) + 1
+        intent = state.get("intent")
         logger.info(
-            "retry.triggered room=%s retry_count=%d",
+            "retry.triggered room=%s retry_count=%d intent=%s",
             state.get("room_id"),
             new_retry_count,
+            intent.value if intent else None,
         )
         self.node_path.append("retry_prep")
-        return {
+
+        # 모든 분기 공통 베이스 — 분기별 override 로 검색 슬롯/필터를 덮어쓴다.
+        update: dict[str, Any] = {
             "retry_count": new_retry_count,
             "error": None,
-            "sql_results": None,
-            "vector_results": None,
-            "map_results": None,
-            "hydrated_services": None,
-            "refined_query": None,
-            "max_class_name": None,
-            "area_name": None,
-            "service_status": None,
-            # payment_type 완화 — 0건 재시도 시 결제 유형 필터를 드롭한다.
-            # AnswerAgent 가 retry_relaxed 로 완화 사실을 답변에 명시한다.
-            "payment_type": None,
             "retry_relaxed": True,
-            # RESET_CHANNELS sentinel — 이전 시도 채널 데이터를 지워
-            # UNIQUE (message_id, channel) 위반을 방지한다.
-            # 빈 dict({}) 는 더 이상 리셋 신호가 아니라 no-op 이므로 sentinel 필수.
             "search_channels": RESET_CHANNELS,
         }
+
+        # 케이스 A: 강제 전환 대상 intent (SQL_SEARCH → VECTOR_SEARCH 등)
+        fallback = _RETRY_FALLBACK_INTENT.get(intent) if intent else None
+        if fallback is not None:
+            update.update(
+                {
+                    "forced_intent": fallback,
+                    "sql_results": None,
+                    "vector_results": None,
+                    "map_results": None,
+                    "hydrated_services": None,
+                    "refined_query": None,
+                    # 전환 시 정형 필터는 유지하지 않는다(전환 경로가 자체 정제).
+                    "max_class_name": None,
+                    "area_name": None,
+                    "service_status": None,
+                    "payment_type": None,
+                }
+            )
+            return update
+
+        # 케이스 B: ANALYTICS — 가장 제약 큰 effective 필터 1개만 드롭(intent 유지)
+        if intent == IntentType.ANALYTICS:
+            update["analytics_results"] = None
+            for field in _ANALYTICS_DROP_ORDER:
+                if state.get(field):
+                    update[field] = None  # 한 개만 드롭하고 중단
+                    break
+            return update
+
+        # 케이스 D: MAP — 반경 확장(intent 유지)
+        # 케이스 C 와 달리 sql/vector/hydrated 슬롯을 건드리지 않는다: MAP 경로는
+        # 이 슬롯들을 채우지 않으므로 리셋 자체가 무의미하다(반경만 확장하면 충분).
+        if intent == IntentType.MAP:
+            update.update(
+                {
+                    "map_results": None,
+                    # map_node 가 이 값을 기본 반경 대신 사용한다.
+                    "retry_radius_m": _MAP_RETRY_RADIUS_M,
+                }
+            )
+            return update
+
+        # 케이스 C: 기존 완화 (VECTOR_SEARCH 0건, 빈 답변 등)
+        # payment_type 완화 — 0건 재시도 시 결제 유형 필터를 드롭한다.
+        update.update(
+            {
+                "sql_results": None,
+                "vector_results": None,
+                "map_results": None,
+                "hydrated_services": None,
+                "refined_query": None,
+                "max_class_name": None,
+                "area_name": None,
+                "service_status": None,
+                "payment_type": None,
+            }
+        )
+        return update
 
     async def sql_node(self, state: AgentState) -> dict[str, Any]:
         """SqlAgent.search() 호출 — sql_results + search_channels 설정."""
@@ -315,17 +419,22 @@ class GraphNodes:
         lng = state.get("user_lng")
         if lat is not None and lng is not None:
             try:
-                geojson = await map_search(self.data_session, lat, lng)
+                # MAP 0건 재시도 시 retry_prep_node 가 retry_radius_m 을 세팅한다.
+                # 없으면 기본 반경(1000m). ChannelData 에도 실제 사용 반경을 반영한다.
+                radius = state.get("retry_radius_m") or _MAP_DEFAULT_RADIUS_M
+                geojson = await map_search(
+                    self.data_session, lat, lng, radius_m=radius
+                )
                 self.node_path.append("map_node")
                 features = (geojson or {}).get("features") or []
                 channel_data = ChannelData(
                     kind=SearchKind.MAP,
                     query=ChannelQuery(
-                        query_text=f"lat={lat},lng={lng},r={_MAP_DEFAULT_RADIUS_M}m",
+                        query_text=f"lat={lat},lng={lng},r={radius}m",
                         parameters={
                             "lat": lat,
                             "lng": lng,
-                            "radius_m": _MAP_DEFAULT_RADIUS_M,
+                            "radius_m": radius,
                             "top_k": _MAP_TOP_K,
                         },
                     ),
@@ -380,6 +489,9 @@ class GraphNodes:
         except Exception as exc:
             logger.exception("analytics_node 실행 오류")
             self.node_path.append("analytics_error")
+            # error 를 세팅하면 _analytics_zero_hits 가 참이 되어 1회 재시도된다:
+            # 결정적 error 라도 1회는 재시도해 일시 오류(DB 순단 등) 회복 기회를 준다.
+            # 2회차는 retry_count 캡(self_correction_edge ①)으로 종료되므로 무한 루프 없음.
             return {"analytics_results": [], "error": str(exc)}
 
     async def answer_node(self, state: AgentState) -> dict[str, Any]:
@@ -596,28 +708,35 @@ class GraphNodes:
     def self_correction_edge(self, state: AgentState) -> str:
         """answer_node 완료 후 자기 교정 여부를 결정한다.
 
-        재시도 트리거 (retry_count == 0 캡, 최대 1회):
-          1. answer 가 비어 있음 (기존 동작).
-          2. intent 가 SQL_SEARCH/VECTOR_SEARCH 이고 하드 필터 적용 결과가 0건
-             (hydrated_services/sql_results/vector_results 모두 빈) — 케이스1 안전망.
+        평가 순서(고정) — 다중 조건 동시 참 시 비결정성을 제거한다. 위에서부터
+        먼저 매칭되는 하나만 적용(1회 캡이므로 단일 완화):
+          ① retry_count 캡: 이미 1회 소진 → 종료(무한 루프 방지).
+          ② 빈 답변: intent 무관 최우선 재시도(기존 동작).
+          ③ intent별 0건:
+             - SQL_SEARCH/VECTOR_SEARCH → _hard_filter_zero_hits
+             - ANALYTICS               → _analytics_zero_hits
+             - MAP                     → _map_zero_hits
 
-        retry_prep_node 가 retry_count 를 1 로 올리므로 다음 순회에서는 이 분기에
-        진입하지 않는다(무한 루프 방지). 재시도 판단은 state["retry_count"] 로 자기 완결된다.
+        intent 분기는 상호배타라 한 순회에 하나만 평가된다. retry_prep_node 가
+        retry_count 를 1 로 올리므로 다음 순회에서는 ①에서 즉시 종료된다.
         """
         retry_count = state.get("retry_count", 0)
-        answer = state.get("answer") or ""
-
         if retry_count != 0:
-            return "end_normal"
+            return "end_normal"  # ① 캡
 
-        # 트리거 1: 빈 답변.
+        answer = state.get("answer") or ""
         if not answer.strip():
-            return "retry_prep_node"
+            return "retry_prep_node"  # ② 빈 답변 (최우선, intent 무관)
 
-        # 트리거 2: SQL/VECTOR 하드 필터 0건.
-        intent = state.get("intent")
+        intent = state.get("intent")  # ③ intent별 0건
         if intent in (IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH):
             if self._hard_filter_zero_hits(state):
+                return "retry_prep_node"
+        elif intent == IntentType.ANALYTICS:
+            if self._analytics_zero_hits(state):
+                return "retry_prep_node"
+        elif intent == IntentType.MAP:
+            if self._map_zero_hits(state):
                 return "retry_prep_node"
 
         return "end_normal"
@@ -630,6 +749,25 @@ class GraphNodes:
             or state.get("sql_results")
             or state.get("vector_results")
         )
+
+    @staticmethod
+    def _analytics_zero_hits(state: AgentState) -> bool:
+        """ANALYTICS 결과가 없거나(0행) error 인지 판정한다."""
+        if state.get("error"):
+            return True
+        return not state.get("analytics_results")  # [] / None 모두 True
+
+    @staticmethod
+    def _map_zero_hits(state: AgentState) -> bool:
+        """MAP 반경 내 0건인지 판정한다.
+
+        lat/lng 미제공(map_results=None)은 위치 안내가 최선이므로 재시도 제외.
+        features=[] (반경 내 0건)만 반경 확장 재시도 대상이다.
+        """
+        mr = state.get("map_results")
+        if mr is None:
+            return False
+        return not (mr.get("features") or [])
 
 
 # ---------------------------------------------------------------------------

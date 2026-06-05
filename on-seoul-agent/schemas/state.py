@@ -18,6 +18,13 @@ class AgentState(TypedDict):
     message: str  # 사용자 원본 질문
     title_needed: bool  # 제목 생성 필요 여부
     intent: IntentType | None  # SQL_SEARCH / VECTOR_SEARCH / MAP / ANALYTICS / FALLBACK
+    # 방향성 재시도: retry_prep_node 가 다음 순회의 intent 를 강제할 때 세팅.
+    # router_node 가 존재 시 LLM 분류를 skip 하고 이 값을 사용한다(1회성, 즉시 소비).
+    # None 이면 일반 분류(기존 동작).
+    forced_intent: IntentType | None
+    # MAP 0건 재시도 시 확장 반경(m). map_node 가 존재 시 기본 반경 대신 사용한다.
+    # None 이면 _MAP_DEFAULT_RADIUS_M(1000) 적용(기존 동작).
+    retry_radius_m: int | None
     # MAP intent 반경 검색용 좌표 (ChatRequest.lat/lng 로부터 주입).
     # None이면 MAP intent를 FALLBACK으로 대체한다.
     user_lat: float | None  # 클라이언트 위도 (latitude)

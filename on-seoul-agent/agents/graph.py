@@ -375,6 +375,19 @@ class AgentGraph:
                             },
                         )
 
+                elif node_name == "retry_prep_node":
+                    # 재시도 경계: 검색/답변 진행 플래그를 리셋해 다음 순회의
+                    # searching/answering 이벤트가 다시 흐르게 한다.
+                    _search_progress_emitted = False
+                    _answer_progress_emitted = False
+                    yield (
+                        "progress",
+                        {
+                            "step": "re_searching",
+                            "message": "다른 방식으로 다시 검색하고 있습니다...",
+                        },
+                    )
+
                 elif node_name in _SEARCH_NODES and not _answer_progress_emitted:
                     _answer_progress_emitted = True
                     yield (
