@@ -39,16 +39,26 @@
     조회하는 모듈 수준 함수이므로, CompiledGraph → AgentGraph 역참조(순환 참조)가
     발생하지 않는다.
 
-세션 주입:
-    data_session : on_data DB (SQL 검색 — SqlAgent)
-    ai_session   : on_ai DB  (Vector 검색 + trace 저장 — VectorAgent, trace_node)
+세션 주입 (제안 0 — 요청 격리):
+    GraphNodes 는 컨테이너당 싱글톤(무상태)이므로 요청별 DB 세션을 인스턴스에 들고
+    있으면 동시 요청 간 교차가 발생한다. 따라서 세션은 RunnableConfig 의 `configurable`
+    로 per-run 주입한다(LangGraph 정석). dispatch 함수가 config 에서 세션을 꺼내
+    GraphNodes 메서드 인자로 전달하고, GraphNodes 는 인자로 받은 세션만 사용한다.
+
+    data_session : on_data DB (SQL/MAP/Analytics/Hydration — SqlAgent 등)
+    ai_session   : on_ai DB  (Vector 검색 + search_persist + trace 저장)
+
+    _ACTIVE_NODES ContextVar 는 (무상태) 공유 GraphNodes 조회 = 순환참조 회피용이며,
+    요청 격리는 config(세션) + state(node_path/started_at)가 담당한다.
 """
 
 import contextvars
 import logging
+import time
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar, Literal
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,7 +85,20 @@ _ACTIVE_NODES: contextvars.ContextVar[GraphNodes] = contextvars.ContextVar(
 # ---------------------------------------------------------------------------
 # 모듈 수준 dispatch 함수 — CompiledGraph에 등록된다.
 # self를 직접 클로저로 캡처하지 않으므로 AgentGraph와의 순환 참조가 없다.
+#
+# 세션이 필요한 노드 dispatch 는 두 번째 인자로 RunnableConfig 를 받아(LangGraph 가
+# 노드 시그니처에 config 가 있으면 주입한다) configurable 에서 per-run 세션을 꺼낸다.
 # ---------------------------------------------------------------------------
+
+
+def _data_session(config: RunnableConfig) -> AsyncSession:
+    """RunnableConfig.configurable 에서 on_data 세션을 추출한다."""
+    return config["configurable"]["data_session"]
+
+
+def _ai_session(config: RunnableConfig) -> AsyncSession:
+    """RunnableConfig.configurable 에서 on_ai 세션을 추출한다."""
+    return config["configurable"]["ai_session"]
 
 
 async def _dispatch_router_node(state: AgentState) -> dict[str, Any]:
@@ -94,36 +117,50 @@ async def _dispatch_retry_prep_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().retry_prep_node(state)
 
 
-async def _dispatch_sql_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().sql_node(state)
+async def _dispatch_sql_node(
+    state: AgentState, config: RunnableConfig
+) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().sql_node(state, _data_session(config))
 
 
-async def _dispatch_vector_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().vector_node(state)
+async def _dispatch_vector_node(
+    state: AgentState, config: RunnableConfig
+) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().vector_node(state, _ai_session(config))
 
 
-async def _dispatch_map_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().map_node(state)
+async def _dispatch_map_node(
+    state: AgentState, config: RunnableConfig
+) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().map_node(state, _data_session(config))
 
 
-async def _dispatch_analytics_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().analytics_node(state)
+async def _dispatch_analytics_node(
+    state: AgentState, config: RunnableConfig
+) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().analytics_node(state, _data_session(config))
 
 
-async def _dispatch_hydration_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().hydration_node(state)
+async def _dispatch_hydration_node(
+    state: AgentState, config: RunnableConfig
+) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().hydration_node(state, _data_session(config))
 
 
 async def _dispatch_answer_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().answer_node(state)
 
 
-async def _dispatch_search_persist_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().search_persist_node(state)
+async def _dispatch_search_persist_node(
+    state: AgentState, config: RunnableConfig
+) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().search_persist_node(state, _ai_session(config))
 
 
-async def _dispatch_trace_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().trace_node(state)
+async def _dispatch_trace_node(
+    state: AgentState, config: RunnableConfig
+) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().trace_node(state, _ai_session(config))
 
 
 def _dispatch_route_by_intent(state: AgentState) -> str:
@@ -221,6 +258,21 @@ _StreamEvent = (
 )
 
 
+def _prepare_state(state: AgentState) -> AgentState:
+    """run()/stream() 진입 시 per-request 런타임 상태를 state 에 초기화한다.
+
+    제안 0: GraphNodes.prepare()(인스턴스 속성에 세션/경로/시작시각 주입)를 대체한다.
+    node_path 는 reducer 가 누적하므로 빈 리스트로, started_at 은 elapsed_ms 산출용
+    시작 시각으로 세팅한다. retry_count 는 기존과 동일하게 미존재 시 0으로 채운다.
+    """
+    overrides: dict[str, Any] = {}
+    if "retry_count" not in state:
+        overrides["retry_count"] = 0
+    overrides["started_at"] = time.monotonic()
+    overrides["node_path"] = []
+    return {**state, **overrides}  # type: ignore[return-value]
+
+
 class AgentGraph:
     """LangGraph StateGraph 기반 멀티에이전트 워크플로우.
 
@@ -273,10 +325,7 @@ class AgentGraph:
         Returns:
             answer, intent, trace, retry_count가 채워진 AgentState
         """
-        self._nodes.prepare(data_session, ai_session)
-
-        if "retry_count" not in state:
-            state = {**state, "retry_count": 0}
+        state = _prepare_state(state)
 
         token = _ACTIVE_NODES.set(self._nodes)
         try:
@@ -287,9 +336,16 @@ class AgentGraph:
             # retry 1회 포함 시 retry_prep + router/cache_check/search/hydration/answer 재실행으로
             #   +6 노드, 합계 14 super-step.
             # 여유 2를 더해 16으로 설정한다.
+            # 세션은 configurable 로 per-run 주입(제안 0: 요청 격리).
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
-                config={"recursion_limit": 16},
+                config={
+                    "recursion_limit": 16,
+                    "configurable": {
+                        "data_session": data_session,
+                        "ai_session": ai_session,
+                    },
+                },
             )  # type: ignore[arg-type]
         finally:
             _ACTIVE_NODES.reset(token)
@@ -318,10 +374,7 @@ class AgentGraph:
                                    (FALLBACK/error 시 → answering 즉시)
             search node 완료 후  → answering "답변을 생성하고 있습니다..."
         """
-        self._nodes.prepare(data_session, ai_session)
-
-        if "retry_count" not in state:
-            state = {**state, "retry_count": 0}
+        state = _prepare_state(state)
 
         # 그래프 시작 전: routing 단계 진입 알림
         yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
@@ -341,7 +394,13 @@ class AgentGraph:
         try:
             async for chunk in AgentGraph._compiled_graph.astream(
                 state,
-                config={"recursion_limit": 16},  # 정상 8 + retry 최대 6 + 여유 2 = 16
+                config={
+                    "recursion_limit": 16,  # 정상 8 + retry 최대 6 + 여유 2 = 16
+                    "configurable": {
+                        "data_session": data_session,
+                        "ai_session": ai_session,
+                    },
+                },
             ):
                 node_name: str = next(iter(chunk))
                 node_updates: dict[str, Any] | None = chunk[node_name]

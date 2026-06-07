@@ -100,10 +100,14 @@ _MAP_RETRY_RADIUS_M: int = 3000
 
 
 class GraphNodes:
-    """AgentGraph 노드·엣지 구현.
+    """AgentGraph 노드·엣지 구현 (무상태).
 
-    인스턴스는 AgentGraph.__init__()에서 생성되며,
-    run()/stream() 진입마다 prepare()로 런타임 상태를 초기화한다.
+    인스턴스는 AgentGraph.__init__()에서 1회 생성되어 프로세스 내에서 공유된다.
+    제안 0(요청 격리): 요청별 가변 자원/상태를 인스턴스 속성으로 두지 않는다.
+      - DB 세션 → RunnableConfig `configurable` 로 per-run 주입 (노드 메서드 인자).
+      - node_path → AgentState 슬롯 (node_path_reducer 로 per-invoke 누적).
+      - 시작 시각 → AgentState["started_at"].
+    따라서 동시 요청이 같은 GraphNodes 를 공유해도 세션/경로 교차가 발생하지 않는다.
     """
 
     def __init__(
@@ -124,23 +128,6 @@ class GraphNodes:
         self._hydration = hydration or HydrationNode()
         self._cache_check = CacheCheckNode(redis=redis)
         self._cache_write = CacheWriteNode(redis=redis)
-
-        # 런타임 상태 — prepare()로 매 요청마다 초기화된다.
-        self.data_session: AsyncSession | None = None
-        self.ai_session: AsyncSession | None = None
-        self.node_path: list[str] = []
-        self._start: float = 0.0
-
-    def prepare(
-        self,
-        data_session: AsyncSession,
-        ai_session: AsyncSession,
-    ) -> None:
-        """요청 진입 시 런타임 상태를 초기화한다."""
-        self.data_session = data_session
-        self.ai_session = ai_session
-        self.node_path = []
-        self._start = time.monotonic()
 
     # ------------------------------------------------------------------
     # 노드 구현
@@ -166,20 +153,18 @@ class GraphNodes:
         """
         forced = state.get("forced_intent")
         if forced is not None:
-            self.node_path.append("router")
             logger.info(
                 "router.forced room=%s intent=%s",
                 state.get("room_id"),
                 forced.value,
             )
-            return {"intent": forced, "forced_intent": None}
+            return {"intent": forced, "forced_intent": None, "node_path": ["router"]}
         try:
             result = await self._router.classify(
                 state["message"],
                 history=state.get("history") or [],
             )
-            self.node_path.append("router")
-            update: dict[str, Any] = {"intent": result.intent}
+            update: dict[str, Any] = {"intent": result.intent, "node_path": ["router"]}
             if result.refined_query is not None:
                 update["refined_query"] = result.refined_query
             # post-filter는 추출 성공한 필드만 state로 전파한다.
@@ -208,10 +193,10 @@ class GraphNodes:
             return update
         except Exception as exc:
             logger.exception("router_node 실행 오류")
-            self.node_path.append("router_error")
             return {
                 "error": str(exc),
                 "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+                "node_path": ["router_error"],
             }
 
     async def retry_prep_node(self, state: AgentState) -> dict[str, Any]:
@@ -242,7 +227,6 @@ class GraphNodes:
             new_retry_count,
             intent.value if intent else None,
         )
-        self.node_path.append("retry_prep")
 
         # 모든 분기 공통 베이스 — 분기별 override 로 검색 슬롯/필터를 덮어쓴다.
         update: dict[str, Any] = {
@@ -250,6 +234,7 @@ class GraphNodes:
             "error": None,
             "retry_relaxed": True,
             "search_channels": RESET_CHANNELS,
+            "node_path": ["retry_prep"],
         }
 
         # 케이스 A: 강제 전환 대상 intent (SQL_SEARCH → VECTOR_SEARCH 등)
@@ -311,12 +296,12 @@ class GraphNodes:
         )
         return update
 
-    async def sql_node(self, state: AgentState) -> dict[str, Any]:
+    async def sql_node(
+        self, state: AgentState, data_session: AsyncSession
+    ) -> dict[str, Any]:
         """SqlAgent.search() 호출 — sql_results + search_channels 설정."""
-        assert self.data_session is not None
         try:
-            new_state = await self._sql.search(state, self.data_session)
-            self.node_path.append("sql_node")
+            new_state = await self._sql.search(state, data_session)
             sql_rows = new_state.get("sql_results") or []
             keyword = new_state.get("sql_keyword")
             logger.info(
@@ -342,22 +327,22 @@ class GraphNodes:
                 "sql_results": new_state.get("sql_results"),
                 "sql_keyword": keyword,
                 "search_channels": {SearchChannel.SQL: channel_data},
+                "node_path": ["sql_node"],
             }
         except Exception as exc:
             logger.exception("sql_node 실행 오류")
-            self.node_path.append("sql_error")
-            return {"error": str(exc)}
+            return {"error": str(exc), "node_path": ["sql_error"]}
 
-    async def vector_node(self, state: AgentState) -> dict[str, Any]:
+    async def vector_node(
+        self, state: AgentState, ai_session: AsyncSession
+    ) -> dict[str, Any]:
         """VectorAgent.search() 호출 — vector_results(메타데이터 only), refined_query 설정.
 
         hydration(원본 조회)은 후속 hydration_node 가 담당하므로
         ai_session 만 전달한다.
         """
-        assert self.ai_session is not None
         try:
-            new_state = await self._vector.search(state, self.ai_session)
-            self.node_path.append("vector_node")
+            new_state = await self._vector.search(state, ai_session)
             results = new_state.get("vector_results") or []
             logger.info(
                 "vector.results room=%s count=%d refined=%r",
@@ -368,6 +353,7 @@ class GraphNodes:
             ret: dict[str, Any] = {
                 "vector_results": new_state.get("vector_results"),
                 "refined_query": new_state.get("refined_query"),
+                "node_path": ["vector_node"],
             }
             # VectorAgent 가 search_channels 를 채웠으면 전파한다.
             # 빈 dict 는 reducer 의 리셋 시그널이므로 포함하지 않는다.
@@ -378,10 +364,11 @@ class GraphNodes:
             raise
         except Exception as exc:
             logger.exception("vector_node 실행 오류")
-            self.node_path.append("vector_error")
-            return {"error": str(exc)}
+            return {"error": str(exc), "node_path": ["vector_error"]}
 
-    async def hydration_node(self, state: AgentState) -> dict[str, Any]:
+    async def hydration_node(
+        self, state: AgentState, data_session: AsyncSession
+    ) -> dict[str, Any]:
         """검색 결과 service_id → 원본 데이터 통합 슬롯 매핑.
 
         sql_node / vector_node 직후, answer_node 직전에 실행된다.
@@ -392,29 +379,28 @@ class GraphNodes:
         세션:
             data_session — public_service_reservations 원본 조회 전용 (on_data_reader)
         """
-        assert self.data_session is not None
         try:
-            update = await self._hydration(state, self.data_session)
-            self.node_path.append("hydration_node")
+            update = await self._hydration(state, data_session)
             hydrated = update.get("hydrated_services") or []
             logger.info(
                 "hydration.done room=%s count=%d",
                 state.get("room_id"),
                 len(hydrated),
             )
+            update["node_path"] = ["hydration_node"]
             return update
         except Exception:
             logger.exception("hydration_node 실행 오류")
-            self.node_path.append("hydration_error")
-            return {"hydrated_services": []}
+            return {"hydrated_services": [], "node_path": ["hydration_error"]}
 
-    async def map_node(self, state: AgentState) -> dict[str, Any]:
+    async def map_node(
+        self, state: AgentState, data_session: AsyncSession
+    ) -> dict[str, Any]:
         """map_search 호출 — map_results 설정.
 
         lat/lng 미제공 시 검색을 생략하고 map_results=None을 반환한다.
         라우팅은 항상 이 노드를 거치므로 map 분기 처리는 내부에서 담당한다.
         """
-        assert self.data_session is not None
         lat = state.get("user_lat")
         lng = state.get("user_lng")
         if lat is not None and lng is not None:
@@ -422,10 +408,7 @@ class GraphNodes:
                 # MAP 0건 재시도 시 retry_prep_node 가 retry_radius_m 을 세팅한다.
                 # 없으면 기본 반경(1000m). ChannelData 에도 실제 사용 반경을 반영한다.
                 radius = state.get("retry_radius_m") or _MAP_DEFAULT_RADIUS_M
-                geojson = await map_search(
-                    self.data_session, lat, lng, radius_m=radius
-                )
-                self.node_path.append("map_node")
+                geojson = await map_search(data_session, lat, lng, radius_m=radius)
                 features = (geojson or {}).get("features") or []
                 channel_data = ChannelData(
                     kind=SearchKind.MAP,
@@ -447,17 +430,18 @@ class GraphNodes:
                 return {
                     "map_results": geojson,
                     "search_channels": {SearchChannel.MAP: channel_data},
+                    "node_path": ["map_node"],
                 }
             except Exception as exc:
                 logger.exception("map_node 실행 오류")
-                self.node_path.append("map_error")
-                return {"error": str(exc)}
+                return {"error": str(exc), "node_path": ["map_error"]}
         else:
             logger.warning("map_node — lat/lng 미제공, map_results=None 처리")
-            self.node_path.append("map_node")
-            return {"map_results": None}
+            return {"map_results": None, "node_path": ["map_node"]}
 
-    async def analytics_node(self, state: AgentState) -> dict[str, Any]:
+    async def analytics_node(
+        self, state: AgentState, data_session: AsyncSession
+    ) -> dict[str, Any]:
         """AnalyticsAgent.run() 호출 — analytics_results/group_by/metric 설정.
 
         집계는 on_data(data_session) 에서 수행한다. hydration 없이 answer_node 로 직행한다.
@@ -468,10 +452,8 @@ class GraphNodes:
             만일의 KeyError/DB 오류라도 미처리 500 으로 새지 않도록 예외를 잡아
             빈 결과 + error + node_path "analytics_error" 로 처리한다.
         """
-        assert self.data_session is not None
         try:
-            new_state = await self._analytics.run(state, self.data_session)
-            self.node_path.append("analytics_node")
+            new_state = await self._analytics.run(state, data_session)
             rows = new_state.get("analytics_results") or []
             logger.info(
                 "analytics.results room=%s group_by=%s metric=%s count=%d",
@@ -485,24 +467,26 @@ class GraphNodes:
                 "analytics_group_by": new_state.get("analytics_group_by"),
                 "analytics_metric": new_state.get("analytics_metric"),
                 "analytics_keyword": new_state.get("analytics_keyword"),
+                "node_path": ["analytics_node"],
             }
         except Exception as exc:
             logger.exception("analytics_node 실행 오류")
-            self.node_path.append("analytics_error")
             # error 를 세팅하면 _analytics_zero_hits 가 참이 되어 1회 재시도된다:
             # 결정적 error 라도 1회는 재시도해 일시 오류(DB 순단 등) 회복 기회를 준다.
             # 2회차는 retry_count 캡(self_correction_edge ①)으로 종료되므로 무한 루프 없음.
-            return {"analytics_results": [], "error": str(exc)}
+            return {
+                "analytics_results": [],
+                "error": str(exc),
+                "node_path": ["analytics_error"],
+            }
 
     async def answer_node(self, state: AgentState) -> dict[str, Any]:
         """AnswerAgent.answer() 호출 — answer, title 설정."""
         if state.get("error") and state.get("answer"):
-            self.node_path.append("answer_node")
-            return {}
+            return {"node_path": ["answer_node"]}
 
         try:
             new_state = await self._answer.answer(state)
-            self.node_path.append("answer_node")
             answer = new_state.get("answer") or ""
             logger.info(
                 "answer.generated room=%s len=%d", state.get("room_id"), len(answer)
@@ -526,31 +510,34 @@ class GraphNodes:
                 "answer": new_state.get("answer"),
                 "title": new_state.get("title"),
                 "service_cards": new_state.get("service_cards"),
+                "node_path": ["answer_node"],
             }
         except Exception as exc:
             logger.exception("answer_node 실행 오류")
-            self.node_path.append("answer_error")
             return {
                 "error": str(exc),
                 "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+                "node_path": ["answer_error"],
             }
 
     async def cache_check_node(self, state: AgentState) -> dict[str, Any]:
         """router 직후 cache 조회 — hit 시 state 복원, cache_hit 플래그 설정."""
         result = await self._cache_check(state)
         if result.get("cache_hit"):
-            self.node_path.append("cache_check_hit")
+            result["node_path"] = ["cache_check_hit"]
         else:
-            self.node_path.append("cache_check_miss")
+            result["node_path"] = ["cache_check_miss"]
         return result
 
     async def cache_write_node(self, state: AgentState) -> dict[str, Any]:
         """answer 직후 정상 결과만 캐싱 (skip 조건은 노드 내부 처리)."""
         result = await self._cache_write(state)
-        self.node_path.append("cache_write")
+        result["node_path"] = ["cache_write"]
         return result
 
-    async def search_persist_node(self, state: AgentState) -> dict[str, Any]:
+    async def search_persist_node(
+        self, state: AgentState, ai_session: AsyncSession
+    ) -> dict[str, Any]:
         """chat_search_queries + chat_search_results 일괄 적재 (best-effort 종단 노드).
 
         AgentState.search_channels 를 순회하여 두 테이블에 동일 트랜잭션으로 INSERT.
@@ -566,18 +553,17 @@ class GraphNodes:
           정상 흐름에서 UNIQUE 위반은 발생하지 않는다. 방어적 안전망으로만 사용된다.
 
         세션 공유:
-          self.ai_session 은 trace_node 와 공유한다. 정상 흐름(commit 성공)과
-          INSERT 실패 후 rollback 성공 시에는 trace_node 진입 전 세션이 clean 상태다.
-          단, rollback 자체가 실패하면(커넥션 단절 등) 세션이 dirty인 채 trace_node 로
-          넘어가 trace INSERT 도 실패할 수 있다. `_save_trace` 는 자체 except + rollback
-          핸들러를 보유하므로 워크플로우 결과에는 영향이 없으나, 두 관측 데이터가 동시
-          유실될 수 있다. 완전한 독립성이 필요해지면 trace_node 전용 세션 분리를 검토할 것.
+          ai_session 은 trace_node 와 공유한다(config 로 per-run 주입). 정상 흐름
+          (commit 성공)과 INSERT 실패 후 rollback 성공 시에는 trace_node 진입 전 세션이
+          clean 상태다. 단, rollback 자체가 실패하면(커넥션 단절 등) 세션이 dirty인 채
+          trace_node 로 넘어가 trace INSERT 도 실패할 수 있다. `_save_trace` 는 자체
+          except + rollback 핸들러를 보유하므로 워크플로우 결과에는 영향이 없으나, 두
+          관측 데이터가 동시 유실될 수 있다. 완전한 독립성이 필요해지면 trace_node 전용
+          세션 분리를 검토할 것.
         """
-        assert self.ai_session is not None
         channels: dict[str, ChannelData] = state.get("search_channels") or {}
         if not channels:
-            self.node_path.append("search_persist_skip")
-            return {}
+            return {"node_path": ["search_persist_skip"]}
 
         message_id = state["message_id"]
         query_rows: list[dict] = []
@@ -621,42 +607,44 @@ class GraphNodes:
 
         try:
             if query_rows:
-                await self.ai_session.execute(
+                await ai_session.execute(
                     text(_INSERT_SEARCH_QUERIES_SQL),
                     query_rows,
                 )
             if result_rows:
-                await self.ai_session.execute(
+                await ai_session.execute(
                     text(_INSERT_SEARCH_RESULTS_SQL),
                     result_rows,
                 )
-            await self.ai_session.commit()
-            self.node_path.append("search_persist")
+            await ai_session.commit()
             logger.info(
                 "search_persist.done message_id=%s queries=%d results=%d",
                 message_id,
                 len(query_rows),
                 len(result_rows),
             )
+            return {"node_path": ["search_persist"]}
         except Exception:
             logger.warning(
                 "search_persist 적재 실패 (message_id=%s)", message_id, exc_info=True
             )
             try:
-                await self.ai_session.rollback()
+                await ai_session.rollback()
             except Exception:
                 pass
-            self.node_path.append("search_persist_error")
+            return {"node_path": ["search_persist_error"]}
 
-        return {}
-
-    async def trace_node(self, state: AgentState) -> dict[str, Any]:
+    async def trace_node(
+        self, state: AgentState, ai_session: AsyncSession
+    ) -> dict[str, Any]:
         """chat_agent_traces 저장 (best-effort 종단 노드)."""
-        assert self.ai_session is not None
-        elapsed_ms = int((time.monotonic() - self._start) * 1000)
+        started_at = state.get("started_at") or time.monotonic()
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        # node_path: trace_node 자신은 아직 누적되지 않았으므로 state 의 누적분 + "trace".
+        node_path = list(state.get("node_path") or []) + ["trace"]
         trace_payload: dict[str, Any] = {
             "intent": state.get("intent"),
-            "node_path": list(self.node_path),
+            "node_path": node_path,
             "elapsed_ms": elapsed_ms,
             "error": state.get("error"),
         }
@@ -676,8 +664,8 @@ class GraphNodes:
                 "result_count": len(analytics_rows),
                 "result": analytics_rows,
             }
-        await _save_trace(self.ai_session, state["message_id"], trace_payload)
-        return {"trace": trace_payload}
+        await _save_trace(ai_session, state["message_id"], trace_payload)
+        return {"trace": trace_payload, "node_path": ["trace"]}
 
     # ------------------------------------------------------------------
     # 엣지 로직

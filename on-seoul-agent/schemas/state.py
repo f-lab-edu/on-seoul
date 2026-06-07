@@ -4,6 +4,24 @@ from typing import Annotated, Any, TypedDict
 from schemas.search import ChannelData, search_channels_reducer
 
 
+def node_path_reducer(
+    old: "list[str] | None",
+    new: "list[str] | None",
+) -> "list[str]":
+    """LangGraph reducer for AgentState.node_path — 노드 실행 경로 누적.
+
+    각 노드가 `{"node_path": ["<단계명>"]}` 부분 리스트를 반환하면 전체 경로에
+    append 누적된다. search_channels 와 달리 명시적 리셋(sentinel)을 두지 않는다 —
+    node_path 는 self-correction 재시도를 포함한 전체 실행 경로 관측이 목적이므로
+    재시도 시에도 리셋하지 않고 누적을 유지한다(예: sql_node → retry_prep → vector_node).
+
+    None / 빈 리스트는 no-op(기존 누적 유지).
+    """
+    if not new:
+        return old or []
+    return (old or []) + new
+
+
 class IntentType(str, Enum):
     SQL_SEARCH = "SQL_SEARCH"
     VECTOR_SEARCH = "VECTOR_SEARCH"
@@ -36,7 +54,9 @@ class AgentState(TypedDict):
     max_class_name: str | None  # 체육시설·문화행사·시설대관·교육·진료 중 하나
     area_name: str | None  # 서울 자치구명 (예: 강남구)
     service_status: str | None  # 접수중·예약마감·접수종료·예약일시중지·안내중 중 하나
-    payment_type: str | None  # 결제 유형 필터 ("무료"/"유료"). 무료=정확, 유료=접두 매칭
+    payment_type: (
+        str | None
+    )  # 결제 유형 필터 ("무료"/"유료"). 무료=정확, 유료=접두 매칭
     sql_results: list[dict[str, Any]] | None  # SQL Agent 결과
     sql_keyword: str | None  # SqlAgent가 LLM으로 추출한 키워드 (search_channels 적재용)
     vector_sub_intent: (
@@ -49,9 +69,13 @@ class AgentState(TypedDict):
     # 각 행은 {"group_value": ..., "count": ...} 형태 (distinct 는 count 생략/None).
     # 빈 결과: []. 미설정: None (다른 intent 경로 또는 미실행).
     analytics_results: list[dict[str, Any]] | None  # 집계 결과 행 (group_value/count)
-    analytics_group_by: str | None  # 집계 차원 (area_name/max_class_name/min_class_name/service_status)
+    analytics_group_by: (
+        str | None
+    )  # 집계 차원 (area_name/max_class_name/min_class_name/service_status)
     analytics_metric: str | None  # 집계 metric (count / distinct)
-    analytics_keyword: str | None  # AnalyticsAgent가 LLM으로 추출한 키워드 (trace 관측용)
+    analytics_keyword: (
+        str | None
+    )  # AnalyticsAgent가 LLM으로 추출한 키워드 (trace 관측용)
     # ─── Hydration (service_id → public_service_reservations 원본) ───
     # HydrationNode 가 검색 노드(sql/vector) 직후에 채우는 통합 슬롯.
     # AnswerAgent 등 후속 단계는 이 슬롯을 사용하여 검색 경로에 의존하지 않는다.
@@ -72,6 +96,14 @@ class AgentState(TypedDict):
     answer: str | None  # Answer Agent가 생성한 최종 답변
     title: str | None  # Answer Agent가 생성한 대화 제목 (title_needed=True일 때)
     trace: dict[str, Any] | None  # LangGraph 실행 메타데이터
+    # 노드 실행 경로 누적 (관측용). node_path_reducer 가 부분 리스트를 append 병합한다.
+    # GraphNodes 인스턴스 속성에서 state 로 이동(제안 0): 싱글톤 GraphNodes 가 요청별
+    # 가변 경로를 인스턴스에 들고 있으면 동시 요청 간 오염되므로 per-invoke 격리되는
+    # state 로 옮긴다. trace_node 가 이 값을 trace.node_path 로 적재한다.
+    node_path: Annotated[list[str], node_path_reducer]
+    # 그래프 실행 시작 시각 (time.monotonic()). 경과 시간(elapsed_ms) 산출용.
+    # routers/chat.py 의 초기 state 구성 시 주입되며 trace_node 가 읽는다.
+    started_at: float | None
     error: str | None  # 오류 메시지 (있을 경우)
     # LangGraph 자기 교정(Self-Correction) 루프 카운터.
     # answer가 비어 있거나 error가 있을 때 최대 1회 재검색을 허용한다.
