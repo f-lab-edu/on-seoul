@@ -58,6 +58,8 @@ def make_agent_state(**overrides: Any) -> AgentState:
         answer=None,
         title=None,
         trace=None,
+        node_path=[],
+        started_at=None,
         error=None,
         retry_count=0,
         retry_relaxed=False,

@@ -47,16 +47,19 @@ def _make_hit(
 
 
 def _make_nodes(ai_session: Any) -> GraphNodes:
-    """ai_session 이 주입된 GraphNodes 인스턴스를 반환한다."""
-    nodes = GraphNodes(
+    """GraphNodes 인스턴스를 반환한다.
+
+    제안 0 이후 GraphNodes 는 무상태이므로 세션은 인스턴스가 아니라 노드 메서드
+    인자로 전달한다. ai_session 인자는 호환을 위해 받지만 무시되며, 호출부가
+    search_persist_node(state, ai_session) 로 직접 주입한다.
+    """
+    return GraphNodes(
         router=MagicMock(),
         sql_agent=MagicMock(),
         vector_agent=MagicMock(),
         answer_agent=MagicMock(),
         analytics_agent=MagicMock(),
     )
-    nodes.ai_session = ai_session
-    return nodes
 
 
 def _make_session(execute_side_effect=None, commit_side_effect=None):
@@ -94,9 +97,9 @@ class TestSearchPersistNodeEmptyChannels:
         nodes = _make_nodes(session)
         state = _base_state(search_channels={})
 
-        result = await nodes.search_persist_node(state)
+        result = await nodes.search_persist_node(state, session)
 
-        assert result == {}
+        assert set(result) <= {"node_path"}
         session.execute.assert_not_called()
         session.commit.assert_not_called()
 
@@ -106,9 +109,9 @@ class TestSearchPersistNodeEmptyChannels:
         nodes = _make_nodes(session)
         state = _base_state(search_channels=None)
 
-        result = await nodes.search_persist_node(state)
+        result = await nodes.search_persist_node(state, session)
 
-        assert result == {}
+        assert set(result) <= {"node_path"}
         session.execute.assert_not_called()
 
     async def test_empty_channels_appends_skip_to_node_path(self):
@@ -116,9 +119,9 @@ class TestSearchPersistNodeEmptyChannels:
         nodes = _make_nodes(session)
         state = _base_state(search_channels={})
 
-        await nodes.search_persist_node(state)
+        result = await nodes.search_persist_node(state, session)
 
-        assert "search_persist_skip" in nodes.node_path
+        assert "search_persist_skip" in result["node_path"]
 
 
 class TestSearchPersistNodeInsertion:
@@ -133,9 +136,9 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        result = await nodes.search_persist_node(state)
+        result = await nodes.search_persist_node(state, session)
 
-        assert result == {}
+        assert set(result) <= {"node_path"}
         # queries INSERT (query_rows=3) + results INSERT (hits 없어서 result_rows=0 → skip)
         # execute 는 queries 한 번만 호출 (result_rows=0 이면 results INSERT 생략)
         calls = session.execute.call_args_list
@@ -155,7 +158,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         calls = session.execute.call_args_list
         assert len(calls) == 2  # queries + results
@@ -177,7 +180,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         calls = session.execute.call_args_list
         query_row = calls[0].args[1][0]
@@ -200,7 +203,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         calls = session.execute.call_args_list
         # queries INSERT 만 호출되어야 한다
@@ -217,7 +220,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(message_id=9999, search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         calls = session.execute.call_args_list
         query_row = calls[0].args[1][0]
@@ -239,7 +242,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         calls = session.execute.call_args_list
         query_row = calls[0].args[1][0]
@@ -262,7 +265,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         calls = session.execute.call_args_list
         query_row = calls[0].args[1][0]
@@ -281,7 +284,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         calls = session.execute.call_args_list
         assert len(calls) == 1
@@ -297,7 +300,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         calls = session.execute.call_args_list
         # sqlalchemy text() 객체를 str로 변환해서 비교
@@ -318,7 +321,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         session.commit.assert_called_once()
 
@@ -328,9 +331,9 @@ class TestSearchPersistNodeInsertion:
         channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        result = await nodes.search_persist_node(state, session)
 
-        assert "search_persist" in nodes.node_path
+        assert "search_persist" in result["node_path"]
 
 
 class TestSearchPersistNodeBestEffort:
@@ -341,9 +344,9 @@ class TestSearchPersistNodeBestEffort:
         channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
         state = _base_state(search_channels=channels)
 
-        result = await nodes.search_persist_node(state)
+        result = await nodes.search_persist_node(state, session)
 
-        assert result == {}
+        assert set(result) <= {"node_path"}
 
     async def test_execute_failure_calls_rollback(self):
         """execute 예외 시 rollback 이 호출된다."""
@@ -352,7 +355,7 @@ class TestSearchPersistNodeBestEffort:
         channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         session.rollback.assert_called_once()
 
@@ -363,9 +366,9 @@ class TestSearchPersistNodeBestEffort:
         channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
         state = _base_state(search_channels=channels)
 
-        result = await nodes.search_persist_node(state)
+        result = await nodes.search_persist_node(state, session)
 
-        assert result == {}
+        assert set(result) <= {"node_path"}
         session.rollback.assert_called_once()
 
     async def test_rollback_failure_is_swallowed(self):
@@ -377,8 +380,8 @@ class TestSearchPersistNodeBestEffort:
         state = _base_state(search_channels=channels)
 
         # 예외가 전파되지 않아야 한다
-        result = await nodes.search_persist_node(state)
-        assert result == {}
+        result = await nodes.search_persist_node(state, session)
+        assert set(result) <= {"node_path"}
 
     async def test_failure_appends_error_to_node_path(self):
         session = _make_session(execute_side_effect=RuntimeError("오류"))
@@ -386,9 +389,9 @@ class TestSearchPersistNodeBestEffort:
         channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        result = await nodes.search_persist_node(state, session)
 
-        assert "search_persist_error" in nodes.node_path
+        assert "search_persist_error" in result["node_path"]
 
     async def test_failure_logs_warning(self):
         """execute 실패 시 logger.warning 이 호출된다."""
@@ -398,7 +401,7 @@ class TestSearchPersistNodeBestEffort:
         state = _base_state(search_channels=channels)
 
         with patch("agents.nodes.logger") as mock_logger:
-            await nodes.search_persist_node(state)
+            await nodes.search_persist_node(state, session)
             mock_logger.warning.assert_called_once()
 
 
@@ -501,12 +504,11 @@ class TestSearchPersistNodeAtomicity:
         }
         state = _base_state(search_channels=channels)
 
-        result = await nodes.search_persist_node(state)
+        result = await nodes.search_persist_node(state, session)
 
-        assert result == {}
         assert session.execute.call_count == 2  # queries + results 시도
         session.rollback.assert_called_once()
-        assert "search_persist_error" in nodes.node_path
+        assert "search_persist_error" in result["node_path"]
 
     async def test_results_insert_failure_no_commit(self):
         """results INSERT 실패 시 commit 은 호출되지 않는다."""
@@ -527,7 +529,7 @@ class TestSearchPersistNodeAtomicity:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         session.commit.assert_not_called()
 
@@ -548,7 +550,7 @@ class TestSearchPersistNodeMultiChannelKinds:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         calls = session.execute.call_args_list
         # 모든 hits 가 없으므로 queries execute 1회만 호출된다.
@@ -580,7 +582,7 @@ class TestSearchPersistNodeMultiChannelKinds:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state)
+        await nodes.search_persist_node(state, session)
 
         calls = session.execute.call_args_list
         assert len(calls) == 2  # queries + results

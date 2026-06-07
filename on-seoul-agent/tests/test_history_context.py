@@ -67,10 +67,6 @@ async def test_router_node_passes_history_to_classify():
         analytics_agent=make_analytics_agent([])[0],
         redis=None,
     )
-    nodes.data_session = MagicMock()
-    nodes.ai_session = MagicMock()
-    nodes.node_path = []
-
     # classify 호출 인자를 캡처
     captured: dict = {}
     real_structured = router._llm.with_structured_output.return_value
@@ -92,6 +88,8 @@ async def test_router_node_passes_history_to_classify():
         message="그 중 무료인 것만",
         title_needed=False,
         intent=None,
+        forced_intent=None,
+        retry_radius_m=None,
         user_lat=None,
         user_lng=None,
         refined_query=None,

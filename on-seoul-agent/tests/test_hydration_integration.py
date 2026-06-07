@@ -55,7 +55,7 @@ class TestHydrationNodeExceptionHandler:
         # hydration 예외에도 불구하고 그래프가 정상 종료되어야 한다
         assert result["answer"] == "답변"
         # hydration_error node_path 기록 확인
-        assert "hydration_error" in graph._nodes.node_path
+        assert "hydration_error" in result["node_path"]
 
     async def test_hydration_node_error_path_sets_empty_hydrated_services(self):
         """GraphNodes.hydration_node 예외 핸들러가 hydrated_services=[] 를 반환한다."""
@@ -63,7 +63,6 @@ class TestHydrationNodeExceptionHandler:
 
         _, data_session = make_sql_agent([])
         graph = AgentGraph(answer_agent=make_answer_agent())
-        graph._nodes.prepare(data_session, make_ai_session())
         graph._nodes._hydration = bad_hydration
 
         state = make_agent_state(
@@ -71,10 +70,10 @@ class TestHydrationNodeExceptionHandler:
             sql_results=[{"service_id": "S1"}],
         )
 
-        result = await graph._nodes.hydration_node(state)
+        result = await graph._nodes.hydration_node(state, data_session)
 
-        assert result == {"hydrated_services": []}
-        assert "hydration_error" in graph._nodes.node_path
+        assert result["hydrated_services"] == []
+        assert "hydration_error" in result["node_path"]
 
 
 # ---------------------------------------------------------------------------
@@ -86,9 +85,7 @@ class TestRetryPrepNodeResetsHydratedServices:
     """retry_prep_node 가 hydrated_services 를 None 으로 리셋하는지 검증."""
 
     async def test_hydrated_services_reset_to_none(self):
-        _, data_session = make_sql_agent([])
         graph = AgentGraph(answer_agent=make_answer_agent())
-        graph._nodes.prepare(data_session, make_ai_session())
 
         stale_state = make_agent_state(
             retry_count=0,

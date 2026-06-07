@@ -22,7 +22,6 @@ def _make_nodes(returned_state: AgentState) -> GraphNodes:
     answer = MagicMock()
     answer.answer = AsyncMock(return_value=returned_state)
     nodes._answer = answer
-    nodes.node_path = []
     return nodes
 
 
@@ -128,14 +127,14 @@ async def test_error_answer_fast_path_skips_observation():
     answer = MagicMock()
     answer.answer = AsyncMock(side_effect=AssertionError("answer() must not be called"))
     nodes._answer = answer
-    nodes.node_path = []
 
     with patch("agents.nodes.logger.warning") as mock_warning:
         result = await nodes.answer_node(state)
 
     answer.answer.assert_not_awaited()
     assert _count_cards_empty_warnings(mock_warning) == 0
-    assert result == {}
+    # fast-path 는 answer/title/service_cards 데이터를 만들지 않는다 (node_path 만 누적).
+    assert set(result) <= {"node_path"}
 
 
 @pytest.mark.asyncio

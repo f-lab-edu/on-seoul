@@ -307,9 +307,10 @@ class TestAnalyticsRoute:
         # 예외에도 answer_node 가 실행되어 답변이 채워진다.
         assert result["answer"] == "그래도 답변"
         # node_path 에 analytics_error 가 기록되고 정상 analytics_node 는 없다.
-        assert "analytics_error" in graph._nodes.node_path
-        assert "analytics_node" not in graph._nodes.node_path
-        assert "answer_node" in graph._nodes.node_path
+        path = result["node_path"]
+        assert "analytics_error" in path
+        assert "analytics_node" not in path
+        assert "answer_node" in path
         # trace 의 analytics 블록은 빈 결과로 적재된다 (intent==ANALYTICS 유지).
         assert result["trace"]["analytics"]["result_count"] == 0
 
@@ -882,13 +883,19 @@ class TestSelfCorrectionInfiniteLoopRegression:
 
         from agents.graph import _ACTIVE_NODES
 
-        graph._nodes.prepare(data_session, _ai_session())
-        state = {**_state(), "retry_count": 0}
+        state = {**_state(), "retry_count": 0, "node_path": [], "started_at": None}
 
         token = _ACTIVE_NODES.set(graph._nodes)
         try:
             result = await AgentGraph._compiled_graph.ainvoke(
-                state, config={"recursion_limit": 8}
+                state,
+                config={
+                    "recursion_limit": 8,
+                    "configurable": {
+                        "data_session": data_session,
+                        "ai_session": _ai_session(),
+                    },
+                },
             )
         finally:
             _ACTIVE_NODES.reset(token)
@@ -896,8 +903,8 @@ class TestSelfCorrectionInfiniteLoopRegression:
         # fallback answer 가 설정되어 정상 종료된다.
         assert result["answer"], "fallback answer 가 비어있으면 안 된다"
         # router_error 는 1회만 기록된다 (무한 사이클 없음).
-        assert graph._nodes.node_path.count("router_error") == 1, (
-            f"router_error 가 1회 초과 기록됨: {graph._nodes.node_path}"
+        assert result["node_path"].count("router_error") == 1, (
+            f"router_error 가 1회 초과 기록됨: {result['node_path']}"
         )
 
     async def test_retry_prep_node_increments_retry_count_and_clears_results(self):
@@ -906,9 +913,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
         재시도 제어는 retry_count 단일 필드로 자기 완결되며,
         _node_path 기반 재진입 감지에 의존하지 않는다.
         """
-        _, data_session = _sql_agent([])
         graph = AgentGraph(answer_agent=_answer_agent())
-        graph._nodes.prepare(data_session, _ai_session())
 
         stale_state: AgentState = {
             **_state(),
@@ -930,8 +935,8 @@ class TestSelfCorrectionInfiniteLoopRegression:
         assert result["map_results"] is None
         assert result["refined_query"] is None
         assert result["error"] is None
-        # node_path 기록
-        assert "retry_prep" in graph._nodes.node_path
+        # node_path 기록 (반환 dict 누적분)
+        assert "retry_prep" in result["node_path"]
 
     async def test_self_correction_edge_skips_retry_when_answer_present(self):
         """수정(Phase 17): answer가 있으면 error 유무와 무관하게 trace_node로 진행한다.
@@ -1023,9 +1028,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
 
     async def test_retry_prep_node_relaxes_payment_and_sets_flag(self):
         """retry_prep_node가 payment_type을 드롭하고 retry_relaxed=True를 세팅한다."""
-        _, data_session = _sql_agent([])
         graph = AgentGraph(answer_agent=_answer_agent())
-        graph._nodes.prepare(data_session, _ai_session())
 
         stale: AgentState = {
             **_state(),
@@ -1089,7 +1092,6 @@ class TestDirectedSelfCorrectionRetry:
     async def test_retry_prep_sql_forces_vector_and_clears_filters(self):
         """SQL_SEARCH 0건 재시도 → forced_intent=VECTOR_SEARCH, 정형 필터 전부 None."""
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
         stale: AgentState = {
             **_state(),
             "intent": IntentType.SQL_SEARCH,
@@ -1106,7 +1108,7 @@ class TestDirectedSelfCorrectionRetry:
         for f in ("max_class_name", "area_name", "service_status", "payment_type"):
             assert result[f] is None
         assert result["retry_relaxed"] is True
-        assert "retry_prep" in nodes.node_path
+        assert "retry_prep" in result["node_path"]
 
     async def test_router_node_honors_forced_intent_without_classify(self):
         """forced_intent 가 있으면 classify 미호출, intent 반환 + forced_intent=None 소비."""
@@ -1120,7 +1122,7 @@ class TestDirectedSelfCorrectionRetry:
         assert update["intent"] == IntentType.VECTOR_SEARCH
         assert update["forced_intent"] is None
         structured.ainvoke.assert_not_called()
-        assert "router" in graph._nodes.node_path
+        assert "router" in update["node_path"]
 
     async def test_e2e_sql_zero_hits_switches_to_vector(self):
         """SQL_SEARCH 0건 시나리오 → retry_prep → router(forced) → vector_node 경로 전환."""
@@ -1150,7 +1152,7 @@ class TestDirectedSelfCorrectionRetry:
                 ai_session=ai_session,
             )
 
-        path = graph._nodes.node_path
+        path = result["node_path"]
         assert "sql_node" in path
         assert "retry_prep" in path
         assert "vector_node" in path
@@ -1203,7 +1205,6 @@ class TestDirectedSelfCorrectionRetry:
         질의여도 곧장 실효성 있는 service_status 를 드롭해야 한다.
         """
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
         state = _state(
             intent=IntentType.ANALYTICS,
             retry_count=0,
@@ -1223,7 +1224,6 @@ class TestDirectedSelfCorrectionRetry:
 
     async def test_retry_prep_analytics_drops_area_when_no_status(self):
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
         state = _state(
             intent=IntentType.ANALYTICS,
             retry_count=0,
@@ -1237,7 +1237,6 @@ class TestDirectedSelfCorrectionRetry:
 
     async def test_retry_prep_analytics_no_filter_to_drop(self):
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
         state = _state(intent=IntentType.ANALYTICS, retry_count=0)
         result = await nodes.retry_prep_node(state)
         # 드롭할 필터 없음 — analytics_results 만 리셋
@@ -1284,7 +1283,7 @@ class TestDirectedSelfCorrectionRetry:
                 ai_session=_ai_session(),
             )
 
-        path = graph._nodes.node_path
+        path = result["node_path"]
         assert path.count("analytics_node") == 2, f"analytics_node 2회여야 함: {path}"
         assert "retry_prep" in path
         assert result["retry_count"] == 1
@@ -1354,7 +1353,6 @@ class TestDirectedSelfCorrectionRetry:
 
     async def test_retry_prep_map_expands_radius(self):
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
         state = _state(
             intent=IntentType.MAP,
             retry_count=0,
@@ -1367,17 +1365,16 @@ class TestDirectedSelfCorrectionRetry:
 
     async def test_map_node_uses_retry_radius(self):
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
+        data_session = MagicMock()
         geojson = {"type": "FeatureCollection", "features": []}
         with patch(
             "agents.nodes.map_search", AsyncMock(return_value=geojson)
         ) as mock_map:
             update = await nodes.map_node(
-                _state(user_lat=37.5, user_lng=127.0, retry_radius_m=3000)
+                _state(user_lat=37.5, user_lng=127.0, retry_radius_m=3000),
+                data_session,
             )
-        mock_map.assert_awaited_once_with(
-            nodes.data_session, 37.5, 127.0, radius_m=3000
-        )
+        mock_map.assert_awaited_once_with(data_session, 37.5, 127.0, radius_m=3000)
         # ChannelData query_text/parameters 에 확장 반경(3000m)이 반영되어야 한다.
         ch = next(iter(update["search_channels"].values()))
         assert "r=3000m" in ch["query"]["query_text"]
@@ -1385,7 +1382,7 @@ class TestDirectedSelfCorrectionRetry:
 
     async def test_map_node_default_radius_when_no_retry(self):
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
+        data_session = MagicMock()
         geojson = {
             "type": "FeatureCollection",
             "features": [{"type": "Feature", "properties": {"service_id": "M1"}}],
@@ -1393,10 +1390,10 @@ class TestDirectedSelfCorrectionRetry:
         with patch(
             "agents.nodes.map_search", AsyncMock(return_value=geojson)
         ) as mock_map:
-            update = await nodes.map_node(_state(user_lat=37.5, user_lng=127.0))
-        mock_map.assert_awaited_once_with(
-            nodes.data_session, 37.5, 127.0, radius_m=1000
-        )
+            update = await nodes.map_node(
+                _state(user_lat=37.5, user_lng=127.0), data_session
+            )
+        mock_map.assert_awaited_once_with(data_session, 37.5, 127.0, radius_m=1000)
         # ChannelData query_text 에 실제 반경 반영
         ch = next(iter(update["search_channels"].values()))
         assert "r=1000m" in ch["query"]["query_text"]
@@ -1424,7 +1421,7 @@ class TestDirectedSelfCorrectionRetry:
                 ai_session=_ai_session(),
             )
 
-        path = graph._nodes.node_path
+        path = result["node_path"]
         assert path.count("map_node") == 2, f"map_node 2회여야 함: {path}"
         assert "retry_prep" in path
         assert result["retry_count"] == 1
@@ -1573,15 +1570,13 @@ class TestVectorNodeRateLimitPropagation:
 
     def _make_nodes(self, vector_agent: VectorAgent) -> GraphNodes:
         """GraphNodes 인스턴스를 최소 의존성으로 생성한다."""
-        nodes = GraphNodes(
+        return GraphNodes(
             router=_router(IntentType.VECTOR_SEARCH),
             sql_agent=MagicMock(),
             vector_agent=vector_agent,
             answer_agent=_answer_agent(),
             analytics_agent=MagicMock(),
         )
-        nodes.prepare(data_session=MagicMock(), ai_session=_ai_session())
-        return nodes
 
     async def test_vector_node_reraises_rate_limit_exception(self):
         """VectorAgent.search()가 RateLimitException을 던지면 vector_node가 re-raise한다."""
@@ -1593,7 +1588,9 @@ class TestVectorNodeRateLimitPropagation:
         nodes = self._make_nodes(vector_agent)
 
         with pytest.raises(RateLimitException, match="rate limit 소진"):
-            await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
+            await nodes.vector_node(
+                _state(intent=IntentType.VECTOR_SEARCH), _ai_session()
+            )
 
     async def test_vector_node_does_not_return_error_dict_on_rate_limit(self):
         """RateLimitException 발생 시 {"error": ...} dict를 반환하지 않고 예외를 전파한다."""
@@ -1606,7 +1603,9 @@ class TestVectorNodeRateLimitPropagation:
 
         raised = False
         try:
-            await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
+            await nodes.vector_node(
+                _state(intent=IntentType.VECTOR_SEARCH), _ai_session()
+            )
         except RateLimitException:
             raised = True
 
@@ -1620,7 +1619,9 @@ class TestVectorNodeRateLimitPropagation:
         )
 
         nodes = self._make_nodes(vector_agent)
-        result = await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
+        result = await nodes.vector_node(
+            _state(intent=IntentType.VECTOR_SEARCH), _ai_session()
+        )
 
         assert "error" in result
         assert "일반 오류" in result["error"]
