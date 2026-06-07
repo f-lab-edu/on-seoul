@@ -66,14 +66,16 @@ flowchart TD
 
 ### 3-1. Router Agent — 의도 분류
 
-LCEL `prompt | llm.with_structured_output` 으로 사용자 메시지를 `IntentType` 4종 중 하나로 분류한다.
+LCEL `prompt | llm.with_structured_output` 으로 사용자 메시지를 `IntentType` 5종(`SQL_SEARCH` / `VECTOR_SEARCH` / `MAP` / `ANALYTICS` / `FALLBACK`) 중 하나로 분류한다. 분류와 동시에 후속 검색·캐시 조회에 필요한 post-filter 메타데이터를 단일 LLM 호출로 함께 추출한다.
 
 | 입출력 | 필드 |
 |---|---|
-| **in** | `message` |
-| **out** | `intent` |
+| **in** | `message`, `history` (직전 N턴, 선택) |
+| **out** | `intent`, `reasoning`(CoT 사고 정리 — 검색 로직 미사용, 관측 전용), `refined_query`, `max_class_name`, `area_name`, `service_status`, `payment_type`, `vector_sub_intent` |
 
-**예외 처리**: `_router_node` 내부에서 예외가 발생하면 `error`(예외 메시지)와 `answer`(fallback 안내 메시지)를 모두 state에 주입하고, `_node_path` 에 `"router_error"` 를 append한다. 후속 self-correction 엣지는 `answer`가 비어있지 않으므로 즉시 `trace_node` 로 종료한다 (무한루프 방지).
+산출 필드는 `router_agent._IntentOutput`(Pydantic) 스키마를 따른다. `max_class_name` / `area_name` / `service_status` / `payment_type` / `vector_sub_intent` 는 `field_validator` 로 도메인 화이트리스트(자치구 25종, 상태 5종, 카테고리 5종, `payment_type` 은 `"무료"`/`"유료"` 정규값) 밖 값을 `None` 으로 정규화하여 cache key 오염·SQL 빈 결과를 차단한다. `payment_type` 은 SQL_SEARCH 경로에서 `sql_search` 의 결제 유형 필터로 전달되며(유료는 `"유료%"` 접두 매칭), `cache_check` 키에도 포함된다.
+
+**예외 처리**: `router_node` 내부에서 예외가 발생하면 `error`(예외 메시지)와 `answer`(fallback 안내 메시지)를 모두 state에 주입하고, `node_path` 에 `"router_error"` 를 append한다. 후속 self-correction 엣지는 `answer`가 비어있지 않으므로 즉시 종단 체인으로 종료한다 (무한루프 방지).
 
 ### 3-2. SQL Agent — 정형 데이터 조회
 
@@ -312,12 +314,34 @@ result = await graph.run(
 
 각 에이전트는 생성자 주입으로 교체 가능하여 단위 테스트에서 Mock으로 대체한다. `CompiledStateGraph`는 `ClassVar` 로 캐시되어 프로세스당 1회만 컴파일된다.
 
+### 7-0. 상태 → 엣지 제어 메커니즘
+
+LangGraph는 **데이터(상태)와 제어(엣지)를 분리**한다. 노드는 `AgentState`(§5)를 읽어 부분 업데이트 dict를 반환할 뿐 다음 노드를 직접 지목하지 않는다. 노드 간 전이는 그래프 빌드(`agents/graph.py`의 `_build_shared_graph`)에서 두 종류의 엣지로 선언된다.
+
+- **무조건 엣지** `add_edge(source, target)` — 분기 없이 항상 다음 노드로 진행한다. (예: `router_node → cache_check_node`, `sql_node → hydration_node`, `cache_write_node → search_persist_node → trace_node`.)
+- **조건부 엣지** `add_conditional_edges(source, 분기함수, 매핑dict)` — 분기 함수가 `state`를 읽어 **다음 노드 키(문자열)** 를 반환하고, 매핑 dict가 그 키를 실제 노드로 해석한다.
+
+현재 조건부 엣지는 **2개**뿐이다.
+
+| source | 분기 함수 | 제어 신호(읽는 state 필드) | 분기 |
+|---|---|---|---|
+| `cache_check_node` | `post_cache_check` | `cache_hit`, (miss 시) `intent`·`error`·`answer` | `cache_hit=True` → `search_persist_node`(검색 우회). miss면 내부에서 `route_by_intent` 위임 — `intent` 로 sql/vector/map/analytics 분기, 그 외 또는 `error+answer` 채워짐 → `answer_node`. |
+| `answer_node` | `self_correction_edge` | `retry_count`, `answer`, `intent`, `*_results` | 재시도 필요 시 `retry_prep_node`, 아니면 `end_normal`(=`cache_write_node`). 평가 순서는 §7-2. |
+
+분기 함수(`post_cache_check` / `route_by_intent` / `self_correction_edge`)는 모두 **state만 읽는 순수 함수**로 부수효과가 없다. 제어 신호는 전부 노드가 앞서 state에 써 둔 필드(`intent`·`cache_hit`·`answer`·`retry_count`·`sql_results`/`vector_results`/`analytics_results`/`map_results` 등)이며, 분기 함수는 이를 판독만 한다.
+
+구현상 분기 함수와 노드는 모듈 수준 dispatch 함수(`_dispatch_route_by_intent`·`_dispatch_self_correction_edge`·`_dispatch_post_cache_check` 등)로 그래프에 등록되고, 실제 호출 대상 `GraphNodes` 인스턴스는 `_ACTIVE_NODES` ContextVar로 조회한다 — `CompiledStateGraph → AgentGraph` 순환 참조를 회피하기 위함이다.
+
+이 두 분기는 §2 mermaid 다이어그램의 `CACHE_CHECK` 와 `SELF_CORR` 노드로 시각화되어 있다.
+
 ### 7-1. 조건부 엣지
 
-| 엣지 | 분기 함수 | 동작 |
+| 엣지 | 분기 함수 (graph 등록명) | 동작 |
 |---|---|---|
-| `router_node → ?` | `_route_by_intent` | `intent` 값으로 다음 노드 결정 (`SQL_SEARCH`→sql, `VECTOR_SEARCH`→vector, `MAP`→map, `ANALYTICS`→analytics, `FALLBACK`/그 외→answer). router 예외 시 `error + answer` 가 채워져 있으면 `answer_node` 로 단락. `MAP` 의 lat/lng 미제공 처리는 `map_node` 내부에서 담당한다. |
-| `answer_node → ?` | `_self_correction_edge` | `not answer.strip() and retry_count == 0` 이면 `router_node` 재진입, 아니면 `trace_node` 로 진행. |
+| `cache_check_node → ?` | `post_cache_check` (`_dispatch_post_cache_check`) | `cache_hit=True` 면 `search_persist_node` 로 단락(검색 전부 우회, 종단 체인 일관성 유지). miss면 `route_by_intent` 에 위임하여 `intent` 로 분기 (`SQL_SEARCH`→sql, `VECTOR_SEARCH`→vector, `MAP`→map, `ANALYTICS`→analytics, `FALLBACK`/그 외→answer). router 예외로 `error + answer` 가 채워져 있으면 `answer_node` 로 단락. `MAP` 의 lat/lng 미제공 처리는 `map_node` 내부에서 담당한다. |
+| `answer_node → ?` | `self_correction_edge` (`_dispatch_self_correction_edge`) | §7-2의 평가 순서(① `retry_count!=0` 종료 → ② 빈 답변 → ③ intent별 0건)에 따라 `retry_prep_node`(재시도) 또는 `end_normal`(=`cache_write_node`)을 반환한다. 상세는 §7-2 참조. |
+
+> 분기 함수의 실제 메서드명은 `agents/nodes.py` 의 `post_cache_check` / `route_by_intent` / `self_correction_edge` 이며, `agents/graph.py` 가 동명의 모듈 수준 dispatch 함수(`_dispatch_*`)로 래핑하여 `add_conditional_edges` 에 등록한다.
 
 ### 7-2. Self-Correction 사이클 (방향성 재시도)
 
@@ -414,6 +438,7 @@ answer_node → [self_correction_edge]
 | Phase 18 | 원본 hydration 도입 | `tools/hydrate_services` 신설, VectorAgent에서 RRF 후 `public_service_reservations` 조회. 답변 컨텍스트가 항상 최신 원본 값을 사용하도록 변경. `AnswerAgent._normalize`의 metadata 언팩 분기 제거. |
 | Phase 19 | 검색 채널 적재 (chat-search-persistence) | `chat_search_queries` + `chat_search_results` 두 테이블 도입. `AgentState.search_channels: dict[str, ChannelData]` 필드(reducer 적용) + 종단 `search_persist_node` 신설. sql/vector/map 노드가 채널별 `ChannelData(kind, query, hits)` 를 채우고, `retry_prep_node` 가 재시도 시 `search_channels = {}` 리셋. cache hit 경로도 `search_persist_node` 경유로 종단 체인 일관성 유지. `recursion_limit` 10 → 15 상향. |
 | 2026-05-31 | ANALYTICS intent 신설 (Phase A-E) | `analytics_search` 도구(`tools/analytics_search.py`) 신설 — GROUP BY COUNT / SELECT DISTINCT 집계, 차원 화이트리스트 4종, 전 필터값 bind 파라미터. `AnalyticsAgent`(`agents/analytics_agent.py`) 신설 — LLM 구조화 추출 후 `analytics_search` 호출, hydration 생략. `AgentState`에 `analytics_results` / `analytics_group_by` / `analytics_metric` / `analytics_keyword` 필드 추가. Router에 ANALYTICS 분류 기준 + 경계 케이스 few-shot 추가. Answer Agent에 intent별 2-tier 프롬프트 조립 구조 도입 (Tier 1 정적 캐시, Tier 2 런타임 조건부 조립). AI 서비스 전체. |
+| 2026-06-06 | docs | 문서 정합성 정정(§3-1 IntentType 5종 + `_IntentOutput` 산출 필드 reflect, `_router_node`/`_route_by_intent`/`_self_correction_edge` → 실제 심볼명·`_dispatch_*` 등록명으로 drift 정정, §7-1↔§7-2 self_correction_edge 평가 순서 정합) + §7-0 상태기반 엣지 제어(데이터/제어 분리, 조건부 엣지 2개, `_ACTIVE_NODES` ContextVar) 설명 보강. |
 | 2026-06-05 | 방향성 self-correction 재시도 | 재시도가 "router 재분류"(완화)에서 "방향성 전환/완화"로 강화. `AgentState`에 `forced_intent` / `retry_radius_m` 추가. `retry_prep_node` intent별 분기: SQL_SEARCH→VECTOR_SEARCH 강제 전환(레지스트리 `_RETRY_FALLBACK_INTENT`), ANALYTICS 제약 큰 effective 필터 1개 드롭(`_ANALYTICS_DROP_ORDER`=status→area, max_class_name 유지, analytics_keyword는 LLM 재추출이라 제외), MAP 반경 확장(`_MAP_RETRY_RADIUS_M=3000`). `self_correction_edge` 트리거 평가 순서 명문화 + ANALYTICS/MAP 0건 트리거 추가(`_analytics_zero_hits`/`_map_zero_hits`). `router_node` 가 `forced_intent` honor 후 즉시 소비(1회성). `stream()` 재시도 진입 시 `re_searching` progress 1회 emit + 진행 플래그 리셋. 1회 캡·`recursion_limit=16` 유지. |
 
 `AgentState` 입출력 규약을 유지하므로 각 Agent 클래스(`router_agent.py`, `sql_agent.py`, `vector_agent.py`, `answer_agent.py`)는 수정 없이 재사용된다. `agents/workflow.py` (LCEL)는 레거시로 유지된다.
