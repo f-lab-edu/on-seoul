@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from schemas.state import AgentState, IntentType
+from tests.helpers import run_graph
 
 
 @pytest.fixture
@@ -389,7 +390,8 @@ class TestGraphRouting:
                 answer_agent=answer_agent,
                 redis=AsyncMock(),
             )
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 state,
                 data_session=data_session,
                 ai_session=ai_session,

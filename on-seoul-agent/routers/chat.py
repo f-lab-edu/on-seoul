@@ -23,7 +23,6 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from agents.graph import AgentGraph
-from core.database import ai_session_ctx, data_session_ctx
 from core.exceptions import RateLimitException
 from core.redis import get_redis
 from schemas.chat import ChatRequest
@@ -131,47 +130,44 @@ async def _stream(
     )
 
     try:
-        async with data_session_ctx() as data_session, ai_session_ctx() as ai_session:
-            async for event_type, data in graph.stream(
-                state,
-                data_session=data_session,
-                ai_session=ai_session,
-            ):
-                if event_type == "progress":
-                    yield sse_frame("progress", data)
+        # 제안 0-6: DB 노드가 세션을 노드 내부에서 acquire-use-release 하므로 여기서
+        # 세션 스코프를 잡지 않는다. answer LLM 스트리밍 동안 커넥션을 점유하지 않는다.
+        async for event_type, data in graph.stream(state):
+            if event_type == "progress":
+                yield sse_frame("progress", data)
 
-                elif event_type == "result":
-                    result = data
-                    intent = result.get("intent")
-                    payload = {
-                        "message_id": result["message_id"],
-                        "answer": result.get("answer") or "",
-                        "intent": intent.value if intent is not None else None,
-                        "title": result.get("title"),
-                        "cache_hit": bool(result.get("cache_hit")),
-                        "service_cards": result.get("service_cards") or [],
-                    }
-                    if result.get("error"):
-                        logger.error(
-                            "chat.workflow_error room=%s intent=%s error=%s",
-                            result.get("room_id"),
-                            intent,
-                            result["error"],
-                        )
-                        payload["error"] = "서비스 처리 중 오류가 발생했습니다."
-                        # 에러 시 부분 결과 카드는 노출하지 않는다 —
-                        # 에러 메시지 + 정상 카드 조합으로 인한 UI 혼란 방지.
-                        payload["service_cards"] = []
-                        yield sse_frame("workflow_error", payload)
-                    else:
-                        logger.info(
-                            "chat.final room=%s intent=%s cache_hit=%s answer_len=%d",
-                            result.get("room_id"),
-                            intent.value if intent is not None else None,
-                            payload["cache_hit"],
-                            len(payload["answer"]),
-                        )
-                        yield sse_frame("final", payload)
+            elif event_type == "result":
+                result = data
+                intent = result.get("intent")
+                payload = {
+                    "message_id": result["message_id"],
+                    "answer": result.get("answer") or "",
+                    "intent": intent.value if intent is not None else None,
+                    "title": result.get("title"),
+                    "cache_hit": bool(result.get("cache_hit")),
+                    "service_cards": result.get("service_cards") or [],
+                }
+                if result.get("error"):
+                    logger.error(
+                        "chat.workflow_error room=%s intent=%s error=%s",
+                        result.get("room_id"),
+                        intent,
+                        result["error"],
+                    )
+                    payload["error"] = "서비스 처리 중 오류가 발생했습니다."
+                    # 에러 시 부분 결과 카드는 노출하지 않는다 —
+                    # 에러 메시지 + 정상 카드 조합으로 인한 UI 혼란 방지.
+                    payload["service_cards"] = []
+                    yield sse_frame("workflow_error", payload)
+                else:
+                    logger.info(
+                        "chat.final room=%s intent=%s cache_hit=%s answer_len=%d",
+                        result.get("room_id"),
+                        intent.value if intent is not None else None,
+                        payload["cache_hit"],
+                        len(payload["answer"]),
+                    )
+                    yield sse_frame("final", payload)
 
     except RateLimitException:
         logger.warning(

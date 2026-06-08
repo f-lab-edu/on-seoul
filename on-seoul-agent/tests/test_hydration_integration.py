@@ -21,6 +21,7 @@ from tests.helpers import (
     make_answer_agent,
     make_router,
     make_sql_agent,
+    patch_node_sessions,
 )
 
 
@@ -46,11 +47,10 @@ class TestHydrationNodeExceptionHandler:
         # GraphNodes 의 _hydration 을 예외 던지는 callable 로 교체
         graph._nodes._hydration = bad_hydration
 
-        result = await graph.run(
-            make_agent_state(intent=IntentType.SQL_SEARCH),
-            data_session=data_session,
-            ai_session=make_ai_session(),
-        )
+        with patch_node_sessions(
+            data_session=data_session, ai_session=make_ai_session()
+        ):
+            result = await graph.run(make_agent_state(intent=IntentType.SQL_SEARCH))
 
         # hydration 예외에도 불구하고 그래프가 정상 종료되어야 한다
         assert result["answer"] == "답변"
@@ -70,7 +70,9 @@ class TestHydrationNodeExceptionHandler:
             sql_results=[{"service_id": "S1"}],
         )
 
-        result = await graph._nodes.hydration_node(state, data_session)
+        # 노드 로컬 세션(0-6): hydration_node 는 data_session_ctx 로 세션을 잡는다.
+        with patch_node_sessions(data_session=data_session):
+            result = await graph._nodes.hydration_node(state)
 
         assert result["hydrated_services"] == []
         assert "hydration_error" in result["node_path"]
@@ -160,7 +162,9 @@ class TestCacheCheckNodeHydratedServicesRestore:
             result = await node(self._base_state())
 
         assert result["cache_hit"] is True
-        assert result["hydrated_services"] is None  # snap.get("hydrated_services") → None
+        assert (
+            result["hydrated_services"] is None
+        )  # snap.get("hydrated_services") → None
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,10 @@ _on_ai_engine = create_async_engine(
     # 요청에서 해당 연결을 재사용하기 전에 살아있는지 확인해 stale 연결을 방지한다.
     pool_pre_ping=True,
     pool_recycle=300,  # 5분 이상 유휴 연결 재생성 (네트워크 레벨 타임아웃 방지)
+    # 풀 사이즈 명시 (§4-3): 노드 로컬 세션(0b)으로 커넥션 점유 W가 검색 윈도우로
+    # 축소되므로 컨테이너당 100 QPS에서 평균 동시 ~8, 피크 ~24. cap 25(10+15).
+    pool_size=10,
+    max_overflow=15,
 )
 _OnAiSession = async_sessionmaker(_on_ai_engine, expire_on_commit=False)
 
@@ -40,8 +44,15 @@ _OnAiSession = async_sessionmaker(_on_ai_engine, expire_on_commit=False)
 _on_data_engine = create_async_engine(
     settings.on_data_database_url,
     echo=settings.debug,
+    # statement_cache_size=0: PgBouncer transaction mode(제안 3)와 asyncpg prepared
+    # statement 충돌 방지. PgBouncer 도입 전이라도 선반영(§0-6 (3), §4-4).
+    connect_args={"statement_cache_size": 0},
     pool_pre_ping=True,
     pool_recycle=300,
+    # 풀 사이즈 명시 (§4-3): on_data 는 sql+hydration 두 쿼리 윈도우만 점유. 평균 동시
+    # ~3, 피크 ~10. cap 15(5+10).
+    pool_size=5,
+    max_overflow=10,
 )
 _OnDataSession = async_sessionmaker(_on_data_engine, expire_on_commit=False)
 

@@ -39,17 +39,17 @@
     조회하는 모듈 수준 함수이므로, CompiledGraph → AgentGraph 역참조(순환 참조)가
     발생하지 않는다.
 
-세션 주입 (제안 0 — 요청 격리):
-    GraphNodes 는 컨테이너당 싱글톤(무상태)이므로 요청별 DB 세션을 인스턴스에 들고
-    있으면 동시 요청 간 교차가 발생한다. 따라서 세션은 RunnableConfig 의 `configurable`
-    로 per-run 주입한다(LangGraph 정석). dispatch 함수가 config 에서 세션을 꺼내
-    GraphNodes 메서드 인자로 전달하고, GraphNodes 는 인자로 받은 세션만 사용한다.
+세션 (제안 0-6 — 노드 로컬 세션):
+    GraphNodes 는 컨테이너당 싱글톤(무상태)이다. DB 를 쓰는 노드는 노드 내부에서
+    `data_session_ctx()`/`ai_session_ctx()` 로 풀에서 세션을 잡고 즉시 반납한다
+    (acquire-use-release). 따라서 run()/stream() 은 세션을 주입받지 않으며, 커넥션
+    점유가 노드 쿼리 윈도우로 축소되어 answer LLM 스트리밍 동안 커넥션을 잡지 않는다.
 
-    data_session : on_data DB (SQL/MAP/Analytics/Hydration — SqlAgent 등)
-    ai_session   : on_ai DB  (Vector 검색 + search_persist + trace 저장)
+    0-1 의 config(`configurable`) 세션 주입은 노드 로컬 세션으로 대체되어 제거됐다.
+    세션이 노드 지역 변수로만 존재하므로 요청 간 교차가 원천 차단된다.
 
     _ACTIVE_NODES ContextVar 는 (무상태) 공유 GraphNodes 조회 = 순환참조 회피용이며,
-    요청 격리는 config(세션) + state(node_path/started_at)가 담당한다.
+    요청 격리는 노드 로컬 세션 + state(node_path/started_at)가 담당한다.
 """
 
 import contextvars
@@ -58,9 +58,7 @@ import time
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar, Literal
 
-from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.analytics_agent import AnalyticsAgent
 from agents.answer_agent import AnswerAgent
@@ -86,19 +84,9 @@ _ACTIVE_NODES: contextvars.ContextVar[GraphNodes] = contextvars.ContextVar(
 # 모듈 수준 dispatch 함수 — CompiledGraph에 등록된다.
 # self를 직접 클로저로 캡처하지 않으므로 AgentGraph와의 순환 참조가 없다.
 #
-# 세션이 필요한 노드 dispatch 는 두 번째 인자로 RunnableConfig 를 받아(LangGraph 가
-# 노드 시그니처에 config 가 있으면 주입한다) configurable 에서 per-run 세션을 꺼낸다.
+# 제안 0-6: DB 노드는 노드 내부에서 세션을 acquire-use-release 하므로 dispatch 는
+# 더 이상 config 에서 세션을 꺼내 전달하지 않는다(모든 dispatch 가 state 만 받는다).
 # ---------------------------------------------------------------------------
-
-
-def _data_session(config: RunnableConfig) -> AsyncSession:
-    """RunnableConfig.configurable 에서 on_data 세션을 추출한다."""
-    return config["configurable"]["data_session"]
-
-
-def _ai_session(config: RunnableConfig) -> AsyncSession:
-    """RunnableConfig.configurable 에서 on_ai 세션을 추출한다."""
-    return config["configurable"]["ai_session"]
 
 
 async def _dispatch_router_node(state: AgentState) -> dict[str, Any]:
@@ -117,50 +105,36 @@ async def _dispatch_retry_prep_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().retry_prep_node(state)
 
 
-async def _dispatch_sql_node(
-    state: AgentState, config: RunnableConfig
-) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().sql_node(state, _data_session(config))
+async def _dispatch_sql_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().sql_node(state)
 
 
-async def _dispatch_vector_node(
-    state: AgentState, config: RunnableConfig
-) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().vector_node(state, _ai_session(config))
+async def _dispatch_vector_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().vector_node(state)
 
 
-async def _dispatch_map_node(
-    state: AgentState, config: RunnableConfig
-) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().map_node(state, _data_session(config))
+async def _dispatch_map_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().map_node(state)
 
 
-async def _dispatch_analytics_node(
-    state: AgentState, config: RunnableConfig
-) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().analytics_node(state, _data_session(config))
+async def _dispatch_analytics_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().analytics_node(state)
 
 
-async def _dispatch_hydration_node(
-    state: AgentState, config: RunnableConfig
-) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().hydration_node(state, _data_session(config))
+async def _dispatch_hydration_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().hydration_node(state)
 
 
 async def _dispatch_answer_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().answer_node(state)
 
 
-async def _dispatch_search_persist_node(
-    state: AgentState, config: RunnableConfig
-) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().search_persist_node(state, _ai_session(config))
+async def _dispatch_search_persist_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().search_persist_node(state)
 
 
-async def _dispatch_trace_node(
-    state: AgentState, config: RunnableConfig
-) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().trace_node(state, _ai_session(config))
+async def _dispatch_trace_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().trace_node(state)
 
 
 def _dispatch_route_by_intent(state: AgentState) -> str:
@@ -278,8 +252,11 @@ class AgentGraph:
 
     그래프 조립과 실행 인터페이스만 담당한다. 노드·엣지 구현은 GraphNodes에 위임한다.
 
-        run(state, *, data_session, ai_session) → AgentState
-        stream(state, *, data_session, ai_session) → AsyncGenerator[_StreamEvent]
+        run(state) → AgentState
+        stream(state) → AsyncGenerator[_StreamEvent]
+
+    제안 0-6: DB 노드가 세션을 노드 내부에서 acquire-use-release 하므로 run()/stream()
+    은 더 이상 세션을 주입받지 않는다.
 
     CompiledGraph는 클래스 수준 캐시(_compiled_graph)에 저장되어 프로세스 내에서
     단 1회만 컴파일된다. 각 인스턴스는 캐시를 재사용하므로 메모리 오버헤드가 없다.
@@ -313,13 +290,7 @@ class AgentGraph:
     # 공개 인터페이스
     # ---------------------------------------------------------------------------
 
-    async def run(
-        self,
-        state: AgentState,
-        *,
-        data_session: AsyncSession,
-        ai_session: AsyncSession,
-    ) -> AgentState:
+    async def run(self, state: AgentState) -> AgentState:
         """그래프 전체 실행.
 
         Returns:
@@ -336,16 +307,10 @@ class AgentGraph:
             # retry 1회 포함 시 retry_prep + router/cache_check/search/hydration/answer 재실행으로
             #   +6 노드, 합계 14 super-step.
             # 여유 2를 더해 16으로 설정한다.
-            # 세션은 configurable 로 per-run 주입(제안 0: 요청 격리).
+            # 세션은 노드 내부에서 acquire-use-release(제안 0-6: 노드 로컬 세션).
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
-                config={
-                    "recursion_limit": 16,
-                    "configurable": {
-                        "data_session": data_session,
-                        "ai_session": ai_session,
-                    },
-                },
+                config={"recursion_limit": 16},
             )  # type: ignore[arg-type]
         finally:
             _ACTIVE_NODES.reset(token)
@@ -355,9 +320,6 @@ class AgentGraph:
     async def stream(
         self,
         state: AgentState,
-        *,
-        data_session: AsyncSession,
-        ai_session: AsyncSession,
     ) -> AsyncGenerator[_StreamEvent, None]:
         """그래프를 실행하며 진행 이벤트와 최종 결과를 yield한다.
 
@@ -394,13 +356,7 @@ class AgentGraph:
         try:
             async for chunk in AgentGraph._compiled_graph.astream(
                 state,
-                config={
-                    "recursion_limit": 16,  # 정상 8 + retry 최대 6 + 여유 2 = 16
-                    "configurable": {
-                        "data_session": data_session,
-                        "ai_session": ai_session,
-                    },
-                },
+                config={"recursion_limit": 16},  # 정상 8 + retry 최대 6 + 여유 2 = 16
             ):
                 node_name: str = next(iter(chunk))
                 node_updates: dict[str, Any] | None = chunk[node_name]

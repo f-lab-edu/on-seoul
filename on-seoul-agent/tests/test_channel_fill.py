@@ -4,6 +4,7 @@ sql_node / vector_node / map_node 가 각자 search_channels 에 올바른 Chann
 채우는지, _to_hits 헬퍼가 rank·score·meta 를 올바르게 변환하는지 검증한다.
 """
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -44,6 +45,24 @@ def _mock_session() -> MagicMock:
     s.commit = AsyncMock()
     s.rollback = AsyncMock()
     return s
+
+
+async def _call_node(node_method, state, session):
+    """노드 로컬 세션(0-6): DB 노드는 세션 인자를 받지 않고 ctx 로 세션을 잡는다.
+
+    sql/map/hydration → data_session_ctx, vector → ai_session_ctx 를 잡으므로,
+    두 ctx 모두 주어진 session 으로 패치해 노드가 그 세션을 사용하도록 한다.
+    """
+
+    @asynccontextmanager
+    async def _ctx():
+        yield session
+
+    with (
+        patch("agents.nodes.data_session_ctx", _ctx),
+        patch("agents.nodes.ai_session_ctx", _ctx),
+    ):
+        return await node_method(state)
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +148,7 @@ class TestSqlNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.sql_node(state, session)
+        result = await _call_node(nodes.sql_node, state, session)
 
         channel = result["search_channels"][SearchChannel.SQL]
         assert channel["kind"] == SearchKind.SQL
@@ -139,7 +158,7 @@ class TestSqlNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.sql_node(state, session)
+        result = await _call_node(nodes.sql_node, state, session)
 
         channel = result["search_channels"][SearchChannel.SQL]
         assert channel["query"]["query_text"] == "헬스장"
@@ -149,7 +168,7 @@ class TestSqlNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.sql_node(state, session)
+        result = await _call_node(nodes.sql_node, state, session)
 
         channel = result["search_channels"][SearchChannel.SQL]
         assert channel["query"]["query_text"] is None
@@ -163,7 +182,7 @@ class TestSqlNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.sql_node(state, session)
+        result = await _call_node(nodes.sql_node, state, session)
 
         hits = result["search_channels"][SearchChannel.SQL]["hits"]
         assert len(hits) == 2
@@ -180,7 +199,7 @@ class TestSqlNodeChannelData:
             service_status="접수중",
         )
 
-        result = await nodes.sql_node(state, session)
+        result = await _call_node(nodes.sql_node, state, session)
 
         params = result["search_channels"][SearchChannel.SQL]["query"]["parameters"]
         assert params["max_class_name"] == "체육시설"
@@ -195,7 +214,7 @@ class TestSqlNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.sql_node(state, session)
+        result = await _call_node(nodes.sql_node, state, session)
 
         assert "error" in result
         assert "search_channels" not in result
@@ -214,7 +233,7 @@ class TestSqlNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.sql_node(state, session)
+        result = await _call_node(nodes.sql_node, state, session)
 
         hits = result["search_channels"][SearchChannel.SQL]["hits"]
         assert hits == []
@@ -285,7 +304,7 @@ class TestVectorNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.vector_node(state, session)
+        result = await _call_node(nodes.vector_node, state, session)
 
         channels = result["search_channels"]
         assert SearchChannel.VECTOR in channels
@@ -298,7 +317,7 @@ class TestVectorNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.vector_node(state, session)
+        result = await _call_node(nodes.vector_node, state, session)
 
         assert (
             result["search_channels"][SearchChannel.VECTOR]["kind"] == SearchKind.VECTOR
@@ -314,7 +333,7 @@ class TestVectorNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.vector_node(state, session)
+        result = await _call_node(nodes.vector_node, state, session)
 
         final = result["search_channels"][SearchChannel.FINAL]
         assert final["query"]["query_text"] is None
@@ -331,7 +350,7 @@ class TestVectorNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.vector_node(state, session)
+        result = await _call_node(nodes.vector_node, state, session)
 
         vector_hits = result["search_channels"][SearchChannel.VECTOR]["hits"]
         assert len(vector_hits) == 1
@@ -354,7 +373,7 @@ class TestVectorNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.vector_node(state, session)
+        result = await _call_node(nodes.vector_node, state, session)
 
         # 빈 dict 는 전파하지 않아야 한다 (reducer 리셋 방지)
         assert "search_channels" not in result
@@ -367,7 +386,7 @@ class TestVectorNodeChannelData:
         session = _mock_session()
         state = make_agent_state()
 
-        result = await nodes.vector_node(state, session)
+        result = await _call_node(nodes.vector_node, state, session)
 
         assert "error" in result
         assert "search_channels" not in result
@@ -400,7 +419,7 @@ class TestMapNodeChannelData:
 
         with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
             state = make_agent_state(user_lat=37.56, user_lng=126.97)
-            result = await nodes.map_node(state, session)
+            result = await _call_node(nodes.map_node, state, session)
 
         assert SearchChannel.MAP in result["search_channels"]
 
@@ -411,7 +430,7 @@ class TestMapNodeChannelData:
 
         with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
             state = make_agent_state(user_lat=37.56, user_lng=126.97)
-            result = await nodes.map_node(state, session)
+            result = await _call_node(nodes.map_node, state, session)
 
         channel = result["search_channels"][SearchChannel.MAP]
         assert channel["kind"] == SearchKind.MAP
@@ -423,7 +442,7 @@ class TestMapNodeChannelData:
 
         with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
             state = make_agent_state(user_lat=37.5665, user_lng=126.9780)
-            result = await nodes.map_node(state, session)
+            result = await _call_node(nodes.map_node, state, session)
 
         query_text = result["search_channels"][SearchChannel.MAP]["query"]["query_text"]
         assert "lat=37.5665" in query_text
@@ -441,7 +460,7 @@ class TestMapNodeChannelData:
 
         with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
             state = make_agent_state(user_lat=37.56, user_lng=126.97)
-            result = await nodes.map_node(state, session)
+            result = await _call_node(nodes.map_node, state, session)
 
         hits = result["search_channels"][SearchChannel.MAP]["hits"]
         assert len(hits) == 2
@@ -456,7 +475,7 @@ class TestMapNodeChannelData:
         session = _mock_session()
         state = make_agent_state(user_lat=None, user_lng=None)
 
-        result = await nodes.map_node(state, session)
+        result = await _call_node(nodes.map_node, state, session)
 
         assert result["map_results"] is None
         assert "search_channels" not in result
@@ -469,7 +488,7 @@ class TestMapNodeChannelData:
             "agents.nodes.map_search", AsyncMock(side_effect=RuntimeError("DB 오류"))
         ):
             state = make_agent_state(user_lat=37.56, user_lng=126.97)
-            result = await nodes.map_node(state, session)
+            result = await _call_node(nodes.map_node, state, session)
 
         assert "error" in result
         assert "search_channels" not in result

@@ -92,7 +92,7 @@ agents/
 
 ### graph.py — LangGraph 워크플로우
 
-`AgentGraph.run(state, *, data_session, ai_session)` 한 번 호출로 전체 파이프라인을 실행합니다.
+`AgentGraph.run(state)` 한 번 호출로 전체 파이프라인을 실행합니다. DB 세션은 인자로 받지 않고, 각 노드가 실행 시점에 컨텍스트(`ai_session_ctx`/`data_session_ctx`)에서 자체 획득합니다.
 
 ```python
 from agents.graph import AgentGraph
@@ -106,8 +106,6 @@ result = await graph.run(
         "retry_count": 0,
         # 나머지 필드는 None으로 초기화
     },
-    data_session=data_session,
-    ai_session=ai_session,
 )
 # result["answer"], result["title"], result["trace"] 사용
 ```

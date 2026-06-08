@@ -20,6 +20,7 @@ from tests.helpers import (
     make_answer_agent,
     make_router,
     make_sql_agent,
+    run_graph,
 )
 from agents.vector_agent import VectorAgent, _RefinedQuery
 
@@ -95,7 +96,8 @@ class TestSqlIntentPersist:
             sql_agent=sql_agent,
             answer_agent=make_answer_agent("수영장 안내입니다."),
         )
-        await graph.run(
+        await run_graph(
+            graph,
             _state(message_id=10),
             data_session=data_session,
             ai_session=ai_session,
@@ -128,8 +130,11 @@ class TestZeroHitQueryRecorded:
             sql_agent=sql_agent,
             answer_agent=make_answer_agent("결과가 없습니다."),
         )
-        await graph.run(
-            _state(message_id=20), data_session=data_session, ai_session=ai_session
+        await run_graph(
+            graph,
+            _state(message_id=20),
+            data_session=data_session,
+            ai_session=ai_session,
         )
 
         assert _get_queries_rows(ai_session) is not None
@@ -165,7 +170,8 @@ class TestVectorIntentPersist:
             patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=bm25_rows)),
             patch(
-                "agents.hydration_node.hydrate_services", AsyncMock(return_value=hydrated)
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=hydrated),
             ),
         ):
             graph = AgentGraph(
@@ -173,7 +179,8 @@ class TestVectorIntentPersist:
                 vector_agent=_vector_agent("아이랑 체험할 수 있는 곳"),
                 answer_agent=make_answer_agent("체험관 안내입니다."),
             )
-            await graph.run(
+            await run_graph(
+                graph,
                 _state(message="아이랑 체험할 수 있는 곳", message_id=30),
                 data_session=MagicMock(),
                 ai_session=ai_session,
@@ -222,7 +229,8 @@ class TestMapIntentPersist:
                 router=make_router(IntentType.MAP),
                 answer_agent=make_answer_agent("주변 시설입니다."),
             )
-            await graph.run(
+            await run_graph(
+                graph,
                 _state(user_lat=37.5665, user_lng=126.9780, message_id=40),
                 data_session=MagicMock(),
                 ai_session=ai_session,
@@ -250,7 +258,8 @@ class TestFallbackIntentPersist:
             router=make_router(IntentType.FALLBACK),
             answer_agent=make_answer_agent("안내 메시지입니다."),
         )
-        await graph.run(
+        await run_graph(
+            graph,
             _state(message="안녕하세요"),
             data_session=MagicMock(),
             ai_session=ai_session,
@@ -311,7 +320,8 @@ class TestSelfCorrectionPersistOnlyLastAttempt:
                 vector_agent=vector_agent,
                 answer_agent=agent,
             )
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(message_id=50),
                 data_session=data_session,
                 ai_session=ai_session,
@@ -322,7 +332,9 @@ class TestSelfCorrectionPersistOnlyLastAttempt:
         assert query_rows is not None
         sql_rows = [r for r in query_rows if r["channel"] == SearchChannel.SQL]
         # 1차 SQL 채널은 리셋됨 — 마지막 시도는 VECTOR 전환이므로 SQL 0행.
-        assert len(sql_rows) == 0, f"전환 후 SQL 채널은 0행이어야 하지만 {len(sql_rows)}행"
+        assert len(sql_rows) == 0, (
+            f"전환 후 SQL 채널은 0행이어야 하지만 {len(sql_rows)}행"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +363,8 @@ class TestPersistFailureDoesNotBlockTrace:
             sql_agent=sql_agent,
             answer_agent=make_answer_agent("수영장 안내입니다."),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(message_id=60),
             data_session=data_session,
             ai_session=ai_session,

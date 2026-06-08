@@ -5,7 +5,7 @@ AgentWorkflow는 AsyncMock으로 패치하여 LLM/DB 호출 없이 단위 테스
 """
 
 import json
-from contextlib import asynccontextmanager
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -64,17 +64,6 @@ def _parse_sse_events(content: bytes) -> list[dict]:
     return events
 
 
-def _make_session_ctx():
-    """asynccontextmanager로 MagicMock 세션을 yield하는 픽스처 헬퍼."""
-    mock_session = MagicMock()
-
-    @asynccontextmanager
-    async def _ctx():
-        yield mock_session
-
-    return _ctx
-
-
 def _make_stream(final_state: AgentState):
     """workflow.stream()을 모사하는 async generator factory를 반환한다.
 
@@ -129,10 +118,7 @@ class TestChatStreamRouter:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -166,10 +152,7 @@ class TestChatStreamRouter:
 
         mock_graph.stream = _capturing_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -191,10 +174,7 @@ class TestChatStreamRouter:
 
         mock_graph.stream = _capturing_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 5, "message": "수영장 알려줘"},
@@ -208,10 +188,7 @@ class TestChatStreamRouter:
         """세션/DB 레벨 예외 → error 이벤트 반환."""
         mock_graph.stream = MagicMock(side_effect=RuntimeError("LLM 타임아웃"))
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "테스트"},
@@ -242,10 +219,7 @@ class TestChatStreamRouter:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -280,10 +254,7 @@ class TestChatStreamRouter:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={
@@ -304,10 +275,7 @@ class TestChatStreamRouter:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -324,10 +292,7 @@ class TestChatStreamRouter:
         """세션/DB 레벨 예외 시 SSE 이벤트가 정확히 1개(error)만 발행된다."""
         mock_graph.stream = MagicMock(side_effect=ValueError("DB 연결 실패"))
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "테스트"},
@@ -345,10 +310,7 @@ class TestChatStreamRouter:
             side_effect=RateLimitException("Gemini embed rate limit 소진")
         )
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -358,20 +320,18 @@ class TestChatStreamRouter:
         events = _parse_sse_events(response.content)
         error_events = [e for e in events if e.get("event") == "error"]
         assert len(error_events) == 1
-        assert error_events[0]["data"]["message"] == "현재 요청이 많아 잠시 후 다시 시도해 주세요."
+        assert (
+            error_events[0]["data"]["message"]
+            == "현재 요청이 많아 잠시 후 다시 시도해 주세요."
+        )
 
     async def test_rate_limit_error_message_differs_from_generic_error(
         self, client: AsyncClient, mock_graph
     ):
         """RateLimitException의 error 메시지는 범용 error 메시지와 다른 문자열이다."""
-        mock_graph.stream = MagicMock(
-            side_effect=RateLimitException("소진")
-        )
+        mock_graph.stream = MagicMock(side_effect=RateLimitException("소진"))
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -387,10 +347,7 @@ class TestChatStreamRouter:
         """error 이벤트의 message 필드는 예외 내용을 노출하지 않고 범용 문자열을 반환한다."""
         mock_graph.stream = MagicMock(side_effect=RuntimeError("LLM 타임아웃 발생"))
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -412,10 +369,7 @@ class TestChatStreamRouter:
         )
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -432,10 +386,7 @@ class TestChatStreamRouter:
         final_state = _make_final_state(message_id=3, title=None, title_needed=False)
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 3, "message": "수영장 몇 시까지야"},
@@ -484,10 +435,7 @@ class TestChatStreamRouter:
 
         mock_graph.stream = _error_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "테스트"},
@@ -526,10 +474,7 @@ class TestChatStreamRouter:
 
         mock_graph.stream = _error_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -553,10 +498,7 @@ class TestCacheAndContextIntegration:
         final_state = _make_final_state(cache_hit=True)
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -573,10 +515,7 @@ class TestCacheAndContextIntegration:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -586,9 +525,7 @@ class TestCacheAndContextIntegration:
         final_events = [e for e in events if e["event"] == "final"]
         assert final_events[0]["data"]["cache_hit"] is False
 
-    async def test_history_passed_into_state(
-        self, client: AsyncClient, mock_graph
-    ):
+    async def test_history_passed_into_state(self, client: AsyncClient, mock_graph):
         """request.history가 model_dump 되어 AgentState["history"]에 주입된다."""
         final_state = _make_final_state()
         captured: list[AgentState] = []
@@ -600,10 +537,7 @@ class TestCacheAndContextIntegration:
 
         mock_graph.stream = _capturing_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             await client.post(
                 "/chat/stream",
                 json={
@@ -636,10 +570,7 @@ class TestCacheAndContextIntegration:
 
         mock_graph.stream = _capturing_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "강남구 수영장"},
@@ -655,10 +586,7 @@ class TestCacheAndContextIntegration:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={
@@ -706,10 +634,7 @@ class TestCacheAndContextIntegration:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={
@@ -737,10 +662,7 @@ class TestServiceCardsInFinalPayload:
         final_state = _make_final_state(service_cards=cards)
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -757,10 +679,7 @@ class TestServiceCardsInFinalPayload:
         final_state = _make_final_state(service_cards=None)
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -786,10 +705,7 @@ class TestServiceCardsInFinalPayload:
         )
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -828,10 +744,7 @@ class TestServiceCardsInFinalPayload:
         final_state = _make_final_state(cache_hit=True, service_cards=cards)
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장"},
@@ -866,10 +779,7 @@ class TestServiceCardsInFinalPayload:
         final_state = _make_final_state(service_cards=cards)
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -912,10 +822,7 @@ class TestServiceCardsInFinalPayload:
         final_state = _make_final_state(service_cards=cards)
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -942,10 +849,7 @@ class TestServiceCardsInFinalPayload:
         final_state = _make_final_state(service_cards=[])
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -987,10 +891,7 @@ class TestServiceCardsInFinalPayload:
 
         mock_graph.stream = _error_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -1027,10 +928,7 @@ class TestServiceCardsInFinalPayload:
 
         mock_graph.stream = _error_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},

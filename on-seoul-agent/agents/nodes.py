@@ -33,10 +33,11 @@ from agents.hydration_node import HydrationNode
 from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.vector_agent import VectorAgent
+from agents._search_channel_utils import _to_hits
 from core.cache import get_cached_answer, set_cached_answer
 from core.config import settings
+from core.database import ai_session_ctx, data_session_ctx
 from core.exceptions import RateLimitException
-from agents._search_channel_utils import _to_hits
 from schemas.search import (
     RESET_CHANNELS,
     ChannelData,
@@ -104,10 +105,20 @@ class GraphNodes:
 
     인스턴스는 AgentGraph.__init__()에서 1회 생성되어 프로세스 내에서 공유된다.
     제안 0(요청 격리): 요청별 가변 자원/상태를 인스턴스 속성으로 두지 않는다.
-      - DB 세션 → RunnableConfig `configurable` 로 per-run 주입 (노드 메서드 인자).
       - node_path → AgentState 슬롯 (node_path_reducer 로 per-invoke 누적).
       - 시작 시각 → AgentState["started_at"].
     따라서 동시 요청이 같은 GraphNodes 를 공유해도 세션/경로 교차가 발생하지 않는다.
+
+    제안 0-6(노드 로컬 세션): DB 를 쓰는 노드는 0-1 의 config 주입 장수명 세션 대신
+    노드 내부에서 `data_session_ctx()`/`ai_session_ctx()` 로 풀에서 세션을 잡고 즉시
+    반납한다(acquire-use-release). 커넥션 점유가 노드 쿼리 윈도우(수십 ms)로 축소되어
+    answer LLM 스트리밍 동안 커넥션을 잡지 않는다. 세션은 노드 메서드 지역 변수로만
+    존재하므로 인스턴스 속성 교차도 원천 차단된다.
+      - data_session : sql / map / analytics / hydration
+      - ai_session   : vector / search_persist / trace
+    search_persist 와 trace 는 0-1 에서 한 ai_session 을 공유했으나, 노드 로컬에서는
+    각자 독립 세션을 연다(서로 다른 테이블 INSERT 이고 search_persist 가 먼저 commit
+    하므로 트랜잭션 공유 의존성 없음 — §0-6 (1)).
     """
 
     def __init__(
@@ -296,12 +307,14 @@ class GraphNodes:
         )
         return update
 
-    async def sql_node(
-        self, state: AgentState, data_session: AsyncSession
-    ) -> dict[str, Any]:
-        """SqlAgent.search() 호출 — sql_results + search_channels 설정."""
+    async def sql_node(self, state: AgentState) -> dict[str, Any]:
+        """SqlAgent.search() 호출 — sql_results + search_channels 설정.
+
+        노드 로컬 세션(0-6): data_session 을 풀에서 잡고 쿼리 후 즉시 반납한다.
+        """
         try:
-            new_state = await self._sql.search(state, data_session)
+            async with data_session_ctx() as data_session:
+                new_state = await self._sql.search(state, data_session)
             sql_rows = new_state.get("sql_results") or []
             keyword = new_state.get("sql_keyword")
             logger.info(
@@ -333,16 +346,15 @@ class GraphNodes:
             logger.exception("sql_node 실행 오류")
             return {"error": str(exc), "node_path": ["sql_error"]}
 
-    async def vector_node(
-        self, state: AgentState, ai_session: AsyncSession
-    ) -> dict[str, Any]:
+    async def vector_node(self, state: AgentState) -> dict[str, Any]:
         """VectorAgent.search() 호출 — vector_results(메타데이터 only), refined_query 설정.
 
-        hydration(원본 조회)은 후속 hydration_node 가 담당하므로
-        ai_session 만 전달한다.
+        hydration(원본 조회)은 후속 hydration_node 가 담당한다.
+        노드 로컬 세션(0-6): ai_session 을 풀에서 잡고 검색 후 즉시 반납한다.
         """
         try:
-            new_state = await self._vector.search(state, ai_session)
+            async with ai_session_ctx() as ai_session:
+                new_state = await self._vector.search(state, ai_session)
             results = new_state.get("vector_results") or []
             logger.info(
                 "vector.results room=%s count=%d refined=%r",
@@ -366,9 +378,7 @@ class GraphNodes:
             logger.exception("vector_node 실행 오류")
             return {"error": str(exc), "node_path": ["vector_error"]}
 
-    async def hydration_node(
-        self, state: AgentState, data_session: AsyncSession
-    ) -> dict[str, Any]:
+    async def hydration_node(self, state: AgentState) -> dict[str, Any]:
         """검색 결과 service_id → 원본 데이터 통합 슬롯 매핑.
 
         sql_node / vector_node 직후, answer_node 직전에 실행된다.
@@ -376,11 +386,13 @@ class GraphNodes:
         단일 슬롯 hydrated_services 로 통합하여 AnswerAgent 가 검색 경로에 의존하지
         않도록 한다.
 
-        세션:
-            data_session — public_service_reservations 원본 조회 전용 (on_data_reader)
+        세션(노드 로컬, 0-6):
+            data_session — public_service_reservations 원본 조회 전용 (on_data_reader).
+            풀에서 잡고 조회 후 즉시 반납한다.
         """
         try:
-            update = await self._hydration(state, data_session)
+            async with data_session_ctx() as data_session:
+                update = await self._hydration(state, data_session)
             hydrated = update.get("hydrated_services") or []
             logger.info(
                 "hydration.done room=%s count=%d",
@@ -393,13 +405,12 @@ class GraphNodes:
             logger.exception("hydration_node 실행 오류")
             return {"hydrated_services": [], "node_path": ["hydration_error"]}
 
-    async def map_node(
-        self, state: AgentState, data_session: AsyncSession
-    ) -> dict[str, Any]:
+    async def map_node(self, state: AgentState) -> dict[str, Any]:
         """map_search 호출 — map_results 설정.
 
         lat/lng 미제공 시 검색을 생략하고 map_results=None을 반환한다.
         라우팅은 항상 이 노드를 거치므로 map 분기 처리는 내부에서 담당한다.
+        노드 로컬 세션(0-6): data_session 을 풀에서 잡고 검색 후 즉시 반납한다.
         """
         lat = state.get("user_lat")
         lng = state.get("user_lng")
@@ -408,7 +419,8 @@ class GraphNodes:
                 # MAP 0건 재시도 시 retry_prep_node 가 retry_radius_m 을 세팅한다.
                 # 없으면 기본 반경(1000m). ChannelData 에도 실제 사용 반경을 반영한다.
                 radius = state.get("retry_radius_m") or _MAP_DEFAULT_RADIUS_M
-                geojson = await map_search(data_session, lat, lng, radius_m=radius)
+                async with data_session_ctx() as data_session:
+                    geojson = await map_search(data_session, lat, lng, radius_m=radius)
                 features = (geojson or {}).get("features") or []
                 channel_data = ChannelData(
                     kind=SearchKind.MAP,
@@ -439,13 +451,12 @@ class GraphNodes:
             logger.warning("map_node — lat/lng 미제공, map_results=None 처리")
             return {"map_results": None, "node_path": ["map_node"]}
 
-    async def analytics_node(
-        self, state: AgentState, data_session: AsyncSession
-    ) -> dict[str, Any]:
+    async def analytics_node(self, state: AgentState) -> dict[str, Any]:
         """AnalyticsAgent.run() 호출 — analytics_results/group_by/metric 설정.
 
         집계는 on_data(data_session) 에서 수행한다. hydration 없이 answer_node 로 직행한다.
         search_channels 는 채우지 않으므로 search_persist_node 가 즉시 skip 한다.
+        노드 로컬 세션(0-6): data_session 을 풀에서 잡고 집계 후 즉시 반납한다.
 
         graceful degrade:
             _AnalyticsParams Literal+validator 로 group_by 화이트리스트를 강제하지만,
@@ -453,7 +464,8 @@ class GraphNodes:
             빈 결과 + error + node_path "analytics_error" 로 처리한다.
         """
         try:
-            new_state = await self._analytics.run(state, data_session)
+            async with data_session_ctx() as data_session:
+                new_state = await self._analytics.run(state, data_session)
             rows = new_state.get("analytics_results") or []
             logger.info(
                 "analytics.results room=%s group_by=%s metric=%s count=%d",
@@ -535,9 +547,7 @@ class GraphNodes:
         result["node_path"] = ["cache_write"]
         return result
 
-    async def search_persist_node(
-        self, state: AgentState, ai_session: AsyncSession
-    ) -> dict[str, Any]:
+    async def search_persist_node(self, state: AgentState) -> dict[str, Any]:
         """chat_search_queries + chat_search_results 일괄 적재 (best-effort 종단 노드).
 
         AgentState.search_channels 를 순회하여 두 테이블에 동일 트랜잭션으로 INSERT.
@@ -552,14 +562,11 @@ class GraphNodes:
           self-correction 재시도 시 retry_prep_node 가 search_channels 를 {} 로 리셋하므로
           정상 흐름에서 UNIQUE 위반은 발생하지 않는다. 방어적 안전망으로만 사용된다.
 
-        세션 공유:
-          ai_session 은 trace_node 와 공유한다(config 로 per-run 주입). 정상 흐름
-          (commit 성공)과 INSERT 실패 후 rollback 성공 시에는 trace_node 진입 전 세션이
-          clean 상태다. 단, rollback 자체가 실패하면(커넥션 단절 등) 세션이 dirty인 채
-          trace_node 로 넘어가 trace INSERT 도 실패할 수 있다. `_save_trace` 는 자체
-          except + rollback 핸들러를 보유하므로 워크플로우 결과에는 영향이 없으나, 두
-          관측 데이터가 동시 유실될 수 있다. 완전한 독립성이 필요해지면 trace_node 전용
-          세션 분리를 검토할 것.
+        세션 (노드 로컬, 0-6):
+          ai_session 을 풀에서 잡아 두 테이블 INSERT 를 한 트랜잭션으로 커밋한 뒤 즉시
+          반납한다. trace_node 는 별도 독립 세션을 연다 — search_persist 가 먼저 commit
+          하므로 트랜잭션 공유 의존성이 없고, 한 노드의 INSERT/rollback 실패가 다른
+          노드 세션을 오염시키지 않는다(관측 데이터 동시 유실 위험 제거).
         """
         channels: dict[str, ChannelData] = state.get("search_channels") or {}
         if not channels:
@@ -606,17 +613,18 @@ class GraphNodes:
                 )
 
         try:
-            if query_rows:
-                await ai_session.execute(
-                    text(_INSERT_SEARCH_QUERIES_SQL),
-                    query_rows,
-                )
-            if result_rows:
-                await ai_session.execute(
-                    text(_INSERT_SEARCH_RESULTS_SQL),
-                    result_rows,
-                )
-            await ai_session.commit()
+            async with ai_session_ctx() as ai_session:
+                if query_rows:
+                    await ai_session.execute(
+                        text(_INSERT_SEARCH_QUERIES_SQL),
+                        query_rows,
+                    )
+                if result_rows:
+                    await ai_session.execute(
+                        text(_INSERT_SEARCH_RESULTS_SQL),
+                        result_rows,
+                    )
+                await ai_session.commit()
             logger.info(
                 "search_persist.done message_id=%s queries=%d results=%d",
                 message_id,
@@ -628,16 +636,14 @@ class GraphNodes:
             logger.warning(
                 "search_persist 적재 실패 (message_id=%s)", message_id, exc_info=True
             )
-            try:
-                await ai_session.rollback()
-            except Exception:
-                pass
+            # 노드 로컬 세션은 async with 종료 시 자동 반납되므로 명시적 rollback 불필요.
             return {"node_path": ["search_persist_error"]}
 
-    async def trace_node(
-        self, state: AgentState, ai_session: AsyncSession
-    ) -> dict[str, Any]:
-        """chat_agent_traces 저장 (best-effort 종단 노드)."""
+    async def trace_node(self, state: AgentState) -> dict[str, Any]:
+        """chat_agent_traces 저장 (best-effort 종단 노드).
+
+        노드 로컬 세션(0-6): search_persist_node 와 독립된 ai_session 을 연다.
+        """
         started_at = state.get("started_at") or time.monotonic()
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         # node_path: trace_node 자신은 아직 누적되지 않았으므로 state 의 누적분 + "trace".
@@ -664,7 +670,16 @@ class GraphNodes:
                 "result_count": len(analytics_rows),
                 "result": analytics_rows,
             }
-        await _save_trace(ai_session, state["message_id"], trace_payload)
+        try:
+            async with ai_session_ctx() as ai_session:
+                await _save_trace(ai_session, state["message_id"], trace_payload)
+        except Exception:
+            # 세션 획득 실패도 best-effort 종단 노드 정책상 무시한다(워크플로우 결과 불변).
+            logger.warning(
+                "trace 세션 획득 실패 (message_id=%s)",
+                state["message_id"],
+                exc_info=True,
+            )
         return {"trace": trace_payload, "node_path": ["trace"]}
 
     # ------------------------------------------------------------------

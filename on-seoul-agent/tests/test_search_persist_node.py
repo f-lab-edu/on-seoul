@@ -6,6 +6,7 @@ GraphNodes.search_persist_node 가 chat_search_queries / chat_search_results 를
 """
 
 import json
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,6 +18,20 @@ from schemas.search import (
     SearchChannel,
     SearchKind,
 )
+
+
+@asynccontextmanager
+async def _session_ctx(session):
+    """search_persist_node 가 ai_session_ctx() 로 잡는 세션을 mock 으로 주입한다."""
+    yield session
+
+
+async def _call_persist(nodes: GraphNodes, state: dict, session: Any) -> dict:
+    """노드 로컬 세션(0-6) 전환 후 search_persist_node 는 세션 인자를 받지 않고
+    ai_session_ctx() 로 세션을 잡는다. 이 헬퍼가 그 ctx 를 주어진 session 으로 패치한다.
+    """
+    with patch("agents.nodes.ai_session_ctx", lambda: _session_ctx(session)):
+        return await nodes.search_persist_node(state)
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +112,7 @@ class TestSearchPersistNodeEmptyChannels:
         nodes = _make_nodes(session)
         state = _base_state(search_channels={})
 
-        result = await nodes.search_persist_node(state, session)
+        result = await _call_persist(nodes, state, session)
 
         assert set(result) <= {"node_path"}
         session.execute.assert_not_called()
@@ -109,7 +124,7 @@ class TestSearchPersistNodeEmptyChannels:
         nodes = _make_nodes(session)
         state = _base_state(search_channels=None)
 
-        result = await nodes.search_persist_node(state, session)
+        result = await _call_persist(nodes, state, session)
 
         assert set(result) <= {"node_path"}
         session.execute.assert_not_called()
@@ -119,7 +134,7 @@ class TestSearchPersistNodeEmptyChannels:
         nodes = _make_nodes(session)
         state = _base_state(search_channels={})
 
-        result = await nodes.search_persist_node(state, session)
+        result = await _call_persist(nodes, state, session)
 
         assert "search_persist_skip" in result["node_path"]
 
@@ -136,7 +151,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        result = await nodes.search_persist_node(state, session)
+        result = await _call_persist(nodes, state, session)
 
         assert set(result) <= {"node_path"}
         # queries INSERT (query_rows=3) + results INSERT (hits 없어서 result_rows=0 → skip)
@@ -158,7 +173,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         calls = session.execute.call_args_list
         assert len(calls) == 2  # queries + results
@@ -180,7 +195,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         calls = session.execute.call_args_list
         query_row = calls[0].args[1][0]
@@ -203,7 +218,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         calls = session.execute.call_args_list
         # queries INSERT 만 호출되어야 한다
@@ -220,7 +235,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(message_id=9999, search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         calls = session.execute.call_args_list
         query_row = calls[0].args[1][0]
@@ -242,7 +257,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         calls = session.execute.call_args_list
         query_row = calls[0].args[1][0]
@@ -265,7 +280,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         calls = session.execute.call_args_list
         query_row = calls[0].args[1][0]
@@ -284,7 +299,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         calls = session.execute.call_args_list
         assert len(calls) == 1
@@ -300,7 +315,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         calls = session.execute.call_args_list
         # sqlalchemy text() 객체를 str로 변환해서 비교
@@ -321,7 +336,7 @@ class TestSearchPersistNodeInsertion:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         session.commit.assert_called_once()
 
@@ -331,7 +346,7 @@ class TestSearchPersistNodeInsertion:
         channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
         state = _base_state(search_channels=channels)
 
-        result = await nodes.search_persist_node(state, session)
+        result = await _call_persist(nodes, state, session)
 
         assert "search_persist" in result["node_path"]
 
@@ -344,44 +359,38 @@ class TestSearchPersistNodeBestEffort:
         channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
         state = _base_state(search_channels=channels)
 
-        result = await nodes.search_persist_node(state, session)
+        result = await _call_persist(nodes, state, session)
 
         assert set(result) <= {"node_path"}
 
-    async def test_execute_failure_calls_rollback(self):
-        """execute 예외 시 rollback 이 호출된다."""
+    async def test_execute_failure_is_best_effort(self):
+        """execute 예외 시 best-effort — 예외 미전파, node_path 만 반환.
+
+        노드 로컬 세션(0-6) 전환으로 명시적 rollback 은 제거됐다. 세션은
+        async with(ai_session_ctx) 종료 시 자동 반납되므로 best-effort 보장은
+        "예외가 그래프로 새지 않음" + "error node_path" 로 검증한다.
+        """
         session = _make_session(execute_side_effect=RuntimeError("DB 오류"))
         nodes = _make_nodes(session)
         channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        result = await _call_persist(nodes, state, session)
 
-        session.rollback.assert_called_once()
+        assert set(result) <= {"node_path"}
+        assert "search_persist_error" in result["node_path"]
 
-    async def test_commit_failure_calls_rollback(self):
-        """commit 예외 시에도 rollback 이 호출된다."""
+    async def test_commit_failure_is_best_effort(self):
+        """commit 예외 시에도 best-effort — 예외 미전파, error node_path."""
         session = _make_session(commit_side_effect=RuntimeError("commit 실패"))
         nodes = _make_nodes(session)
         channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
         state = _base_state(search_channels=channels)
 
-        result = await nodes.search_persist_node(state, session)
+        result = await _call_persist(nodes, state, session)
 
         assert set(result) <= {"node_path"}
-        session.rollback.assert_called_once()
-
-    async def test_rollback_failure_is_swallowed(self):
-        """rollback 자체도 실패할 때 예외가 전파되지 않는다."""
-        session = _make_session(execute_side_effect=RuntimeError("execute 실패"))
-        session.rollback = AsyncMock(side_effect=RuntimeError("rollback 실패"))
-        nodes = _make_nodes(session)
-        channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
-        state = _base_state(search_channels=channels)
-
-        # 예외가 전파되지 않아야 한다
-        result = await nodes.search_persist_node(state, session)
-        assert set(result) <= {"node_path"}
+        assert "search_persist_error" in result["node_path"]
 
     async def test_failure_appends_error_to_node_path(self):
         session = _make_session(execute_side_effect=RuntimeError("오류"))
@@ -389,7 +398,7 @@ class TestSearchPersistNodeBestEffort:
         channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
         state = _base_state(search_channels=channels)
 
-        result = await nodes.search_persist_node(state, session)
+        result = await _call_persist(nodes, state, session)
 
         assert "search_persist_error" in result["node_path"]
 
@@ -401,7 +410,7 @@ class TestSearchPersistNodeBestEffort:
         state = _base_state(search_channels=channels)
 
         with patch("agents.nodes.logger") as mock_logger:
-            await nodes.search_persist_node(state, session)
+            await _call_persist(nodes, state, session)
             mock_logger.warning.assert_called_once()
 
 
@@ -482,9 +491,12 @@ class TestRetryPrepResetsSearchChannels:
 class TestSearchPersistNodeAtomicity:
     """results INSERT 실패 시 queries INSERT 도 함께 롤백되는지 (트랜잭션 원자성) 검증."""
 
-    async def test_results_insert_failure_rolls_back_both_tables(self):
-        """첫 번째 execute(queries) 는 성공하고 두 번째 execute(results) 가 실패할 때
-        rollback 이 호출되어 두 테이블 모두 롤백됨을 보장한다.
+    async def test_results_insert_failure_no_commit_and_error(self):
+        """첫 번째 execute(queries) 성공, 두 번째 execute(results) 실패 시 commit 이
+        호출되지 않아(부분 커밋 없음) 두 테이블 원자성이 보장된다.
+
+        노드 로컬 세션(0-6): 실패 시 명시적 rollback 대신 async with 종료로 세션이
+        반납되며, commit 이 호출되지 않았으므로 미커밋 트랜잭션은 폐기된다.
         """
         call_count = 0
 
@@ -504,10 +516,10 @@ class TestSearchPersistNodeAtomicity:
         }
         state = _base_state(search_channels=channels)
 
-        result = await nodes.search_persist_node(state, session)
+        result = await _call_persist(nodes, state, session)
 
         assert session.execute.call_count == 2  # queries + results 시도
-        session.rollback.assert_called_once()
+        session.commit.assert_not_called()  # 부분 커밋 없음 (원자성)
         assert "search_persist_error" in result["node_path"]
 
     async def test_results_insert_failure_no_commit(self):
@@ -529,7 +541,7 @@ class TestSearchPersistNodeAtomicity:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         session.commit.assert_not_called()
 
@@ -550,7 +562,7 @@ class TestSearchPersistNodeMultiChannelKinds:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         calls = session.execute.call_args_list
         # 모든 hits 가 없으므로 queries execute 1회만 호출된다.
@@ -582,7 +594,7 @@ class TestSearchPersistNodeMultiChannelKinds:
         }
         state = _base_state(search_channels=channels)
 
-        await nodes.search_persist_node(state, session)
+        await _call_persist(nodes, state, session)
 
         calls = session.execute.call_args_list
         assert len(calls) == 2  # queries + results

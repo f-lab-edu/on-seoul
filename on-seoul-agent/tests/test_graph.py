@@ -28,6 +28,9 @@ from tests.helpers import (
     make_answer_agent,
     make_router,
     make_sql_agent,
+    patch_node_sessions,
+    run_graph,
+    stream_graph,
 )
 
 
@@ -86,7 +89,8 @@ class TestConditionalEdgeRouting:
             sql_agent=sql_agent,
             answer_agent=_answer_agent("수영장 안내입니다."),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -111,7 +115,8 @@ class TestConditionalEdgeRouting:
             patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", mock_bm25),
             patch(
-                "agents.hydration_node.hydrate_services", AsyncMock(return_value=hydrated)
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=hydrated),
             ),
         ):
             graph = AgentGraph(
@@ -119,7 +124,8 @@ class TestConditionalEdgeRouting:
                 vector_agent=vector_agent,
                 answer_agent=_answer_agent("체험관 안내입니다."),
             )
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(message="아이랑 체험할 수 있는 곳"),
                 data_session=MagicMock(),
                 ai_session=ai_session,
@@ -144,7 +150,8 @@ class TestConditionalEdgeRouting:
                 router=_router(IntentType.MAP),
                 answer_agent=_answer_agent("주변 시설입니다."),
             )
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(user_lat=37.5665, user_lng=126.9780),
                 data_session=data_session,
                 ai_session=_ai_session(),
@@ -164,7 +171,8 @@ class TestConditionalEdgeRouting:
             router=_router(IntentType.MAP),
             answer_agent=_answer_agent("위치 정보가 없습니다."),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(user_lat=None, user_lng=None),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -184,7 +192,8 @@ class TestConditionalEdgeRouting:
             vector_agent=vector_agent,
             answer_agent=_answer_agent("안내 메시지입니다."),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(message="안녕하세요"),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -215,7 +224,8 @@ class TestAnalyticsRoute:
             analytics_agent=analytics_agent,
             answer_agent=_answer_agent("강서구에 가장 많습니다."),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(message="테니스장 자치구별 분포"),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -239,7 +249,8 @@ class TestAnalyticsRoute:
             analytics_agent=analytics_agent,
             answer_agent=_answer_agent("요약"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=ai_session,
@@ -263,7 +274,8 @@ class TestAnalyticsRoute:
             analytics_agent=analytics_agent,
             answer_agent=_answer_agent("그래도 답변"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -282,9 +294,7 @@ class TestAnalyticsRoute:
         명시한 'KeyError/DB 오류' 는 도구 호출 경로의 예외다. 도구 자체를 강제로
         터뜨려 analytics_node 의 try/except 가 그 경로도 포착하는지 봉인한다.
         """
-        analytics_agent, data_session = make_analytics_agent(
-            [], group_by="area_name"
-        )
+        analytics_agent, data_session = make_analytics_agent([], group_by="area_name")
 
         graph = AgentGraph(
             router=_router(IntentType.ANALYTICS),
@@ -296,7 +306,8 @@ class TestAnalyticsRoute:
             "agents.analytics_agent.analytics_search",
             AsyncMock(side_effect=RuntimeError("DB down")),
         ):
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(),
                 data_session=data_session,
                 ai_session=_ai_session(),
@@ -327,7 +338,8 @@ class TestAnalyticsRoute:
             analytics_agent=analytics_agent,
             answer_agent=_answer_agent("요약"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=ai_session,
@@ -361,7 +373,8 @@ class TestTraceNode:
             router=_router(IntentType.FALLBACK),
             answer_agent=_answer_agent(),
         )
-        await graph.run(
+        await run_graph(
+            graph,
             _state(message_id=42),
             data_session=data_session,
             ai_session=ai_session,
@@ -384,7 +397,8 @@ class TestTraceNode:
             router=_router(IntentType.FALLBACK),
             answer_agent=_answer_agent("답변"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=ai_session,
@@ -406,7 +420,8 @@ class TestTraceNode:
             sql_agent=sql_agent,
             answer_agent=_answer_agent("수영장 안내"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -423,7 +438,8 @@ class TestTraceNode:
             router=_router(IntentType.FALLBACK),
             answer_agent=_answer_agent(),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -468,7 +484,8 @@ class TestSelfCorrectionCycle:
             sql_agent=sql_agent,
             answer_agent=agent,
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -496,7 +513,8 @@ class TestSelfCorrectionCycle:
             sql_agent=_sql_agent([])[0],
             answer_agent=agent,
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -530,7 +548,8 @@ class TestSelfCorrectionCycle:
             router=router_agent,
             answer_agent=_answer_agent("재시도 후 답변"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -555,7 +574,8 @@ class TestAgentStateContract:
             router=_router(IntentType.FALLBACK),
             answer_agent=_answer_agent(),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(room_id=99, message_id=77, message="테스트"),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -572,7 +592,8 @@ class TestAgentStateContract:
             router=_router(IntentType.FALLBACK),
             answer_agent=_answer_agent(),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -617,7 +638,8 @@ class TestAgentStateContract:
             router=router_agent,
             answer_agent=_answer_agent(),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -636,7 +658,8 @@ class TestAgentStateContract:
             router=_router(IntentType.FALLBACK),
             answer_agent=answer_agent,
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(title_needed=True),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -667,7 +690,9 @@ class TestAgentGraphStream:
             answer_agent=_answer_agent("답변"),
         )
         events = await self._collect(
-            graph.stream(_state(), data_session=data_session, ai_session=_ai_session())
+            stream_graph(
+                graph, _state(), data_session=data_session, ai_session=_ai_session()
+            )
         )
 
         types = [e for e, _ in events]
@@ -682,7 +707,9 @@ class TestAgentGraphStream:
             answer_agent=_answer_agent("스트림 답변"),
         )
         events = await self._collect(
-            graph.stream(_state(), data_session=data_session, ai_session=_ai_session())
+            stream_graph(
+                graph, _state(), data_session=data_session, ai_session=_ai_session()
+            )
         )
 
         result_events = [(t, d) for t, d in events if t == "result"]
@@ -698,8 +725,16 @@ class TestAgentGraphStream:
         그래프 경로의 final payload 는 빈 배열이 된다. 이 통합 경로를 봉인한다.
         """
         rows = [
-            {"service_id": "S001", "service_name": "수영장", "service_url": "https://x"},
-            {"service_id": "S002", "service_name": "테니스장", "service_url": "https://y"},
+            {
+                "service_id": "S001",
+                "service_name": "수영장",
+                "service_url": "https://x",
+            },
+            {
+                "service_id": "S002",
+                "service_name": "테니스장",
+                "service_url": "https://y",
+            },
         ]
         sql_agent, data_session = _sql_agent(rows)
         graph = AgentGraph(
@@ -707,7 +742,8 @@ class TestAgentGraphStream:
             sql_agent=sql_agent,
             answer_agent=_answer_agent("안내입니다."),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -726,7 +762,9 @@ class TestAgentGraphStream:
             answer_agent=_answer_agent(),
         )
         events = await self._collect(
-            graph.stream(_state(), data_session=data_session, ai_session=_ai_session())
+            stream_graph(
+                graph, _state(), data_session=data_session, ai_session=_ai_session()
+            )
         )
 
         progress_steps = [d["step"] for t, d in events if t == "progress"]
@@ -757,8 +795,8 @@ class TestAgentGraphStream:
                 answer_agent=_answer_agent("체험관 안내입니다."),
             )
             events = await self._collect(
-                graph.stream(
-                    _state(), data_session=data_session, ai_session=ai_session
+                stream_graph(
+                    graph, _state(), data_session=data_session, ai_session=ai_session
                 )
             )
 
@@ -784,7 +822,9 @@ class TestAgentGraphStream:
             answer_agent=_answer_agent(),
         )
         events = await self._collect(
-            graph.stream(_state(), data_session=data_session, ai_session=_ai_session())
+            stream_graph(
+                graph, _state(), data_session=data_session, ai_session=_ai_session()
+            )
         )
 
         progress_steps = [d["step"] for t, d in events if t == "progress"]
@@ -809,7 +849,8 @@ class TestSessionRouting:
             sql_agent=sql_agent,
             answer_agent=_answer_agent(),
         )
-        await graph.run(
+        await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=ai_session,
@@ -833,7 +874,8 @@ class TestSessionRouting:
                 vector_agent=vector_agent,
                 answer_agent=_answer_agent(),
             )
-            await graph.run(
+            await run_graph(
+                graph,
                 _state(),
                 data_session=data_session,
                 ai_session=ai_session,
@@ -1146,7 +1188,8 @@ class TestDirectedSelfCorrectionRetry:
                 vector_agent=vector_agent,
                 answer_agent=_answer_agent("체험관 안내입니다."),
             )
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(),
                 data_session=data_session,
                 ai_session=ai_session,
@@ -1156,8 +1199,10 @@ class TestDirectedSelfCorrectionRetry:
         assert "sql_node" in path
         assert "retry_prep" in path
         assert "vector_node" in path
-        assert path.index("sql_node") < path.index("retry_prep") < path.index(
-            "vector_node"
+        assert (
+            path.index("sql_node")
+            < path.index("retry_prep")
+            < path.index("vector_node")
         )
         assert result["retry_count"] == 1
 
@@ -1173,9 +1218,7 @@ class TestDirectedSelfCorrectionRetry:
             )
             is True
         )
-        assert (
-            nodes._analytics_zero_hits(_state(analytics_results=[{"x": 1}])) is False
-        )
+        assert nodes._analytics_zero_hits(_state(analytics_results=[{"x": 1}])) is False
 
     def test_self_correction_edge_analytics_zero_triggers_retry(self):
         nodes = self._nodes()
@@ -1277,7 +1320,8 @@ class TestDirectedSelfCorrectionRetry:
                 analytics_agent=analytics_agent,
                 answer_agent=_answer_agent("집계 안내입니다."),
             )
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(service_status="접수중", area_name="강남구"),
                 data_session=data_session,
                 ai_session=_ai_session(),
@@ -1367,12 +1411,14 @@ class TestDirectedSelfCorrectionRetry:
         nodes = self._nodes()
         data_session = MagicMock()
         geojson = {"type": "FeatureCollection", "features": []}
-        with patch(
-            "agents.nodes.map_search", AsyncMock(return_value=geojson)
-        ) as mock_map:
+        with (
+            patch(
+                "agents.nodes.map_search", AsyncMock(return_value=geojson)
+            ) as mock_map,
+            patch_node_sessions(data_session=data_session),
+        ):
             update = await nodes.map_node(
                 _state(user_lat=37.5, user_lng=127.0, retry_radius_m=3000),
-                data_session,
             )
         mock_map.assert_awaited_once_with(data_session, 37.5, 127.0, radius_m=3000)
         # ChannelData query_text/parameters 에 확장 반경(3000m)이 반영되어야 한다.
@@ -1387,12 +1433,13 @@ class TestDirectedSelfCorrectionRetry:
             "type": "FeatureCollection",
             "features": [{"type": "Feature", "properties": {"service_id": "M1"}}],
         }
-        with patch(
-            "agents.nodes.map_search", AsyncMock(return_value=geojson)
-        ) as mock_map:
-            update = await nodes.map_node(
-                _state(user_lat=37.5, user_lng=127.0), data_session
-            )
+        with (
+            patch(
+                "agents.nodes.map_search", AsyncMock(return_value=geojson)
+            ) as mock_map,
+            patch_node_sessions(data_session=data_session),
+        ):
+            update = await nodes.map_node(_state(user_lat=37.5, user_lng=127.0))
         mock_map.assert_awaited_once_with(data_session, 37.5, 127.0, radius_m=1000)
         # ChannelData query_text 에 실제 반경 반영
         ch = next(iter(update["search_channels"].values()))
@@ -1415,7 +1462,8 @@ class TestDirectedSelfCorrectionRetry:
                 router=_router(IntentType.MAP),
                 answer_agent=_answer_agent("주변 안내입니다."),
             )
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(user_lat=37.5, user_lng=127.0),
                 data_session=data_session,
                 ai_session=_ai_session(),
@@ -1453,7 +1501,10 @@ class TestDirectedSelfCorrectionRetry:
             intent=IntentType.ANALYTICS,
             answer="결과 없음",
             analytics_results=[{"x": 1}],  # ANALYTICS 0건 아님
-            map_results={"type": "FeatureCollection", "features": []},  # MAP 0건이지만 무시
+            map_results={
+                "type": "FeatureCollection",
+                "features": [],
+            },  # MAP 0건이지만 무시
             retry_count=0,
         )
         assert nodes.self_correction_edge(state) == "end_normal"
@@ -1587,25 +1638,23 @@ class TestVectorNodeRateLimitPropagation:
 
         nodes = self._make_nodes(vector_agent)
 
-        with pytest.raises(RateLimitException, match="rate limit 소진"):
-            await nodes.vector_node(
-                _state(intent=IntentType.VECTOR_SEARCH), _ai_session()
-            )
+        with (
+            patch_node_sessions(ai_session=_ai_session()),
+            pytest.raises(RateLimitException, match="rate limit 소진"),
+        ):
+            await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
 
     async def test_vector_node_does_not_return_error_dict_on_rate_limit(self):
         """RateLimitException 발생 시 {"error": ...} dict를 반환하지 않고 예외를 전파한다."""
         vector_agent = VectorAgent.__new__(VectorAgent)
-        vector_agent.search = AsyncMock(
-            side_effect=RateLimitException("소진")
-        )
+        vector_agent.search = AsyncMock(side_effect=RateLimitException("소진"))
 
         nodes = self._make_nodes(vector_agent)
 
         raised = False
         try:
-            await nodes.vector_node(
-                _state(intent=IntentType.VECTOR_SEARCH), _ai_session()
-            )
+            with patch_node_sessions(ai_session=_ai_session()):
+                await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
         except RateLimitException:
             raised = True
 
@@ -1614,14 +1663,11 @@ class TestVectorNodeRateLimitPropagation:
     async def test_vector_node_wraps_generic_exception_as_error_dict(self):
         """일반 예외는 기존과 동일하게 {"error": ...} dict로 변환된다."""
         vector_agent = VectorAgent.__new__(VectorAgent)
-        vector_agent.search = AsyncMock(
-            side_effect=ValueError("일반 오류")
-        )
+        vector_agent.search = AsyncMock(side_effect=ValueError("일반 오류"))
 
         nodes = self._make_nodes(vector_agent)
-        result = await nodes.vector_node(
-            _state(intent=IntentType.VECTOR_SEARCH), _ai_session()
-        )
+        with patch_node_sessions(ai_session=_ai_session()):
+            result = await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
 
         assert "error" in result
         assert "일반 오류" in result["error"]

@@ -10,8 +10,9 @@ AgentState에 필드가 추가될 때 make_agent_state만 수정하면 된다.
     router = make_router(IntentType.SQL_SEARCH)
 """
 
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents.analytics_agent import AnalyticsAgent, _AnalyticsParams
 from agents.answer_agent import (
@@ -174,3 +175,85 @@ def make_ai_session() -> MagicMock:
     # MagicMock은 __aenter__/__aexit__ 를 AsyncMock 으로 자동 설정하므로
     # 별도 설정 없이 `async with session.begin_nested():` 가 동작한다.
     return session
+
+
+def _ctx_factory(*sessions: Any):
+    """호출마다 sessions 를 순서대로 yield 하는 asynccontextmanager 팩토리.
+
+    노드 로컬 세션(0-6) 전환 후 노드는 `data_session_ctx()`/`ai_session_ctx()` 를
+    직접 호출해 세션을 acquire-use-release 한다. 테스트는 이 팩토리로 두 ctx 를
+    패치해, 노드가 어떤 mock 세션을 잡는지 제어/관측한다.
+
+    sessions 가 1개면 매 호출 동일 세션을, 여러 개면 호출 순서대로 소비한다(여러
+    번 세션을 여는 경로 — 예: retry 재진입 — 검증용). 다 소진하면 마지막 세션을
+    반복 반환한다.
+    """
+    used: list[Any] = []
+    seq = list(sessions)
+
+    @asynccontextmanager
+    async def _ctx():
+        if seq:
+            session = seq.pop(0) if len(seq) > 1 else seq[0]
+        else:
+            session = MagicMock()
+        used.append(session)
+        yield session
+
+    _ctx.used = used  # type: ignore[attr-defined]
+    return _ctx
+
+
+async def run_graph(graph, state, *, data_session=None, ai_session=None):
+    """graph.run(state) 를 노드 로컬 세션 ctx 패치와 함께 실행한다(테스트 전용).
+
+    0-6 전환으로 graph.run() 은 세션 인자를 받지 않는다. 기존 테스트가 넘기던
+    data_session/ai_session 은 이 헬퍼가 `patch_node_sessions` 로 ctx 에 주입한다.
+    """
+    with patch_node_sessions(data_session=data_session, ai_session=ai_session):
+        return await graph.run(state)
+
+
+def stream_graph(graph, state, *, data_session=None, ai_session=None):
+    """graph.stream(state) 를 노드 로컬 세션 ctx 패치와 함께 감싸는 async generator.
+
+    패치 컨텍스트가 스트림 소비 전 구간 동안 유지되도록 generator 로 감싼다.
+    """
+
+    async def _gen():
+        with patch_node_sessions(data_session=data_session, ai_session=ai_session):
+            async for ev in graph.stream(state):
+                yield ev
+
+    return _gen()
+
+
+@contextmanager
+def patch_node_sessions(
+    *,
+    data_session: Any = None,
+    ai_session: Any = None,
+    data_sessions: tuple[Any, ...] | None = None,
+    ai_sessions: tuple[Any, ...] | None = None,
+):
+    """`agents.nodes` 의 노드 로컬 세션 ctx 두 개를 mock 으로 패치한다.
+
+    노드는 `data_session_ctx()`/`ai_session_ctx()` 로 세션을 잡으므로, 단위/통합
+    테스트는 이 헬퍼로 mock 세션을 주입한다. graph.run()/stream() 은 더 이상 세션
+    인자를 받지 않는다(0-6).
+
+    Args:
+        data_session/ai_session: 매 acquire 마다 반환할 단일 mock 세션.
+        data_sessions/ai_sessions: acquire 순서대로 소비할 mock 세션 튜플
+            (retry 재진입 등 동일 노드가 세션을 재획득하는 경로 검증용).
+
+    Yields:
+        (data_ctx, ai_ctx) — `.used` 속성으로 실제 yield 된 세션 리스트를 관측한다.
+    """
+    d = _ctx_factory(*(data_sessions or ((data_session,) if data_session else ())))
+    a = _ctx_factory(*(ai_sessions or ((ai_session,) if ai_session else ())))
+    with (
+        patch("agents.nodes.data_session_ctx", d),
+        patch("agents.nodes.ai_session_ctx", a),
+    ):
+        yield d, a

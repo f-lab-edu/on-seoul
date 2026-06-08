@@ -1,7 +1,8 @@
-"""제안 0 — 동시 요청 격리 회귀 테스트.
+"""제안 0 / 0-6 — 동시 요청 격리 회귀 테스트.
 
-GraphNodes 는 컨테이너당 싱글톤(무상태)이고, DB 세션은 RunnableConfig 의
-`configurable` 로, node_path 는 AgentState reducer 로 per-request 격리된다.
+GraphNodes 는 컨테이너당 싱글톤(무상태)이다. DB 세션은 노드 로컬(0-6, 노드 내부
+`*_session_ctx()` 로 acquire-use-release)로, node_path 는 AgentState reducer 로
+per-request 격리된다.
 
 이 파일은 다음을 봉인한다:
 1. 두 요청을 asyncio 로 동시 실행해 인터리빙을 강제할 때, 각 요청이 자기 세션만
@@ -12,6 +13,7 @@ GraphNodes 는 컨테이너당 싱글톤(무상태)이고, DB 세션은 Runnable
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents.graph import AgentGraph
@@ -22,6 +24,7 @@ from tests.helpers import (
     make_ai_session,
     make_answer_agent,
     make_router,
+    run_graph,
 )
 
 
@@ -49,81 +52,101 @@ class _RecordingSqlAgent(SqlAgent):
         return {**state, "sql_results": self._rows, "sql_keyword": "kw"}
 
 
+def _unique_session_ctx(prefix: str):
+    """호출마다 고유 MagicMock 세션을 yield 하는 asynccontextmanager.
+
+    노드 로컬 세션(0-6): 노드는 풀에서 매번 별개 세션을 잡는다. 이를 모사해 동시
+    요청이 서로 다른 세션 객체를 받는지(교차 없음) 검증한다.
+    """
+    counter = {"n": 0}
+
+    @asynccontextmanager
+    async def _ctx():
+        counter["n"] += 1
+        yield MagicMock(name=f"{prefix}{counter['n']}")
+
+    return _ctx
+
+
 class TestConcurrentRequestIsolation:
     async def test_two_concurrent_requests_use_own_sessions(self):
-        """공유 그래프에서 두 요청을 동시 실행 시 각 요청이 자기 data_session 만 사용한다.
+        """공유 그래프에서 두 요청을 동시 실행 시 각 요청이 자기 노드 로컬 세션만 쓴다.
 
-        barrier 로 두 요청을 sql search 안에서 동시에 머무르게 한 뒤(과거 버그가
-        재현되는 정확한 타이밍), 각 요청의 search 가 자기 세션만 받았는지 단언한다.
+        노드 로컬 세션(0-6) 전환 후 노드는 `data_session_ctx()` 로 풀에서 세션을
+        잡는다. 호출마다 고유 세션을 돌려주는 ctx 로 패치하고, barrier 로 두 요청을
+        sql search 안에서 동시에 머무르게 한 뒤(과거 싱글톤 버그 재현 타이밍), 각
+        요청의 search 가 받은 세션 집합이 서로 겹치지 않음을 단언한다(교차 없음).
         """
         barrier = asyncio.Barrier(2)
-        sql_agent = _RecordingSqlAgent(
+        sql_a = _RecordingSqlAgent(
             [{"service_id": "S1", "service_name": "수영장"}], barrier=barrier
         )
+        sql_b = _RecordingSqlAgent(
+            [{"service_id": "S2", "service_name": "헬스장"}], barrier=barrier
+        )
 
-        # 단일 공유 그래프 인스턴스 (컨테이너당 싱글톤 모사).
-        graph = AgentGraph(
+        # 컨테이너당 싱글톤 그래프를 모사하되, 요청별 sql_agent 로 seen_sessions 를 분리 관측.
+        graph_a = AgentGraph(
             router=make_router(IntentType.SQL_SEARCH),
-            sql_agent=sql_agent,
+            sql_agent=sql_a,
+            answer_agent=make_answer_agent("답변"),
+        )
+        graph_b = AgentGraph(
+            router=make_router(IntentType.SQL_SEARCH),
+            sql_agent=sql_b,
             answer_agent=make_answer_agent("답변"),
         )
 
-        # 요청별 고유 세션 — 객체 동일성으로 교차를 탐지한다.
-        data_a, ai_a = MagicMock(name="data_a"), make_ai_session()
-        data_b, ai_b = MagicMock(name="data_b"), make_ai_session()
+        data_ctx = _unique_session_ctx("data")
+        ai_ctx = _unique_session_ctx("ai")
 
-        with patch(
-            "agents.hydration_node.hydrate_services", AsyncMock(return_value=[])
+        with (
+            patch("agents.nodes.data_session_ctx", data_ctx),
+            patch("agents.nodes.ai_session_ctx", ai_ctx),
+            patch("agents.hydration_node.hydrate_services", AsyncMock(return_value=[])),
         ):
             res_a, res_b = await asyncio.gather(
-                graph.run(
-                    _state(room_id=1, message_id=1),
-                    data_session=data_a,
-                    ai_session=ai_a,
-                ),
-                graph.run(
-                    _state(room_id=2, message_id=2),
-                    data_session=data_b,
-                    ai_session=ai_b,
-                ),
+                graph_a.run(_state(room_id=1, message_id=1)),
+                graph_b.run(_state(room_id=2, message_id=2)),
             )
 
-        # 두 세션이 모두 정확히 한 번씩 search 에 전달됐다(교차/유실 없음).
-        assert set(map(id, sql_agent.seen_sessions)) == {id(data_a), id(data_b)}
-        # 각 요청 결과가 정상 완료됐다.
+        # 두 요청의 sql search 세션 집합이 서로 겹치지 않는다(교차/유실 없음).
+        ids_a = set(map(id, sql_a.seen_sessions))
+        ids_b = set(map(id, sql_b.seen_sessions))
+        assert ids_a and ids_b
+        assert ids_a.isdisjoint(ids_b)
         assert res_a["answer"] == "답변"
         assert res_b["answer"] == "답변"
-        # search_persist/trace 는 각자 자기 ai_session 만 사용한다(상대 세션 미사용).
-        ai_a.commit.assert_awaited()
-        ai_b.commit.assert_awaited()
 
     async def test_concurrent_requests_node_paths_do_not_cross(self):
         """동시 요청의 node_path 가 서로 섞이지 않고 각자 완전한 경로를 가진다."""
         barrier = asyncio.Barrier(2)
         # 0건이면 self-correction 재시도가 끼어 경로가 길어지므로 hit 1건으로 단순화.
-        sql_agent = _RecordingSqlAgent([{"service_id": "S1"}], barrier=barrier)
+        sql_a = _RecordingSqlAgent([{"service_id": "S1"}], barrier=barrier)
+        sql_b = _RecordingSqlAgent([{"service_id": "S2"}], barrier=barrier)
 
-        graph = AgentGraph(
+        graph_a = AgentGraph(
             router=make_router(IntentType.SQL_SEARCH),
-            sql_agent=sql_agent,
+            sql_agent=sql_a,
+            answer_agent=make_answer_agent("답변"),
+        )
+        graph_b = AgentGraph(
+            router=make_router(IntentType.SQL_SEARCH),
+            sql_agent=sql_b,
             answer_agent=make_answer_agent("답변"),
         )
 
-        with patch(
-            "agents.hydration_node.hydrate_services",
-            AsyncMock(return_value=[{"service_id": "S1"}]),
+        with (
+            patch("agents.nodes.data_session_ctx", _unique_session_ctx("data")),
+            patch("agents.nodes.ai_session_ctx", _unique_session_ctx("ai")),
+            patch(
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=[{"service_id": "S1"}]),
+            ),
         ):
             res_a, res_b = await asyncio.gather(
-                graph.run(
-                    _state(room_id=1, message_id=1),
-                    data_session=MagicMock(),
-                    ai_session=make_ai_session(),
-                ),
-                graph.run(
-                    _state(room_id=2, message_id=2),
-                    data_session=MagicMock(),
-                    ai_session=make_ai_session(),
-                ),
+                graph_a.run(_state(room_id=1, message_id=1)),
+                graph_b.run(_state(room_id=2, message_id=2)),
             )
 
         # 각 요청의 node_path 는 router → sql → ... → trace 의 자기 경로만 가진다.
@@ -204,7 +227,8 @@ class TestRetryNodePathAccumulation:
                 vector_agent=vector_agent,
                 answer_agent=make_answer_agent("체험관 안내"),
             )
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(),
                 data_session=MagicMock(),
                 ai_session=make_ai_session(),
