@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.chat.adapter.out.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.jazzybyte.onseoul.chat.domain.Carryover;
 import dev.jazzybyte.onseoul.chat.domain.ChatTurn;
 import dev.jazzybyte.onseoul.chat.port.out.AiServiceStreamPort;
 import dev.jazzybyte.onseoul.chat.port.out.AiStreamEvent;
@@ -37,14 +38,19 @@ public class ChatAgentClient implements AiServiceStreamPort {
 
     @Override
     public Flux<AiStreamEvent> stream(String question, long roomId, long messageId, Double lat, Double lng,
-                                      List<ChatTurn> history) {
+                                      List<ChatTurn> history, Carryover carryover) {
         List<AiChatRequest.Turn> turns = (history == null ? List.<ChatTurn>of() : history).stream()
                 .map(t -> new AiChatRequest.Turn(t.role(), t.content()))
                 .toList();
-        AiChatRequest body = new AiChatRequest(roomId, messageId, question, lat, lng, turns);
-        // PII 보호: 질문/대화 content 평문은 로깅하지 않고 식별자와 history 건수만 INFO로 남긴다.
-        log.info("[Chat] 스트림 요청 to AI 서비스 - roomId={}, messageId={}, historySize={}",
-                roomId, messageId, turns.size());
+        Carryover safeCarryover = carryover == null ? Carryover.empty() : carryover;
+        List<AiChatRequest.PrevEntity> prevEntities = safeCarryover.prevEntities().stream()
+                .map(e -> new AiChatRequest.PrevEntity(e.serviceId(), e.label()))
+                .toList();
+        AiChatRequest body = new AiChatRequest(roomId, messageId, question, lat, lng, turns,
+                prevEntities, safeCarryover.prevIntent(), safeCarryover.prevReasoning());
+        // PII 보호: 질문/대화 content 평문은 로깅하지 않고 식별자와 건수만 INFO로 남긴다.
+        log.info("[Chat] 스트림 요청 to AI 서비스 - roomId={}, messageId={}, historySize={}, prevEntities={}, prevIntent={}",
+                roomId, messageId, turns.size(), prevEntities.size(), safeCarryover.prevIntent());
 
         return webClient.post()
                 .uri("/chat/stream")
@@ -84,7 +90,10 @@ public class ChatAgentClient implements AiServiceStreamPort {
                 String serviceCardsJson = (cards == null || cards.isNull())
                         ? null
                         : OBJECT_MAPPER.writeValueAsString(cards);
-                return AiStreamEvent.finalEvent(data, answer.isNull() ? "" : answer.asText(), serviceCardsJson);
+                JsonNode intentNode = node.get("intent");
+                String intent = (intentNode == null || intentNode.isNull()) ? null : intentNode.asText();
+                return AiStreamEvent.finalEvent(data, answer.isNull() ? "" : answer.asText(),
+                        serviceCardsJson, intent);
             }
         } catch (Exception e) {
             // JSON이 아니거나 파싱 실패 — relay 전용 이벤트로 취급(프론트 스트림에는 영향 없음).

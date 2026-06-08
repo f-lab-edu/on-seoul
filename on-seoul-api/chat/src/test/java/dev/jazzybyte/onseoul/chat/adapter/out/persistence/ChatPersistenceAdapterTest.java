@@ -107,7 +107,7 @@ class ChatPersistenceAdapterTest {
         String cardsJson = "[{\"service_id\":\"S1\",\"name\":\"강남 음악회 🎵\",\"area\":\"강남구\"},"
                 + "{\"service_id\":\"S2\",\"name\":\"미술 전시\",\"area\":\"강남구\"}]";
 
-        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.ASSISTANT, "강남구 안내", cardsJson));
+        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.ASSISTANT, "강남구 안내", cardsJson, null));
 
         List<ChatMessage> loaded = adapter.findByRoomIdOrderBySeqAsc(room.getId());
 
@@ -145,11 +145,39 @@ class ChatPersistenceAdapterTest {
         ChatRoom room = adapter.save(ChatRoom.create(62L, "ASSISTANT 카드 null"));
         Long seq = adapter.nextSeq();
 
-        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.ASSISTANT, "답변", null));
+        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.ASSISTANT, "답변", null, null));
 
         List<ChatMessage> loaded = adapter.findByRoomIdOrderBySeqAsc(room.getId());
         assertThat(loaded).hasSize(1);
         assertThat(loaded.get(0).getServiceCards()).isNull();
+    }
+
+    // ── intent round-trip (carryover) ─────────────────────────────
+
+    @Test
+    @DisplayName("intent — ASSISTANT 메시지의 intent를 저장 후 로드 시 동일 값으로 복원된다")
+    void intent_assistantRoundTrip_restoresSameValue() {
+        ChatRoom room = adapter.save(ChatRoom.create(63L, "intent 라운드트립"));
+        Long seq = adapter.nextSeq();
+
+        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.ASSISTANT, "강남구 안내", null, "SQL_SEARCH"));
+
+        List<ChatMessage> loaded = adapter.findByRoomIdOrderBySeqAsc(room.getId());
+        assertThat(loaded).hasSize(1);
+        assertThat(loaded.get(0).getIntent()).isEqualTo("SQL_SEARCH");
+    }
+
+    @Test
+    @DisplayName("intent — USER 메시지는 intent가 null로 유지된다")
+    void intent_userMessage_remainsNull() {
+        ChatRoom room = adapter.save(ChatRoom.create(64L, "USER intent null"));
+        Long seq = adapter.nextSeq();
+
+        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.USER, "질문"));
+
+        List<ChatMessage> loaded = adapter.findByRoomIdOrderBySeqAsc(room.getId());
+        assertThat(loaded).hasSize(1);
+        assertThat(loaded.get(0).getIntent()).isNull();
     }
 
     // ── findActiveByIdAndUserId ───────────────────────────────────

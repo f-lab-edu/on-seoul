@@ -78,6 +78,8 @@ public class ChatStreamService implements QueryAndStreamUseCase {
         AtomicReference<String> finalAnswer = new AtomicReference<>(null);
         // final 이벤트의 service_cards(opaque JSON) 보관. 카드 미동반이면 null로 남고 그대로 null 저장.
         AtomicReference<String> finalServiceCards = new AtomicReference<>(null);
+        // final 이벤트의 intent 보관. 미동반이면 null로 남고 그대로 null 저장(다음 턴 carryover용).
+        AtomicReference<String> finalIntent = new AtomicReference<>(null);
 
         // relay fan-out 채널. replay().all(): 저장 구독이 즉시 시작해도 클라가 처음부터 토큰을 받도록 버퍼·재생한다.
         Sinks.Many<String> relaySink = Sinks.many().replay().all();
@@ -85,13 +87,14 @@ public class ChatStreamService implements QueryAndStreamUseCase {
         // (a) 저장 구독 — 업스트림의 유일한 직접 소비자. 클라 끊김과 무관하게 살아 있다.
         aiServiceStreamPort.stream(
                         command.question(), prepared.roomId(), prepared.messageId(),
-                        command.lat(), command.lng(), prepared.history())
+                        command.lat(), command.lng(), prepared.history(), prepared.carryover())
                 .publishOn(Schedulers.boundedElastic())   // 직렬 실행 보장(Netty 이벤트 루프 이탈)
                 .timeout(backgroundTimeout)                 // 백그라운드 상한(클라 끊김 무관)
                 .doOnNext(event -> {
                     if (event.isFinal()) {
                         finalAnswer.set(event.finalAnswer());
                         finalServiceCards.set(event.finalServiceCards());
+                        finalIntent.set(event.finalIntent());
                     }
                     // relay는 best-effort: 구독자가 없거나 버퍼가 차도 저장 흐름은 막지 않는다.
                     relaySink.tryEmitNext(event.raw());
@@ -108,7 +111,7 @@ public class ChatStreamService implements QueryAndStreamUseCase {
                     try {
                         String answer = finalAnswer.get();
                         sendQueryUseCase.saveAnswer(prepared.roomId(), answer == null ? "" : answer,
-                                finalServiceCards.get());
+                                finalServiceCards.get(), finalIntent.get());
                         log.debug("[Chat] 응답 저장 완료 - roomId={}, signal={}", prepared.roomId(), signal);
                     } catch (Exception e) {
                         log.error("[Chat] ASSISTANT 응답 저장 실패 - roomId={}, signal={}",

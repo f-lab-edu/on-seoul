@@ -38,6 +38,10 @@ public class ChatMessageJpaEntity {
     @Column(name = "service_cards")
     private String serviceCards;
 
+    // ASSISTANT 메시지의 intent(예: "SQL_SEARCH"). USER는 null. 다음 턴 carryover(prev_intent)용.
+    @Column(name = "intent", length = 20)
+    private String intent;
+
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
@@ -47,7 +51,8 @@ public class ChatMessageJpaEntity {
     }
 
     public ChatMessage toDomain() {
-        return new ChatMessage(id, roomId, seq, ChatMessageRole.valueOf(role), content, serviceCards, createdAt);
+        return new ChatMessage(id, roomId, seq, ChatMessageRole.valueOf(role), content,
+                serviceCards, intent, createdAt);
     }
 
     public static ChatMessageJpaEntity fromDomain(ChatMessage message) {
@@ -58,6 +63,7 @@ public class ChatMessageJpaEntity {
         entity.role = message.getRole().name();
         entity.content = message.getContent();
         entity.serviceCards = message.getServiceCards();
+        entity.intent = message.getIntent();
         entity.createdAt = message.getCreatedAt();
         return entity;
     }

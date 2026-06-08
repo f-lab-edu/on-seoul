@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     role        VARCHAR(20) NOT NULL,
     content     CLOB NOT NULL,
     service_cards JSON,
+    intent      VARCHAR(20),
     created_at  TIMESTAMP WITH TIME ZONE NOT NULL
 );
 

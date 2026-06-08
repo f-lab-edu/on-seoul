@@ -24,7 +24,7 @@ class MessageResponseTest {
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     private ChatMessage assistant(String content, String serviceCards) {
-        return new ChatMessage(1L, 10L, 2L, ChatMessageRole.ASSISTANT, content, serviceCards,
+        return new ChatMessage(1L, 10L, 2L, ChatMessageRole.ASSISTANT, content, serviceCards, null,
                 OffsetDateTime.parse("2026-06-04T10:00:00Z"));
     }
 
@@ -66,7 +66,7 @@ class MessageResponseTest {
     @Test
     @DisplayName("USER 메시지(serviceCards null)도 JSON null로 직렬화된다")
     void serviceCards_userMessage_serializedAsJsonNull() throws Exception {
-        ChatMessage user = new ChatMessage(2L, 10L, 1L, ChatMessageRole.USER, "질문", null,
+        ChatMessage user = new ChatMessage(2L, 10L, 1L, ChatMessageRole.USER, "질문", null, null,
                 OffsetDateTime.parse("2026-06-04T09:59:00Z"));
         MessageResponse response = MessageResponse.from(user);
 
