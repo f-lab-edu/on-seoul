@@ -10,6 +10,15 @@ per-request 격리된다.
 2. node_path 가 요청별로 누적되며 서로 섞이지 않는다.
 3. node_path reducer 가 노드 경로 순서를 보존하며 누적한다.
 4. self-correction 재시도 경로에서도 node_path 가 정상 누적된다.
+
+NOTE (설계 경계):
+    이 파일은 0-1(configurable 세션 주입 시대)의 격리 회귀 테스트다.
+    test_two_concurrent_requests_use_own_sessions /
+    test_concurrent_requests_node_paths_do_not_cross 는 graph_a / graph_b 를
+    별도 생성하므로, "단일 GraphNodes 인스턴스를 두 요청이 공유할 때 교차 없음"을
+    직접 검증하지는 않는다. 단일 그래프 + 노드 로컬 세션 시나리오의 완전한 격리
+    검증은 tests/test_node_local_sessions.py::TestConcurrentIsolationNodeLocal
+    에서 다룬다.
 """
 
 import asyncio

@@ -9,8 +9,10 @@ AgentGraph에서 노드/엣지 로직 책임을 분리한다.
     GraphNodes 분리로 각 클래스의 변경 이유(reason to change)를 단일화한다.
 
 세션·타이밍:
-    GraphNodes 인스턴스는 AgentGraph가 소유하며,
-    run()/stream() 진입 시 prepare()로 세션과 실행 상태를 초기화한다.
+    GraphNodes 인스턴스는 AgentGraph가 소유하며 프로세스 내 싱글톤으로 공유된다.
+    세션은 각 노드 메서드 안에서 *_session_ctx()로 acquire-use-release(노드 로컬).
+    실행 상태(node_path, started_at)는 AgentState 슬롯으로 per-request 격리된다.
+    (prepare()는 제거됐고, 대응 로직은 graph._prepare_state()와 AgentState reducer로 이동)
 
 캐시 노드만 클래스로 분리된 이유:
     CacheCheckNode / CacheWriteNode는 Redis 의존성을 명시적으로 주입받고

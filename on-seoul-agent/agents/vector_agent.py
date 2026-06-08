@@ -202,8 +202,12 @@ async def _safe_question_search(
 async def _safe_bm25_search(session: AsyncSession, tokens: list[str]) -> list[dict]:
     """bm25_search 예외를 격리하여 빈 결과 반환.
 
-    예외 발생 시 세션 트랜잭션을 롤백하여 이후 쿼리(search_persist 등)가
-    InFailedSQLTransactionError 로 연쇄 실패하지 않도록 복구한다.
+    명시 rollback (레거시 방어 코드):
+        제안 2(채널별 독립 세션)로 전환된 이후 이 세션은 이 채널 전용이며,
+        async with _run_channel() 블록 종료 시 __aexit__ 가 자동으로 반납한다.
+        따라서 명시 rollback 은 현재 구조에서 무해하지만 불필요하다.
+        과거 공유 세션 시대(0-1)에 InFailedSQLTransactionError 연쇄 실패를 막기
+        위해 추가된 코드이며, 독립 세션 전환 이후에는 삭제해도 무방하다.
     """
     try:
         return await bm25_search(tokens, session)
@@ -238,8 +242,11 @@ class VectorAgent:
         )
         self._refine_chain = prompt | llm.with_structured_output(_RefinedQuery)
         # 프로세스당 VectorAgent 1개이므로 실질 프로세스 전역 cap.
-        # search() 호출마다 새 Semaphore를 생성하면 N 동시 요청 × 4채널 = N×4 연결이
-        # pool cap(25)을 초과할 수 있으므로 인스턴스 레벨로 유지한다.
+        # self._channel_sema 는 VectorAgent 싱글톤에 1개이므로, 요청이 몇 개
+        # 들어와도 동시에 ai_session 을 획득할 수 있는 채널 수의 상한은
+        # vector_channel_concurrency(4) 다. 인스턴스 레벨로 유지해야 이 cap이
+        # 프로세스 전역으로 작동한다(search() 호출마다 새 Semaphore를 생성하면
+        # per-request 4 상한이 되어 전역 cap 역할을 하지 못한다).
         self._channel_sema = asyncio.Semaphore(settings.vector_channel_concurrency)
 
     async def search(

@@ -240,6 +240,9 @@ def _prepare_state(state: AgentState) -> AgentState:
     시작 시각으로 세팅한다. retry_count 는 기존과 동일하게 미존재 시 0으로 채운다.
     """
     overrides: dict[str, Any] = {}
+    # routers/chat.py 가 항상 retry_count=0 으로 채워 넘기므로 이 분기는
+    # 정상 요청 경로에서는 실행되지 않는다. 테스트에서 부분 dict(retry_count 미포함)를
+    # 직접 넘길 때를 위한 방어 코드다.
     if "retry_count" not in state:
         overrides["retry_count"] = 0
     overrides["started_at"] = time.monotonic()
