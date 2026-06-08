@@ -70,6 +70,7 @@ from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
+from schemas.events import DecisionEvent
 from schemas.state import AgentState, ActionType, IntentType
 
 logger = logging.getLogger(__name__)
@@ -377,7 +378,9 @@ def _build_shared_graph() -> Any:
 
 
 _StreamEvent = (
-    tuple[Literal["progress"], dict[str, str]] | tuple[Literal["result"], AgentState]
+    tuple[Literal["progress"], dict[str, str]]
+    | tuple[Literal["decision"], dict[str, Any]]
+    | tuple[Literal["result"], AgentState]
 )
 
 
@@ -528,8 +531,41 @@ class AgentGraph:
 
                 if node_name in ("triage_node", "router_node") and not _search_progress_emitted:
                     _search_progress_emitted = True
+                    # triage_node는 항상 non-None dict를 반환하므로 node_updates는 여기서 항상 존재한다.
                     action = accumulated.get("action")
                     intent = accumulated.get("intent")
+
+                    # [D] W3: triage_node 완료 직후 decision 이벤트 emit.
+                    # 조건: triage_node가 LLM 분류를 실제 실행한 경우에만.
+                    # forced_intent 경로는 node_updates에 "user_rationale" 키를 포함하지
+                    # 않으므로 해당 키 존재 여부로 실행 여부를 판별한다.
+                    # router_node(하위호환 alias)는 user_rationale을 설정하지 않으므로 스킵.
+                    #
+                    # primary/secondary는 node_updates 전용으로 읽는다.
+                    # triage_node는 항상 intent/secondary_intent를 직접 반환하므로
+                    # accumulated fallback이 불필요하다(동일 값이 accumulated에도 반영됨).
+                    user_rationale = (
+                        node_updates.get("user_rationale")
+                        if node_name == "triage_node"
+                        else None
+                    )
+                    if user_rationale and action is not None:
+                        primary = node_updates.get("intent")
+                        secondary = node_updates.get("secondary_intent")
+                        routes: list[str] = []
+                        if primary is not None:
+                            routes.append(primary.value)
+                        if secondary is not None:
+                            routes.append(secondary.value)
+                        yield (
+                            "decision",
+                            DecisionEvent(
+                                action=action.value,
+                                routes=routes,
+                                user_rationale=user_rationale,
+                            ).model_dump(),
+                        )
+
                     # RETRIEVE action이고 검색 intent면 searching 이벤트
                     if action == ActionType.RETRIEVE and intent in (
                         IntentType.SQL_SEARCH,

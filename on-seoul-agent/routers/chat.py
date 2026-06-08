@@ -142,6 +142,9 @@ async def _stream(
             if event_type == "progress":
                 yield sse_frame("progress", data)
 
+            elif event_type == "decision":
+                yield sse_frame("decision", data)
+
             elif event_type == "result":
                 result = data
                 intent = result.get("intent")
