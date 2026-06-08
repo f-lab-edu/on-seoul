@@ -7,6 +7,7 @@
 - 기존 AgentWorkflow와 동일한 입출력 계약 (AgentState 기반)
 """
 
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -68,6 +69,9 @@ def _vector_agent(rows: list[dict]) -> tuple[VectorAgent, MagicMock, AsyncMock]:
     embeddings = MagicMock()
     embeddings.aembed_query = AsyncMock(return_value=[0.1] * 3)
     agent._embeddings = embeddings
+
+    # __new__ 가 __init__ 을 건너뛰므로 _channel_sema 를 직접 설정한다.
+    agent._channel_sema = asyncio.Semaphore(4)
 
     mock_bm25 = AsyncMock(return_value=[])
     return agent, make_ai_session(), mock_bm25

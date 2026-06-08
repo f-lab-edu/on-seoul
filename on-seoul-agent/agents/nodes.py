@@ -350,11 +350,11 @@ class GraphNodes:
         """VectorAgent.search() 호출 — vector_results(메타데이터 only), refined_query 설정.
 
         hydration(원본 조회)은 후속 hydration_node 가 담당한다.
-        노드 로컬 세션(0-6): ai_session 을 풀에서 잡고 검색 후 즉시 반납한다.
+        세션 관리(제안 2): VectorAgent.search() 내부에서 4채널마다 독립 ai_session_ctx() 로
+        세션을 열고 asyncio.gather 병렬 실행한다. vector_node 는 세션을 직접 다루지 않는다.
         """
         try:
-            async with ai_session_ctx() as ai_session:
-                new_state = await self._vector.search(state, ai_session)
+            new_state = await self._vector.search(state)
             results = new_state.get("vector_results") or []
             logger.info(
                 "vector.results room=%s count=%d refined=%r",

@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     # 임베딩 동기화 API — /embeddings/services/sync 백그라운드 동시 처리 수
     embedding_sync_concurrency: int = 4
 
+    # VECTOR 4채널 동시성 상한 — asyncio.Semaphore 값.
+    # 채널 수(4)와 동일하게 두면 풀 max_overflow(15) 이내에서 버스트 안전.
+    vector_channel_concurrency: int = 4
+
     # Triple-track + RRF 결합
     rrf_k_constant: int = 60
     rrf_scan_k_per_track: int = 50

@@ -2,7 +2,7 @@
 
 1. LLM으로 사용자 질의를 검색에 최적화된 문장으로 정제한다.
 2. 정제된 질의를 임베딩한다.
-3. 4채널을 순차 실행한다 (asyncpg 단일 세션 제약):
+3. 4채널을 채널별 독립 세션으로 asyncio.gather 병렬 실행한다:
    - Track A: vector_search(row_kind='identity')  + post-filter
    - Track B: vector_search(row_kind='summary')
    - Track C: question_search(row_kind='question') — PARTITION BY dedup
@@ -12,6 +12,7 @@
    hydration(원본 조회)은 HydrationNode 가 단독으로 담당한다.
 """
 
+import asyncio
 import logging
 
 from langchain_core.embeddings import Embeddings
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents._search_channel_utils import _to_hits
 from core.config import settings
+from core.database import ai_session_ctx
 from core.rrf import reciprocal_rank_fusion
 from llm.client import get_chat_model, get_embeddings
 from schemas.search import ChannelData, ChannelQuery, SearchChannel, SearchKind
@@ -235,15 +237,19 @@ class VectorAgent:
             ]
         )
         self._refine_chain = prompt | llm.with_structured_output(_RefinedQuery)
+        # 프로세스당 VectorAgent 1개이므로 실질 프로세스 전역 cap.
+        # search() 호출마다 새 Semaphore를 생성하면 N 동시 요청 × 4채널 = N×4 연결이
+        # pool cap(25)을 초과할 수 있으므로 인스턴스 레벨로 유지한다.
+        self._channel_sema = asyncio.Semaphore(settings.vector_channel_concurrency)
 
     async def search(
         self,
         state: AgentState,
-        ai_session: AsyncSession,
     ) -> dict:
-        """질의 정제 → 임베딩 → 4채널 순차 검색 → 가중 RRF.
+        """질의 정제 → 임베딩 → 4채널 병렬 검색 → 가중 RRF.
 
-        ai_session : service_embeddings(on_ai)에 대한 의미 검색·BM25 용도
+        채널마다 독립 ai_session_ctx()로 세션을 열어 asyncio.gather로 동시 실행한다.
+        asyncio.Semaphore(vector_channel_concurrency)로 동시 채널 수를 cap한다.
 
         vector_results 에는 검색 메타데이터만 채운다:
           [{service_id, rrf_score}, ...]
@@ -268,23 +274,45 @@ class VectorAgent:
         tokens = tokenize_query(refined.refined_query)
         bm25_tokens = [t for t in tokens if t not in _BM25_STOPWORDS]
 
-        # 4채널 순차 실행.
-        # asyncpg 단일 세션은 동시 쿼리를 허용하지 않으므로 순차 실행한다.
-        # 각 _safe_* 래퍼가 예외를 개별 격리하므로 한 채널 실패가 전체에 영향을 주지 않는다.
-        a_rows = await _safe_vector_search(
-            ai_session,
-            query_vector,
-            row_kind="identity",
-            max_class_name=refined.max_class_name,
-            area_name=refined.area_name,
-            service_status=refined.service_status,
-        )
-        b_rows = await _safe_vector_search(ai_session, query_vector, row_kind="summary")
-        c_rows = await _safe_question_search(ai_session, query_vector)
+        # 4채널 병렬 실행.
+        # 채널마다 독립 ai_session_ctx()로 세션을 열어 asyncpg 동시 쿼리 제약을 우회한다.
+        # self._channel_sema(인스턴스 레벨)로 동시 채널 수를 cap하여 풀 버스트를 방지한다.
+        # bm25_tokens 없으면 채널 D를 태스크에 포함하지 않고 빈 결과로 인덱스를 고정한다.
+        # 결과 인덱스: results[0]=a_rows, results[1]=b_rows, results[2]=c_rows, results[3]=d_rows
+
+        async def _run_channel(coro_fn):
+            async with self._channel_sema:
+                async with ai_session_ctx() as session:
+                    return await coro_fn(session)
+
+        tasks = [
+            _run_channel(
+                lambda s: _safe_vector_search(
+                    s,
+                    query_vector,
+                    row_kind="identity",
+                    max_class_name=refined.max_class_name,
+                    area_name=refined.area_name,
+                    service_status=refined.service_status,
+                )
+            ),
+            _run_channel(
+                lambda s: _safe_vector_search(s, query_vector, row_kind="summary")
+            ),
+            _run_channel(lambda s: _safe_question_search(s, query_vector)),
+        ]
         if bm25_tokens:
-            d_rows = await _safe_bm25_search(ai_session, bm25_tokens)
-        else:
-            d_rows = []
+            tasks.append(
+                _run_channel(lambda s: _safe_bm25_search(s, bm25_tokens))
+            )
+
+        gathered = await asyncio.gather(*tasks)
+        a_rows: list[dict] = gathered[0]
+        b_rows: list[dict] = gathered[1]
+        c_rows: list[dict] = gathered[2]
+        d_rows: list[dict] = gathered[3] if bm25_tokens else []
+
+        if not bm25_tokens:
             logger.debug("유효 BM25 토큰 없음 — 벡터 단독 검색으로 진행")
 
         # 가중치 결정
@@ -309,7 +337,7 @@ class VectorAgent:
             {"service_id": sid, "rrf_score": score} for sid, score in rrf_top
         ]
 
-        # --- search_channels 구성 (6채널) ---
+        # --- search_channels 구성 (5채널) ---
         search_channels: dict[str, ChannelData] = {
             SearchChannel.VECTOR_A: ChannelData(
                 kind=SearchKind.VECTOR,

@@ -236,11 +236,14 @@ def patch_node_sessions(
     data_sessions: tuple[Any, ...] | None = None,
     ai_sessions: tuple[Any, ...] | None = None,
 ):
-    """`agents.nodes` 의 노드 로컬 세션 ctx 두 개를 mock 으로 패치한다.
+    """`agents.nodes` 와 `agents.vector_agent` 의 세션 ctx 를 mock 으로 패치한다.
 
     노드는 `data_session_ctx()`/`ai_session_ctx()` 로 세션을 잡으므로, 단위/통합
     테스트는 이 헬퍼로 mock 세션을 주입한다. graph.run()/stream() 은 더 이상 세션
     인자를 받지 않는다(0-6).
+
+    제안 2 이후: VectorAgent.search() 가 `agents.vector_agent.ai_session_ctx()` 로
+    채널별 세션을 독립 획득하므로, 해당 경로도 함께 패치한다.
 
     Args:
         data_session/ai_session: 매 acquire 마다 반환할 단일 mock 세션.
@@ -255,5 +258,6 @@ def patch_node_sessions(
     with (
         patch("agents.nodes.data_session_ctx", d),
         patch("agents.nodes.ai_session_ctx", a),
+        patch("agents.vector_agent.ai_session_ctx", a),
     ):
         yield d, a

@@ -2,9 +2,14 @@
 
 vector_search(A/B), question_search(C), bm25_search(D) 4채널 병렬 호출 +
 가중 RRF + hydration 동작을 Mock으로 검증한다.
+
+제안 2 이후: VectorAgent.search()는 ai_session 인자를 받지 않는다.
+내부에서 ai_session_ctx()로 채널별 독립 세션을 열기 때문에
+테스트는 agents.vector_agent.ai_session_ctx 를 함께 patch 해야 한다.
 """
 
-from contextlib import ExitStack
+import asyncio
+from contextlib import asynccontextmanager, ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -38,7 +43,20 @@ def _make_agent(
     mock_embeddings = MagicMock()
     mock_embeddings.aembed_query = AsyncMock(return_value=vector)
     agent._embeddings = mock_embeddings
+    # __new__ 가 __init__ 을 건너뛰므로 _channel_sema 를 직접 설정한다.
+    agent._channel_sema = asyncio.Semaphore(4)
     return agent
+
+
+def _mock_ai_session_ctx():
+    """agents.vector_agent.ai_session_ctx 를 mock 세션을 yield 하도록 패치한다."""
+    mock_session = MagicMock()
+
+    @asynccontextmanager
+    async def _ctx():
+        yield mock_session
+
+    return patch("agents.vector_agent.ai_session_ctx", _ctx)
 
 
 def _patch_all_searches(
@@ -47,9 +65,10 @@ def _patch_all_searches(
     c_rows: list[dict] | None = None,
     d_rows: list[dict] | None = None,
 ):
-    """4채널 검색을 동시에 patch하는 컨텍스트 매니저.
+    """4채널 검색과 ai_session_ctx 를 동시에 patch하는 컨텍스트 매니저.
 
     Phase 2: hydrate_services 는 HydrationNode 책임이므로 여기서 patch 하지 않는다.
+    제안 2 이후: ai_session_ctx 도 함께 patch 한다.
     """
     _a_rows = a_rows or []
     _b_rows = b_rows or []
@@ -81,6 +100,7 @@ def _patch_all_searches(
                     new=AsyncMock(return_value=_d_rows),
                 )
             )
+            self._stack.enter_context(_mock_ai_session_ctx())
             return self
 
         def __exit__(self, *args):
@@ -96,7 +116,7 @@ class TestVectorAgentHybrid:
         state = _make_state()
 
         with _patch_all_searches() as ctx:
-            await agent.search(state, MagicMock())
+            await agent.search(state)
 
         # vector_search는 identity + summary 두 번 호출
         assert ctx.mock_vs.call_count == 2
@@ -121,7 +141,7 @@ class TestVectorAgentHybrid:
         agent = _make_agent()
 
         with _patch_all_searches(a_rows=a_rows):
-            result = await agent.search(_make_state(), MagicMock())
+            result = await agent.search(_make_state())
 
         assert result["vector_results"] is not None
         assert result["vector_results"][0]["service_id"] == "S001"
@@ -137,7 +157,7 @@ class TestVectorAgentHybrid:
                 "agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]
             ),
         ):
-            await agent.search(_make_state(), MagicMock())
+            await agent.search(_make_state())
 
         ctx.mock_bm25.assert_not_called()
 
@@ -174,7 +194,7 @@ class TestVectorAgentHybrid:
                 "agents.vector_agent.reciprocal_rank_fusion", wraps=lambda ch, **kw: []
             ) as mock_rrf_fn,
         ):
-            await agent.search(_make_state(), MagicMock())
+            await agent.search(_make_state())
 
         # rrf_unweighted_baseline=True 이면 weights=None
         if mock_rrf_fn.call_count > 0:
@@ -198,7 +218,7 @@ class TestVectorAgentHybrid:
         agent = _make_agent()
 
         with _patch_all_searches(a_rows=a_rows):
-            result = await agent.search(_make_state(), MagicMock())
+            result = await agent.search(_make_state())
 
         channels = result["search_channels"]
         assert SearchChannel.VECTOR_A in channels
@@ -229,8 +249,9 @@ class TestVectorAgentHybrid:
                 new=AsyncMock(return_value=c_rows),
             ),
             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])),
+            _mock_ai_session_ctx(),
         ):
-            result = await agent.search(_make_state(), MagicMock())
+            result = await agent.search(_make_state())
 
         # 실패해도 빈 결과 대신 다른 채널 결과가 들어온다
         assert result["vector_results"] is not None

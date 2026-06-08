@@ -209,6 +209,8 @@ class TestRetryNodePathAccumulation:
         embeddings = MagicMock()
         embeddings.aembed_query = AsyncMock(return_value=[0.1] * 3)
         vector_agent._embeddings = embeddings
+        # __new__ 가 __init__ 을 건너뛰므로 _channel_sema 를 직접 설정한다.
+        vector_agent._channel_sema = asyncio.Semaphore(4)
 
         vrows = [{"service_id": "V1", "service_name": "체험관", "similarity": 0.9}]
 

@@ -5,9 +5,12 @@
   - 4채널 모두 빈 결과 → 빈 vector_results
   - search_channels에 6개 키 모두 존재 (기존 테스트 보완)
   - _resolve_weights: vector_sub_intent_enabled=False일 때 default 프로파일 사용
+
+제안 2 이후: VectorAgent.search()는 ai_session 인자를 받지 않는다.
 """
 
-from contextlib import ExitStack
+import asyncio
+from contextlib import asynccontextmanager, ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents.vector_agent import VectorAgent, _RefinedQuery, _resolve_weights
@@ -40,13 +43,27 @@ def _make_agent(
     mock_embeddings = MagicMock()
     mock_embeddings.aembed_query = AsyncMock(return_value=vector)
     agent._embeddings = mock_embeddings
+    # __new__ 가 __init__ 을 건너뛰므로 _channel_sema 를 직접 설정한다.
+    agent._channel_sema = asyncio.Semaphore(4)
     return agent
 
 
+def _mock_ai_session_ctx():
+    """agents.vector_agent.ai_session_ctx 를 mock 세션을 yield 하도록 패치한다."""
+    mock_session = MagicMock()
+
+    @asynccontextmanager
+    async def _ctx():
+        yield mock_session
+
+    return patch("agents.vector_agent.ai_session_ctx", _ctx)
+
+
 def _patch_all_empty():
-    """4채널 모두 빈 결과.
+    """4채널 모두 빈 결과 + ai_session_ctx 패치.
 
     Phase 2: hydrate_services 는 HydrationNode 책임이므로 여기서 patch 하지 않는다.
+    제안 2 이후: ai_session_ctx 도 함께 patch 한다.
     """
 
     class _Ctx:
@@ -66,6 +83,7 @@ def _patch_all_empty():
             self._stack.enter_context(
                 patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[]))
             )
+            self._stack.enter_context(_mock_ai_session_ctx())
             return self
 
         def __exit__(self, *args):
@@ -97,6 +115,7 @@ class TestVectorAgentWeightPassthrough:
             mock_settings.rrf_top_k_final = 10
             mock_settings.vector_sub_intent_enabled = False
             mock_settings.vector_default_sub_intent = "semantic"
+            mock_settings.vector_channel_concurrency = 4
             mock_settings.rrf_weight_profiles = {
                 "semantic": {
                     "track_a": 0.15,
@@ -106,7 +125,7 @@ class TestVectorAgentWeightPassthrough:
                 }
             }
 
-            await agent.search(_make_state(), MagicMock())
+            await agent.search(_make_state())
 
         assert len(captured_kwargs) == 1, (
             "reciprocal_rank_fusion이 정확히 1번 호출돼야 한다"
@@ -123,7 +142,7 @@ class TestVectorAgentAllChannelsEmpty:
         agent = _make_agent()
 
         with _patch_all_empty():
-            result = await agent.search(_make_state(), MagicMock())
+            result = await agent.search(_make_state())
 
         assert result["vector_results"] == [], (
             f"4채널 모두 빈 결과이면 vector_results=[] 이어야 하지만 {result['vector_results']!r}"
@@ -138,7 +157,7 @@ class TestVectorAgentAllChannelsEmpty:
         agent = _make_agent()
 
         with _patch_all_empty():
-            result = await agent.search(_make_state(), MagicMock())
+            result = await agent.search(_make_state())
 
         channels = result["search_channels"]
         for key in (

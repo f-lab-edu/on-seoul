@@ -8,6 +8,7 @@ test_search_persist_node.py 의 단위 테스트에서 커버한다.
 이 파일은 "full-graph → persist까지 파이프라인이 연결됐는지"만 확인한다.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents.answer_agent import AnswerAgent, _TitleOutput
@@ -50,6 +51,8 @@ def _vector_agent(refined_query: str = "정제된 질의") -> VectorAgent:
     embeddings = MagicMock()
     embeddings.aembed_query = AsyncMock(return_value=[0.1] * 3)
     agent._embeddings = embeddings
+    # __new__ 가 __init__ 을 건너뛰므로 _channel_sema 를 직접 설정한다.
+    agent._channel_sema = asyncio.Semaphore(4)
     return agent
 
 
