@@ -180,7 +180,8 @@ class TestBm25TokensAbsent:
                 "agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])
             ) as mock_bm25,
             patch(
-                "agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]
+                "agents.vector_agent.atokenize_query",
+                new=AsyncMock(return_value=["예약", "서비스"]),
             ),
             _mock_ai_session_ctx(),
         ):
@@ -211,7 +212,8 @@ class TestBm25TokensAbsent:
             ),
             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])),
             patch(
-                "agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]
+                "agents.vector_agent.atokenize_query",
+                new=AsyncMock(return_value=["예약", "서비스"]),
             ),
             _mock_ai_session_ctx(),
         ):

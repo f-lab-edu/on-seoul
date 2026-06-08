@@ -10,9 +10,12 @@ from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from agents.graph import AgentGraph
+from core.concurrency import init_global_sema
+from core.config import settings
 from core.logging import setup_logging
 from core.redis import get_redis
 from core.telemetry import setup_telemetry, shutdown_telemetry
+from llm.client import close_openai_http_client, init_openai_http_client
 from middleware.metrics import ProcessTimeMiddleware
 from routers import admin as admin_router
 from routers import chat
@@ -30,10 +33,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     Answer Cache(core/cache.py)가 Redis를 사용하므로 app.state.redis에 보관한다.
     AgentGraph는 이 redis를 주입받아 process 내에서 1회만 컴파일된다.
+
+    vector_global_sema를 이벤트 루프 시작 이후 초기화하여 Python 3.10+ 경고를 방지한다.
     """
     # OTel 인프라 계측 — otel_enabled=False(기본)이거나 endpoint 미설정 시 no-op.
     # 기존 커스텀 트레이싱(chat_agent_traces)과 병행한다.
     setup_telemetry(app)
+
+    # 글로벌 VECTOR fan-out 세마포어 초기화 — 이벤트 루프 생성 후 실행.
+    # core/concurrency.py 모듈 전역 변수에 등록하여 VectorAgent가 직접 참조한다.
+    init_global_sema()
+    logger.info(
+        "vector_global_sema 초기화: concurrency=%d", settings.vector_global_concurrency
+    )
+
+    # OpenAI provider용 httpx.AsyncClient 싱글톤 초기화.
+    # 요청마다 새 AsyncClient를 생성하면 FD 누수가 발생하므로 lifespan에서 1회 초기화한다.
+    init_openai_http_client()
+    logger.info(
+        "openai_http_client 초기화: max_connections=%d", settings.llm_http_max_connections
+    )
+
     redis = get_redis()
     app.state.redis = redis
     app.state.graph = AgentGraph(redis=redis)
@@ -44,6 +64,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await redis.aclose()
         except Exception:
             logger.warning("redis aclose 실패", exc_info=True)
+        try:
+            await close_openai_http_client()
+        except Exception:
+            logger.warning("openai_http_client aclose 실패", exc_info=True)
         shutdown_telemetry()
 
 

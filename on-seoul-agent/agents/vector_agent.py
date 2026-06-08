@@ -13,6 +13,7 @@
 """
 
 import asyncio
+import contextlib
 import logging
 
 from langchain_core.embeddings import Embeddings
@@ -21,6 +22,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import core.concurrency as _concurrency
 from agents._search_channel_utils import _to_hits
 from core.config import settings
 from core.database import ai_session_ctx
@@ -30,7 +32,7 @@ from schemas.search import ChannelData, ChannelQuery, SearchChannel, SearchKind
 from schemas.state import AgentState
 from tools.bm25_search import bm25_search
 from tools.question_search import question_search
-from tools.tokenizer import tokenize_query
+from tools.tokenizer import atokenize_query
 from tools.vector_search import MIN_SIMILARITY, TOP_K as _VECTOR_TOP_K
 from tools.vector_search import vector_search
 
@@ -278,7 +280,8 @@ class VectorAgent:
             refined = await self._refine_chain.ainvoke({"message": state["message"]})
 
         query_vector = await self._embeddings.aembed_query(refined.refined_query)
-        tokens = tokenize_query(refined.refined_query)
+        # kiwipiepy.tokenize()는 동기 C 확장 — asyncio.to_thread()로 오프로드.
+        tokens = await atokenize_query(refined.refined_query)
         bm25_tokens = [t for t in tokens if t not in _BM25_STOPWORDS]
 
         # 4채널 병렬 실행.
@@ -286,11 +289,22 @@ class VectorAgent:
         # self._channel_sema(인스턴스 레벨)로 동시 채널 수를 cap하여 풀 버스트를 방지한다.
         # bm25_tokens 없으면 채널 D를 태스크에 포함하지 않고 빈 결과로 인덱스를 고정한다.
         # 결과 인덱스: results[0]=a_rows, results[1]=b_rows, results[2]=c_rows, results[3]=d_rows
+        #
+        # 글로벌 세마포어(core.concurrency.vector_global_sema) — 외곽 가드.
+        #   on_ai 풀(cap=25)이 고갈되지 않도록 프로세스 전체 동시 채널 수를 제한한다.
+        #   100 동시 요청 × 4채널 = 400 잠재 쿼리를 vector_global_concurrency(기본 20)로 캡.
+        #   채널별 세마포어(self._channel_sema=4)와 중첩: 글로벌이 외곽, 채널이 내곽.
+        #   모듈 속성(_concurrency.vector_global_sema)을 런타임에 읽어 lifespan 이후
+        #   init_global_sema()로 할당된 값을 정확히 참조한다.
 
         async def _run_channel(coro_fn):
-            async with self._channel_sema:
-                async with ai_session_ctx() as session:
-                    return await coro_fn(session)
+            # lifespan 이전(테스트 환경)에는 vector_global_sema가 None이므로
+            # contextlib.nullcontext()로 대체하여 분기 중복을 제거한다.
+            sema_ctx = _concurrency.vector_global_sema or contextlib.nullcontext()
+            async with sema_ctx:
+                async with self._channel_sema:
+                    async with ai_session_ctx() as session:
+                        return await coro_fn(session)
 
         tasks = [
             _run_channel(

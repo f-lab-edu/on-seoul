@@ -154,7 +154,8 @@ class TestVectorAgentHybrid:
         with (
             _patch_all_searches() as ctx,
             patch(
-                "agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]
+                "agents.vector_agent.atokenize_query",
+                new=AsyncMock(return_value=["예약", "서비스"]),
             ),
         ):
             await agent.search(_make_state())

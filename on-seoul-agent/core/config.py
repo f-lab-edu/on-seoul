@@ -75,6 +75,19 @@ class Settings(BaseSettings):
     # 채널 수(4)와 동일하게 두면 풀 max_overflow(15) 이내에서 버스트 안전.
     vector_channel_concurrency: int = 4
 
+    # 글로벌 VECTOR fan-out 세마포어 — 고QPS 환경에서 풀 고갈 방지.
+    # 100 동시 요청 × 4채널 = 400 동시 on_ai 쿼리 가능성을 막아
+    # on_ai 풀(pool_size=10, max_overflow=15 → cap=25)이 고갈되지 않게 한다.
+    # 20으로 설정하면 동시 채널 쿼리 ≤ 20 → 풀 cap(25) 이내 유지.
+    vector_global_concurrency: int = 20
+
+    # httpx HTTP 연결 풀 — LLM 클라이언트용 (LangChain SDK 전달).
+    # 컨테이너당 answer 스트림 ≈ 100 × 3s = 300, router ≈ 100 × 0.5s = 50
+    # → 동시 LLM HTTP 연결 ~350. httpx 기본 max_connections=100 으로는 부족.
+    llm_http_max_connections: int = 400
+    # 임베딩 클라이언트 — 동시 임베딩 요청 ≈ 100/s (vector agent 1건/요청).
+    embedding_http_max_connections: int = 200
+
     # Triple-track + RRF 결합
     rrf_k_constant: int = 60
     rrf_scan_k_per_track: int = 50
