@@ -127,6 +127,12 @@ async def _stream(
         history=[h.model_dump() for h in request.history],
         cache_hit=False,
         search_channels={},
+        # W1: 결과 엔티티 carryover + 참조 해소. 미전송 시 빈 배열/None →
+        # reference_resolution_node 가 non-referential 로 처리(기존 흐름 보존).
+        prev_entities=[e.model_dump() for e in request.prev_entities],
+        prev_intent=request.prev_intent,
+        prev_reasoning=request.prev_reasoning,
+        target_service_ids=None,
     )
 
     try:

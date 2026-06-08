@@ -108,6 +108,40 @@ _STRUCT_ANALYTICS = """\
 
 3) 마무리: 특정 카테고리나 지역을 지정하면 더 자세히 안내할 수 있다는 안내."""
 
+# W1 describe-known-entity — 참조 해소 경로 전용.
+# 직전 턴의 결과 엔티티를 재-hydrate 한 원본을 받아 "어떤 곳인지" 서술한다.
+# 예약 카드 템플릿(목록 나열)이 아니라, 시설의 성격·분류·대상·위치를 설명한다.
+_STRUCT_DESCRIBE = """\
+사용자가 직전 답변에서 안내한 특정 시설/서비스에 대해 "어떤 곳인지" 추가로 묻고 있습니다.
+전달된 검색 결과(JSON 배열)는 그 시설의 최신 원본 정보입니다.
+이를 바탕으로 해당 시설이 어떤 곳인지 자연스럽게 설명하세요.
+
+# 출력 구조
+
+1) 시설명을 언급하며 어떤 종류의 시설/서비스인지 한두 문장으로 설명
+   - 분류(max_class_name/min_class_name), 위치(area_name/place_name), 대상(target_info)을
+     활용해 "어떤 곳인지"를 서술합니다.
+   - 단순 목록 나열이 아니라, 사용자가 "이 곳이 어떤 곳"인지 이해하도록 풀어서 설명하세요.
+
+2) 예약/이용과 관련해 알아두면 좋은 점(접수 상태 등)을 한 문장으로 덧붙이되,
+   전달된 값에 없는 정보(보수공사 일정·주차 등)는 절대 추측하거나 지어내지 마세요.
+
+# 규칙
+
+- 전달된 검색 결과(JSON)에 있는 사실만 사용하세요. 없는 속성은 "정보가 없다"고 정직하게 안내합니다.
+- 중괄호 기호나 JSON 키 이름을 그대로 노출하지 말고 실제 값으로 치환해서 출력하세요."""
+
+# 재-hydrate 0건 — 직전 service_id 가 그새 soft-delete/마감된 경우.
+_STRUCT_DESCRIBE_EMPTY = """\
+사용자가 직전에 안내된 특정 시설에 대해 추가로 묻고 있으나,
+해당 시설 정보를 지금은 조회할 수 없습니다(삭제되었거나 접수가 종료되었을 수 있음).
+
+# 출력
+
+- 환각·빈 카드 금지. "방금 안내드린 시설의 최신 정보를 지금은 확인하기 어렵다"는 점을 정직하게 안내하세요.
+- 새로 검색해 드릴 수 있다고 제안하세요(예: 시설명·지역을 다시 알려주시면 다시 찾아드리겠다는 안내).
+- 한두 문장으로 간결하게, 친근한 한국어로 답하세요."""
+
 _STRUCT_FALLBACK = """\
 사용자 발화가 공공서비스 예약 조회 범위 밖이거나(인사·잡담·엉뚱한 요청) 검색 결과가 없습니다.
 아래 응대 방식에 따라 친근하고 위트 있게 답하되, 항상 서울 공공서비스 예약 안내라는 본분으로 자연스럽게 되돌리세요.
@@ -356,6 +390,47 @@ class AnswerAgent:
             IntentType.FALLBACK.value: _compose(
                 _ROLE, _STRUCT_FALLBACK, _FALLBACK_GUARDRAILS, _OUTPUT_RULES
             ),
+            # W1 describe-known-entity (참조 해소 경로). intent 와 무관한 전용 키.
+            "DESCRIBE": _compose(_ROLE, _STRUCT_DESCRIBE, _OUTPUT_RULES),
+            "DESCRIBE_EMPTY": _compose(_ROLE, _STRUCT_DESCRIBE_EMPTY, _OUTPUT_RULES),
+        }
+
+    async def describe(self, state: AgentState) -> AgentState:
+        """W1 참조 해소 경로 — 재-hydrate 한 엔티티를 "어떤 곳인지" 서술한다.
+
+        hydrated_services 가 비어 있으면(재-hydrate 0건: soft-delete/마감) 정직한
+        안내 + 재검색 제안만 답한다(환각·빈 카드 금지). 예약 카드 템플릿이 아니라
+        시설 성격·분류·대상 설명을 생성한다.
+        """
+        message = state["message"]
+        hydrated = state.get("hydrated_services") or []
+
+        if not hydrated:
+            answer_text = await self._answer_chain.ainvoke(
+                {
+                    "system": self._static_prompts["DESCRIBE_EMPTY"],
+                    "message": message,
+                    "results_json": "[]",
+                    "more_notice": _more_notice(0),
+                }
+            )
+            # 0건은 카드 노출 없음.
+            return {**state, "answer": answer_text, "service_cards": []}
+
+        display = [self._normalize(r) for r in hydrated[:_DISPLAY_LIMIT]]
+        results_json = json.dumps(display, ensure_ascii=False, default=str)
+        answer_text = await self._answer_chain.ainvoke(
+            {
+                "system": self._static_prompts["DESCRIBE"],
+                "message": message,
+                "results_json": results_json,
+                "more_notice": _more_notice(0),
+            }
+        )
+        return {
+            **state,
+            "answer": answer_text,
+            "service_cards": [dict(card) for card in display],
         }
 
     async def answer(self, state: AgentState) -> AgentState:

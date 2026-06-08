@@ -182,6 +182,67 @@ class TestChatStreamRouter:
 
         assert captured[0]["title_needed"] is False
 
+    async def test_prev_entities_injected_into_state(
+        self, client: AsyncClient, mock_graph
+    ):
+        """W1: ChatRequest.prev_entities/prev_intent/prev_reasoning → AgentState 주입."""
+        final_state = _make_final_state(message_id=2)
+        captured: list[AgentState] = []
+
+        async def _capturing_stream(state, **kwargs):
+            captured.append(state)
+            yield "result", final_state
+
+        mock_graph.stream = _capturing_stream
+
+        await client.post(
+            "/chat/stream",
+            json={
+                "room_id": 1,
+                "message_id": 2,
+                "message": "이 곳 어떤 곳이야?",
+                "prev_entities": [
+                    {"service_id": "S1", "label": "마루공원 테니스장"},
+                    {"service_id": "S2", "label": "강남 수영장"},
+                ],
+                "prev_intent": "VECTOR_SEARCH",
+                "prev_reasoning": "직전에 자연 친화 시설로 분류함",
+            },
+        )
+
+        st = captured[0]
+        assert st["prev_entities"] == [
+            {"service_id": "S1", "label": "마루공원 테니스장"},
+            {"service_id": "S2", "label": "강남 수영장"},
+        ]
+        assert st["prev_intent"] == IntentType.VECTOR_SEARCH
+        assert st["prev_reasoning"] == "직전에 자연 친화 시설로 분류함"
+        assert st["target_service_ids"] is None
+
+    async def test_prev_fields_default_when_omitted(
+        self, client: AsyncClient, mock_graph
+    ):
+        """W1 하위호환: 신규 필드 미전송 시 빈 배열/None 으로 주입(기존 동작)."""
+        final_state = _make_final_state(message_id=2)
+        captured: list[AgentState] = []
+
+        async def _capturing_stream(state, **kwargs):
+            captured.append(state)
+            yield "result", final_state
+
+        mock_graph.stream = _capturing_stream
+
+        await client.post(
+            "/chat/stream",
+            json={"room_id": 1, "message_id": 2, "message": "수영장 알려줘"},
+        )
+
+        st = captured[0]
+        assert st["prev_entities"] == []
+        assert st["prev_intent"] is None
+        assert st["prev_reasoning"] is None
+        assert st["target_service_ids"] is None
+
     async def test_workflow_exception_returns_error_event(
         self, client: AsyncClient, mock_graph
     ):

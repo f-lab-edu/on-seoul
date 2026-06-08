@@ -43,6 +43,28 @@ def test_chat_request_history_model_dump_shape():
     ]
 
 
+def test_prev_intent_known_value_parsed():
+    """알려진 prev_intent 문자열은 그대로 IntentType 으로 파싱된다."""
+    req = ChatRequest(
+        room_id=1, message_id=1, message="질문", prev_intent="VECTOR_SEARCH"
+    )
+    assert req.prev_intent == IntentType.VECTOR_SEARCH
+
+
+def test_prev_intent_unknown_value_falls_back_to_none():
+    """SHOULD-FIX 2: 알 수 없는/오타 prev_intent 는 422 대신 None 으로 폴백한다.
+
+    Spring 이 미래의 신규 intent 나 오타를 회신해도 요청 전체가 실패하지 않는다.
+    """
+    req = ChatRequest(
+        room_id=1, message_id=1, message="질문", prev_intent="FUTURE_INTENT"
+    )
+    assert req.prev_intent is None
+
+    req2 = ChatRequest(room_id=1, message_id=1, message="질문", prev_intent="sql_search")
+    assert req2.prev_intent is None  # 대소문자 불일치도 unknown 취급
+
+
 def test_no_recent_queries_module_import_in_production_code():
     """프로덕션 코드 어디에도 core.recent_queries import가 없다."""
     import importlib

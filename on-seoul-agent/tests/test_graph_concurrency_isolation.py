@@ -158,10 +158,12 @@ class TestConcurrentRequestIsolation:
                 graph_b.run(_state(room_id=2, message_id=2)),
             )
 
-        # 각 요청의 node_path 는 router → sql → ... → trace 의 자기 경로만 가진다.
+        # 각 요청의 node_path 는 reference_resolution → router → sql → ... → trace 의
+        # 자기 경로만 가진다 (W1: START 직후 참조 해소 선판정 노드).
         for res in (res_a, res_b):
             path = res["node_path"]
-            assert path[0] == "router"
+            assert path[0] == "reference_resolution"
+            assert path[1] == "router"
             assert "sql_node" in path
             assert path[-1] == "trace"
             # 동일 노드가 (재시도 없이) 중복 누적되지 않는다 = 상대 요청 경로 미혼입.

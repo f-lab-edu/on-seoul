@@ -121,3 +121,18 @@ class AgentState(TypedDict):
     # operator.or_ reducer: 부분 dict 반환 시 LangGraph가 누적 병합한다.
     # self-correction 재시도 시 retry_prep_node 가 {} 로 명시 리셋 (UNIQUE 위반 방지).
     search_channels: Annotated[dict[str, ChannelData], search_channels_reducer]
+    # ─── W1: 대화 상태·결과 엔티티 carryover + 참조 해소 ───
+    # 직전 턴의 결과 엔티티(정체성). 각 항목 {"service_id": str, "label": str}.
+    # ChatRequest.prev_entities 에서 주입(API 서비스가 영속 service_cards 로부터 조립).
+    # 미전송 시 None([]) — reference_resolution_node 가 무조건 non-referential 처리(하위호환).
+    prev_entities: list[dict[str, str]] | None
+    # 직전 턴의 분류 intent. ChatRequest.prev_intent 에서 주입. 미전송 시 None.
+    # (현재는 carryover 슬롯으로만 보관. EXPLAIN 소비는 [C] 이후.)
+    prev_intent: IntentType | None
+    # 직전 턴의 판단 근거(user_rationale). ChatRequest.prev_reasoning 에서 주입.
+    # 미전송 시 None. EXPLAIN action 소비는 [C] 이후 — 이번엔 슬롯·주입만(X7).
+    prev_reasoning: str | None
+    # 참조 해소 결과: 현재 message 가 지시 참조일 때 바인딩된 service_id 리스트.
+    # reference_resolution_node 가 referential 판정 시 채운다. None([]) 이면 비-referential
+    # (기존 흐름). 다중 참조("1번이랑 3번") 시 복수 바인딩.
+    target_service_ids: list[str] | None

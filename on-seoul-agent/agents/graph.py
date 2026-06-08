@@ -89,6 +89,18 @@ _ACTIVE_NODES: contextvars.ContextVar[GraphNodes] = contextvars.ContextVar(
 # ---------------------------------------------------------------------------
 
 
+async def _dispatch_reference_resolution_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().reference_resolution_node(state)
+
+
+async def _dispatch_rehydrate_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().rehydrate_node(state)
+
+
+async def _dispatch_describe_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().describe_node(state)
+
+
 async def _dispatch_router_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().router_node(state)
 
@@ -137,6 +149,10 @@ async def _dispatch_trace_node(state: AgentState) -> dict[str, Any]:
     return await _ACTIVE_NODES.get().trace_node(state)
 
 
+def _dispatch_route_after_reference(state: AgentState) -> str:
+    return _ACTIVE_NODES.get().route_after_reference(state)
+
+
 def _dispatch_route_by_intent(state: AgentState) -> str:
     return _ACTIVE_NODES.get().route_by_intent(state)
 
@@ -158,6 +174,11 @@ def _build_shared_graph() -> Any:
     """StateGraph를 구성하고 컴파일한다. dispatch 함수만 사용하므로 재사용 가능."""
     builder: StateGraph = StateGraph(AgentState)
 
+    builder.add_node(
+        "reference_resolution_node", _dispatch_reference_resolution_node
+    )
+    builder.add_node("rehydrate_node", _dispatch_rehydrate_node)
+    builder.add_node("describe_node", _dispatch_describe_node)
     builder.add_node("router_node", _dispatch_router_node)
     builder.add_node("cache_check_node", _dispatch_cache_check_node)
     builder.add_node("cache_write_node", _dispatch_cache_write_node)
@@ -171,7 +192,22 @@ def _build_shared_graph() -> Any:
     builder.add_node("search_persist_node", _dispatch_search_persist_node)
     builder.add_node("trace_node", _dispatch_trace_node)
 
-    builder.add_edge(START, "router_node")
+    # W1: START 직후 참조 해소 선판정.
+    # referential → rehydrate_node → describe_node(검색/캐시/라우터 우회).
+    # non-referential → router_node(기존 흐름). prev_entities 미전송 시 항상 후자.
+    builder.add_edge(START, "reference_resolution_node")
+    builder.add_conditional_edges(
+        "reference_resolution_node",
+        _dispatch_route_after_reference,
+        {
+            "rehydrate_node": "rehydrate_node",
+            "router_node": "router_node",
+        },
+    )
+    # 참조 해소 경로: 최신 원본 재-hydrate → describe → 종단 체인(search_persist → trace).
+    # cache_write 는 우회한다(refined_query 없음 + 참조 경로는 캐시 대상 아님).
+    builder.add_edge("rehydrate_node", "describe_node")
+    builder.add_edge("describe_node", "search_persist_node")
 
     # router → cache_check.
     # refined_query와 post-filter(max_class_name/area_name/service_status)는
@@ -303,17 +339,19 @@ class AgentGraph:
 
         token = _ACTIVE_NODES.set(self._nodes)
         try:
-            # recursion_limit=16:
-            # 1회 정상 흐름:
-            #   router(1) → cache_check(2) → search(3) → hydration(4) →
-            #   answer(5) → cache_write(6) → search_persist(7) → trace(8) = 8 super-step.
-            # retry 1회 포함 시 retry_prep + router/cache_check/search/hydration/answer 재실행으로
-            #   +6 노드, 합계 14 super-step.
-            # 여유 2를 더해 16으로 설정한다.
+            # recursion_limit=18:
+            # 1회 정상 흐름(W1 reference_resolution 선판정 추가):
+            #   reference_resolution(1) → router(2) → cache_check(3) → search(4) →
+            #   hydration(5) → answer(6) → cache_write(7) → search_persist(8) →
+            #   trace(9) = 9 super-step.
+            # retry 1회 포함 시 retry_prep + router/cache_check/search/hydration/answer
+            #   재실행으로 +6 노드, 합계 15 super-step.
+            # 참조 해소 경로는 더 짧다(reference → rehydrate → describe →
+            #   search_persist → trace = 5). 여유 3을 더해 18로 설정한다.
             # 세션은 노드 내부에서 acquire-use-release(제안 0-6: 노드 로컬 세션).
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
-                config={"recursion_limit": 16},
+                config={"recursion_limit": 18},
             )  # type: ignore[arg-type]
         finally:
             _ACTIVE_NODES.reset(token)
@@ -359,7 +397,7 @@ class AgentGraph:
         try:
             async for chunk in AgentGraph._compiled_graph.astream(
                 state,
-                config={"recursion_limit": 16},  # 정상 8 + retry 최대 6 + 여유 2 = 16
+                config={"recursion_limit": 18},  # 정상 9 + retry 최대 6 + 여유 3 = 18
             ):
                 node_name: str = next(iter(chunk))
                 node_updates: dict[str, Any] | None = chunk[node_name]
@@ -392,6 +430,15 @@ class AgentGraph:
                                 "message": "답변을 생성하고 있습니다...",
                             },
                         )
+
+                elif node_name == "rehydrate_node" and not _answer_progress_emitted:
+                    # W1 참조 해소 경로: 재-hydrate 완료 후 describe 답변 단계로.
+                    # 기존 "answering" 이벤트만 사용(신규 SSE 이벤트 미도입 — 하위호환).
+                    _answer_progress_emitted = True
+                    yield (
+                        "progress",
+                        {"step": "answering", "message": "답변을 생성하고 있습니다..."},
+                    )
 
                 elif node_name == "retry_prep_node":
                     # 재시도 경계: 검색/답변 진행 플래그를 리셋해 다음 순회의

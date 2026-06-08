@@ -1111,3 +1111,83 @@ class TestAnswerAgentMap:
         result = await agent.answer(state)
 
         assert result["answer"] == "내 주변 시설입니다."
+
+
+class TestAnswerAgentDescribe:
+    """W1 describe-known-entity 단위 테스트 (QA 갭 보강).
+
+    invariant #5: describe()는 예약 카드 목록 템플릿(_STRUCT_CARD_LIST)이 아니라
+    설명형 프롬프트(_STRUCT_DESCRIBE / _STRUCT_DESCRIBE_EMPTY)를 사용해야 한다.
+    helpers.make_answer_agent 는 DESCRIBE/DESCRIBE_EMPTY 키를 갖춘 정적 프롬프트
+    캐시를 제공한다(이 파일 로컬 _make_agent 는 갖지 않으므로 사용하지 않는다).
+    """
+
+    def _make_state(self, **kwargs):
+        return make_agent_state(message="이 곳 어떤 곳이야?", **kwargs)
+
+    async def test_describe_uses_describe_prompt_not_card_list(self):
+        from tests.helpers import make_answer_agent
+        from agents.answer_agent import _STRUCT_DESCRIBE, _STRUCT_CARD_LIST
+
+        agent = make_answer_agent("마루공원 테니스장은 노원구의 테니스 시설입니다.")
+        state = self._make_state(
+            target_service_ids=["S1"],
+            hydrated_services=[
+                {
+                    "service_id": "S1",
+                    "service_name": "마루공원 테니스장",
+                    "area_name": "노원구",
+                    "service_url": "https://yeyak.seoul.go.kr/x",
+                }
+            ],
+        )
+        result = await agent.describe(state)
+
+        system = agent._answer_chain.ainvoke.call_args[0][0]["system"]
+        # 설명형 프롬프트 선택 — 예약 카드 목록 템플릿이 아님.
+        assert _STRUCT_DESCRIBE[:30] in system
+        assert _STRUCT_CARD_LIST[:30] not in system
+        assert result["answer"] == "마루공원 테니스장은 노원구의 테니스 시설입니다."
+        assert len(result["service_cards"]) == 1
+        assert result["service_cards"][0]["service_id"] == "S1"
+
+    async def test_describe_empty_uses_empty_prompt_and_no_cards(self):
+        from tests.helpers import make_answer_agent
+        from agents.answer_agent import _STRUCT_DESCRIBE_EMPTY
+
+        agent = make_answer_agent("지금은 확인이 어렵습니다. 다시 찾아드릴까요?")
+        state = self._make_state(
+            target_service_ids=["S1"],
+            hydrated_services=[],  # 재-hydrate 0건
+        )
+        result = await agent.describe(state)
+
+        call = agent._answer_chain.ainvoke.call_args[0][0]
+        assert _STRUCT_DESCRIBE_EMPTY[:30] in call["system"]
+        # 0건이면 빈 JSON 배열을 LLM 에 전달(환각 방지) + 카드 없음.
+        assert call["results_json"] == "[]"
+        assert result["service_cards"] == []
+        assert result["answer"]
+
+    async def test_describe_does_not_leak_reservation_period_fields(self):
+        # invariant: describe 도 _normalize 를 거치므로 신뢰 불가 운영기간 필드를
+        # LLM 컨텍스트/카드에 노출하지 않는다(answer() 와 동일 정규화 계약).
+        from tests.helpers import make_answer_agent
+
+        agent = make_answer_agent("설명입니다.")
+        state = self._make_state(
+            target_service_ids=["S1"],
+            hydrated_services=[
+                {
+                    "service_id": "S1",
+                    "service_name": "마루공원 테니스장",
+                    "service_open_start_dt": "2021-01-01",
+                    "service_open_end_dt": "2031-12-30",
+                    "service_url": "https://x",
+                }
+            ],
+        )
+        result = await agent.describe(state)
+        card = result["service_cards"][0]
+        assert "service_open_start_dt" not in card
+        assert "service_open_end_dt" not in card

@@ -22,6 +22,8 @@ from agents.answer_agent import (
     _OUTPUT_RULES,
     _ROLE,
     _STRUCT_ANALYTICS,
+    _STRUCT_DESCRIBE,
+    _STRUCT_DESCRIBE_EMPTY,
     _STRUCT_FALLBACK,
     _STRUCT_MAP,
 )
@@ -69,6 +71,10 @@ def make_agent_state(**overrides: Any) -> AgentState:
         search_channels={},
         hydrated_services=None,
         service_cards=None,
+        prev_entities=None,
+        prev_intent=None,
+        prev_reasoning=None,
+        target_service_ids=None,
     )
     base.update(overrides)
     return base
@@ -161,6 +167,8 @@ def make_answer_agent(
         IntentType.MAP.value: _compose(_ROLE, _STRUCT_MAP, _OUTPUT_RULES),
         IntentType.ANALYTICS.value: _compose(_ROLE, _STRUCT_ANALYTICS, _OUTPUT_RULES),
         IntentType.FALLBACK.value: _compose(_ROLE, _STRUCT_FALLBACK, _OUTPUT_RULES),
+        "DESCRIBE": _compose(_ROLE, _STRUCT_DESCRIBE, _OUTPUT_RULES),
+        "DESCRIBE_EMPTY": _compose(_ROLE, _STRUCT_DESCRIBE_EMPTY, _OUTPUT_RULES),
     }
     return agent
 
