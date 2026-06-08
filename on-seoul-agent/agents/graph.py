@@ -65,8 +65,9 @@ from agents.answer_agent import AnswerAgent
 from agents.nodes import GraphNodes
 from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
+from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
-from schemas.state import AgentState, IntentType
+from schemas.state import AgentState, ActionType, IntentType
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,46 @@ _ACTIVE_NODES: contextvars.ContextVar[GraphNodes] = contextvars.ContextVar(
 # 제안 0-6: DB 노드는 노드 내부에서 세션을 acquire-use-release 하므로 dispatch 는
 # 더 이상 config 에서 세션을 꺼내 전달하지 않는다(모든 dispatch 가 state 만 받는다).
 # ---------------------------------------------------------------------------
+
+
+async def _dispatch_triage_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().triage_node(state)
+
+
+async def _dispatch_direct_answer_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().direct_answer_node(state)
+
+
+async def _dispatch_ambiguous_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().ambiguous_node(state)
+
+
+async def _dispatch_out_of_scope_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().out_of_scope_node(state)
+
+
+async def _dispatch_explain_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().explain_node(state)
+
+
+async def _dispatch_rrf_fusion_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().rrf_fusion_node(state)
+
+
+async def _dispatch_pre_answer_gate_node(state: AgentState) -> dict[str, Any]:
+    return await _ACTIVE_NODES.get().pre_answer_gate_node(state)
+
+
+def _dispatch_route_by_action(state: AgentState) -> str:
+    return _ACTIVE_NODES.get().route_by_action(state)
+
+
+def _dispatch_route_by_action_fanout(state: AgentState) -> list[str] | str:
+    return _ACTIVE_NODES.get().route_by_action_fanout(state)
+
+
+def _dispatch_route_pre_answer_gate(state: AgentState) -> str:
+    return _ACTIVE_NODES.get().route_pre_answer_gate(state)
 
 
 async def _dispatch_reference_resolution_node(state: AgentState) -> dict[str, Any]:
@@ -171,15 +212,36 @@ def _dispatch_self_correction_edge(state: AgentState) -> str:
 
 
 def _build_shared_graph() -> Any:
-    """StateGraph를 구성하고 컴파일한다. dispatch 함수만 사용하므로 재사용 가능."""
+    """StateGraph를 구성하고 컴파일한다. dispatch 함수만 사용하므로 재사용 가능.
+
+    그래프 구조 ([C] W2 확장):
+    START → reference_resolution_node
+      ├─ referential → rehydrate_node → describe_node → search_persist_node → trace_node
+      └─ non-referential → triage_node (router_node alias)
+           │
+           ├─ action=RETRIEVE     → cache_check_node → [sql/vector/map/analytics]
+           │                           → hydration_node → pre_answer_gate_node
+           │                                ├─ 0건(C2) → retry_prep_node
+           │                                └─ 유건    → rrf_fusion_node → answer_node
+           ├─ action=DIRECT_ANSWER → direct_answer_node → 종단 체인
+           ├─ action=AMBIGUOUS     → ambiguous_node → 종단 체인
+           ├─ action=OUT_OF_SCOPE  → out_of_scope_node
+           │    ├─ domain_outside → 종단 체인
+           │    └─ attribute_gap → vector_node → hydration_node → ...
+           └─ action=EXPLAIN      → explain_node → 종단 체인
+
+    secondary_intent 팬아웃(enable_secondary_intent=True):
+      cache_check miss → [sql_node, vector_node] 병렬 → rrf_fusion_node → hydration_node
+    """
     builder: StateGraph = StateGraph(AgentState)
 
-    builder.add_node(
-        "reference_resolution_node", _dispatch_reference_resolution_node
-    )
+    # ── 노드 등록 ──
+    builder.add_node("reference_resolution_node", _dispatch_reference_resolution_node)
     builder.add_node("rehydrate_node", _dispatch_rehydrate_node)
     builder.add_node("describe_node", _dispatch_describe_node)
-    builder.add_node("router_node", _dispatch_router_node)
+    # triage_node = router_node (alias 제공)
+    builder.add_node("triage_node", _dispatch_triage_node)
+    builder.add_node("router_node", _dispatch_router_node)  # 하위호환 alias
     builder.add_node("cache_check_node", _dispatch_cache_check_node)
     builder.add_node("cache_write_node", _dispatch_cache_write_node)
     builder.add_node("retry_prep_node", _dispatch_retry_prep_node)
@@ -188,41 +250,54 @@ def _build_shared_graph() -> Any:
     builder.add_node("map_node", _dispatch_map_node)
     builder.add_node("analytics_node", _dispatch_analytics_node)
     builder.add_node("hydration_node", _dispatch_hydration_node)
+    builder.add_node("rrf_fusion_node", _dispatch_rrf_fusion_node)
+    builder.add_node("pre_answer_gate_node", _dispatch_pre_answer_gate_node)
     builder.add_node("answer_node", _dispatch_answer_node)
     builder.add_node("search_persist_node", _dispatch_search_persist_node)
     builder.add_node("trace_node", _dispatch_trace_node)
+    # [C] W2 action 노드
+    builder.add_node("direct_answer_node", _dispatch_direct_answer_node)
+    builder.add_node("ambiguous_node", _dispatch_ambiguous_node)
+    builder.add_node("out_of_scope_node", _dispatch_out_of_scope_node)
+    builder.add_node("explain_node", _dispatch_explain_node)
 
-    # W1: START 직후 참조 해소 선판정.
-    # referential → rehydrate_node → describe_node(검색/캐시/라우터 우회).
-    # non-referential → router_node(기존 흐름). prev_entities 미전송 시 항상 후자.
+    # ── START → reference_resolution ──
     builder.add_edge(START, "reference_resolution_node")
     builder.add_conditional_edges(
         "reference_resolution_node",
         _dispatch_route_after_reference,
         {
             "rehydrate_node": "rehydrate_node",
-            "router_node": "router_node",
+            "triage_node": "triage_node",
         },
     )
-    # 참조 해소 경로: 최신 원본 재-hydrate → describe → 종단 체인(search_persist → trace).
-    # cache_write 는 우회한다(refined_query 없음 + 참조 경로는 캐시 대상 아님).
+
+    # ── W1 참조 해소 경로 ──
     builder.add_edge("rehydrate_node", "describe_node")
     builder.add_edge("describe_node", "search_persist_node")
 
-    # router → cache_check.
-    # refined_query와 post-filter(max_class_name/area_name/service_status)는
-    # 1차적으로 router_node가 산출하여 state에 채운다 (단일 LLM 호출).
-    # vector_node의 _refine_chain은 router 미산출 시(단독 단위 테스트 등)에만
-    # 동작하는 fallback이다.
-    # cache_check는 intent + refined_query가 둘 다 있을 때만 lookup하므로
-    # router가 refined_query=None을 반환한 경우에는 pass-through 효과를 가진다.
+    # ── triage_node → route_by_action ──
+    builder.add_conditional_edges(
+        "triage_node",
+        _dispatch_route_by_action,
+        {
+            "cache_check_node": "cache_check_node",
+            "direct_answer_node": "direct_answer_node",
+            "ambiguous_node": "ambiguous_node",
+            "out_of_scope_node": "out_of_scope_node",
+            "explain_node": "explain_node",
+            "answer_node": "answer_node",
+        },
+    )
+
+    # ── router_node(alias) → cache_check(하위호환) ──
     builder.add_edge("router_node", "cache_check_node")
 
+    # ── cache_check → fanout or intent 분기 ──
     builder.add_conditional_edges(
         "cache_check_node",
         _dispatch_post_cache_check,
         {
-            # cache hit: 검색 없이 search_persist_node(skip) → trace 로 종단 체인 유지
             "search_persist_node": "search_persist_node",
             "sql_node": "sql_node",
             "vector_node": "vector_node",
@@ -232,30 +307,63 @@ def _build_shared_graph() -> Any:
         },
     )
 
-    # sql_node / vector_node → hydration_node → answer_node
-    # 검색 노드는 service_id 산출에 집중하고, hydration_node 가 단일 책임으로
-    # public_service_reservations 원본을 hydrated_services 슬롯에 통합한다.
-    # map_node 는 GeoJSON 구조이므로 hydration 을 건너뛰고 직접 answer_node 로 간다.
+    # ── out_of_scope_node: attribute_gap → vector_node, domain_outside → END 체인 ──
+    # attribute_gap은 out_of_scope_node 내부에서 vector_sub_intent=identification 세팅 후
+    # 일반 검색 경로(vector_node → hydration → ...)로 연결된다.
+    # domain_outside는 answer가 이미 세팅되므로 search_persist → trace 종단 체인.
+    def _dispatch_out_of_scope_route(state: AgentState) -> str:
+        if state.get("out_of_scope_type") == "attribute_gap":
+            return "vector_node"
+        return "search_persist_node"
+
+    builder.add_conditional_edges(
+        "out_of_scope_node",
+        _dispatch_out_of_scope_route,
+        {
+            "vector_node": "vector_node",
+            "search_persist_node": "search_persist_node",
+        },
+    )
+
+    # ── sql / vector → hydration → rrf_fusion → pre_answer_gate ──
     builder.add_edge("sql_node", "hydration_node")
     builder.add_edge("vector_node", "hydration_node")
-    builder.add_edge("hydration_node", "answer_node")
+    builder.add_edge("hydration_node", "rrf_fusion_node")
+    builder.add_edge("rrf_fusion_node", "pre_answer_gate_node")
+
+    # C2 게이트: 0건 → retry_prep_node, 유건 → answer_node
+    builder.add_conditional_edges(
+        "pre_answer_gate_node",
+        _dispatch_route_pre_answer_gate,
+        {
+            "answer_node": "answer_node",
+            "retry_prep_node": "retry_prep_node",
+        },
+    )
+
+    # map_node / analytics_node는 hydration 없이 answer_node 직행
     builder.add_edge("map_node", "answer_node")
-    # analytics_node 는 집계행을 최종 산출하므로 hydration 없이 answer_node 로 직행한다.
     builder.add_edge("analytics_node", "answer_node")
 
+    # ── answer_node → self_correction or 종단 체인 ──
     builder.add_conditional_edges(
         "answer_node",
         _dispatch_self_correction_edge,
         {
-            # "end_normal": self_correction_edge의 반환값.
-            # 정상 완료 시 cache_write_node → trace_node 순으로 이어진다.
             "end_normal": "cache_write_node",
             "retry_prep_node": "retry_prep_node",
         },
     )
 
-    # 재시도 준비 완료 후 router_node로 재진입
-    builder.add_edge("retry_prep_node", "router_node")
+    # ── 재시도 준비 → triage_node 재진입 ──
+    builder.add_edge("retry_prep_node", "triage_node")
+
+    # ── 비-RETRIEVE action 종단 체인 ──
+    # direct_answer / ambiguous / explain → 검색 없이 종단 체인
+    for _non_retrieve_node in ("direct_answer_node", "ambiguous_node", "explain_node"):
+        builder.add_edge(_non_retrieve_node, "cache_write_node")
+
+    # ── 종단 체인 ──
     builder.add_edge("cache_write_node", "search_persist_node")
     builder.add_edge("search_persist_node", "trace_node")
     builder.add_edge("trace_node", END)
@@ -305,20 +413,25 @@ class AgentGraph:
 
     def __init__(
         self,
-        router: RouterAgent | None = None,
+        router: RouterAgent | TriageAgent | None = None,
         sql_agent: SqlAgent | None = None,
         vector_agent: VectorAgent | None = None,
         answer_agent: AnswerAgent | None = None,
         analytics_agent: AnalyticsAgent | None = None,
         redis: Any = None,
+        triage: TriageAgent | None = None,
     ) -> None:
+        # triage 우선, router는 하위호환 경로
+        _triage = triage or (router if isinstance(router, TriageAgent) else None)
+        _router = router if isinstance(router, RouterAgent) else None
         self._nodes = GraphNodes(
-            router=router or RouterAgent(),
+            router=_router or RouterAgent(),
             sql_agent=sql_agent or SqlAgent(),
             vector_agent=vector_agent or VectorAgent(),
             answer_agent=answer_agent or AnswerAgent(),
             analytics_agent=analytics_agent or AnalyticsAgent(),
             redis=redis,
+            triage=_triage,
         )
 
         # 그래프는 클래스 수준에서 한 번만 컴파일한다.
@@ -351,7 +464,7 @@ class AgentGraph:
             # 세션은 노드 내부에서 acquire-use-release(제안 0-6: 노드 로컬 세션).
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
-                config={"recursion_limit": 18},
+                config={"recursion_limit": 22},  # W2 신규 노드 추가로 여유 확장
             )  # type: ignore[arg-type]
         finally:
             _ACTIVE_NODES.reset(token)
@@ -397,18 +510,19 @@ class AgentGraph:
         try:
             async for chunk in AgentGraph._compiled_graph.astream(
                 state,
-                config={"recursion_limit": 18},  # 정상 9 + retry 최대 6 + 여유 3 = 18
+                config={"recursion_limit": 22},  # W2 신규 노드 추가로 여유 확장
             ):
                 node_name: str = next(iter(chunk))
                 node_updates: dict[str, Any] | None = chunk[node_name]
                 if node_updates:
                     accumulated.update(node_updates)
 
-                if node_name == "router_node" and not _search_progress_emitted:
+                if node_name in ("triage_node", "router_node") and not _search_progress_emitted:
                     _search_progress_emitted = True
+                    action = accumulated.get("action")
                     intent = accumulated.get("intent")
-                    # FALLBACK이거나 router_node 에러 시 검색 없이 바로 답변 단계로 간다.
-                    if intent in (
+                    # RETRIEVE action이고 검색 intent면 searching 이벤트
+                    if action == ActionType.RETRIEVE and intent in (
                         IntentType.SQL_SEARCH,
                         IntentType.VECTOR_SEARCH,
                         IntentType.MAP,

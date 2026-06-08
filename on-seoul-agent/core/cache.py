@@ -29,12 +29,17 @@ def _cache_key(
     area_name: str | None = None,
     service_status: str | None = None,
     payment_type: str | None = None,
+    routes: str | None = None,
 ) -> str:
-    """합성 키 — refined_query + post-filter 조합.
+    """합성 키 — refined_query + post-filter + routes 조합.
 
     Router LLM이 prompt를 어기고 메타데이터를 분리 산출해도 사용자 간
     잘못된 cache hit이 발생하지 않도록, post-filter 필드를 키에 포함한다.
     None과 "" 는 동등하게 취급한다.
+
+    routes: primary+secondary intent를 정렬된 집합 문자열로 표현
+            (예: "SQL_SEARCH" 또는 "SQL_SEARCH,VECTOR_SEARCH").
+            단일 라우트 또는 secondary 없는 경우는 primary intent 문자열.
     """
     parts = [
         query.strip().lower(),
@@ -42,6 +47,7 @@ def _cache_key(
         f"area={area_name or ''}",
         f"status={service_status or ''}",
         f"pay={payment_type or ''}",
+        f"routes={routes or ''}",
     ]
     composite = "|".join(parts)
     # 64-bit(16 hex) 잘라내기 — 동시 키 규모 O(1000)에서 충돌 확률 무시 가능.
@@ -62,6 +68,7 @@ async def get_cached_answer(
     area_name: str | None = None,
     service_status: str | None = None,
     payment_type: str | None = None,
+    routes: str | None = None,
 ) -> dict | None:
     """캐시된 envelope({payload, state})를 반환. miss/장애 시 None."""
     if not settings.answer_cache_enabled:
@@ -74,6 +81,7 @@ async def get_cached_answer(
                 area_name=area_name,
                 service_status=service_status,
                 payment_type=payment_type,
+                routes=routes,
             )
         )
         if raw is None:
@@ -94,6 +102,7 @@ async def set_cached_answer(
     area_name: str | None = None,
     service_status: str | None = None,
     payment_type: str | None = None,
+    routes: str | None = None,
 ) -> None:
     """payload + state 일부를 envelope로 저장. 장애 시 무시."""
     if not settings.answer_cache_enabled:
@@ -112,6 +121,7 @@ async def set_cached_answer(
                 area_name=area_name,
                 service_status=service_status,
                 payment_type=payment_type,
+                routes=routes,
             ),
             json.dumps(envelope, ensure_ascii=False, default=str),
             ex=ttl,

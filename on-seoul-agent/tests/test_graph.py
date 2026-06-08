@@ -948,9 +948,14 @@ class TestSelfCorrectionInfiniteLoopRegression:
 
         # fallback answer 가 설정되어 정상 종료된다.
         assert result["answer"], "fallback answer 가 비어있으면 안 된다"
-        # router_error 는 1회만 기록된다 (무한 사이클 없음).
-        assert result["node_path"].count("router_error") == 1, (
-            f"router_error 가 1회 초과 기록됨: {result['node_path']}"
+        # triage_error(또는 구버전 router_error) 는 1회만 기록된다 (무한 사이클 없음).
+        # W2: triage_node 가 router_node 를 대체하므로 triage_error 를 체크한다.
+        error_count = (
+            result["node_path"].count("triage_error")
+            + result["node_path"].count("router_error")
+        )
+        assert error_count == 1, (
+            f"triage_error/router_error 가 1회 초과 기록됨: {result['node_path']}"
         )
 
     async def test_retry_prep_node_increments_retry_count_and_clears_results(self):

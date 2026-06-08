@@ -129,6 +129,26 @@ class HydrationNode:
 
         intent = state.get("intent")
 
+        # [C] W2 RRF 팬아웃 경로: rrf_merged_ids 가 있으면 SQL/VECTOR 혼합 결과.
+        # hydrate_services 로 통합 원본 조회 후 rrf 랭킹 순으로 정렬한다.
+        rrf_ids = state.get("rrf_merged_ids")
+        if rrf_ids:
+            try:
+                hydrated = await hydrate_services(data_session, rrf_ids)
+            except Exception:
+                logger.warning(
+                    "hydrate_services(rrf) 실패 — 빈 결과 fallback (ids=%d건)",
+                    len(rrf_ids),
+                    exc_info=True,
+                )
+                return {"hydrated_services": []}
+            # rrf 랭킹 순으로 정렬
+            order = {sid: i for i, sid in enumerate(rrf_ids)}
+            hydrated.sort(key=lambda r: order.get(r.get("service_id", ""), 9999))
+            # 결제유형 post-filter
+            hydrated = _filter_by_payment(hydrated, state.get("payment_type"))
+            return {"hydrated_services": hydrated}
+
         # SQL_SEARCH — sql_results 가 이미 원본 행이므로 그대로 통과.
         if intent == IntentType.SQL_SEARCH:
             sql_results = state.get("sql_results") or []

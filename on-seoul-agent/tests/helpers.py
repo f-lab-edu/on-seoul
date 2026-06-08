@@ -29,7 +29,8 @@ from agents.answer_agent import (
 )
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.sql_agent import SqlAgent, _SqlParams
-from schemas.state import AgentState, IntentType
+from agents.triage_agent import TriageAgent, TriageOutput
+from schemas.state import ActionType, AgentState, IntentType
 
 
 def make_agent_state(**overrides: Any) -> AgentState:
@@ -75,6 +76,12 @@ def make_agent_state(**overrides: Any) -> AgentState:
         prev_intent=None,
         prev_reasoning=None,
         target_service_ids=None,
+        # [C] W2
+        action=None,
+        out_of_scope_type=None,
+        user_rationale=None,
+        secondary_intent=None,
+        rrf_merged_ids=None,
     )
     base.update(overrides)
     return base
@@ -93,6 +100,49 @@ def make_router(intent: IntentType) -> RouterAgent:
     llm = MagicMock()
     llm.with_structured_output = MagicMock(return_value=structured)
     agent._llm = llm
+    return agent
+
+
+def make_triage(
+    action: ActionType,
+    intent: IntentType | None = None,
+    *,
+    refined_query: str | None = None,
+    max_class_name: str | None = None,
+    area_name: str | None = None,
+    service_status: str | None = None,
+    payment_type: str | None = None,
+    vector_sub_intent: str | None = None,
+    secondary_intent: IntentType | None = None,
+    out_of_scope_type: str | None = None,
+    user_rationale: str | None = None,
+) -> TriageAgent:
+    """주어진 action/intent를 항상 반환하는 TriageAgent mock."""
+    agent = TriageAgent.__new__(TriageAgent)
+    # primary_intent 결정
+    primary = intent if action == ActionType.RETRIEVE else None
+    resolved_intent = intent if intent is not None else IntentType.FALLBACK
+    structured = MagicMock()
+    structured.ainvoke = AsyncMock(
+        return_value=TriageOutput(
+            action=action,
+            primary_intent=primary,
+            secondary_intent=secondary_intent,
+            intent=resolved_intent,
+            refined_query=refined_query,
+            max_class_name=max_class_name,
+            area_name=area_name,
+            service_status=service_status,
+            payment_type=payment_type,
+            vector_sub_intent=vector_sub_intent,  # type: ignore[arg-type]
+            out_of_scope_type=out_of_scope_type,  # type: ignore[arg-type]
+            user_rationale=user_rationale,
+        )
+    )
+    llm = MagicMock()
+    llm.with_structured_output = MagicMock(return_value=structured)
+    agent._llm = llm
+    agent._build_context_block = lambda history: ""
     return agent
 
 

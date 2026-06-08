@@ -30,6 +30,16 @@ class IntentType(str, Enum):
     FALLBACK = "FALLBACK"
 
 
+class ActionType(str, Enum):
+    """TriageAgent가 결정하는 행동 유형 (2축 분리의 action 축)."""
+
+    RETRIEVE = "RETRIEVE"
+    DIRECT_ANSWER = "DIRECT_ANSWER"
+    AMBIGUOUS = "AMBIGUOUS"
+    OUT_OF_SCOPE = "OUT_OF_SCOPE"
+    EXPLAIN = "EXPLAIN"
+
+
 class AgentState(TypedDict):
     room_id: int
     message_id: int
@@ -121,6 +131,21 @@ class AgentState(TypedDict):
     # operator.or_ reducer: 부분 dict 반환 시 LangGraph가 누적 병합한다.
     # self-correction 재시도 시 retry_prep_node 가 {} 로 명시 리셋 (UNIQUE 위반 방지).
     search_channels: Annotated[dict[str, ChannelData], search_channels_reducer]
+    # ─── [C] W2: RRF fusion 슬롯 ───
+    # rrf_fusion_node 가 SQL+VECTOR 병렬 팬아웃 결과를 RRF 통합한 service_id 순서 리스트.
+    # HydrationNode 가 이 슬롯을 우선 참조하여 hydrate_services 를 호출한다.
+    # None 이면 단일 라우트(기존 동작). enable_secondary_intent=True 시만 유효.
+    rrf_merged_ids: list[str] | None
+    # ─── [C] W2: TriageAgent 2축 분리 슬롯 ───
+    # TriageAgent가 결정하는 행동 유형. None이면 TriageAgent 미실행 또는 구 router 경로.
+    action: ActionType | None
+    # OUT_OF_SCOPE 서브타입: "domain_outside" | "attribute_gap"
+    out_of_scope_type: str | None
+    # 사용자 노출용 판단 근거 1문장 (TriageAgent.user_rationale).
+    # SSE router_decision 이벤트에 포함(W3 연계 기반).
+    user_rationale: str | None
+    # secondary_intent: SQL↔VECTOR 경계 모호 시 팬아웃용. None이면 단일 라우트(기존 동작).
+    secondary_intent: IntentType | None
     # ─── W1: 대화 상태·결과 엔티티 carryover + 참조 해소 ───
     # 직전 턴의 결과 엔티티(정체성). 각 항목 {"service_id": str, "label": str}.
     # ChatRequest.prev_entities 에서 주입(API 서비스가 영속 service_cards 로부터 조립).

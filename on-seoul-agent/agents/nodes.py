@@ -36,12 +36,13 @@ from agents.answer_agent import AnswerAgent
 from agents.hydration_node import HydrationNode
 from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
+from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
-from tools.hydrate_services import hydrate_services
 from core.cache import get_cached_answer, set_cached_answer
 from core.config import settings
 from core.database import ai_session_ctx, data_session_ctx
 from core.exceptions import RateLimitException
+from core.rrf import reciprocal_rank_fusion
 from schemas.search import (
     RESET_CHANNELS,
     ChannelData,
@@ -50,7 +51,8 @@ from schemas.search import (
     SearchKind,
     kind_of,
 )
-from schemas.state import AgentState, IntentType
+from schemas.state import ActionType, AgentState, IntentType
+from tools.hydrate_services import hydrate_services
 from tools.map_search import DEFAULT_RADIUS_M as _MAP_DEFAULT_RADIUS_M
 from tools.map_search import TOP_K as _MAP_TOP_K
 from tools.map_search import map_search
@@ -127,19 +129,22 @@ class GraphNodes:
 
     def __init__(
         self,
-        router: RouterAgent,
-        sql_agent: SqlAgent,
-        vector_agent: VectorAgent,
-        answer_agent: AnswerAgent,
-        analytics_agent: AnalyticsAgent,
+        router: RouterAgent | TriageAgent | None = None,
+        sql_agent: SqlAgent | None = None,
+        vector_agent: VectorAgent | None = None,
+        answer_agent: AnswerAgent | None = None,
+        analytics_agent: AnalyticsAgent | None = None,
         redis: Any = None,
         hydration: HydrationNode | None = None,
+        triage: TriageAgent | None = None,
     ) -> None:
-        self._router = router
-        self._sql = sql_agent
-        self._vector = vector_agent
-        self._answer = answer_agent
-        self._analytics = analytics_agent
+        # triage 우선, router는 하위호환 별칭
+        self._triage = triage or (router if isinstance(router, TriageAgent) else None)
+        self._router = router if isinstance(router, RouterAgent) else None
+        self._sql = sql_agent or SqlAgent()
+        self._vector = vector_agent or VectorAgent()
+        self._answer = answer_agent or AnswerAgent()
+        self._analytics = analytics_agent or AnalyticsAgent()
         self._hydration = hydration or HydrationNode()
         self._cache_check = CacheCheckNode(redis=redis)
         self._cache_write = CacheWriteNode(redis=redis)
@@ -226,11 +231,100 @@ class GraphNodes:
         """reference_resolution_node 직후 라우팅.
 
         referential(target_service_ids 채워짐) → rehydrate_node(검색 우회).
-        non-referential → router_node(기존 흐름).
+        non-referential → triage_node(기존 흐름; router_node alias).
         """
         if state.get("target_service_ids"):
             return "rehydrate_node"
-        return "router_node"
+        return "triage_node"
+
+    async def triage_node(self, state: AgentState) -> dict[str, Any]:
+        """TriageAgent.classify() 호출 — action · intent · refined_query 설정.
+
+        기존 router_node와 동일한 출력 슬롯(intent, refined_query, post-filter)에 더해
+        action / out_of_scope_type / user_rationale / secondary_intent를 채운다.
+
+        forced_intent honor:
+            retry_prep_node가 방향성 재시도로 intent를 강제하면 LLM 재분류를
+            skip하고 그 intent를 그대로 반환한다. action=RETRIEVE로 강제된다.
+        """
+        forced = state.get("forced_intent")
+        if forced is not None:
+            logger.info(
+                "triage.forced room=%s intent=%s",
+                state.get("room_id"),
+                forced.value,
+            )
+            return {
+                "intent": forced,
+                "action": ActionType.RETRIEVE,
+                "forced_intent": None,
+                "node_path": ["triage"],
+            }
+
+        # TriageAgent 우선, fallback → RouterAgent (하위호환)
+        agent = self._triage or self._router
+        if agent is None:
+            agent = TriageAgent()
+
+        try:
+            if isinstance(agent, TriageAgent):
+                result = await agent.classify(
+                    state["message"],
+                    history=state.get("history") or [],
+                    prev_reasoning=state.get("prev_reasoning"),
+                )
+                update: dict[str, Any] = {
+                    "intent": result.intent,
+                    "action": result.action,
+                    "secondary_intent": result.secondary_intent,
+                    "out_of_scope_type": result.out_of_scope_type,
+                    "user_rationale": result.user_rationale,
+                    "node_path": ["triage"],
+                }
+            else:
+                # RouterAgent fallback (하위호환)
+                result = await agent.classify(
+                    state["message"],
+                    history=state.get("history") or [],
+                )
+                update = {
+                    "intent": result.intent,
+                    "action": ActionType.RETRIEVE
+                    if result.intent != IntentType.FALLBACK
+                    else ActionType.DIRECT_ANSWER,
+                    "secondary_intent": None,
+                    "out_of_scope_type": None,
+                    "user_rationale": None,
+                    "node_path": ["triage"],
+                }
+            if result.refined_query is not None:
+                update["refined_query"] = result.refined_query
+            if result.max_class_name is not None:
+                update["max_class_name"] = result.max_class_name
+            if result.area_name is not None:
+                update["area_name"] = result.area_name
+            if result.service_status is not None:
+                update["service_status"] = result.service_status
+            if result.payment_type is not None:
+                update["payment_type"] = result.payment_type
+            if result.vector_sub_intent is not None:
+                update["vector_sub_intent"] = result.vector_sub_intent
+            logger.info(
+                "triage.classify room=%s action=%s intent=%s refined=%r",
+                state.get("room_id"),
+                update.get("action"),
+                result.intent.value,
+                (result.refined_query or "")[:40],
+            )
+            return update
+        except Exception as exc:
+            logger.exception("triage_node 실행 오류")
+            return {
+                "error": str(exc),
+                "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+                "action": ActionType.DIRECT_ANSWER,
+                "node_path": ["triage_error"],
+            }
 
     async def router_node(self, state: AgentState) -> dict[str, Any]:
         """RouterAgent.classify() 호출 — intent · refined_query 설정.
@@ -298,6 +392,181 @@ class GraphNodes:
                 "node_path": ["router_error"],
             }
 
+    # ------------------------------------------------------------------
+    # [C] W2 action별 노드
+    # ------------------------------------------------------------------
+
+    async def direct_answer_node(self, state: AgentState) -> dict[str, Any]:
+        """DIRECT_ANSWER action — DB 없이 LLM 직접 응답.
+
+        기존 FALLBACK 안내문을 대체한다.
+        state["intent"] = FALLBACK으로 설정되어 AnswerAgent의 FALLBACK 분기를 탄다.
+        """
+        try:
+            new_state = await self._answer.answer(state)
+            return {
+                "answer": new_state.get("answer"),
+                "title": new_state.get("title"),
+                "service_cards": new_state.get("service_cards"),
+                "node_path": ["direct_answer_node"],
+            }
+        except Exception as exc:
+            logger.exception("direct_answer_node 실행 오류")
+            return {
+                "error": str(exc),
+                "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+                "node_path": ["direct_answer_error"],
+            }
+
+    async def ambiguous_node(self, state: AgentState) -> dict[str, Any]:
+        """AMBIGUOUS action — 명확화 질문 1개 생성.
+
+        TriageAgent가 이미 AMBIGUOUS로 판정한 경우에만 도달하므로
+        신뢰도 게이팅은 triage 단계에서 완료됐다.
+        user_rationale이 있으면 답변으로 사용하고, 없으면 기본 안내를 반환한다.
+        """
+        rationale = state.get("user_rationale")
+        if rationale:
+            answer = rationale
+        else:
+            answer = (
+                "어떤 종류의 시설이나 서비스를 찾으시는지 조금 더 알려주시겠어요? "
+                "예를 들어 '수영장', '문화행사', '강남구 체육시설' 처럼 구체적으로 말씀해 주시면 "
+                "더 정확한 정보를 안내해드릴 수 있습니다."
+            )
+        logger.info("ambiguous_node room=%s", state.get("room_id"))
+        return {"answer": answer, "node_path": ["ambiguous_node"]}
+
+    async def out_of_scope_node(self, state: AgentState) -> dict[str, Any]:
+        """OUT_OF_SCOPE action — 서브타입 분기.
+
+        domain_outside: 즉시 거절 메시지, 검색 없음, END로.
+        attribute_gap: refined_query + vector_sub_intent=identification으로
+                       vector_node → answer 경로. service_url 안내, 환각 금지.
+        """
+        oos_type = state.get("out_of_scope_type")
+        if oos_type == "attribute_gap":
+            # attribute_gap은 시설 식별 검색이 필요하므로 vector_node로 넘긴다.
+            # vector_sub_intent를 identification으로 강제한다.
+            logger.info(
+                "out_of_scope.attribute_gap room=%s refined=%r",
+                state.get("room_id"),
+                (state.get("refined_query") or "")[:40],
+            )
+            return {
+                "vector_sub_intent": "identification",
+                "node_path": ["out_of_scope_attribute_gap"],
+            }
+        # domain_outside: 즉시 거절
+        rationale = state.get("user_rationale")
+        answer = rationale or "죄송합니다, 해당 질문은 서울 공공서비스 예약 챗봇의 서비스 범위를 벗어납니다."
+        logger.info("out_of_scope.domain_outside room=%s", state.get("room_id"))
+        return {"answer": answer, "node_path": ["out_of_scope_domain_outside"]}
+
+    async def explain_node(self, state: AgentState) -> dict[str, Any]:
+        """EXPLAIN action — prev_reasoning으로 판단 근거 설명.
+
+        prev_reasoning 없으면 direct_answer_node로 폴백.
+        """
+        prev_reasoning = state.get("prev_reasoning")
+        if not prev_reasoning:
+            logger.info(
+                "explain_node.fallback room=%s (no prev_reasoning)",
+                state.get("room_id"),
+            )
+            # prev_reasoning 없으면 직접 답변 경로로 폴백
+            return await self.direct_answer_node(state)
+
+        try:
+            # prev_reasoning을 바탕으로 간결한 근거 설명 생성
+            answer = (
+                f"이전 답변에서의 판단 근거를 설명해드릴게요.\n\n{prev_reasoning}"
+            )
+            logger.info("explain_node room=%s", state.get("room_id"))
+            return {"answer": answer, "node_path": ["explain_node"]}
+        except Exception as exc:
+            logger.exception("explain_node 실행 오류")
+            return {
+                "error": str(exc),
+                "answer": "죄송합니다, 일시적인 오류가 발생했습니다.",
+                "node_path": ["explain_error"],
+            }
+
+    async def rrf_fusion_node(self, state: AgentState) -> dict[str, Any]:
+        """SQL + VECTOR 병렬 팬아웃 결과를 RRF로 통합한다.
+
+        secondary_intent 있고 enable_secondary_intent=True인 경우에만 실행된다.
+        그 외에는 bypass(빈 dict 반환).
+
+        SQL 결과(sql_results)와 vector 결과(vector_results)를 동일 레벨로 RRF 통합.
+        통합된 결과는 hydrated_services로 직접 매핑되지 않고, hydration_node가
+        rrf_merged_ids 슬롯을 읽어 처리한다.
+
+        단순 구현: sql_results와 vector_results의 service_id를 각각 채널로 입력하여
+        RRF 점수 기준으로 재정렬한 service_id 순서를 rrf_merged_ids에 적재한다.
+        hydration_node가 이 슬롯을 우선 참조하여 hydrate_services를 호출한다.
+        """
+        if not settings.enable_secondary_intent:
+            return {"node_path": ["rrf_fusion_bypass"]}
+
+        secondary = state.get("secondary_intent")
+        if secondary is None:
+            return {"node_path": ["rrf_fusion_bypass"]}
+
+        sql_rows = state.get("sql_results") or []
+        vector_rows = state.get("vector_results") or []
+
+        sql_ids = [r["service_id"] for r in sql_rows if r.get("service_id")]
+        vector_ids = [r["service_id"] for r in vector_rows if r.get("service_id")]
+
+        if not sql_ids and not vector_ids:
+            logger.info("rrf_fusion: 두 채널 모두 0건 room=%s", state.get("room_id"))
+            return {"node_path": ["rrf_fusion_empty"]}
+
+        channels: dict[str, list[str]] = {}
+        if sql_ids:
+            channels["sql"] = sql_ids
+        if vector_ids:
+            channels["vector"] = vector_ids
+
+        fused = reciprocal_rank_fusion(channels, k_constant=settings.rrf_k_constant)
+        merged_ids = [sid for sid, _ in fused[: settings.rrf_top_k_final]]
+
+        logger.info(
+            "rrf_fusion.done room=%s sql=%d vector=%d merged=%d",
+            state.get("room_id"),
+            len(sql_ids),
+            len(vector_ids),
+            len(merged_ids),
+        )
+        return {"rrf_merged_ids": merged_ids, "node_path": ["rrf_fusion_node"]}
+
+    async def pre_answer_gate_node(self, state: AgentState) -> dict[str, Any]:
+        """C2 pre-answer 0건 게이트.
+
+        hydration_node 직후 hydrated_services=[] 이면 answer_node를 미호출하고
+        retry_prep_node로 직행하도록 엣지 로직에서 판정한다.
+        이 노드 자체는 상태 변경 없이 node_path만 기록한다(엣지 분기는 별도 메서드).
+        """
+        return {"node_path": ["pre_answer_gate"]}
+
+    def route_pre_answer_gate(self, state: AgentState) -> str:
+        """C2 게이트 엣지: hydrated_services=[] 시 retry_prep, 그 외 answer_node."""
+        action = state.get("action")
+        # 비-RETRIEVE action은 게이트 통과 불가 (직접 answer/ambiguous/etc로 이동)
+        if action not in (ActionType.RETRIEVE, None):
+            return "answer_node"
+
+        hydrated = state.get("hydrated_services")
+        retry_count = state.get("retry_count", 0)
+
+        # C2: hydrated_services=[] 이면 answer LLM 미호출 + retry_prep 직행
+        # retry_count 캡(>=1) 시에는 answer_node로 통과(무한루프 방지)
+        if hydrated is not None and len(hydrated) == 0 and retry_count == 0:
+            return "retry_prep_node"
+
+        return "answer_node"
+
     async def retry_prep_node(self, state: AgentState) -> dict[str, Any]:
         """자기 교정 재시도 준비 노드 (intent별 방향성 분기).
 
@@ -320,11 +589,13 @@ class GraphNodes:
         """
         new_retry_count = (state.get("retry_count") or 0) + 1
         intent = state.get("intent")
+        action = state.get("action")
         logger.info(
-            "retry.triggered room=%s retry_count=%d intent=%s",
+            "retry.triggered room=%s retry_count=%d intent=%s action=%s",
             state.get("room_id"),
             new_retry_count,
             intent.value if intent else None,
+            action.value if action else None,
         )
 
         # 모든 분기 공통 베이스 — 분기별 override 로 검색 슬롯/필터를 덮어쓴다.
@@ -774,6 +1045,58 @@ class GraphNodes:
     # 엣지 로직
     # ------------------------------------------------------------------
 
+    def route_by_action(self, state: AgentState) -> str:
+        """triage_node 직후 — action에 따라 다음 노드를 결정한다.
+
+        RETRIEVE → cache_check_node(기존 흐름)
+        DIRECT_ANSWER → direct_answer_node
+        AMBIGUOUS → ambiguous_node
+        OUT_OF_SCOPE/domain_outside → out_of_scope_node
+        OUT_OF_SCOPE/attribute_gap → out_of_scope_node (내부에서 vector_node로 라우팅)
+        EXPLAIN → explain_node
+        error(answer 이미 설정) → answer_node
+        """
+        error = state.get("error")
+        answer = state.get("answer") or ""
+        if error and answer.strip():
+            return "answer_node"
+
+        action = state.get("action")
+        if action == ActionType.RETRIEVE:
+            return "cache_check_node"
+        elif action == ActionType.DIRECT_ANSWER:
+            return "direct_answer_node"
+        elif action == ActionType.AMBIGUOUS:
+            return "ambiguous_node"
+        elif action == ActionType.OUT_OF_SCOPE:
+            return "out_of_scope_node"
+        elif action == ActionType.EXPLAIN:
+            return "explain_node"
+        else:
+            # fallback: action 미설정 또는 미지 값 → cache_check(기존 동작)
+            return "cache_check_node"
+
+    def route_by_action_fanout(self, state: AgentState) -> list[str] | str:
+        """RETRIEVE 경로 내 secondary_intent 팬아웃 분기.
+
+        enable_secondary_intent=True이고 secondary_intent가 있으면 SQL+VECTOR 병렬 팬아웃.
+        그 외에는 route_by_intent(기존 단일 라우트).
+
+        LangGraph 조건부 엣지가 list를 반환하면 병렬 팬아웃을 수행한다.
+        """
+        if not settings.enable_secondary_intent:
+            return self.route_by_intent(state)
+
+        secondary = state.get("secondary_intent")
+        primary = state.get("intent")
+        if secondary is not None and primary in (
+            IntentType.SQL_SEARCH,
+            IntentType.VECTOR_SEARCH,
+        ):
+            return ["sql_node", "vector_node"]
+
+        return self.route_by_intent(state)
+
     def post_cache_check(self, state: AgentState) -> str:
         """cache_check 직후 라우팅 — hit 시 search_persist_node → trace 경로, miss면 intent 분기.
 
@@ -816,6 +1139,7 @@ class GraphNodes:
 
         평가 순서(고정) — 다중 조건 동시 참 시 비결정성을 제거한다. 위에서부터
         먼저 매칭되는 하나만 적용(1회 캡이므로 단일 완화):
+          ⓪ 비-RETRIEVE action(DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE/EXPLAIN) → end_normal.
           ① retry_count 캡: 이미 1회 소진 → 종료(무한 루프 방지).
           ② 빈 답변: intent 무관 최우선 재시도(기존 동작).
           ③ intent별 0건:
@@ -826,6 +1150,11 @@ class GraphNodes:
         intent 분기는 상호배타라 한 순회에 하나만 평가된다. retry_prep_node 가
         retry_count 를 1 로 올리므로 다음 순회에서는 ①에서 즉시 종료된다.
         """
+        # ⓪ 비-RETRIEVE action은 self-correction 제외
+        action = state.get("action")
+        if action is not None and action != ActionType.RETRIEVE:
+            return "end_normal"
+
         retry_count = state.get("retry_count", 0)
         if retry_count != 0:
             return "end_normal"  # ① 캡
@@ -920,7 +1249,25 @@ class CacheCheckNode:
     def __init__(self, redis: Any) -> None:
         self._redis = redis
 
+    @staticmethod
+    def _build_routes_key(
+        primary: IntentType | None, secondary: IntentType | None
+    ) -> str | None:
+        """primary + secondary intent를 정렬된 캐시 키 문자열로 변환한다."""
+        if primary is None:
+            return None
+        parts = sorted(
+            {primary.value}
+            | ({secondary.value} if secondary is not None else set())
+        )
+        return ",".join(parts)
+
     async def __call__(self, state: AgentState) -> dict[str, Any]:
+        # 비-RETRIEVE action은 캐시 제외
+        action = state.get("action")
+        if action is not None and action != ActionType.RETRIEVE:
+            return {"cache_hit": False}
+
         intent = state.get("intent")
         refined = state.get("refined_query")
         if intent is None or refined is None:
@@ -932,6 +1279,7 @@ class CacheCheckNode:
         area_name = state.get("area_name")
         service_status = state.get("service_status")
         payment_type = state.get("payment_type")
+        routes = self._build_routes_key(intent, state.get("secondary_intent"))
 
         envelope = await get_cached_answer(
             refined,
@@ -940,6 +1288,7 @@ class CacheCheckNode:
             area_name=area_name,
             service_status=service_status,
             payment_type=payment_type,
+            routes=routes,
         )
         if envelope is None:
             logger.info(
@@ -993,6 +1342,10 @@ class CacheWriteNode:
             return {}
         if state.get("cache_hit"):
             return {}
+        # 비-RETRIEVE action은 캐시 저장 제외
+        action = state.get("action")
+        if action is not None and action != ActionType.RETRIEVE:
+            return {}
         intent = state.get("intent")
         if intent is None or intent.value not in settings.answer_cache_eligible_intents:
             return {}
@@ -1005,6 +1358,7 @@ class CacheWriteNode:
         area_name = state.get("area_name")
         service_status = state.get("service_status")
         payment_type = state.get("payment_type")
+        routes = CacheCheckNode._build_routes_key(intent, state.get("secondary_intent"))
 
         payload = {
             "message_id": state.get("message_id"),
@@ -1036,6 +1390,7 @@ class CacheWriteNode:
             area_name=area_name,
             service_status=service_status,
             payment_type=payment_type,
+            routes=routes,
         )
         empty = not snap["vector_results"] and not snap["sql_results"]
         logger.info("cache.write intent=%s empty=%s", intent.value, empty)
