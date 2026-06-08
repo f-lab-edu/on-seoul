@@ -1,31 +1,34 @@
-"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 (Phase 17 + Answer Cache + SearchPersist).
+"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 ([C] W2 + Answer Cache + SearchPersist).
 
-그래프 구조:
+그래프 구조 ([C] W2):
     START
       ↓
-    router_node          — RouterAgent.classify(), state.intent · refined_query 설정
+    reference_resolution_node   — 지시 참조 선판정 (규칙 기반, LLM 미사용)
+      ├─ referential → rehydrate_node → describe_node → search_persist_node → trace_node
+      └─ non-referential → triage_node
+           ↓
+    triage_node                 — TriageAgent.classify(), action·intent·refined_query 설정
+      ├─ RETRIEVE     → cache_check_node → [sql/vector/map/analytics]
+      │                  → hydration_node → rrf_fusion_node → pre_answer_gate_node
+      │                       ├─ 0건(C2) → retry_prep_node → triage_node 재진입
+      │                       └─ 유건    → answer_node
+      ├─ DIRECT_ANSWER → direct_answer_node → 종단 체인
+      ├─ AMBIGUOUS     → ambiguous_node → 종단 체인
+      ├─ OUT_OF_SCOPE  → out_of_scope_node
+      │    ├─ domain_outside → 종단 체인
+      │    └─ attribute_gap → vector_node → hydration_node → ...
+      └─ EXPLAIN       → explain_node → 종단 체인
       ↓
-    cache_check_node     — refined_query 기반 전역 Answer Cache lookup
-      ├─ hit  → search_persist_node(skip) → trace_node (sql/vector/map/answer 전체 우회)
-      └─ miss → intent에 따라 분기
-            ├─ SQL_SEARCH    → sql_node
-            ├─ VECTOR_SEARCH → vector_node
-            ├─ MAP           → map_node
-            └─ FALLBACK      → answer_node (검색 없이 바로 답변)
+    answer_node                 — AnswerAgent.answer()
       ↓
-    sql_node / vector_node → hydration_node → answer_node
-    map_node               → answer_node (GeoJSON 구조라 hydration 건너뜀)
-      ↓
-    answer_node          — AnswerAgent.answer()
-      ↓
-    (self_correction)    — 빈 답변일 때만 재시도 + retry_count==0 → retry_prep_node 경유
+    (self_correction)           — 비-RETRIEVE는 제외. 빈 답변/0건 시 retry_prep 경유
       ↓ (정상) 또는 사이클
-    [retry_prep_node]    — retry_count 증가 + 이전 검색 결과 초기화 → router_node 재진입
-    cache_write_node     — 정상 결과만(SQL_SEARCH / VECTOR_SEARCH) 캐시 저장
+    [retry_prep_node]           — retry_count 증가 + 이전 검색 결과 초기화 → triage_node 재진입
+    cache_write_node            — 정상 결과만(SQL_SEARCH / VECTOR_SEARCH) 캐시 저장
       ↓
-    search_persist_node  — chat_search_queries + chat_search_results 적재 (best-effort)
+    search_persist_node         — chat_search_queries + chat_search_results 적재 (best-effort)
       ↓
-    trace_node           — chat_agent_traces 저장 (best-effort, 최종 종단 노드)
+    trace_node                  — chat_agent_traces 저장 (best-effort, 최종 종단 노드)
       ↓
     END
 
@@ -206,6 +209,13 @@ def _dispatch_self_correction_edge(state: AgentState) -> str:
     return _ACTIVE_NODES.get().self_correction_edge(state)
 
 
+def _dispatch_out_of_scope_route(state: AgentState) -> str:
+    """out_of_scope_node 직후 — attribute_gap이면 vector_node, domain_outside면 종단 체인."""
+    if state.get("out_of_scope_type") == "attribute_gap":
+        return "vector_node"
+    return "search_persist_node"
+
+
 # ---------------------------------------------------------------------------
 # 공유 그래프 빌드 (프로세스당 1회)
 # ---------------------------------------------------------------------------
@@ -308,14 +318,9 @@ def _build_shared_graph() -> Any:
     )
 
     # ── out_of_scope_node: attribute_gap → vector_node, domain_outside → END 체인 ──
-    # attribute_gap은 out_of_scope_node 내부에서 vector_sub_intent=identification 세팅 후
-    # 일반 검색 경로(vector_node → hydration → ...)로 연결된다.
+    # attribute_gap은 out_of_scope_node 내부에서 intent=VECTOR_SEARCH +
+    # vector_sub_intent=identification 세팅 후 일반 검색 경로로 연결된다.
     # domain_outside는 answer가 이미 세팅되므로 search_persist → trace 종단 체인.
-    def _dispatch_out_of_scope_route(state: AgentState) -> str:
-        if state.get("out_of_scope_type") == "attribute_gap":
-            return "vector_node"
-        return "search_persist_node"
-
     builder.add_conditional_edges(
         "out_of_scope_node",
         _dispatch_out_of_scope_route,
@@ -421,11 +426,15 @@ class AgentGraph:
         redis: Any = None,
         triage: TriageAgent | None = None,
     ) -> None:
-        # triage 우선, router는 하위호환 경로
+        # triage 우선, router(TriageAgent 인스턴스)는 하위호환 경로.
+        # triage/TriageAgent router가 없고 RouterAgent도 없으면 TriageAgent()로 기본 초기화.
+        # RouterAgent가 명시 주입된 경우는 하위호환 router_node alias 경로를 유지한다.
         _triage = triage or (router if isinstance(router, TriageAgent) else None)
         _router = router if isinstance(router, RouterAgent) else None
+        if _triage is None and _router is None:
+            _triage = TriageAgent()
         self._nodes = GraphNodes(
-            router=_router or RouterAgent(),
+            router=_router,
             sql_agent=sql_agent or SqlAgent(),
             vector_agent=vector_agent or VectorAgent(),
             answer_agent=answer_agent or AnswerAgent(),
@@ -452,19 +461,19 @@ class AgentGraph:
 
         token = _ACTIVE_NODES.set(self._nodes)
         try:
-            # recursion_limit=18:
-            # 1회 정상 흐름(W1 reference_resolution 선판정 추가):
-            #   reference_resolution(1) → router(2) → cache_check(3) → search(4) →
-            #   hydration(5) → answer(6) → cache_write(7) → search_persist(8) →
-            #   trace(9) = 9 super-step.
-            # retry 1회 포함 시 retry_prep + router/cache_check/search/hydration/answer
-            #   재실행으로 +6 노드, 합계 15 super-step.
+            # recursion_limit=22:
+            # 1회 정상 흐름(W2 기준 최악 경로):
+            #   reference_resolution(1) → triage(2) → cache_check(3) → search(4) →
+            #   hydration(5) → rrf_fusion(6) → pre_answer_gate(7) → answer(8) →
+            #   cache_write(9) → search_persist(10) → trace(11) = 11 super-step.
+            # retry 1회 포함 시 retry_prep(+1) + triage/cache_check/search/hydration/
+            #   rrf_fusion/pre_answer_gate/answer 재실행(+7) = 합계 18 super-step.
             # 참조 해소 경로는 더 짧다(reference → rehydrate → describe →
-            #   search_persist → trace = 5). 여유 3을 더해 18로 설정한다.
+            #   search_persist → trace = 5). 여유 4를 더해 22로 설정한다.
             # 세션은 노드 내부에서 acquire-use-release(제안 0-6: 노드 로컬 세션).
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
-                config={"recursion_limit": 22},  # W2 신규 노드 추가로 여유 확장
+                config={"recursion_limit": 22},
             )  # type: ignore[arg-type]
         finally:
             _ACTIVE_NODES.reset(token)
@@ -510,7 +519,7 @@ class AgentGraph:
         try:
             async for chunk in AgentGraph._compiled_graph.astream(
                 state,
-                config={"recursion_limit": 22},  # W2 신규 노드 추가로 여유 확장
+                config={"recursion_limit": 22},  # W2 최악 경로 18 super-step + 여유 4
             ):
                 node_name: str = next(iter(chunk))
                 node_updates: dict[str, Any] | None = chunk[node_name]

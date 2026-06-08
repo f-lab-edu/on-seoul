@@ -137,7 +137,8 @@ class AgentState(TypedDict):
     # None 이면 단일 라우트(기존 동작). enable_secondary_intent=True 시만 유효.
     rrf_merged_ids: list[str] | None
     # ─── [C] W2: TriageAgent 2축 분리 슬롯 ───
-    # TriageAgent가 결정하는 행동 유형. None이면 TriageAgent 미실행 또는 구 router 경로.
+    # TriageAgent가 결정하는 행동 유형. None이면 구 router 경로(하위호환).
+    # AgentGraph()는 항상 TriageAgent()를 기본 주입하므로 프로덕션에서는 항상 채워진다.
     action: ActionType | None
     # OUT_OF_SCOPE 서브타입: "domain_outside" | "attribute_gap"
     out_of_scope_type: str | None

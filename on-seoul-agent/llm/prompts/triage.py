@@ -8,6 +8,8 @@ RouterAgent -> TriageAgent 확장:
   - user_rationale: 사용자 노출용 1문장
 """
 
+import json
+
 from langchain_core.prompts import ChatPromptTemplate, FewShotChatMessagePromptTemplate
 
 TRIAGE_SYSTEM = """\
@@ -110,27 +112,23 @@ def _ex(reasoning: str, action: str, primary: str | None, secondary: str | None,
          intent: str, refined: str | None, max_cls: str | None, area: str | None,
          status: str | None, pay: str | None, sub: str | None,
          oos_type: str | None, rationale: str) -> str:
-    """Few-shot 예시 JSON 문자열을 생성한다."""
-    parts = [
-        f'"reasoning": "{reasoning}"',
-        f'"action": "{action}"',
-        f'"primary_intent": {_json_val(primary)}',
-        f'"secondary_intent": {_json_val(secondary)}',
-        f'"intent": "{intent}"',
-        f'"refined_query": {_json_val(refined)}',
-        f'"max_class_name": {_json_val(max_cls)}',
-        f'"area_name": {_json_val(area)}',
-        f'"service_status": {_json_val(status)}',
-        f'"payment_type": {_json_val(pay)}',
-        f'"vector_sub_intent": {_json_val(sub)}',
-        f'"out_of_scope_type": {_json_val(oos_type)}',
-        f'"user_rationale": "{rationale}"',
-    ]
-    return "{" + ", ".join(parts) + "}"
-
-
-def _json_val(v: str | None) -> str:
-    return "null" if v is None else f'"{v}"'
+    """Few-shot 예시 JSON 문자열을 생성한다. json.dumps로 이스케이프를 위임한다."""
+    data = {
+        "reasoning": reasoning,
+        "action": action,
+        "primary_intent": primary,
+        "secondary_intent": secondary,
+        "intent": intent,
+        "refined_query": refined,
+        "max_class_name": max_cls,
+        "area_name": area,
+        "service_status": status,
+        "payment_type": pay,
+        "vector_sub_intent": sub,
+        "out_of_scope_type": oos_type,
+        "user_rationale": rationale,
+    }
+    return json.dumps(data, ensure_ascii=False)
 
 
 TRIAGE_FEW_SHOT_EXAMPLES = [

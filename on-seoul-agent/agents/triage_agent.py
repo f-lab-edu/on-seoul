@@ -17,9 +17,9 @@ from pydantic import BaseModel, Field, field_validator
 
 from agents.router_agent import (
     SEOUL_DISTRICTS,
-    RouterAgent,
     _ALLOWED_MAX_CLASS_NAMES,
     _ALLOWED_SERVICE_STATUSES,
+    build_context_block,
 )
 from llm.client import get_chat_model
 from llm.prompts.triage import TRIAGE_FEW_SHOT, TRIAGE_SYSTEM
@@ -143,15 +143,11 @@ class TriageAgent:
     """LCEL 기반 트리아지 에이전트.
 
     RouterAgent를 대체하며 2축(action + retrieval_intent) 분류를 수행한다.
-    history 컨텍스트 블록은 RouterAgent의 _build_context_block을 재사용한다.
+    history 컨텍스트 블록은 agents.router_agent.build_context_block을 재사용한다.
     """
 
     def __init__(self, model: BaseChatModel | None = None) -> None:
         self._llm = model or get_chat_model()
-        # 컨텍스트 블록 빌더는 RouterAgent 로직을 재사용한다.
-        self._build_context_block = RouterAgent._build_context_block.__get__(
-            self, TriageAgent
-        )
 
     async def classify(
         self,
@@ -166,21 +162,25 @@ class TriageAgent:
             history: 직전 N턴 대화 이력(과거→최신).
             prev_reasoning: 직전 턴의 판단 근거. EXPLAIN action 가능 여부 판정에 사용.
         """
-        context_block = self._build_context_block(history)
+        context_block = build_context_block(history)
         system_parts = [TRIAGE_SYSTEM]
         if context_block:
             system_parts.append(context_block)
-        # prev_reasoning 컨텍스트: EXPLAIN 판정을 위해 시스템 프롬프트에 추가
+        # prev_reasoning 컨텍스트: EXPLAIN 판정을 위해 시스템 프롬프트에 추가.
+        # 경계 마커로 감싸 역할 지시 삽입(prompt injection) 위험을 차단한다.
         if prev_reasoning:
             system_parts.append(
-                f"직전 답변의 판단 근거(prev_reasoning):\n{prev_reasoning}"
+                "직전 답변의 판단 근거(prev_reasoning):\n"
+                "---PREV_REASONING_START---\n"
+                f"{prev_reasoning}\n"
+                "---PREV_REASONING_END---"
             )
         system_text = "\n\n".join(system_parts)
 
         messages = [
             SystemMessage(content=system_text),
             *TRIAGE_FEW_SHOT.format_messages(),
-            HumanMessage(content=f"사용자 메시지: {message}"),
+            HumanMessage(content=f"<user_message>{message}</user_message>"),
         ]
         structured = self._llm.with_structured_output(TriageOutput)
         result: TriageOutput = await structured.ainvoke(messages)

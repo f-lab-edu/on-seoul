@@ -150,6 +150,33 @@ class _IntentOutput(BaseModel):
         return None
 
 
+def build_context_block(history: list[dict[str, str]] | None) -> str:
+    """history(직전 N턴)를 system prompt에 append할 블록으로 변환.
+
+    비어 있으면 빈 문자열을 반환하여 섹션 자체를 생략한다(토큰 절약).
+
+    프롬프트 인젝션 표면: history.content(사용자·어시스턴트 발화)는 외부 입력이며
+    escape 없이 system prompt에 삽입된다. 다만 이 블록은 Router/Triage 분류에만 쓰이고
+    with_structured_output으로 고정 스키마만 추출하므로, content가 임의 지시를 담아도
+    자유 실행으로 이어지지 않는다.
+    (content는 HistoryTurn max_length=1000 + API 서비스 10메시지 윈도우로 제한.)
+    향후 출력에 자유 텍스트 필드를 넓힐 경우 이 가정을 재검토할 것.
+    """
+    if not history:
+        return ""
+    lines = []
+    for turn in history:
+        role_label = "사용자" if turn["role"] == "user" else "어시스턴트"
+        lines.append(f"- [{role_label}] {turn['content']}")
+    turns_text = "\n".join(lines)
+    return (
+        "이전 대화 이력 (과거 → 최신). 후속 질의는 직전 발화의 "
+        "카테고리·지역을 이어받을 가능성이 높다.\n"
+        "이전 맥락이 명확하면 refined_query에 카테고리·지역 키워드를 병합한다.\n"
+        f"{turns_text}"
+    )
+
+
 class RouterAgent:
     """LCEL 기반 의도 분류 에이전트.
 
@@ -161,30 +188,8 @@ class RouterAgent:
         self._llm = model or get_chat_model()
 
     def _build_context_block(self, history: list[dict[str, str]] | None) -> str:
-        """history(직전 N턴)를 system prompt에 append할 블록으로 변환.
-
-        비어 있으면 빈 문자열을 반환하여 섹션 자체를 생략한다(토큰 절약).
-
-        프롬프트 인젝션 표면: history.content(사용자·어시스턴트 발화)는 외부 입력이며
-        escape 없이 system prompt에 삽입된다. 다만 이 블록은 Router 분류에만 쓰이고
-        Router는 with_structured_output으로 IntentType(5값 enum) 등 고정 스키마만
-        추출하므로, content가 임의 지시를 담아도 자유 실행으로 이어지지 않는다.
-        (content는 HistoryTurn max_length=1000 + API 서비스 10메시지 윈도우로 제한.)
-        향후 Router 출력에 자유 텍스트 필드를 넓힐 경우 이 가정을 재검토할 것.
-        """
-        if not history:
-            return ""
-        lines = []
-        for turn in history:
-            role_label = "사용자" if turn["role"] == "user" else "어시스턴트"
-            lines.append(f"- [{role_label}] {turn['content']}")
-        turns_text = "\n".join(lines)
-        return (
-            "이전 대화 이력 (과거 → 최신). 후속 질의는 직전 발화의 "
-            "카테고리·지역을 이어받을 가능성이 높다.\n"
-            "이전 맥락이 명확하면 refined_query에 카테고리·지역 키워드를 병합한다.\n"
-            f"{turns_text}"
-        )
+        """모듈 수준 build_context_block 위임 (하위호환)."""
+        return build_context_block(history)
 
     async def classify(
         self,

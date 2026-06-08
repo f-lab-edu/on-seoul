@@ -447,13 +447,15 @@ class GraphNodes:
         oos_type = state.get("out_of_scope_type")
         if oos_type == "attribute_gap":
             # attribute_gap은 시설 식별 검색이 필요하므로 vector_node로 넘긴다.
-            # vector_sub_intent를 identification으로 강제한다.
+            # intent=VECTOR_SEARCH를 명시해야 HydrationNode가 올바르게 hydrate한다.
+            # (HydrationNode는 intent==VECTOR_SEARCH를 체크해 hydrated_services를 채운다.)
             logger.info(
                 "out_of_scope.attribute_gap room=%s refined=%r",
                 state.get("room_id"),
                 (state.get("refined_query") or "")[:40],
             )
             return {
+                "intent": IntentType.VECTOR_SEARCH,
                 "vector_sub_intent": "identification",
                 "node_path": ["out_of_scope_attribute_gap"],
             }
