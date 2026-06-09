@@ -101,146 +101,93 @@ flowchart TD
 
 ## 3. 에이전트 (Agents)
 
-### 3-1. Triage Agent — 행동·의도 결정 (2축 분리, W2)
+하나의 LLM에게 분류·조회·답변을 한꺼번에 맡기면 제어·테스트·관측이 모두 어려워진다. 그래서 on-seoul-agent는 역할이 다른 에이전트를 파이프라인으로 잇는다 — **무엇을 할지 정하는** Triage, **데이터를 가져오는** 검색 전문가(SQL·Vector·Analytics·Map), 그리고 **답변을 쓰는** Answer. 각 에이전트는 생성자 주입으로 독립적으로 교체·테스트할 수 있고, 공유 상태 `AgentState`(§5)만 주고받는다.
 
-`TriageAgent`(`agents/triage_agent.py`)는 기존 `RouterAgent`를 대체·포함하며, LCEL `llm.with_structured_output(TriageOutput)` 으로 사용자 메시지를 **2축**으로 분류한다.
+이 구성을 관통하는 한 가지 원칙이 있다. **LLM은 SQL을 직접 쓰거나 DB를 직접 만지지 않는다.** LLM은 자연어에서 필터·파라미터만 구조화 출력으로 뽑아내고, 실제 조회는 파라미터화된 도구(§4)가 수행한다. 덕분에 SQL Injection 위험이 없고, LLM 출력이 흔들려도 쿼리의 형태는 고정된다.
 
-- **action 축** — `RETRIEVE` / `DIRECT_ANSWER` / `AMBIGUOUS` / `OUT_OF_SCOPE` / `EXPLAIN`
-- **retrieval_intent 축** — `primary_intent`(`SQL_SEARCH` / `VECTOR_SEARCH` / `MAP` / `ANALYTICS`), action=RETRIEVE일 때만 채움
+### 3-1. Triage Agent — 무엇을 할지 정한다 (2축 분리, W2)
 
-| 입출력 | 필드 |
-|---|---|
-| **in** | `message`, `history` (직전 N턴, 선택), `prev_reasoning` (EXPLAIN 판정용) |
-| **out** | `action`, `primary_intent`, `secondary_intent`, `out_of_scope_type`, `user_rationale`, `reasoning`(CoT, 관측 전용), `refined_query`, `max_class_name`, `area_name`, `service_status`, `payment_type`, `vector_sub_intent` |
+`TriageAgent`(`agents/triage_agent.py`)는 사용자 메시지를 받아 다음 단계를 결정하는 첫 관문이다.
 
-하위호환을 위해 `TriageOutput.model_post_init`이 `intent` 필드를 동기화한다 — action=RETRIEVE이면 `intent = primary_intent`, 그 외에는 `intent = FALLBACK`. 따라서 `intent`를 읽는 기존 코드가 그대로 동작한다.
+초기 설계는 의도 하나(`SQL_SEARCH`/`VECTOR_SEARCH` 등)만 분류하는 `RouterAgent`였다. 그런데 "안녕", "넌 뭘 할 수 있어?", "방금 그건 왜 추천했어?", "서울 인구 알려줘"(서비스 범위 밖) 같은 질문까지 전부 검색 경로로 흘러 어색한 답이 나왔다. 근본 원인은 **"검색을 할지 말지"와 "검색이라면 어떤 검색인지"가 서로 다른 차원**인데 이를 한 축에 뭉뚱그렸다는 점이다.
 
-- `secondary_intent`는 SQL↔VECTOR 경계가 모호할 때만 채워지며 `SQL_SEARCH`/`VECTOR_SEARCH`만 허용한다(`enable_secondary_intent=True`일 때 팬아웃 트리거).
-- `out_of_scope_type`은 action=OUT_OF_SCOPE일 때 `domain_outside`(즉시 거절) 또는 `attribute_gap`(시설 식별 검색 필요)로 분기한다.
-- `user_rationale`은 사용자 노출용 판단 근거 1문장으로, `decision` SSE 이벤트(§3-7, W3)에 포함된다.
-- `max_class_name` / `area_name` / `service_status` / `payment_type` / `vector_sub_intent`는 `field_validator`로 도메인 화이트리스트(자치구 25종, 상태 5종, 카테고리 5종, `payment_type`은 `"무료"`/`"유료"` 정규값) 밖 값을 `None`으로 정규화한다. `payment_type`은 SQL_SEARCH 경로에서 `sql_search`의 결제 유형 필터로 전달되며(유료는 `"유료%"` 접두 매칭), `cache_check` 키에도 포함된다. history 컨텍스트 블록은 `router_agent.build_context_block`을 재사용한다.
+W2에서 이를 **2축**으로 분리했다.
 
-**forced_intent honor**: `retry_prep_node`가 방향성 재시도로 `forced_intent`를 강제하면 `triage_node`는 LLM 재분류를 skip하고 그 intent를 `action=RETRIEVE`로 반환하며 즉시 `forced_intent=None`으로 소비한다(1회성).
+- **action 축** — 무엇을 할지: `RETRIEVE`(검색한다), `DIRECT_ANSWER`(바로 답한다), `AMBIGUOUS`(되묻는다), `OUT_OF_SCOPE`(범위 밖), `EXPLAIN`(직전 판단 근거를 설명한다).
+- **retrieval_intent 축** — `RETRIEVE`일 때만, 어떤 검색인지: `SQL_SEARCH` / `VECTOR_SEARCH` / `MAP` / `ANALYTICS`.
 
-**예외 처리**: `triage_node` 내부에서 예외가 발생하면 `error`(예외 메시지)와 `answer`(fallback 안내 메시지)를 state에 주입하고 `action=DIRECT_ANSWER`로 설정한 뒤 `node_path`에 `"triage_error"`를 append한다. 후속 self-correction 엣지는 비-RETRIEVE action이므로 즉시 종단 체인으로 종료한다(무한루프 방지).
+`RETRIEVE`만 검색 흐름으로 들어가고, 나머지 4종은 검색 없이 곧바로 답한다(§3-7). 기존 코드는 여전히 단일 `intent` 필드를 읽으므로, action=RETRIEVE이면 `intent=primary_intent`, 그 외에는 `intent=FALLBACK`으로 자동 동기화해 하위호환을 지킨다.
 
-> `RouterAgent`(`router_agent.py`)는 명시 주입 시 하위호환 `router_node` alias 경로로만 사용된다. 프로덕션에서는 `AgentGraph()`가 항상 `TriageAgent()`를 기본 주입한다.
+> **알아둘 규칙**
+> - 추출한 필터(`area_name`·`service_status`·`payment_type` 등)는 도메인 화이트리스트 밖 값이면 `None`으로 정규화한다 — 잘못된 값이 캐시 키를 오염시키거나 빈 검색을 만들지 않도록.
+> - 재시도 경로에서 `forced_intent`가 들어오면 LLM 재분류를 건너뛰고 그 의도로 한 번만 검색한다(1회성 소비, §7-2).
+> - triage 내부에서 예외가 나면 사용자에게 안내 메시지를 답으로 주고 종료한다(무한 루프 방지).
+> - 프로덕션에서는 `AgentGraph()`가 항상 `TriageAgent`를 주입한다. 레거시 `RouterAgent`는 명시 주입 시 하위호환 경로로만 쓰인다.
 
-### 3-1a. 참조 해소 — reference_resolution / rehydrate / describe (W1)
+### 3-1a. 참조 해소 — "방금 그거"는 다시 검색하지 않는다 (W1)
 
-`reference_resolution_node`는 START 직후 실행되어 현재 메시지가 직전 턴 결과 엔티티를 가리키는 **지시 참조**인지 규칙 기반(LLM 미사용, `agents/_reference_resolution.py`)으로 판정한다. 신호 3종을 사용한다.
+멀티턴 대화에서 "두 번째 거 알려줘", "거기 지금 접수해?"처럼 **직전 턴의 결과를 가리키는 질문**은 다시 검색할 필요가 없다. 이미 보여준 시설을 그대로 이어받으면 된다.
 
-1. **지시대명사** — "이곳/저기/그거/여기/방금/위에/해당" 등 (공백 제거 후 부분 문자열 매칭).
-2. **서수** — 한글("첫번째"~"열번째") + 아라비아("3번째", 단서 동반 시 "1번"). 0-base 인덱스로 변환.
-3. **직전 라벨 부분일치** — `prev_entities[].label`의 변별 토큰이 메시지에 등장. 일반 카테고리 토큰("수영장"·"센터" 등)은 과잉 매칭 방지를 위해 제외한다.
+`reference_resolution_node`는 START 직후 이 판정을 **규칙 기반(LLM 미사용, `agents/_reference_resolution.py`)**으로 한다. 지시대명사("이곳/방금/거기"), 서수("첫 번째/3번째"), 직전 카드 라벨 부분일치 — 이 세 신호를 본다. LLM을 쓰지 않는 이유는 이 판정이 결정적이고 빨라서 LLM 호출의 비용과 지연이 아깝기 때문이다. 직전 카드(`prev_entities`)가 비어 있으면 무조건 비참조로 처리되므로 기존 흐름과 100% 호환된다.
 
-게이트: `prev_entities`가 비어 있으면 무조건 non-referential(`target_service_ids=None`)이므로 기존 흐름과 100% 하위호환된다. 다중 참조("1번이랑 3번")는 `prev_entities` 인덱스 오름차순으로 정규화하여 복수 바인딩한다.
+참조로 판정되면 검색을 건너뛰고 두 노드를 거친다.
 
-- referential → `target_service_ids` 바인딩 후 `rehydrate_node`(검색 우회).
-- non-referential → `triage_node`(기존 흐름).
+1. `rehydrate_node` — 정체성(`service_id`)만 이어받고, 상태·일정 같은 **사실은 `hydrate_services`로 최신 원본에서 다시 읽는다**. 직전 스냅샷을 그대로 쓰면 그사이 바뀐 마감·상태를 놓치기 때문이다.
+2. `describe_node` — 예약 카드가 아니라 "어떤 곳인지" 설명형 답변을 만든다. 재조회 결과가 0건(삭제·마감)이면 환각 대신 정직한 안내와 재검색 제안을 준다.
 
-`rehydrate_node`는 정체성(`service_id`)만 이어받고 사실(상태·일정)은 `hydrate_services(target_service_ids)`로 최신 원본에서 재조회한다(스냅샷 캐싱 금지 — staleness 위험). 재-hydrate 0건(soft-delete/마감)이면 `hydrated_services=[]`로 둔다. 이어 `describe_node`가 `AnswerAgent.describe()`로 예약 카드 템플릿이 아닌 "어떤 곳인지" 설명형 답변을 생성하고, 0건이면 정직한 안내 + 재검색 제안을 반환한다(환각·빈 카드 금지).
+### 3-2. SQL Agent — 정형 조건 조회
 
-### 3-2. SQL Agent — 정형 데이터 조회
+"마포구에서 지금 접수 중인 수영장"처럼 카테고리·자치구·상태·키워드로 또렷이 걸러지는 질의를 담당한다. LLM은 메시지에서 필터 값만 뽑고, 실제 조회는 `sql_search` 도구가 파라미터화 SQL로 수행한다. 결과는 개별 시설 목록이다.
 
-LLM이 SQL을 직접 생성하지 않는다. 메시지에서 필터 파라미터만 구조화 출력으로 추출한 뒤 `sql_search` 도구를 호출한다.
+### 3-3. Vector Agent — 의미 기반 검색 (4채널 하이브리드)
 
-| 입출력 | 필드 |
-|---|---|
-| **in** | `message` |
-| **out** | `sql_results` |
+"아이랑 체험할 수 있는 곳"처럼 정형 필터로는 잡히지 않는 **의미 중심 질의**를 담당한다.
 
-### 3-3. Vector Agent — 의미 기반 검색 (4채널 RRF 하이브리드)
+의미 검색을 잘하려면 한 가지 방식만으로는 부족하다. 그래서 서로 다른 관점의 **4개 채널**을 함께 돌리고 결과를 합친다.
 
-> Task 1~6에서 4채널 순차 실행 + RRF 결합으로 확장되었다.
+- **Track A (identity)** — 시설 신원 임베딩. 자치구·상태 등 post-filter를 적용한다.
+- **Track B (summary)** — 자연어 요약 임베딩.
+- **Track C (question)** — "이 시설로 답할 만한 예상 질문" 임베딩.
+- **BM25** — 정확 키워드 매칭(전문 검색). 한국어는 `tools/tokenizer.py`가 Kiwi로 의미 형태소만 추려 검색어로 쓴다. 토크나이저가 두 계층(쿼리 전처리 Kiwi + 색인 매칭 `korean_lindera`)으로 나뉜 배경은 [하이브리드 검색 전략](hybrid-search-strategy.md)을 참조한다.
 
-1. **질의 정제** — LLM으로 사용자 질의를 벡터 검색용 문장으로 정제하고, post-filter용 파라미터(`max_class_name`, `area_name`, `service_status`)와 `vector_sub_intent`를 함께 추출한다.
-2. **4채널 순차 실행 (ai_session)** — asyncpg 단일 세션 제약으로 `gather` 대신 순차 실행한다.
-   - **Track A**: `vector_search(row_kind="identity")` — 시설 신원 임베딩, post-filter 적용
-   - **Track B**: `vector_search(row_kind="summary")` — 자연어 요약 임베딩, post-filter 미적용
-   - **Track C**: `question_search()` — 예상 질문 임베딩, `service_id`별 dedup
-   - **BM25**: `bm25_search()` — `tools/tokenizer.py` (Kiwi(kiwipiepy) 형태소 분석 + `DOMAIN_TOKENS`)로 토큰화 후 호출. 제안3에서 토큰화는 `atokenize_query()`로 `asyncio.to_thread()` 오프로드된다(고QPS 이벤트 루프 블로킹 방지)
-3. **RRF 결합** — `core/rrf.py`의 `reciprocal_rank_fusion`으로 4채널 결과를 통합한다. Phase 1은 `rrf_unweighted_baseline=True` (모든 채널 가중치 1.0).
-4. `vector_results`에 RRF 통합 결과(메타데이터 + `service_id` + `rrf_score`)를 저장한다.
+채널마다 점수 척도가 달라 단순 합산이 어렵다. 그래서 각 채널의 *순위*만 모아 통합하는 **RRF(Reciprocal Rank Fusion)**를 쓴다(`core/rrf.py`). asyncpg 단일 세션 제약 때문에 4채널은 순차로 실행한다.
 
-> **Hydration 분리(W2)**: 원본 hydration은 `VectorAgent.search()` 내부가 아니라 후속 `hydration_node`(별도 그래프 노드)가 담당한다. `vector_node`는 `vector_results`(메타데이터·`service_id`·`rrf_score`)만 채우고, `hydration_node`가 `service_id`로 `hydrate_services`를 호출하여 `hydrated_services` 슬롯에 최신 원본을 채운다. `AnswerAgent`는 검색 경로에 무관하게 `hydrated_services` 단일 슬롯을 사용한다. `sql_node` 경로는 `sql_search`가 이미 원본 행을 반환하므로 `hydration_node`를 통과한다.
+> **원본 재조회 분리 (W2)**: 검색은 임베딩에 붙은 메타데이터를 쓰는데, 이 값(상태·접수일 등)은 시간이 지나면 실제와 어긋난다(stale). 그래서 검색이 끝나면 별도 `hydration_node`가 `service_id`로 원본 테이블을 다시 읽어 `hydrated_services`에 채운다. Answer Agent는 검색 경로와 무관하게 이 단일 슬롯만 본다 — SQL 경로는 이미 원본 행이라 그대로 통과한다.
 
-| 입출력 | 필드 |
-|---|---|
-| **in** | `message`, `vector_sub_intent` |
-| **out** | `refined_query`, `vector_results` |
+### 3-4. Analytics Agent — 집계·분포 질의
 
-> 4채널 검색은 `ai_session`(채널별 독립 세션, `asyncio.gather` 병렬), 원본 조회는 `hydration_node`의 `data_session`으로 분리되어 있다.
-
-**BM25 도입 배경**: ParadeDB Lindera의 `user_dictionary`는 SQL API 레벨에서 지원되지 않아 커스텀 사전 적용에 소스 빌드가 필요했다. 이를 우회하기 위해 Python 레이어(`tools/tokenizer.py`)에서 Kiwi(kiwipiepy)로 사전 토크나이징한 뒤 BM25 쿼리 조건을 구성한다. 도메인 용어(예: "따릉이", "한강공원")는 `DOMAIN_TOKENS` 화이트리스트로 보존된다.
-
-> **토크나이저 2계층 구조**: 토크나이저는 역할이 다른 두 계층으로 나뉜다. ① **색인/매칭 계층** — DB BM25 인덱스(`scripts/ddl/service_embeddings.sql`)는 ParadeDB `korean_lindera`(KoDic)로 색인하고, `col @@@ 'token'` 평가 시 전달된 토큰도 동일 `korean_lindera`로 재분석해 매칭하므로 색인↔매칭 토크나이저는 일치한다. ② **쿼리 이해 계층** — Python(`tools/tokenizer.py`)은 Kiwi(kiwipiepy)로 의미 품사만 추출해 BM25에 보낼 검색어를 선별한다(노이즈 감소). 원안은 Python 측도 `lindera-py`였으나 PyPI 미등록으로 설치 불가하여 문맥 기반 분석이 더 정교한 Kiwi로 교체했다. 두 계층은 경쟁이 아니라 역할 분리다. 상세는 [`docs/hybrid-search-strategy.md`](hybrid-search-strategy.md#토크나이저-2계층-kiwi-쿼리-이해--korean_lindera-색인-매칭) 참조.
-
-### 3-4. Analytics Agent — 집계 질의 처리
-
-LLM이 SQL을 직접 생성하지 않는다. 메시지에서 집계 파라미터(group_by, metric, keyword 등)를 구조화 출력으로 추출한 뒤 `analytics_search` 도구를 호출한다. hydration 단계는 거치지 않는다.
-
-| 입출력 | 필드 |
-|---|---|
-| **in** | `message`, `max_class_name`, `area_name`, `service_status` |
-| **out** | `analytics_results`, `analytics_group_by`, `analytics_metric`, `analytics_keyword` |
+"강남구에 체육시설이 몇 개야?"처럼 개수·분포·종류를 묻는 집계 질의를 담당한다. 개별 목록을 주는 SQL_SEARCH와 구별되며, 집계 값만 필요하므로 원본 재조회(hydration)는 거치지 않는다. 여기서도 LLM은 집계 파라미터만 뽑고 `analytics_search`가 GROUP BY/DISTINCT를 실행한다.
 
 ### 3-5. Answer Agent — 답변 생성
 
-검색 결과를 자연어 답변 + 시설 카드로 가공한다.
+모든 검색 경로의 결과는 마지막에 `AnswerAgent` 하나로 모여 자연어 답변과 시설 카드가 된다. 답변·카드 포맷을 한곳에서 관리해 일관성을 유지하기 위해서다.
 
-| 입출력 | 필드 |
-|---|---|
-| **in** | `message`, `intent`, `sql_results`, `vector_results`, `map_results`, `title_needed` |
-| **out** | `answer`, `title` (`title_needed=True` 일 때) |
+핵심 규칙은 두 가지다. 시설에 `service_url`이 없으면 서울 예약 포털(`https://yeyak.seoul.go.kr`)로 fallback하고, 입력에 이미 `error`와 `answer`가 모두 채워져 있으면(triage 예외 등) LLM을 다시 부르지 않고 즉시 반환한다. 성능을 위해 정적인 프롬프트(MAP/ANALYTICS/FALLBACK)는 시작 시 한 번만 조립해 캐시하고, 내용이 매번 달라지는 카드형(SQL/VECTOR) 프롬프트만 호출 시점에 조건부로 조합한다.
 
-특이사항:
+### 3-6. 검색 의도(IntentType) 분류 기준
 
-- `sql_results` / `vector_results` / `map_results` / `analytics_results` 를 intent별로 분기하여 LLM에 전달한다.
-- `service_url` 이 없으면 `https://yeyak.seoul.go.kr` 로 fallback한다.
-- `title_needed=True` 이면 대화 제목(10자 이내)을 별도 LLM 호출로 생성한다.
-- 입력 state에 이미 `error` + `answer` 가 모두 채워져 있으면(triage 예외 fast-path) 추가 LLM 호출 없이 즉시 반환한다.
+action=RETRIEVE일 때 Triage가 고르는 검색 의도 4종이다. 비-RETRIEVE action은 `intent=FALLBACK`으로 동기화되어 §3-7 경로로 간다.
 
-**2-tier 프롬프트 조립 구조:**
+| IntentType | 분류 기준 | 예시 |
+|---|---|---|
+| `SQL_SEARCH` | 카테고리·자치구·접수 상태·날짜 등 정형 조건 | "지금 접수 중인 수영장" |
+| `VECTOR_SEARCH` | 키워드·의미 기반 유사 시설 탐색 | "아이랑 체험할 수 있는 곳" |
+| `MAP` | 지도·위치·반경 탐색 | "내 주변 500m 이내 체육관" |
+| `ANALYTICS` | 개수·분포·종류 등 집계 질의 | "강남구에 체육시설이 몇 개야?" |
+| `FALLBACK` | 위 검색에 해당하지 않음 (비-RETRIEVE action의 동기화 값) | "어떤 서비스를 제공하나요?" |
 
-- **Tier 1 (정적 조립)**: MAP / ANALYTICS / FALLBACK 프롬프트는 `__init__` 시 1회 조립되어 `_static_prompts` dict에 캐시된다. 실행 경로마다 프롬프트 객체를 재생성하지 않는다.
-- **Tier 2 (런타임 조립)**: 카드형(SQL / VECTOR) 프롬프트는 매 호출마다 조건부 절을 코드로 판단해 조합한다. 접수중 여부, 자치구 명시 여부에 따라 해당 절을 포함하거나 제외하여 LLM 컨텍스트를 최소화한다.
-- ANALYTICS / FALLBACK intent는 `service_cards=[]`를 반환한다 — 집계/안내 답변은 카드 UI를 사용하지 않는다.
+### 3-7. 비검색 action 노드 (W2) + decision 이벤트 (W3)
 
-### 3-6. IntentType 분류 기준
-
-| IntentType | 분류 기준 | 예시 | 비고 |
-|---|---|---|---|
-| `SQL_SEARCH` | 카테고리·자치구·접수 상태·날짜 등 정형 조건 | "지금 접수 중인 수영장" | 개별 목록 반환 |
-| `VECTOR_SEARCH` | 키워드·의미 기반 유사 시설 탐색 | "아이랑 체험할 수 있는 곳" | `vector_sub_intent`: `identification` / `detail` / `semantic` |
-| `MAP` | 지도·위치·반경 탐색 | "내 주변 500m 이내 체육관" | GeoJSON 반환 |
-| `ANALYTICS` | 개수·분포·종류 등 집계/요약 질의 | "강남구에 체육시설이 몇 개야?" | 통계/카운트 반환. hydration 생략. SQL_SEARCH(개별 목록)와 구별 |
-| `FALLBACK` | 인사·기능 문의 등 그 외 | "어떤 서비스를 제공하나요?" | action이 비-RETRIEVE일 때 동기화 값. service_cards=[] |
-
-> action=RETRIEVE일 때만 `intent`가 위 검색 4종 중 하나로 채워진다. 비-RETRIEVE action(DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE/EXPLAIN)은 `intent=FALLBACK`으로 동기화되고 §3-7의 action 노드로 라우팅된다.
-
-### 3-7. action 노드 (W2) + decision SSE 이벤트 (W3)
-
-action=RETRIEVE를 제외한 4종은 `triage_node` 직후 `route_by_action` 분기로 각자의 노드에 도달한다. 모두 검색 없이 답변을 생성하고 종단 체인으로 진행한다.
+RETRIEVE를 제외한 4종은 `triage_node` 직후 `route_by_action` 분기로 각자의 노드에 도달한다. 모두 검색 없이 답변을 만들고 종단 체인으로 진행한다.
 
 | action | 노드 | 동작 |
 |---|---|---|
-| `DIRECT_ANSWER` | `direct_answer_node` | DB 없이 `AnswerAgent.answer()`로 직접 응답 (`intent=FALLBACK` 분기). 기존 FALLBACK 안내문 대체 |
-| `AMBIGUOUS` | `ambiguous_node` | 명확화 질문 1개 생성. `user_rationale`이 있으면 그것을, 없으면 기본 안내를 답변으로 사용 |
-| `OUT_OF_SCOPE` | `out_of_scope_node` | `domain_outside` → 즉시 거절 메시지(검색 없음). `attribute_gap` → `intent=VECTOR_SEARCH` + `vector_sub_intent=identification` 세팅 후 `vector_node`로 합류 |
-| `EXPLAIN` | `explain_node` | `prev_reasoning`으로 판단 근거 설명. `prev_reasoning`이 없으면 `direct_answer_node`로 폴백 |
+| `DIRECT_ANSWER` | `direct_answer_node` | DB 없이 바로 답변. 기존 FALLBACK 안내문을 대체한다 |
+| `AMBIGUOUS` | `ambiguous_node` | 무엇을 찾는지 되묻는 명확화 질문 1개를 만든다 |
+| `OUT_OF_SCOPE` | `out_of_scope_node` | 범위 밖(`domain_outside`)이면 즉시 거절한다. 단, 시설은 맞는데 속성만 모자란 경우(`attribute_gap`)는 시설 식별을 위해 `vector_node`로 합류한다 |
+| `EXPLAIN` | `explain_node` | 직전 턴의 판단 근거(`prev_reasoning`)를 설명한다. 근거가 없으면 `DIRECT_ANSWER`로 폴백한다 |
 
-**decision SSE 이벤트 (W3)**: `triage_node`가 LLM 분류를 실제 수행한 경우(`user_rationale` 존재), `stream()`이 triage 완료 직후 `DecisionEvent`(`schemas/events.py`)를 **1회** 방출한다.
-
-| 필드 | 값 |
-|---|---|
-| `event` | `"decision"` (고정) |
-| `action` | TriageAgent가 결정한 action 5종 중 하나 |
-| `routes` | `[primary_intent, secondary_intent]`에서 None 제거한 리스트. RETRIEVE 외에는 `[]` |
-| `user_rationale` | `sanitize_user_rationale()`로 정제된 판단 근거 1문장 (내부 `__` 식별자 패턴 줄 제거 + 최대 200자 절단) |
-| `sources` | 검색 전 단계라 항상 `[]` |
-
-`forced_intent` 재시도 경로와 하위호환 `router_node` alias 경로는 `user_rationale`을 설정하지 않으므로 decision 이벤트를 방출하지 않는다.
+**decision 이벤트 (W3)**: Triage가 실제로 LLM 분류를 수행하면, `stream()`이 triage 직후 `decision` SSE 이벤트(`schemas/events.py`의 `DecisionEvent`)를 한 번 방출한다. "왜 이렇게 판단했는지"를 사용자에게 투명하게 보여주기 위한 것으로, 결정된 action·검색 경로(`routes`)·사용자 노출용 근거 한 문장(`user_rationale`)을 담는다. 근거 문장은 내부 식별자가 새지 않도록 정제(`sanitize_user_rationale`)하며, `forced_intent` 재시도나 레거시 경로처럼 LLM 분류를 건너뛴 경우에는 방출하지 않는다.
 
 ---
 
