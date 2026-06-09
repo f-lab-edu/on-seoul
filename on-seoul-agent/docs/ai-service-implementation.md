@@ -128,10 +128,10 @@ FastAPI + LangChain 기반 멀티에이전트 서비스 구현 순서.
 ### Phase 14. Python 레이어 BM25 쿼리 토크나이징 및 하이브리드 검색 신설
 
 > ParadeDB Lindera의 `user_dictionary` 지정은 SQL API 레벨에서 지원되지 않으며, 커스텀 사전 적용은 소스 빌드가 필요하다.
-> 대신 Python에서 lindera-py로 쿼리를 사전 토크나이징한 뒤 BM25 검색 조건을 구성하는 방식으로 우회한다.
+> 대신 Python에서 쿼리를 사전 토크나이징한 뒤 BM25 검색 조건을 구성하는 방식으로 우회한다.
 
-- [x] `pyproject.toml` — `lindera-py` 의존성 추가
-- [x] `llm/tokenizer.py` — Lindera KoDic 사전 기반 형태소 분석기 래퍼 구현. 도메인 용어("따릉이", "한강공원" 등) 확장을 위한 사용자 정의 토큰 목록(`DOMAIN_TOKENS`) 지원
+- [x] `pyproject.toml` — `kiwipiepy` 의존성 추가
+- [x] `tools/tokenizer.py` — Kiwi(kiwipiepy) 기반 형태소 분석기 래퍼 구현. 의미 품사(체언·용언 어간 등)만 추출하며, 도메인 용어("따릉이", "한강공원" 등) 보존을 위한 사용자 정의 토큰 목록(`DOMAIN_TOKENS`) 지원. kiwipiepy 미설치 환경에서는 공백 분리 폴백 사용
 - [x] `tools/bm25_search.py` — 토큰 배열을 받아 ParadeDB BM25 쿼리(`service_name @@@ $1 OR metadata @@@ $1`)를 실행하고 `(service_id, bm25_score)` 목록을 반환하는 독립 함수 구현. DB 세션은 `Depends`로 주입
 - [x] `agents/vector_agent.py` — **하이브리드 검색 경로 신설** (이 Phase에서 추가하는 범위):
   - 사용자 쿼리를 `tokenizer`로 토크나이징 → `bm25_search` 호출

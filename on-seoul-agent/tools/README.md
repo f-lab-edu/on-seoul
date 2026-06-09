@@ -13,7 +13,7 @@ tools/
 ├── hydrate_services.py  # service_id → public_service_reservations 최신 원본 hydration
 ├── map_search.py        # earthdistance 반경 검색 → GeoJSON FeatureCollection
 ├── analytics_search.py  # GROUP BY COUNT / SELECT DISTINCT 집계 → list[dict]
-├── tokenizer.py         # 한국어 형태소 토큰화 (Lindera + DOMAIN_TOKENS, atokenize_query)
+├── tokenizer.py         # 한국어 형태소 토큰화 (Kiwi/kiwipiepy + DOMAIN_TOKENS, atokenize_query)
 └── _result_columns.py   # 검색 결과 공통 컬럼 정의
 ```
 
