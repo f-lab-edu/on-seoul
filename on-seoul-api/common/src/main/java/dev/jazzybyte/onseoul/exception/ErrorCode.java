@@ -36,6 +36,9 @@ public enum ErrorCode {
     CHAT_ROOM_NOT_FOUND(404, "CHAT_ROOM_NOT_FOUND", "대화방을 찾을 수 없습니다."),
     CHAT_CONCURRENCY_LIMIT(429, "CHAT_CONCURRENCY_LIMIT", "동시에 진행 중인 대화가 너무 많습니다. 잠시 후 다시 시도해주세요."),
 
+    // ── 레이트 리밋 (RATE_LIMIT_*) ─────────────────────────────────────────
+    RATE_LIMIT_EXCEEDED(429, "RATE_LIMIT_EXCEEDED", "요청이 너무 잦습니다. 잠시 후 다시 시도해주세요."),
+
     // ── 알림 (NOTIFICATION_*) ──────────────────────────────────────────────
     SUBSCRIPTION_NOT_FOUND(404, "SUBSCRIPTION_NOT_FOUND", "구독을 찾을 수 없습니다."),
     SUBSCRIPTION_CONFLICT(409, "SUBSCRIPTION_CONFLICT", "이미 동일한 서비스에 대한 구독이 존재합니다."),
