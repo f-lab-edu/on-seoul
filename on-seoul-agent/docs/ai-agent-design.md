@@ -10,9 +10,11 @@
 
 | 구성 요소 | 위치 | 역할 |
 |---|---|---|
-| **에이전트** (Agent) | `agents/` | 의도 분류, 파라미터 추출, 답변 생성 |
-| **도구** (Tool) | `tools/` | DB 조회 추상화 (SQL / 벡터 / BM25 / 지도) |
+| **에이전트** (Agent) | `agents/` | 트리아지(행동·의도 결정), 파라미터 추출, 답변 생성 |
+| **도구** (Tool) | `tools/` | DB 조회 추상화 (SQL / 벡터 / BM25 / 질문 / 지도 / 집계 / hydration) |
 | **그래프** | `agents/graph.py` | LangGraph `StateGraph` 노드·엣지 조립 및 실행 |
+
+> **W1/W2/W3 반영(2026-06-06)**: 단일 `Router Agent`가 결정하던 라우팅이 `Triage Agent`로 확장되어 **action(행동) × retrieval_intent(검색 방식)** 2축으로 분리되었다. START 직후 규칙 기반 **참조 해소(reference resolution)** 게이트가 추가되어 직전 턴 시설을 가리키는 지시 참조를 우회 경로(rehydrate → describe)로 처리한다. triage 완료 직후에는 판단 근거를 담은 `decision` SSE 이벤트를 1회 방출한다.
 
 ---
 
@@ -21,61 +23,123 @@
 ```mermaid
 flowchart TD
     START(["사용자 메시지"])
-    ROUTER["router_node<br/>(Router Agent)"]
+    REF["reference_resolution_node<br/>(W1 규칙 기반 지시 참조 판정)"]
+    REHYDRATE["rehydrate_node<br/>(target_service_ids<br/>hydrate_services 재수화)"]
+    DESCRIBE["describe_node<br/>(AnswerAgent.describe<br/>설명형 답변)"]
+    TRIAGE["triage_node<br/>(Triage Agent)<br/>action × retrieval_intent"]
+    DIRECT["direct_answer_node"]
+    AMBIG["ambiguous_node<br/>(명확화 질문)"]
+    OOS["out_of_scope_node<br/>(domain_outside /<br/>attribute_gap)"]
+    EXPLAIN["explain_node<br/>(prev_reasoning 설명)"]
     CACHE_CHECK["cache_check_node<br/>(Answer Cache lookup)"]
     SQL["sql_node<br/>(SQL Agent)"]
     VECTOR["vector_node<br/>(Vector Agent)<br/>BM25 + vector RRF"]
     MAP["map_node<br/>(map_search)<br/>lat/lng 미제공 시<br/>map_results=None"]
     ANALYTICS["analytics_node<br/>(Analytics Agent)<br/>analytics_search 집계"]
+    HYDRATION["hydration_node<br/>(service_id → 원본 hydration)"]
+    RRF["rrf_fusion_node<br/>(secondary_intent 팬아웃<br/>RRF 통합, 기본 bypass)"]
+    GATE{{"pre_answer_gate_node<br/>hydrated 0건?(C2)<br/>(retry=0 캡)"}}
     ANSWER["answer_node<br/>(Answer Agent)"]
-    SELF_CORR{{"self_correction<br/>빈 답변/intent별 0건?<br/>(retry=0 캡)"}}
+    SELF_CORR{{"self_correction<br/>빈 답변/intent별 0건?<br/>(retry=0 캡, 비-RETRIEVE 제외)"}}
     RETRY_PREP["retry_prep_node<br/>(intent별 분기:<br/>forced_intent 전환 /<br/>ANALYTICS 필터 드롭 /<br/>MAP 반경 확장 ·<br/>search_channels 리셋)"]
     CACHE_WRITE["cache_write_node<br/>(Answer Cache 저장)"]
     SEARCH_PERSIST(["search_persist_node<br/>chat_search_queries +<br/>chat_search_results 적재"])
     TRACE(["trace_node<br/>chat_agent_traces 적재"])
 
-    START --> ROUTER
-    ROUTER --> CACHE_CHECK
+    START --> REF
+    REF -- "referential" --> REHYDRATE
+    REF -- "non-referential" --> TRIAGE
+    REHYDRATE --> DESCRIBE
+    DESCRIBE --> SEARCH_PERSIST
+
+    TRIAGE -- "RETRIEVE" --> CACHE_CHECK
+    TRIAGE -- "DIRECT_ANSWER" --> DIRECT
+    TRIAGE -- "AMBIGUOUS" --> AMBIG
+    TRIAGE -- "OUT_OF_SCOPE" --> OOS
+    TRIAGE -- "EXPLAIN" --> EXPLAIN
+
+    OOS -- "attribute_gap" --> VECTOR
+    OOS -- "domain_outside" --> SEARCH_PERSIST
+
     CACHE_CHECK -- "hit" --> SEARCH_PERSIST
     CACHE_CHECK -- "miss · SQL_SEARCH" --> SQL
     CACHE_CHECK -- "miss · VECTOR_SEARCH" --> VECTOR
     CACHE_CHECK -- "miss · MAP" --> MAP
     CACHE_CHECK -- "miss · ANALYTICS" --> ANALYTICS
-    CACHE_CHECK -- "miss · FALLBACK 또는 router 예외" --> ANSWER
+    CACHE_CHECK -- "miss · FALLBACK 또는 triage 예외" --> ANSWER
 
-    SQL --> ANSWER
-    VECTOR --> ANSWER
+    SQL --> HYDRATION
+    VECTOR --> HYDRATION
+    HYDRATION --> RRF
+    RRF --> GATE
+    GATE -- "유건" --> ANSWER
+    GATE -- "0건(C2)" --> RETRY_PREP
     MAP --> ANSWER
     ANALYTICS --> ANSWER
 
+    DIRECT --> CACHE_WRITE
+    AMBIG --> CACHE_WRITE
+    EXPLAIN --> CACHE_WRITE
+
     ANSWER --> SELF_CORR
     SELF_CORR -- "Yes (최대 1회)" --> RETRY_PREP
-    RETRY_PREP --> ROUTER
+    RETRY_PREP --> TRIAGE
     SELF_CORR -- "No" --> CACHE_WRITE
     CACHE_WRITE --> SEARCH_PERSIST
     SEARCH_PERSIST --> TRACE
 ```
 
-각 노드는 공유 상태인 **`AgentState`** 를 입력받아 부분 업데이트 dict를 반환한다. LangGraph가 상태 병합을 담당하므로 노드 내부에서 직접 변이하지 않는다. 그래프 전체에는 super-step을 16으로 제한(`recursion_limit=16`)하고 재시도는 1회 캡(`retry_count==0`)을 둬 무한 사이클을 방지한다.
+각 노드는 공유 상태인 **`AgentState`** 를 입력받아 부분 업데이트 dict를 반환한다. LangGraph가 상태 병합을 담당하므로 노드 내부에서 직접 변이하지 않는다. 그래프 전체에는 super-step을 22로 제한(`recursion_limit=22`)하고 재시도는 1회 캡(`retry_count==0`)을 둬 무한 사이클을 방지한다. W2 최악 경로(RETRIEVE + 1회 재시도)는 18 super-step이며 여유 4를 더해 22로 설정한다.
 
-> **종단 체인 일관성**: cache hit 경로도 `search_persist_node` 를 경유한다. 빈 `search_channels` 에서는 즉시 skip 되므로 오버헤드는 없으나, 명시적으로 통과시켜 "cache_write → search_persist → trace" 의 종단 체인 형태를 항상 동일하게 유지한다.
+> **참조 해소 경로(W1)**: `reference_resolution_node`가 `prev_entities`를 근거로 현재 메시지가 직전 턴 시설을 가리키는 지시 참조인지 규칙 기반(LLM 미사용)으로 판정한다. referential이면 `rehydrate_node → describe_node`로 검색 경로를 우회하고, 비참조이면 `triage_node`로 진행한다(기존 흐름, 하위호환).
+
+> **2축 분리(W2)**: `triage_node`는 `action`(RETRIEVE / DIRECT_ANSWER / AMBIGUOUS / OUT_OF_SCOPE / EXPLAIN)과 `retrieval_intent`(RETRIEVE일 때만)를 직교 산출한다. RETRIEVE만 기존 검색 흐름으로 진입하고, 나머지 4종은 각자의 action 노드에서 검색 없이 답변을 생성한다. `OUT_OF_SCOPE/attribute_gap`만 예외적으로 `vector_node`로 합류하여 시설 식별 검색을 수행한다.
+
+> **종단 체인 일관성**: cache hit·참조 해소·비-RETRIEVE action 경로 모두 `search_persist_node`를 경유한다. 빈 `search_channels`에서는 즉시 skip되므로 오버헤드는 없으나, 명시적으로 통과시켜 "cache_write → search_persist → trace"의 종단 체인 형태를 항상 동일하게 유지한다.
 
 ---
 
 ## 3. 에이전트 (Agents)
 
-### 3-1. Router Agent — 의도 분류
+### 3-1. Triage Agent — 행동·의도 결정 (2축 분리, W2)
 
-LCEL `prompt | llm.with_structured_output` 으로 사용자 메시지를 `IntentType` 5종(`SQL_SEARCH` / `VECTOR_SEARCH` / `MAP` / `ANALYTICS` / `FALLBACK`) 중 하나로 분류한다. 분류와 동시에 후속 검색·캐시 조회에 필요한 post-filter 메타데이터를 단일 LLM 호출로 함께 추출한다.
+`TriageAgent`(`agents/triage_agent.py`)는 기존 `RouterAgent`를 대체·포함하며, LCEL `llm.with_structured_output(TriageOutput)` 으로 사용자 메시지를 **2축**으로 분류한다.
+
+- **action 축** — `RETRIEVE` / `DIRECT_ANSWER` / `AMBIGUOUS` / `OUT_OF_SCOPE` / `EXPLAIN`
+- **retrieval_intent 축** — `primary_intent`(`SQL_SEARCH` / `VECTOR_SEARCH` / `MAP` / `ANALYTICS`), action=RETRIEVE일 때만 채움
 
 | 입출력 | 필드 |
 |---|---|
-| **in** | `message`, `history` (직전 N턴, 선택) |
-| **out** | `intent`, `reasoning`(CoT 사고 정리 — 검색 로직 미사용, 관측 전용), `refined_query`, `max_class_name`, `area_name`, `service_status`, `payment_type`, `vector_sub_intent` |
+| **in** | `message`, `history` (직전 N턴, 선택), `prev_reasoning` (EXPLAIN 판정용) |
+| **out** | `action`, `primary_intent`, `secondary_intent`, `out_of_scope_type`, `user_rationale`, `reasoning`(CoT, 관측 전용), `refined_query`, `max_class_name`, `area_name`, `service_status`, `payment_type`, `vector_sub_intent` |
 
-산출 필드는 `router_agent._IntentOutput`(Pydantic) 스키마를 따른다. `max_class_name` / `area_name` / `service_status` / `payment_type` / `vector_sub_intent` 는 `field_validator` 로 도메인 화이트리스트(자치구 25종, 상태 5종, 카테고리 5종, `payment_type` 은 `"무료"`/`"유료"` 정규값) 밖 값을 `None` 으로 정규화하여 cache key 오염·SQL 빈 결과를 차단한다. `payment_type` 은 SQL_SEARCH 경로에서 `sql_search` 의 결제 유형 필터로 전달되며(유료는 `"유료%"` 접두 매칭), `cache_check` 키에도 포함된다.
+하위호환을 위해 `TriageOutput.model_post_init`이 `intent` 필드를 동기화한다 — action=RETRIEVE이면 `intent = primary_intent`, 그 외에는 `intent = FALLBACK`. 따라서 `intent`를 읽는 기존 코드가 그대로 동작한다.
 
-**예외 처리**: `router_node` 내부에서 예외가 발생하면 `error`(예외 메시지)와 `answer`(fallback 안내 메시지)를 모두 state에 주입하고, `node_path` 에 `"router_error"` 를 append한다. 후속 self-correction 엣지는 `answer`가 비어있지 않으므로 즉시 종단 체인으로 종료한다 (무한루프 방지).
+- `secondary_intent`는 SQL↔VECTOR 경계가 모호할 때만 채워지며 `SQL_SEARCH`/`VECTOR_SEARCH`만 허용한다(`enable_secondary_intent=True`일 때 팬아웃 트리거).
+- `out_of_scope_type`은 action=OUT_OF_SCOPE일 때 `domain_outside`(즉시 거절) 또는 `attribute_gap`(시설 식별 검색 필요)로 분기한다.
+- `user_rationale`은 사용자 노출용 판단 근거 1문장으로, `decision` SSE 이벤트(§3-7, W3)에 포함된다.
+- `max_class_name` / `area_name` / `service_status` / `payment_type` / `vector_sub_intent`는 `field_validator`로 도메인 화이트리스트(자치구 25종, 상태 5종, 카테고리 5종, `payment_type`은 `"무료"`/`"유료"` 정규값) 밖 값을 `None`으로 정규화한다. `payment_type`은 SQL_SEARCH 경로에서 `sql_search`의 결제 유형 필터로 전달되며(유료는 `"유료%"` 접두 매칭), `cache_check` 키에도 포함된다. history 컨텍스트 블록은 `router_agent.build_context_block`을 재사용한다.
+
+**forced_intent honor**: `retry_prep_node`가 방향성 재시도로 `forced_intent`를 강제하면 `triage_node`는 LLM 재분류를 skip하고 그 intent를 `action=RETRIEVE`로 반환하며 즉시 `forced_intent=None`으로 소비한다(1회성).
+
+**예외 처리**: `triage_node` 내부에서 예외가 발생하면 `error`(예외 메시지)와 `answer`(fallback 안내 메시지)를 state에 주입하고 `action=DIRECT_ANSWER`로 설정한 뒤 `node_path`에 `"triage_error"`를 append한다. 후속 self-correction 엣지는 비-RETRIEVE action이므로 즉시 종단 체인으로 종료한다(무한루프 방지).
+
+> `RouterAgent`(`router_agent.py`)는 명시 주입 시 하위호환 `router_node` alias 경로로만 사용된다. 프로덕션에서는 `AgentGraph()`가 항상 `TriageAgent()`를 기본 주입한다.
+
+### 3-1a. 참조 해소 — reference_resolution / rehydrate / describe (W1)
+
+`reference_resolution_node`는 START 직후 실행되어 현재 메시지가 직전 턴 결과 엔티티를 가리키는 **지시 참조**인지 규칙 기반(LLM 미사용, `agents/_reference_resolution.py`)으로 판정한다. 신호 3종을 사용한다.
+
+1. **지시대명사** — "이곳/저기/그거/여기/방금/위에/해당" 등 (공백 제거 후 부분 문자열 매칭).
+2. **서수** — 한글("첫번째"~"열번째") + 아라비아("3번째", 단서 동반 시 "1번"). 0-base 인덱스로 변환.
+3. **직전 라벨 부분일치** — `prev_entities[].label`의 변별 토큰이 메시지에 등장. 일반 카테고리 토큰("수영장"·"센터" 등)은 과잉 매칭 방지를 위해 제외한다.
+
+게이트: `prev_entities`가 비어 있으면 무조건 non-referential(`target_service_ids=None`)이므로 기존 흐름과 100% 하위호환된다. 다중 참조("1번이랑 3번")는 `prev_entities` 인덱스 오름차순으로 정규화하여 복수 바인딩한다.
+
+- referential → `target_service_ids` 바인딩 후 `rehydrate_node`(검색 우회).
+- non-referential → `triage_node`(기존 흐름).
+
+`rehydrate_node`는 정체성(`service_id`)만 이어받고 사실(상태·일정)은 `hydrate_services(target_service_ids)`로 최신 원본에서 재조회한다(스냅샷 캐싱 금지 — staleness 위험). 재-hydrate 0건(soft-delete/마감)이면 `hydrated_services=[]`로 둔다. 이어 `describe_node`가 `AnswerAgent.describe()`로 예약 카드 템플릿이 아닌 "어떤 곳인지" 설명형 답변을 생성하고, 0건이면 정직한 안내 + 재검색 제안을 반환한다(환각·빈 카드 금지).
 
 ### 3-2. SQL Agent — 정형 데이터 조회
 
@@ -95,19 +159,20 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 필터 파라미터
    - **Track A**: `vector_search(row_kind="identity")` — 시설 신원 임베딩, post-filter 적용
    - **Track B**: `vector_search(row_kind="summary")` — 자연어 요약 임베딩, post-filter 미적용
    - **Track C**: `question_search()` — 예상 질문 임베딩, `service_id`별 dedup
-   - **BM25**: `bm25_search()` — `llm/tokenizer.py` (Lindera KoDic + `DOMAIN_TOKENS`)로 토큰화 후 호출
+   - **BM25**: `bm25_search()` — `tools/tokenizer.py` (Lindera KoDic + `DOMAIN_TOKENS`)로 토큰화 후 호출. 제안3에서 토큰화는 `atokenize_query()`로 `asyncio.to_thread()` 오프로드된다(고QPS 이벤트 루프 블로킹 방지)
 3. **RRF 결합** — `core/rrf.py`의 `reciprocal_rank_fusion`으로 4채널 결과를 통합한다. Phase 1은 `rrf_unweighted_baseline=True` (모든 채널 가중치 1.0).
-4. **원본 Hydration (data_session)** — RRF 결과의 `service_id`로 `tools/hydrate_services`를 호출하여 `public_service_reservations` 최신 원본 행을 가져온다. 임베딩 metadata의 stale 필드(`service_status`·`receipt_*_dt` 등) 우회 목적. 개별 service_id 가 원본 테이블에 없거나 soft-delete 된 경우 해당 행만 결과에서 제외된다. `hydrate_services` 도구 호출 자체가 예외를 던지면 `vector_results = []` 로 폴백하여 stale metadata 가 답변에 노출되지 않도록 한다.
-5. `vector_results`에 hydrated 결과 + `rrf_score`를 저장한다. 스키마는 `sql_results`와 동일.
+4. `vector_results`에 RRF 통합 결과(메타데이터 + `service_id` + `rrf_score`)를 저장한다.
+
+> **Hydration 분리(W2)**: 원본 hydration은 `VectorAgent.search()` 내부가 아니라 후속 `hydration_node`(별도 그래프 노드)가 담당한다. `vector_node`는 `vector_results`(메타데이터·`service_id`·`rrf_score`)만 채우고, `hydration_node`가 `service_id`로 `hydrate_services`를 호출하여 `hydrated_services` 슬롯에 최신 원본을 채운다. `AnswerAgent`는 검색 경로에 무관하게 `hydrated_services` 단일 슬롯을 사용한다. `sql_node` 경로는 `sql_search`가 이미 원본 행을 반환하므로 `hydration_node`를 통과한다.
 
 | 입출력 | 필드 |
 |---|---|
 | **in** | `message`, `vector_sub_intent` |
 | **out** | `refined_query`, `vector_results` |
 
-> Phase 18부터 VectorAgent.search()는 `ai_session`(검색) + `data_session`(hydration) 두 세션을 모두 받는다.
+> 4채널 검색은 `ai_session`(채널별 독립 세션, `asyncio.gather` 병렬), 원본 조회는 `hydration_node`의 `data_session`으로 분리되어 있다.
 
-**BM25 도입 배경**: ParadeDB Lindera의 `user_dictionary`는 SQL API 레벨에서 지원되지 않아 커스텀 사전 적용에 소스 빌드가 필요했다. Python 레이어에서 lindera-py로 사전 토크나이징한 뒤 BM25 쿼리 조건을 구성하는 방식으로 우회한다. 도메인 용어(예: "따릉이", "한강공원")는 `DOMAIN_TOKENS` 화이트리스트로 보존된다.
+**BM25 도입 배경**: ParadeDB Lindera의 `user_dictionary`는 SQL API 레벨에서 지원되지 않아 커스텀 사전 적용에 소스 빌드가 필요했다. Python 레이어(`tools/tokenizer.py`)에서 lindera-py로 사전 토크나이징한 뒤 BM25 쿼리 조건을 구성하는 방식으로 우회한다. 도메인 용어(예: "따릉이", "한강공원")는 `DOMAIN_TOKENS` 화이트리스트로 보존된다.
 
 ### 3-4. Analytics Agent — 집계 질의 처리
 
@@ -132,7 +197,7 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 집계 파라미터
 - `sql_results` / `vector_results` / `map_results` / `analytics_results` 를 intent별로 분기하여 LLM에 전달한다.
 - `service_url` 이 없으면 `https://yeyak.seoul.go.kr` 로 fallback한다.
 - `title_needed=True` 이면 대화 제목(10자 이내)을 별도 LLM 호출로 생성한다.
-- 입력 state에 이미 `error` + `answer` 가 모두 채워져 있으면(router 예외 fast-path) 추가 LLM 호출 없이 즉시 반환한다.
+- 입력 state에 이미 `error` + `answer` 가 모두 채워져 있으면(triage 예외 fast-path) 추가 LLM 호출 없이 즉시 반환한다.
 
 **2-tier 프롬프트 조립 구조:**
 
@@ -148,13 +213,38 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 집계 파라미터
 | `VECTOR_SEARCH` | 키워드·의미 기반 유사 시설 탐색 | "아이랑 체험할 수 있는 곳" | `vector_sub_intent`: `identification` / `detail` / `semantic` |
 | `MAP` | 지도·위치·반경 탐색 | "내 주변 500m 이내 체육관" | GeoJSON 반환 |
 | `ANALYTICS` | 개수·분포·종류 등 집계/요약 질의 | "강남구에 체육시설이 몇 개야?" | 통계/카운트 반환. hydration 생략. SQL_SEARCH(개별 목록)와 구별 |
-| `FALLBACK` | 인사·기능 문의 등 그 외 | "어떤 서비스를 제공하나요?" | service_cards=[] |
+| `FALLBACK` | 인사·기능 문의 등 그 외 | "어떤 서비스를 제공하나요?" | action이 비-RETRIEVE일 때 동기화 값. service_cards=[] |
+
+> action=RETRIEVE일 때만 `intent`가 위 검색 4종 중 하나로 채워진다. 비-RETRIEVE action(DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE/EXPLAIN)은 `intent=FALLBACK`으로 동기화되고 §3-7의 action 노드로 라우팅된다.
+
+### 3-7. action 노드 (W2) + decision SSE 이벤트 (W3)
+
+action=RETRIEVE를 제외한 4종은 `triage_node` 직후 `route_by_action` 분기로 각자의 노드에 도달한다. 모두 검색 없이 답변을 생성하고 종단 체인으로 진행한다.
+
+| action | 노드 | 동작 |
+|---|---|---|
+| `DIRECT_ANSWER` | `direct_answer_node` | DB 없이 `AnswerAgent.answer()`로 직접 응답 (`intent=FALLBACK` 분기). 기존 FALLBACK 안내문 대체 |
+| `AMBIGUOUS` | `ambiguous_node` | 명확화 질문 1개 생성. `user_rationale`이 있으면 그것을, 없으면 기본 안내를 답변으로 사용 |
+| `OUT_OF_SCOPE` | `out_of_scope_node` | `domain_outside` → 즉시 거절 메시지(검색 없음). `attribute_gap` → `intent=VECTOR_SEARCH` + `vector_sub_intent=identification` 세팅 후 `vector_node`로 합류 |
+| `EXPLAIN` | `explain_node` | `prev_reasoning`으로 판단 근거 설명. `prev_reasoning`이 없으면 `direct_answer_node`로 폴백 |
+
+**decision SSE 이벤트 (W3)**: `triage_node`가 LLM 분류를 실제 수행한 경우(`user_rationale` 존재), `stream()`이 triage 완료 직후 `DecisionEvent`(`schemas/events.py`)를 **1회** 방출한다.
+
+| 필드 | 값 |
+|---|---|
+| `event` | `"decision"` (고정) |
+| `action` | TriageAgent가 결정한 action 5종 중 하나 |
+| `routes` | `[primary_intent, secondary_intent]`에서 None 제거한 리스트. RETRIEVE 외에는 `[]` |
+| `user_rationale` | `sanitize_user_rationale()`로 정제된 판단 근거 1문장 (내부 `__` 식별자 패턴 줄 제거 + 최대 200자 절단) |
+| `sources` | 검색 전 단계라 항상 `[]` |
+
+`forced_intent` 재시도 경로와 하위호환 `router_node` alias 경로는 `user_rationale`을 설정하지 않으므로 decision 이벤트를 방출하지 않는다.
 
 ---
 
 ## 4. 도구 (Tools)
 
-에이전트는 SQL을 직접 작성하거나 벡터 연산을 직접 다루지 않는다. DB 조회는 아래 다섯 도구로 위임된다.
+에이전트는 SQL을 직접 작성하거나 벡터 연산을 직접 다루지 않는다. DB 조회는 아래 도구로 위임된다: `sql_search`, `vector_search`, `bm25_search`, `question_search`, `hydrate_services`, `map_search`, `analytics_search`. 토큰화 유틸은 `tools/tokenizer.py`(W1/W2가 신규 도구를 추가하진 않음).
 
 ### 4-1. `sql_search` — 정형 필터 조회
 
@@ -252,48 +342,66 @@ PostgreSQL `earthdistance` + `cube` 확장으로 사용자 위치(위도·경도
 |---|---|---|
 | `room_id`, `message_id`, `message`, `title_needed` | 호출자 | 입력 |
 | `user_lat`, `user_lng` | 호출자 | MAP intent 용 위치 |
-| `intent` | router_node | 분류된 의도 |
-| `forced_intent` | retry_prep_node | 방향성 재시도 시 다음 순회 intent 강제(예: SQL_SEARCH→VECTOR_SEARCH). router_node 가 LLM 분류 skip 후 honor + 즉시 None 소비(1회성). None=일반 분류 |
+| `history` | 호출자 | 직전 N턴 대화 이력. triage가 맥락으로 활용 |
+| `prev_entities` | 호출자(W1) | 직전 턴 결과 엔티티 `[{service_id, label}]`. reference_resolution_node가 지시 참조 바인딩에 사용. 미전송 시 `[]` → 항상 non-referential |
+| `prev_intent` | 호출자(W1) | 직전 턴 분류 intent (carryover 슬롯) |
+| `prev_reasoning` | 호출자(W1) | 직전 턴 판단 근거. triage의 EXPLAIN 판정 + explain_node가 소비 |
+| `target_service_ids` | reference_resolution_node(W1) | referential 판정 시 바인딩된 service_id 리스트. None([])=비참조(기존 흐름) |
+| `intent` | triage_node | 분류된 의도 (action=RETRIEVE면 primary_intent, 그 외 FALLBACK) |
+| `action` | triage_node(W2) | 행동 유형 5종 (RETRIEVE/DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE/EXPLAIN) |
+| `secondary_intent` | triage_node(W2) | SQL↔VECTOR 경계 모호 시 팬아웃용. None=단일 라우트. `enable_secondary_intent=True`일 때만 유효 |
+| `out_of_scope_type` | triage_node(W2) | OUT_OF_SCOPE 서브타입 (`domain_outside` / `attribute_gap`) |
+| `user_rationale` | triage_node(W2/W3) | 사용자 노출용 판단 근거 1문장. decision SSE 이벤트에 포함 |
+| `forced_intent` | retry_prep_node | 방향성 재시도 시 다음 순회 intent 강제(예: SQL_SEARCH→VECTOR_SEARCH). triage_node 가 LLM 분류 skip 후 honor + 즉시 None 소비(1회성). None=일반 분류 |
 | `retry_radius_m` | retry_prep_node | MAP 0건 재시도 시 확장 반경(m). map_node 가 기본 반경 대신 사용. None=기본 1000m |
-| `vector_sub_intent` | router_node | Router가 분류한 벡터 검색 세부 의도 (`identification`/`detail`/`semantic`). VECTOR_SEARCH 전용 |
-| `refined_query` | router_node / vector_node | 벡터 검색용 정제 질의 (router 1차 산출, 미산출 시 vector_node fallback) |
-| `max_class_name`, `area_name`, `service_status` | router_node | post-filter 메타데이터 |
+| `vector_sub_intent` | triage_node | 벡터 검색 세부 의도 (`identification`/`detail`/`semantic`). VECTOR_SEARCH 전용 |
+| `refined_query` | triage_node / vector_node | 벡터 검색용 정제 질의 (triage 1차 산출, 미산출 시 vector_node fallback) |
+| `max_class_name`, `area_name`, `service_status`, `payment_type` | triage_node | post-filter 메타데이터 |
 | `sql_results` | sql_node | SQL 조회 결과 |
 | `sql_keyword` | sql_node | SqlAgent 가 LLM 으로 추출한 keyword (search_persist 의 sql 채널 query_text 로 사용) |
-| `vector_results` | vector_node | BM25 + vector RRF 결합 결과 |
+| `vector_results` | vector_node | BM25 + vector RRF 결합 결과 (메타데이터·service_id·rrf_score) |
+| `rrf_merged_ids` | rrf_fusion_node(W2) | secondary_intent 팬아웃 결과를 RRF 통합한 service_id 순서. None=단일 라우트. hydration_node가 우선 참조 |
+| `hydrated_services` | hydration_node / rehydrate_node | service_id → public_service_reservations 최신 원본. AnswerAgent/describe_node 가 사용 |
+| `service_cards` | answer_node / describe_node | 카드 UI용 상위 N건 dict 리스트 |
 | `map_results` | map_node | 반경 검색 GeoJSON |
 | `analytics_results` | analytics_node | `analytics_search` 집계 결과 리스트 |
 | `analytics_group_by` | analytics_node | LLM이 추출한 집계 차원 (area_name / max_class_name / min_class_name / service_status) |
 | `analytics_metric` | analytics_node | LLM이 추출한 집계 방식 (`count` / `distinct`) |
 | `analytics_keyword` | analytics_node | LLM이 추출한 키워드 필터 (없으면 None) |
-| `search_channels` | sql/vector/map_node + retry_prep_node | `dict[str, ChannelData]` — 채널별 입력(query) + 출력(hits). reducer `search_channels_reducer` 로 누적, `{}` 시그널로 리셋 |
-| `answer`, `title` | answer_node | 최종 답변 / 대화 제목 |
+| `search_channels` | sql/vector/map_node + retry_prep_node | `dict[str, ChannelData]` — 채널별 입력(query) + 출력(hits). reducer `search_channels_reducer` 로 누적, `RESET_CHANNELS` sentinel 로 리셋(빈 dict는 no-op) |
+| `node_path` | 각 노드 | 실행 경로 누적. `node_path_reducer`가 부분 리스트를 append (재시도 포함) |
+| `started_at` | 호출자(prepare) | 실행 시작 시각(time.monotonic). elapsed_ms 산출용 |
+| `answer`, `title` | answer_node / 각 action 노드 | 최종 답변 / 대화 제목 |
 | `cache_hit` | cache_check_node | Answer Cache hit 여부 |
 | `trace` | trace_node | `intent`, `node_path`, `elapsed_ms` |
 | `error` | 각 노드 | 오류 메시지 |
 | `retry_count` | retry_prep_node | 자기 교정 재시도 횟수 (0=초기, 최대 1) |
+| `retry_relaxed` | retry_prep_node | 0건 완화 재시도 신호. AnswerAgent가 완화 사실을 답변에 명시 |
 
 ---
 
 ## 6. DB 세션 라우팅
 
+DB를 쓰는 노드는 노드 내부에서 `data_session_ctx()` / `ai_session_ctx()`로 풀에서 세션을 잡고 즉시 반납한다(acquire-use-release, 제안 0-6). `run()`/`stream()`은 세션을 주입받지 않는다.
+
 | 노드 / 작업 | 세션 | DB | 대상 테이블 |
 |---|---|---|---|
 | sql_node → `sql_search` | `data_session` | `on_data` | `public_service_reservations` |
-| vector_node → `vector_search` / `bm25_search` | `ai_session` | `on_ai` | `service_embeddings` |
-| vector_node → `hydrate_services` | `data_session` | `on_data` | `public_service_reservations` |
+| vector_node → `vector_search` / `bm25_search` / `question_search` | `ai_session` | `on_ai` | `service_embeddings` |
+| hydration_node → `hydrate_services` | `data_session` | `on_data` | `public_service_reservations` |
+| rehydrate_node → `hydrate_services` (W1) | `data_session` | `on_data` | `public_service_reservations` |
 | map_node → `map_search` | `data_session` | `on_data` | `public_service_reservations` (earthdistance) |
 | analytics_node → `analytics_search` | `data_session` | `on_data` | `public_service_reservations` (GROUP BY / DISTINCT) |
 | search_persist_node | `ai_session` | `on_ai` | `chat_search_queries`, `chat_search_results` |
 | trace_node | `ai_session` | `on_ai` | `chat_agent_traces` |
 
-`search_persist_node` 와 `trace_node` 는 동일 `ai_session` 을 사용한다. `search_persist_node` 가 항상 commit() 또는 rollback() 으로 트랜잭션을 닫으므로 trace_node 진입 시 세션은 clean 상태가 보장된다.
+`search_persist_node` 와 `trace_node` 는 각자 독립 `ai_session` 을 노드 내부에서 연다(서로 다른 테이블 INSERT이고 search_persist가 먼저 commit하므로 트랜잭션 공유 의존성이 없다 — 제안 0-6).
 
 ---
 
 ## 7. 그래프 실행
 
-`AgentGraph.run(state, *, data_session, ai_session)` 한 번 호출로 router → 분기 → answer → self-correction → trace 적재가 끝난다. `AgentGraph.stream(...)`은 동일 실행을 `(event_type, data)` 튜플 스트림으로 반환하여 SSE 릴레이에 사용된다.
+`AgentGraph.run(state)` 한 번 호출로 reference_resolution → triage → 분기 → answer → self-correction → 종단 체인 적재가 끝난다. `AgentGraph.stream(state)`은 동일 실행을 `(event_type, data)` 튜플 스트림(`progress` / `decision` / `result`)으로 반환하여 SSE 릴레이에 사용된다. DB 세션은 인자로 받지 않고 각 노드가 실행 시점에 컨텍스트에서 획득한다(제안 0-6).
 
 ```python
 from agents.graph import AgentGraph
@@ -307,41 +415,34 @@ result = await graph.run(
         "retry_count": 0,
         # 나머지 필드는 None 으로 초기화
     },
-    data_session=data_session,
-    ai_session=ai_session,
 )
 ```
 
-각 에이전트는 생성자 주입으로 교체 가능하여 단위 테스트에서 Mock으로 대체한다. `CompiledStateGraph`는 `ClassVar` 로 캐시되어 프로세스당 1회만 컴파일된다.
+각 에이전트는 생성자 주입으로 교체 가능하여 단위 테스트에서 Mock으로 대체한다(`AgentGraph(triage=..., sql_agent=...)`). `CompiledStateGraph`는 `ClassVar` 로 캐시되어 프로세스당 1회만 컴파일된다.
 
 ### 7-0. 상태 → 엣지 제어 메커니즘
 
 LangGraph는 **데이터(상태)와 제어(엣지)를 분리**한다. 노드는 `AgentState`(§5)를 읽어 부분 업데이트 dict를 반환할 뿐 다음 노드를 직접 지목하지 않는다. 노드 간 전이는 그래프 빌드(`agents/graph.py`의 `_build_shared_graph`)에서 두 종류의 엣지로 선언된다.
 
-- **무조건 엣지** `add_edge(source, target)` — 분기 없이 항상 다음 노드로 진행한다. (예: `router_node → cache_check_node`, `sql_node → hydration_node`, `cache_write_node → search_persist_node → trace_node`.)
+- **무조건 엣지** `add_edge(source, target)` — 분기 없이 항상 다음 노드로 진행한다. (예: `rehydrate_node → describe_node`, `sql_node → hydration_node → rrf_fusion_node → pre_answer_gate_node`, `cache_write_node → search_persist_node → trace_node`.)
 - **조건부 엣지** `add_conditional_edges(source, 분기함수, 매핑dict)` — 분기 함수가 `state`를 읽어 **다음 노드 키(문자열)** 를 반환하고, 매핑 dict가 그 키를 실제 노드로 해석한다.
 
-현재 조건부 엣지는 **2개**뿐이다.
+현재 조건부 엣지는 **5개**다(W1/W2 확장).
 
 | source | 분기 함수 | 제어 신호(읽는 state 필드) | 분기 |
 |---|---|---|---|
-| `cache_check_node` | `post_cache_check` | `cache_hit`, (miss 시) `intent`·`error`·`answer` | `cache_hit=True` → `search_persist_node`(검색 우회). miss면 내부에서 `route_by_intent` 위임 — `intent` 로 sql/vector/map/analytics 분기, 그 외 또는 `error+answer` 채워짐 → `answer_node`. |
-| `answer_node` | `self_correction_edge` | `retry_count`, `answer`, `intent`, `*_results` | 재시도 필요 시 `retry_prep_node`, 아니면 `end_normal`(=`cache_write_node`). 평가 순서는 §7-2. |
+| `reference_resolution_node` | `route_after_reference` | `target_service_ids` | referential → `rehydrate_node`(검색 우회). 비참조 → `triage_node`. |
+| `triage_node` | `route_by_action` | `action`, `error`, `answer` | `RETRIEVE` → `cache_check_node`. `DIRECT_ANSWER`/`AMBIGUOUS`/`OUT_OF_SCOPE`/`EXPLAIN` → 동명 action 노드. error+answer → `answer_node`. |
+| `out_of_scope_node` | `_dispatch_out_of_scope_route` | `out_of_scope_type` | `attribute_gap` → `vector_node`(검색 합류). `domain_outside` → `search_persist_node`(답변 이미 설정, 종단 체인). |
+| `cache_check_node` | `post_cache_check` | `cache_hit`, (miss 시) `intent`·`error`·`answer` | `cache_hit=True` → `search_persist_node`(검색 우회). miss면 `route_by_intent` 위임 — `intent` 로 sql/vector/map/analytics 분기. |
+| `pre_answer_gate_node` | `route_pre_answer_gate` | `action`, `hydrated_services`, `retry_count` | hydrated 0건(C2, retry=0) → `retry_prep_node`. 그 외 → `answer_node`. |
+| `answer_node` | `self_correction_edge` | `action`, `retry_count`, `answer`, `intent`, `*_results` | 재시도 필요 시 `retry_prep_node`, 아니면 `end_normal`(=`cache_write_node`). 비-RETRIEVE action은 즉시 `end_normal`. 평가 순서는 §7-2. |
 
-분기 함수(`post_cache_check` / `route_by_intent` / `self_correction_edge`)는 모두 **state만 읽는 순수 함수**로 부수효과가 없다. 제어 신호는 전부 노드가 앞서 state에 써 둔 필드(`intent`·`cache_hit`·`answer`·`retry_count`·`sql_results`/`vector_results`/`analytics_results`/`map_results` 등)이며, 분기 함수는 이를 판독만 한다.
+분기 함수는 모두 **state만 읽는 순수 함수**로 부수효과가 없다. 제어 신호는 전부 노드가 앞서 state에 써 둔 필드이며 분기 함수는 이를 판독만 한다.
 
-구현상 분기 함수와 노드는 모듈 수준 dispatch 함수(`_dispatch_route_by_intent`·`_dispatch_self_correction_edge`·`_dispatch_post_cache_check` 등)로 그래프에 등록되고, 실제 호출 대상 `GraphNodes` 인스턴스는 `_ACTIVE_NODES` ContextVar로 조회한다 — `CompiledStateGraph → AgentGraph` 순환 참조를 회피하기 위함이다.
+구현상 분기 함수와 노드는 모듈 수준 dispatch 함수(`_dispatch_route_after_reference`·`_dispatch_route_by_action`·`_dispatch_post_cache_check`·`_dispatch_route_pre_answer_gate`·`_dispatch_self_correction_edge` 등)로 그래프에 등록되고, 실제 호출 대상 `GraphNodes` 인스턴스는 `_ACTIVE_NODES` ContextVar로 조회한다 — `CompiledStateGraph → AgentGraph` 순환 참조를 회피하기 위함이다.
 
-이 두 분기는 §2 mermaid 다이어그램의 `CACHE_CHECK` 와 `SELF_CORR` 노드로 시각화되어 있다.
-
-### 7-1. 조건부 엣지
-
-| 엣지 | 분기 함수 (graph 등록명) | 동작 |
-|---|---|---|
-| `cache_check_node → ?` | `post_cache_check` (`_dispatch_post_cache_check`) | `cache_hit=True` 면 `search_persist_node` 로 단락(검색 전부 우회, 종단 체인 일관성 유지). miss면 `route_by_intent` 에 위임하여 `intent` 로 분기 (`SQL_SEARCH`→sql, `VECTOR_SEARCH`→vector, `MAP`→map, `ANALYTICS`→analytics, `FALLBACK`/그 외→answer). router 예외로 `error + answer` 가 채워져 있으면 `answer_node` 로 단락. `MAP` 의 lat/lng 미제공 처리는 `map_node` 내부에서 담당한다. |
-| `answer_node → ?` | `self_correction_edge` (`_dispatch_self_correction_edge`) | §7-2의 평가 순서(① `retry_count!=0` 종료 → ② 빈 답변 → ③ intent별 0건)에 따라 `retry_prep_node`(재시도) 또는 `end_normal`(=`cache_write_node`)을 반환한다. 상세는 §7-2 참조. |
-
-> 분기 함수의 실제 메서드명은 `agents/nodes.py` 의 `post_cache_check` / `route_by_intent` / `self_correction_edge` 이며, `agents/graph.py` 가 동명의 모듈 수준 dispatch 함수(`_dispatch_*`)로 래핑하여 `add_conditional_edges` 에 등록한다.
+> `route_by_action_fanout`은 `enable_secondary_intent=True`일 때 RETRIEVE 경로에서 SQL+VECTOR 병렬 팬아웃(`["sql_node", "vector_node"]`)을 수행하는 분기 함수다. 기본 플래그(False)에서는 `route_by_intent`로 단일 라우트한다.
 
 ### 7-2. Self-Correction 사이클 (방향성 재시도)
 
@@ -349,12 +450,19 @@ LangGraph 의 cycle 기능을 활용한 1회 한정 재시도 루프:
 
 ```
 answer_node → [self_correction_edge]
-                  ├─ retry → retry_prep_node → router_node (retry_count=1로 증가)
+                  ├─ retry → retry_prep_node → triage_node (retry_count=1로 증가)
                   └─ 종료  → cache_write_node → search_persist_node → trace_node
+
+pre_answer_gate_node → [route_pre_answer_gate]   # C2 게이트
+                  ├─ hydrated 0건(retry=0) → retry_prep_node → triage_node
+                  └─ 유건                  → answer_node
 ```
+
+> **C2 pre-answer 0건 게이트(제안1)**: SQL/VECTOR 경로는 `hydration_node → rrf_fusion_node → pre_answer_gate_node`를 거친다. `pre_answer_gate_node` 직후 `route_pre_answer_gate`가 `hydrated_services=[]`(retry=0)이면 answer LLM을 **호출하지 않고** 곧장 `retry_prep_node`로 보낸다. 빈 검색 결과로 답변 LLM을 낭비하지 않는다.
 
 **재시도 트리거 평가 순서 (`self_correction_edge`)** — 다중 조건 동시 참 시 비결정성을 제거하기 위해 위에서부터 먼저 매칭되는 하나만 적용한다(1회 캡):
 
+0. **비-RETRIEVE action** (DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE/EXPLAIN) → `end_normal` (self-correction 제외).
 1. **`retry_count != 0`** → `end_normal` (이미 1회 소진, 무한 루프 방지).
 2. **빈 답변** (`not answer.strip()`) → `retry_prep_node`. intent 무관 최우선. error + fallback_answer 조합은 answer 가 차있어 통과(재시도 안 함).
 3. **intent별 0건** (상호배타):
@@ -371,11 +479,11 @@ answer_node → [self_correction_edge]
 | `ANALYTICS` | **필터 1개 드롭** | `ANALYTICS` | `_ANALYTICS_DROP_ORDER`(status→area) 중 첫 비어있지 않은 1개만 드롭. `max_class_name` 유지. `analytics_keyword`는 제외 — `analytics_search`에 전달되는 keyword는 state 슬롯(trace 관측 전용)이 아니라 `AnalyticsAgent.run`이 매 실행 LLM으로 message에서 재추출하는 `params.keyword`라 state 드롭이 무효(0건 재현·무효 재시도 낭비). 드롭할 게 없으면 no-op 후 정직한 0건 안내. |
 | `MAP` | **반경 확장** | `MAP` | `retry_radius_m=3000`(기본 1000). `map_node` 가 이 값을 우선 사용. intent 전환 아님. |
 
-`forced_intent` 는 `router_node` 가 LLM 재분류를 skip 하고 honor 한 뒤 **즉시 None 으로 소비**(1회성)하므로 무한 전환이 없다. 강제 전환 시 `refined_query=None` 이라 `cache_check` 가 pass-through 되어 0건이던 원 질의의 캐시 오hit 도 없다.
+`forced_intent` 는 `triage_node` 가 LLM 재분류를 skip 하고 honor 한 뒤 **즉시 None 으로 소비**(1회성)하므로 무한 전환이 없다. 강제 전환 시 `refined_query=None` 이라 `cache_check` 가 pass-through 되어 0건이던 원 질의의 캐시 오hit 도 없다. `retry_prep_node`는 다음 순회를 `triage_node`로 재진입시킨다.
 
 - 모든 분기가 `retry_count` 캡을 동일하게 받아 **최대 1회**. 재시도 후에도 0건이면 정직한 "결과 없음" 안내.
 - 재시도 시 `retry_relaxed=True` 로 `AnswerAgent` 가 완화 사실(예: 조건 완화)을 답변에 반드시 명시한다(과잉완화 노출 가드).
-- 그래프 호출 시 `recursion_limit=16` 으로 무한 사이클을 차단한다(정상 8 + 전환 +6 = 14, MAP +5 모두 수용).
+- 그래프 호출 시 `recursion_limit=22` 으로 무한 사이클을 차단한다(W2 최악 경로: RETRIEVE 1회 정상 11 super-step + 재시도 7 = 18, 여유 4 포함).
 - 재시도 진입 시 `stream()` 이 `re_searching` progress 이벤트("다른 방식으로 다시 검색하고 있습니다...")를 1회 emit 하고 검색/답변 진행 플래그를 리셋해 전환 경로의 `searching`/`answering` 이벤트가 다시 흐르게 한다.
 
 ---
@@ -395,8 +503,9 @@ answer_node → [self_correction_edge]
 
 | 상황 | 처리 |
 |---|---|
-| router_node 예외 발생 | `answer` 에 안내 메시지 주입, `error` 에 원인 기록, `node_path` 에 `"router_error"` append, self-correction 우회 |
-| sql/vector/map/answer 노드 예외 | `error` 필드 기록, `node_path` 에 `"*_error"` append, 가능하면 빈 결과로 다음 노드 진행 |
+| triage_node 예외 발생 | `answer` 에 안내 메시지 주입, `error` 에 원인 기록, `action=DIRECT_ANSWER` 설정, `node_path` 에 `"triage_error"` append, self-correction 우회(비-RETRIEVE) |
+| sql/vector/map/analytics/hydration/answer 노드 예외 | `error` 필드 기록, `node_path` 에 `"*_error"` append, 가능하면 빈 결과로 다음 노드 진행 |
+| rehydrate_node 예외 | `hydrated_services=[]` 로 폴백, `node_path` 에 `"rehydrate_error"` append. describe_node가 정직한 0건 안내 |
 | `MAP` intent 인데 `lat`/`lng` 미제공 | `map_node` 내부에서 검색을 생략하고 `map_results=None`을 반환한 뒤 `answer_node` 로 진행. `node_path` 에는 정상 경로와 동일하게 `"map_node"`가 append된다. |
 | Answer Agent 결과의 `service_url` 누락 | `https://yeyak.seoul.go.kr` 로 fallback |
 
@@ -440,5 +549,9 @@ answer_node → [self_correction_edge]
 | 2026-05-31 | ANALYTICS intent 신설 (Phase A-E) | `analytics_search` 도구(`tools/analytics_search.py`) 신설 — GROUP BY COUNT / SELECT DISTINCT 집계, 차원 화이트리스트 4종, 전 필터값 bind 파라미터. `AnalyticsAgent`(`agents/analytics_agent.py`) 신설 — LLM 구조화 추출 후 `analytics_search` 호출, hydration 생략. `AgentState`에 `analytics_results` / `analytics_group_by` / `analytics_metric` / `analytics_keyword` 필드 추가. Router에 ANALYTICS 분류 기준 + 경계 케이스 few-shot 추가. Answer Agent에 intent별 2-tier 프롬프트 조립 구조 도입 (Tier 1 정적 캐시, Tier 2 런타임 조건부 조립). AI 서비스 전체. |
 | 2026-06-06 | docs | 문서 정합성 정정(§3-1 IntentType 5종 + `_IntentOutput` 산출 필드 reflect, `_router_node`/`_route_by_intent`/`_self_correction_edge` → 실제 심볼명·`_dispatch_*` 등록명으로 drift 정정, §7-1↔§7-2 self_correction_edge 평가 순서 정합) + §7-0 상태기반 엣지 제어(데이터/제어 분리, 조건부 엣지 2개, `_ACTIVE_NODES` ContextVar) 설명 보강. |
 | 2026-06-05 | 방향성 self-correction 재시도 | 재시도가 "router 재분류"(완화)에서 "방향성 전환/완화"로 강화. `AgentState`에 `forced_intent` / `retry_radius_m` 추가. `retry_prep_node` intent별 분기: SQL_SEARCH→VECTOR_SEARCH 강제 전환(레지스트리 `_RETRY_FALLBACK_INTENT`), ANALYTICS 제약 큰 effective 필터 1개 드롭(`_ANALYTICS_DROP_ORDER`=status→area, max_class_name 유지, analytics_keyword는 LLM 재추출이라 제외), MAP 반경 확장(`_MAP_RETRY_RADIUS_M=3000`). `self_correction_edge` 트리거 평가 순서 명문화 + ANALYTICS/MAP 0건 트리거 추가(`_analytics_zero_hits`/`_map_zero_hits`). `router_node` 가 `forced_intent` honor 후 즉시 소비(1회성). `stream()` 재시도 진입 시 `re_searching` progress 1회 emit + 진행 플래그 리셋. 1회 캡·`recursion_limit=16` 유지. |
+| 2026-06-06 | W1 — 결과 엔티티 carryover + 참조 해소 | `reference_resolution_node`(START 직후 선판정) + `rehydrate_node` + `describe_node` 신설. 규칙 기반 지시 참조 판정(`agents/_reference_resolution.py` — 지시어/한국어·아라비아 서수/라벨 부분일치). `ChatRequest`에 `prev_entities`/`prev_intent`/`prev_reasoning` 추가, `AgentState`에 동명 슬롯 + `target_service_ids` 추가. referential 시 `hydrate_services(target_service_ids)` 재수화 → `AnswerAgent.describe()` 설명형 답변(정체성만 carryover, 사실은 재-hydrate). |
+| 2026-06-06 | W2 + 제안1 — TriageAgent 2축 분리 | `RouterAgent`를 대체·포함하는 `TriageAgent`(`agents/triage_agent.py`, `llm/prompts/triage.py`) 신설. action×retrieval_intent 직교 출력(`TriageOutput`). action 5종(RETRIEVE/DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE/EXPLAIN), `triage_node`(=router_node alias) 이후 `route_by_action` 분기 + action별 노드(`direct_answer_node`/`ambiguous_node`/`out_of_scope_node`/`explain_node`). 제안1: `rrf_fusion_node` + `pre_answer_gate_node`(C2 0건 게이트) + `enable_secondary_intent` 피처플래그(기본 False). hydration이 `vector_node` 내부에서 `hydration_node`(별도)로 분리. `AgentState`에 `action`/`out_of_scope_type`/`user_rationale`/`secondary_intent`/`rrf_merged_ids` 추가. `recursion_limit` 15 → 22 상향. |
+| 2026-06-06 | W3 — decision SSE 이벤트 | `schemas/events.py`에 `DecisionEvent`(event/action/routes/user_rationale/sources) 신설. `triage_node` 완료 직후 `stream()`이 1회 emit(LLM 분류 수행 시만). `sanitize_user_rationale()`(내부 `__` 식별자 패턴 줄 제거 + 200자 절단). |
+| 2026-06-06 | 제안3 — 1000 QPS 수평 확장(동시성 관점) | `core/concurrency.py` 글로벌 fan-out 세마포어(`vector_global_concurrency`), `tools/tokenizer.py` `atokenize_query()` `asyncio.to_thread` 오프로드, OpenAI httpx 싱글톤. (PgBouncer/Nginx 등 인프라 상세는 `docs/scaling.md` 참조.) |
 
-`AgentState` 입출력 규약을 유지하므로 각 Agent 클래스(`router_agent.py`, `sql_agent.py`, `vector_agent.py`, `answer_agent.py`)는 수정 없이 재사용된다. `agents/workflow.py` (LCEL)는 레거시로 유지된다.
+`AgentState` 입출력 규약을 유지하므로 각 Agent 클래스(`triage_agent.py`, `sql_agent.py`, `vector_agent.py`, `answer_agent.py`, `analytics_agent.py`)는 수정 없이 재사용된다. `agents/workflow.py` (LCEL)는 레거시로 유지된다.
