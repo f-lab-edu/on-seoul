@@ -116,24 +116,39 @@ W2에서 이를 **2축**으로 분리했다.
 - **action 축** — 무엇을 할지: `RETRIEVE`(검색한다), `DIRECT_ANSWER`(바로 답한다), `AMBIGUOUS`(되묻는다), `OUT_OF_SCOPE`(범위 밖), `EXPLAIN`(직전 판단 근거를 설명한다).
 - **retrieval_intent 축** — `RETRIEVE`일 때만, 어떤 검색인지: `SQL_SEARCH` / `VECTOR_SEARCH` / `MAP` / `ANALYTICS`.
 
-`RETRIEVE`만 검색 흐름으로 들어가고, 나머지 4종은 검색 없이 곧바로 답한다(§3-7). 기존 코드는 여전히 단일 `intent` 필드를 읽으므로, action=RETRIEVE이면 `intent=primary_intent`, 그 외에는 `intent=FALLBACK`으로 자동 동기화해 하위호환을 지킨다.
+`RETRIEVE`만 검색 흐름으로 들어가고, 나머지 4종은 검색 없이 곧바로 답한다(아래 "action — 비검색 응답"). 기존 코드는 여전히 단일 `intent` 필드를 읽으므로, action=RETRIEVE이면 `intent=primary_intent`, 그 외에는 `intent=FALLBACK`으로 자동 동기화해 하위호환을 지킨다.
 
-> **알아둘 규칙**
+#### retrieval_intent — 검색 의도(IntentType) 분류 기준
+
+action=RETRIEVE일 때 어떤 검색으로 보낼지 고르는 4종이다. 비-RETRIEVE action은 `intent=FALLBACK`으로 동기화된다.
+
+| IntentType | 분류 기준 | 예시 |
+|---|---|---|
+| `SQL_SEARCH` | 카테고리·자치구·접수 상태·날짜 등 정형 조건 | "지금 접수 중인 수영장" |
+| `VECTOR_SEARCH` | 키워드·의미 기반 유사 시설 탐색 | "아이랑 체험할 수 있는 곳" |
+| `MAP` | 지도·위치·반경 탐색 | "내 주변 500m 이내 체육관" |
+| `ANALYTICS` | 개수·분포·종류 등 집계 질의 | "강남구에 체육시설이 몇 개야?" |
+| `FALLBACK` | 위 검색에 해당하지 않음 (비-RETRIEVE action의 동기화 값) | "어떤 서비스를 제공하나요?" |
+
+#### action — 비검색 응답 노드 + decision 이벤트 (W3)
+
+RETRIEVE를 제외한 4종은 `triage_node` 직후 `route_by_action` 분기로 각자의 노드에 도달한다. 모두 검색 없이 답변을 만들고 종단 체인으로 진행한다.
+
+| action | 노드 | 동작 |
+|---|---|---|
+| `DIRECT_ANSWER` | `direct_answer_node` | DB 없이 바로 답변. 기존 FALLBACK 안내문을 대체한다 |
+| `AMBIGUOUS` | `ambiguous_node` | 무엇을 찾는지 되묻는 명확화 질문 1개를 만든다 |
+| `OUT_OF_SCOPE` | `out_of_scope_node` | 범위 밖(`domain_outside`)이면 즉시 거절한다. 단, 시설은 맞는데 속성만 모자란 경우(`attribute_gap`)는 시설 식별을 위해 `vector_node`로 합류한다 |
+| `EXPLAIN` | `explain_node` | 직전 턴의 판단 근거(`prev_reasoning`)를 설명한다. 근거가 없으면 `DIRECT_ANSWER`로 폴백한다 |
+
+**decision 이벤트 (W3)**: Triage가 실제로 LLM 분류를 수행하면, `stream()`이 triage 직후 `decision` SSE 이벤트(`schemas/events.py`의 `DecisionEvent`)를 한 번 방출한다. "왜 이렇게 판단했는지"를 사용자에게 투명하게 보여주기 위한 것으로, 결정된 action·검색 경로(`routes`)·사용자 노출용 근거 한 문장(`user_rationale`)을 담는다. 근거 문장은 내부 식별자가 새지 않도록 정제(`sanitize_user_rationale`)하며, `forced_intent` 재시도나 레거시 경로처럼 LLM 분류를 건너뛴 경우에는 방출하지 않는다.
+
+> **참고사항**
 > - 추출한 필터(`area_name`·`service_status`·`payment_type` 등)는 도메인 화이트리스트 밖 값이면 `None`으로 정규화한다 — 잘못된 값이 캐시 키를 오염시키거나 빈 검색을 만들지 않도록.
 > - 재시도 경로에서 `forced_intent`가 들어오면 LLM 재분류를 건너뛰고 그 의도로 한 번만 검색한다(1회성 소비, §7-2).
 > - triage 내부에서 예외가 나면 사용자에게 안내 메시지를 답으로 주고 종료한다(무한 루프 방지).
 > - 프로덕션에서는 `AgentGraph()`가 항상 `TriageAgent`를 주입한다. 레거시 `RouterAgent`는 명시 주입 시 하위호환 경로로만 쓰인다.
-
-### 3-1a. 참조 해소 — "방금 그거"는 다시 검색하지 않는다 (W1)
-
-멀티턴 대화에서 "두 번째 거 알려줘", "거기 지금 접수해?"처럼 **직전 턴의 결과를 가리키는 질문**은 다시 검색할 필요가 없다. 이미 보여준 시설을 그대로 이어받으면 된다.
-
-`reference_resolution_node`는 START 직후 이 판정을 **규칙 기반(LLM 미사용, `agents/_reference_resolution.py`)**으로 한다. 지시대명사("이곳/방금/거기"), 서수("첫 번째/3번째"), 직전 카드 라벨 부분일치 — 이 세 신호를 본다. LLM을 쓰지 않는 이유는 이 판정이 결정적이고 빨라서 LLM 호출의 비용과 지연이 아깝기 때문이다. 직전 카드(`prev_entities`)가 비어 있으면 무조건 비참조로 처리되므로 기존 흐름과 100% 호환된다.
-
-참조로 판정되면 검색을 건너뛰고 두 노드를 거친다.
-
-1. `rehydrate_node` — 정체성(`service_id`)만 이어받고, 상태·일정 같은 **사실은 `hydrate_services`로 최신 원본에서 다시 읽는다**. 직전 스냅샷을 그대로 쓰면 그사이 바뀐 마감·상태를 놓치기 때문이다.
-2. `describe_node` — 예약 카드가 아니라 "어떤 곳인지" 설명형 답변을 만든다. 재조회 결과가 0건(삭제·마감)이면 환각 대신 정직한 안내와 재검색 제안을 준다.
+> - **참조 해소 (W1)**: "두 번째 거 알려줘"처럼 직전 턴 결과를 가리키는 후속 질문은 Triage *이전* 단계인 `reference_resolution_node`가 규칙 기반(LLM 미사용)으로 가려낸다. 이 경우 검색을 건너뛰고 직전 시설을 최신 원본으로 다시 읽어(`rehydrate_node`) 설명형 답변(`describe_node`)을 만든다. 직전 카드(`prev_entities`)가 없으면 기존 흐름과 동일하다.
 
 ### 3-2. SQL Agent — 정형 조건 조회
 
@@ -163,31 +178,6 @@ W2에서 이를 **2축**으로 분리했다.
 모든 검색 경로의 결과는 마지막에 `AnswerAgent` 하나로 모여 자연어 답변과 시설 카드가 된다. 답변·카드 포맷을 한곳에서 관리해 일관성을 유지하기 위해서다.
 
 핵심 규칙은 두 가지다. 시설에 `service_url`이 없으면 서울 예약 포털(`https://yeyak.seoul.go.kr`)로 fallback하고, 입력에 이미 `error`와 `answer`가 모두 채워져 있으면(triage 예외 등) LLM을 다시 부르지 않고 즉시 반환한다. 성능을 위해 정적인 프롬프트(MAP/ANALYTICS/FALLBACK)는 시작 시 한 번만 조립해 캐시하고, 내용이 매번 달라지는 카드형(SQL/VECTOR) 프롬프트만 호출 시점에 조건부로 조합한다.
-
-### 3-6. 검색 의도(IntentType) 분류 기준
-
-action=RETRIEVE일 때 Triage가 고르는 검색 의도 4종이다. 비-RETRIEVE action은 `intent=FALLBACK`으로 동기화되어 §3-7 경로로 간다.
-
-| IntentType | 분류 기준 | 예시 |
-|---|---|---|
-| `SQL_SEARCH` | 카테고리·자치구·접수 상태·날짜 등 정형 조건 | "지금 접수 중인 수영장" |
-| `VECTOR_SEARCH` | 키워드·의미 기반 유사 시설 탐색 | "아이랑 체험할 수 있는 곳" |
-| `MAP` | 지도·위치·반경 탐색 | "내 주변 500m 이내 체육관" |
-| `ANALYTICS` | 개수·분포·종류 등 집계 질의 | "강남구에 체육시설이 몇 개야?" |
-| `FALLBACK` | 위 검색에 해당하지 않음 (비-RETRIEVE action의 동기화 값) | "어떤 서비스를 제공하나요?" |
-
-### 3-7. 비검색 action 노드 (W2) + decision 이벤트 (W3)
-
-RETRIEVE를 제외한 4종은 `triage_node` 직후 `route_by_action` 분기로 각자의 노드에 도달한다. 모두 검색 없이 답변을 만들고 종단 체인으로 진행한다.
-
-| action | 노드 | 동작 |
-|---|---|---|
-| `DIRECT_ANSWER` | `direct_answer_node` | DB 없이 바로 답변. 기존 FALLBACK 안내문을 대체한다 |
-| `AMBIGUOUS` | `ambiguous_node` | 무엇을 찾는지 되묻는 명확화 질문 1개를 만든다 |
-| `OUT_OF_SCOPE` | `out_of_scope_node` | 범위 밖(`domain_outside`)이면 즉시 거절한다. 단, 시설은 맞는데 속성만 모자란 경우(`attribute_gap`)는 시설 식별을 위해 `vector_node`로 합류한다 |
-| `EXPLAIN` | `explain_node` | 직전 턴의 판단 근거(`prev_reasoning`)를 설명한다. 근거가 없으면 `DIRECT_ANSWER`로 폴백한다 |
-
-**decision 이벤트 (W3)**: Triage가 실제로 LLM 분류를 수행하면, `stream()`이 triage 직후 `decision` SSE 이벤트(`schemas/events.py`의 `DecisionEvent`)를 한 번 방출한다. "왜 이렇게 판단했는지"를 사용자에게 투명하게 보여주기 위한 것으로, 결정된 action·검색 경로(`routes`)·사용자 노출용 근거 한 문장(`user_rationale`)을 담는다. 근거 문장은 내부 식별자가 새지 않도록 정제(`sanitize_user_rationale`)하며, `forced_intent` 재시도나 레거시 경로처럼 LLM 분류를 건너뛴 경우에는 방출하지 않는다.
 
 ---
 
