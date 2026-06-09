@@ -70,18 +70,21 @@ agents/
 
 검색 노드(sql/vector/map)는 `AgentState.search_channels: dict[str, ChannelData]` 에 채널별 입력(query)·출력(hits) 쌍을 채우고, 종단 `search_persist_node` 가 일괄 적재한다. `retry_prep_node` 가 재시도 시 `search_channels = RESET_CHANNELS` sentinel 을 보내 UNIQUE 위반을 방지한다 (빈 dict 는 더 이상 리셋이 아니라 no-op). 자세한 적재 정책은 `docs/chat-search-persistence.md` 참조.
 
-세션 라우팅:
+## DB 세션 라우팅
 
-| 에이전트 / 노드 | DB | 이유 |
-|---|---|---|
-| `SqlAgent` | `on_data` (`data_session`) | `public_service_reservations` 정형 데이터 |
-| `VectorAgent` 검색 | `on_ai` (`ai_session`) | `service_embeddings` 벡터 인덱스 |
-| `hydration_node` / `rehydrate_node` | `on_data` (`data_session`) | `public_service_reservations` 최신 원본 hydration |
-| `AnalyticsAgent` | `on_data` (`data_session`) | `public_service_reservations` GROUP BY / DISTINCT |
-| `search_persist_node` | `on_ai` (`ai_session`) | `chat_search_queries` + `chat_search_results` |
-| `trace_node` | `on_ai` (`ai_session`) | `chat_agent_traces` 실행 메타데이터 |
+DB를 쓰는 노드는 노드 내부에서 `data_session_ctx()` / `ai_session_ctx()`로 풀에서 세션을 잡고 즉시 반납합니다(acquire-use-release). `run()`/`stream()`은 세션을 주입받지 않습니다.
 
-> DB를 쓰는 노드는 노드 내부에서 `data_session_ctx()`/`ai_session_ctx()`로 세션을 잡고 즉시 반납합니다(acquire-use-release).
+| 노드 / 작업 | 세션 | DB | 대상 테이블 |
+|---|---|---|---|
+| sql_node → `sql_search` | `data_session` | `on_data` | `public_service_reservations` |
+| vector_node → `vector_search` / `bm25_search` / `question_search` | `ai_session` | `on_ai` | `service_embeddings` |
+| hydration_node / rehydrate_node → `hydrate_services` | `data_session` | `on_data` | `public_service_reservations` |
+| map_node → `map_search` | `data_session` | `on_data` | `public_service_reservations` (earthdistance) |
+| analytics_node → `analytics_search` | `data_session` | `on_data` | `public_service_reservations` (GROUP BY / DISTINCT) |
+| search_persist_node | `ai_session` | `on_ai` | `chat_search_queries`, `chat_search_results` |
+| trace_node | `ai_session` | `on_ai` | `chat_agent_traces` |
+
+> `search_persist_node`와 `trace_node`는 각자 독립 `ai_session`을 노드 내부에서 엽니다 — 서로 다른 테이블 INSERT이고 search_persist가 먼저 commit하므로 트랜잭션 공유 의존성이 없습니다.
 
 ---
 
@@ -211,7 +214,7 @@ LLM이 SQL을 직접 생성하지 않습니다. 사용자 메시지에서 필터
 2. 정제된 문장을 Gemini 임베딩 모델로 벡터화합니다.
 3. `on_ai.service_embeddings`에서 코사인 유사도 상위 K개를 반환합니다.
 
-조회에는 `tools.vector_search.vector_search()`를 사용합니다. `vector_search`는 post-filter 전략을 사용합니다 — 전체 임베딩에서 유사도 상위 `scan_k`를 먼저 뽑고, 서브쿼리 외부에서 `max_class_name`·`area_name`·`service_status` 필터를 적용합니다. Phase 14에서 Vector Agent가 메시지로부터 이 파라미터를 추출해 `vector_search`에 전달하는 연동을 구현합니다.
+조회에는 `tools.vector_search.vector_search()`를 사용합니다. `vector_search`는 post-filter 전략을 사용합니다 — 전체 임베딩에서 유사도 상위 `scan_k`를 먼저 뽑고, 서브쿼리 외부에서 `max_class_name`·`area_name`·`service_status` 필터를 적용합니다
 
 ---
 
@@ -227,7 +230,7 @@ LLM이 SQL을 직접 생성하지 않습니다. 사용자 메시지에서 필터
 
 ---
 
-## Search Persistence (Phase 19)
+## Search Persistence 
 
 `search_persist_node` 가 그래프 종단부에서 `search_channels` 를 두 테이블에 일괄 적재합니다.
 
@@ -240,8 +243,7 @@ LLM이 SQL을 직접 생성하지 않습니다. 사용자 메시지에서 필터
 
 ---
 
-## LangGraph 전환 (Phase 17 완료)
-
+## LangGraph 전환
 LangChain LCEL 기반 `workflow.py`에서 LangGraph `StateGraph` 기반 `graph.py`로 전환됐습니다.
 
 | 항목 | 전환 전 (LCEL) | 전환 후 (LangGraph) |
