@@ -162,7 +162,39 @@ graph = AgentGraph(router=mock_router, sql_agent=mock_sql)
 
 **오류 처리**: `triage_node` 예외 시 fallback answer를 state에 주입하고 `action=DIRECT_ANSWER`로 설정하여 Self-Correction 없이 종단 체인(cache_write → search_persist → trace)으로 진행합니다. trace / search_persist 적재는 모두 best-effort로 실행되어 저장 실패가 워크플로우 결과에 영향을 주지 않습니다.
 
-**Self-Correction**: RETRIEVE action에서 answer가 비어 있거나 검색 0건이고 `retry_count == 0`이면 `retry_prep_node` 를 거쳐 `triage_node`로 재진입해 재검색을 시도합니다(비-RETRIEVE action은 제외). C2 게이트(`pre_answer_gate_node`)는 hydrated 0건 시 answer LLM 호출 없이 곧장 재시도로 보냅니다. `retry_prep_node` 는 `retry_count` 증가와 함께 `search_channels = RESET_CHANNELS` sentinel 을 보내 이전 시도의 채널 데이터를 비웁니다. 최대 1회로 제한됩니다 (`recursion_limit=22`).
+**Self-Correction**: RETRIEVE action에서 answer가 비어 있거나 검색 0건이고 `retry_count == 0`이면 `retry_prep_node` 를 거쳐 `triage_node`로 재진입해 재검색을 시도합니다(비-RETRIEVE action은 제외). 0건 게이트(`pre_answer_gate_node`)는 hydrated 0건 시 answer LLM 호출 없이 곧장 재시도로 보냅니다. `retry_prep_node` 는 `retry_count` 증가와 함께 `search_channels = RESET_CHANNELS` sentinel 을 보내 이전 시도의 채널 데이터를 비웁니다. 최대 1회로 제한됩니다 (`recursion_limit=22`).
+
+---
+
+### 조건부 엣지 (상태 → 제어)
+
+LangGraph는 데이터(상태)와 제어(엣지)를 분리합니다. 노드는 `AgentState`를 읽어 부분 업데이트를 반환할 뿐 다음 노드를 직접 지목하지 않습니다. 전이는 무조건 엣지(`add_edge`)와 조건부 엣지(`add_conditional_edges`)로 선언되며, 조건부 엣지의 분기 함수는 state만 읽는 순수 함수입니다. 현재 조건부 엣지는 6개입니다.
+
+| source | 분기 함수 | 제어 신호 | 분기 |
+|---|---|---|---|
+| `reference_resolution_node` | `route_after_reference` | `target_service_ids` | referential → `rehydrate_node`. 비참조 → `triage_node`. |
+| `triage_node` | `route_by_action` | `action`, `error`, `answer` | `RETRIEVE` → `cache_check_node`. 그 외 action → 동명 노드. error+answer → `answer_node`. |
+| `out_of_scope_node` | `_dispatch_out_of_scope_route` | `out_of_scope_type` | `attribute_gap` → `vector_node`. `domain_outside` → `search_persist_node`. |
+| `cache_check_node` | `post_cache_check` | `cache_hit`, `intent` | hit → `search_persist_node`. miss → `intent`로 sql/vector/map/analytics 분기. |
+| `pre_answer_gate_node` | `route_pre_answer_gate` | `action`, `hydrated_services`, `retry_count` | hydrated 0건(retry=0) → `retry_prep_node`. 그 외 → `answer_node`. |
+| `answer_node` | `self_correction_edge` | `action`, `retry_count`, `answer`, `*_results` | 재시도 필요 시 `retry_prep_node`, 아니면 `cache_write_node`. |
+
+분기 함수·노드는 모듈 수준 `_dispatch_*` 함수로 그래프에 등록되고, 실제 `GraphNodes` 인스턴스는 `_ACTIVE_NODES` ContextVar로 조회합니다(`CompiledStateGraph → AgentGraph` 순환 참조 회피).
+
+---
+
+### Self-Correction 방향성 재시도
+
+검색 0건이거나 답변이 비면 **1회만** 다시 시도합니다. 트리거는 위에서부터 먼저 매칭되는 하나만 적용합니다: ① 비-RETRIEVE action → 종료, ② `retry_count != 0` → 종료(1회 소진), ③ 빈 답변 → 재시도, ④ intent별 0건 → 재시도. 재시도는 단순 "조건 완화"가 아니라 방향성 전환에 가깝습니다.
+
+| 원 intent | 동작 | 다음 intent |
+|---|---|---|
+| `SQL_SEARCH` | 강제 전환 (`forced_intent` 주입 + 정형 필터 비움) | `VECTOR_SEARCH` |
+| `VECTOR_SEARCH` | 완화 재분류 (`refined_query`·필터 리셋) | (재분류) |
+| `ANALYTICS` | 제약 큰 필터 1개 드롭 (status→area, `max_class_name` 유지) | `ANALYTICS` |
+| `MAP` | 반경 확장 (`retry_radius_m=3000`) | `MAP` |
+
+빈 검색 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 hydrated 0건이면 답변 생성 전에 곧장 재시도로 보냅니다(0건 게이트). `forced_intent`는 `triage_node`가 honor 후 즉시 None으로 소비(1회성)하므로 무한 전환이 없고, 재시도는 `retry_count` 캡으로 최대 1회(`recursion_limit=22`)입니다. 재시도 시 `retry_relaxed=True`로 `AnswerAgent`가 완화 사실을 답변에 명시합니다.
 
 ---
 
