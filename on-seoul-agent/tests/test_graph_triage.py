@@ -26,6 +26,7 @@ from schemas.state import ActionType, AgentState, IntentType
 from tests.helpers import (
     make_agent_state,
     make_answer_agent,
+    make_router,
     make_sql_agent,
     make_triage,
     make_ai_session,
@@ -60,9 +61,15 @@ class TestTriageActionRouting:
         """RETRIEVE/SQL_SEARCH -> sql_node 경로."""
         rows = [{"service_id": "S001", "service_name": "수영장"}]
         sql_agent, data_session = make_sql_agent(rows)
-        triage = make_triage(ActionType.RETRIEVE, IntentType.SQL_SEARCH)
+        triage = make_triage(ActionType.RETRIEVE)
+        router = make_router(IntentType.SQL_SEARCH)
 
-        graph = AgentGraph(triage=triage, sql_agent=sql_agent, answer_agent=_answer_agent())
+        graph = AgentGraph(
+            triage=triage,
+            router=router,
+            sql_agent=sql_agent,
+            answer_agent=_answer_agent(),
+        )
         result = await run_graph(
             graph, _state(), data_session=data_session, ai_session=make_ai_session()
         )
@@ -81,7 +88,10 @@ class TestTriageActionRouting:
             answer_agent=_answer_agent("챗봇 안내입니다."),
         )
         result = await run_graph(
-            graph, _state(message="안녕하세요"), data_session=data_session, ai_session=make_ai_session()
+            graph,
+            _state(message="안녕하세요"),
+            data_session=data_session,
+            ai_session=make_ai_session(),
         )
         assert result["action"] == ActionType.DIRECT_ANSWER
         assert result["sql_results"] is None
@@ -97,7 +107,10 @@ class TestTriageActionRouting:
         )
         graph = AgentGraph(triage=triage, answer_agent=_answer_agent())
         result = await run_graph(
-            graph, _state(message="좋은 곳 알려줘"), data_session=MagicMock(), ai_session=make_ai_session()
+            graph,
+            _state(message="좋은 곳 알려줘"),
+            data_session=MagicMock(),
+            ai_session=make_ai_session(),
         )
         assert result["action"] == ActionType.AMBIGUOUS
         assert result["answer"] is not None
@@ -112,13 +125,20 @@ class TestTriageActionRouting:
         )
         sql_agent, data_session = make_sql_agent([])
 
-        graph = AgentGraph(triage=triage, sql_agent=sql_agent, answer_agent=_answer_agent())
+        graph = AgentGraph(
+            triage=triage, sql_agent=sql_agent, answer_agent=_answer_agent()
+        )
         result = await run_graph(
-            graph, _state(message="오늘 서울 날씨"), data_session=data_session, ai_session=make_ai_session()
+            graph,
+            _state(message="오늘 서울 날씨"),
+            data_session=data_session,
+            ai_session=make_ai_session(),
         )
         assert result["action"] == ActionType.OUT_OF_SCOPE
         assert result["out_of_scope_type"] == "domain_outside"
-        assert "범위" in result["answer"] or "날씨" in result["answer"] or result["answer"]
+        assert (
+            "범위" in result["answer"] or "날씨" in result["answer"] or result["answer"]
+        )
         sql_agent._chain.ainvoke.assert_not_called()
 
     async def test_out_of_scope_attribute_gap_triggers_vector(self):
@@ -129,15 +149,29 @@ class TestTriageActionRouting:
             refined_query="마루공원 테니스장",
             vector_sub_intent="identification",
         )
-        vrows = [{"service_id": "V001", "service_name": "마루공원 테니스장", "similarity": 0.9}]
-        hydrated = [{"service_id": "V001", "service_name": "마루공원 테니스장",
-                     "service_url": "https://example.com"}]
+        vrows = [
+            {
+                "service_id": "V001",
+                "service_name": "마루공원 테니스장",
+                "similarity": 0.9,
+            }
+        ]
+        hydrated = [
+            {
+                "service_id": "V001",
+                "service_name": "마루공원 테니스장",
+                "service_url": "https://example.com",
+            }
+        ]
 
         with (
             patch("agents.vector_agent.vector_search", AsyncMock(return_value=vrows)),
             patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
-            patch("agents.hydration_node.hydrate_services", AsyncMock(return_value=hydrated)),
+            patch(
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=hydrated),
+            ),
         ):
             from agents.vector_agent import VectorAgent, _RefinedQuery
 
@@ -163,7 +197,8 @@ class TestTriageActionRouting:
                 answer_agent=_answer_agent("시설 페이지를 확인하세요."),
             )
             result = await run_graph(
-                graph, _state(message="마루공원 테니스장 보수 공사"),
+                graph,
+                _state(message="마루공원 테니스장 보수 공사"),
                 data_session=MagicMock(),
                 ai_session=make_ai_session(),
             )
@@ -174,7 +209,9 @@ class TestTriageActionRouting:
 
     async def test_explain_with_prev_reasoning(self):
         """EXPLAIN action + prev_reasoning -> 근거 설명 포함된 답변."""
-        triage = make_triage(ActionType.EXPLAIN, user_rationale="판단 근거를 설명드립니다.")
+        triage = make_triage(
+            ActionType.EXPLAIN, user_rationale="판단 근거를 설명드립니다."
+        )
         prev = "자연 체험 관련 키워드가 포함되어 있어 자연 체험으로 분류했습니다."
 
         graph = AgentGraph(triage=triage, answer_agent=_answer_agent())
@@ -285,7 +322,9 @@ class TestPreAnswerGate:
     def test_none_hydrated_reaches_answer(self):
         """hydrated_services=None (미설정)이면 answer_node로 통과한다."""
         nodes = self._nodes()
-        state = _state(action=ActionType.RETRIEVE, hydrated_services=None, retry_count=0)
+        state = _state(
+            action=ActionType.RETRIEVE, hydrated_services=None, retry_count=0
+        )
         assert nodes.route_pre_answer_gate(state) == "answer_node"
 
     def test_zero_hydrated_capped_after_retry(self):
@@ -307,13 +346,17 @@ class TestPreAnswerGate:
 
     async def test_c2_gate_prevents_answer_llm_on_zero_hits(self):
         """C2 게이트: 0건 시 answer_node LLM 미호출 + retry_prep 직행 E2E."""
-        triage = make_triage(ActionType.RETRIEVE, IntentType.SQL_SEARCH)
+        triage = make_triage(ActionType.RETRIEVE)
+        router = make_router(IntentType.SQL_SEARCH)
         sql_agent, data_session = make_sql_agent([])  # SQL 0건
         answer_agent = _answer_agent("재시도 후 답변")
 
-        with patch("agents.hydration_node.hydrate_services", AsyncMock(return_value=[])):
+        with patch(
+            "agents.hydration_node.hydrate_services", AsyncMock(return_value=[])
+        ):
             graph = AgentGraph(
                 triage=triage,
+                router=router,
                 sql_agent=sql_agent,
                 answer_agent=answer_agent,
             )
@@ -375,7 +418,12 @@ class TestCacheKeyWithRoutes:
             result = await node(state)
             return result.get("cache_hit", False)
 
-        for action in (ActionType.DIRECT_ANSWER, ActionType.AMBIGUOUS, ActionType.OUT_OF_SCOPE, ActionType.EXPLAIN):
+        for action in (
+            ActionType.DIRECT_ANSWER,
+            ActionType.AMBIGUOUS,
+            ActionType.OUT_OF_SCOPE,
+            ActionType.EXPLAIN,
+        ):
             assert asyncio.get_event_loop().run_until_complete(_check(action)) is False
 
     def test_cache_write_excludes_non_retrieve(self):
@@ -488,12 +536,10 @@ class TestRRFFusionNode:
 
 
 class TestTriageNodeStatePropagation:
-    async def test_triage_node_sets_action_and_intent(self):
-        """triage_node가 action/intent/secondary_intent를 state에 채운다."""
+    async def test_triage_node_sets_action_only(self):
+        """triage_node는 action/out_of_scope_type/user_rationale만 채운다(검색 계획 제외)."""
         triage = make_triage(
             ActionType.RETRIEVE,
-            IntentType.SQL_SEARCH,
-            secondary_intent=IntentType.VECTOR_SEARCH,
             user_rationale="마포구 풋살장 검색",
         )
         nodes = GraphNodes(triage=triage, answer_agent=_answer_agent())
@@ -501,21 +547,15 @@ class TestTriageNodeStatePropagation:
             update = await nodes.triage_node(_state(message="마포구 풋살장"))
 
         assert update["action"] == ActionType.RETRIEVE
-        assert update["intent"] == IntentType.SQL_SEARCH
-        assert update["secondary_intent"] == IntentType.VECTOR_SEARCH
         assert update["user_rationale"] == "마포구 풋살장 검색"
-
-    async def test_triage_node_omits_refined_query_when_none(self):
-        """triage_node: refined_query=None이면 update에 키를 포함하지 않는다."""
-        triage = make_triage(ActionType.DIRECT_ANSWER)
-        nodes = GraphNodes(triage=triage, answer_agent=_answer_agent())
-        with patch_node_sessions():
-            update = await nodes.triage_node(_state())
+        # 검색 계획은 router_node 책임 — triage_node update에 없어야 한다.
+        assert "intent" not in update
+        assert "secondary_intent" not in update
         assert "refined_query" not in update
 
-    async def test_triage_node_honors_forced_intent(self):
-        """forced_intent가 있으면 LLM 미호출, action=RETRIEVE로 강제."""
-        triage = make_triage(ActionType.DIRECT_ANSWER)  # 이게 호출되면 DIRECT_ANSWER
+    async def test_triage_node_does_not_honor_forced_intent(self):
+        """forced_intent honor는 router_node로 이동했으므로 triage_node는 무시한다."""
+        triage = make_triage(ActionType.RETRIEVE, user_rationale="검색")
         nodes = GraphNodes(triage=triage, answer_agent=_answer_agent())
 
         structured = triage._llm.with_structured_output.return_value
@@ -524,10 +564,10 @@ class TestTriageNodeStatePropagation:
                 _state(forced_intent=IntentType.VECTOR_SEARCH)
             )
 
-        assert update["intent"] == IntentType.VECTOR_SEARCH
+        # triage_node는 forced_intent를 소비하지 않고 정상 LLM 분류를 수행한다.
         assert update["action"] == ActionType.RETRIEVE
-        assert update["forced_intent"] is None
-        structured.ainvoke.assert_not_called()
+        assert "intent" not in update
+        structured.ainvoke.assert_called_once()
 
     async def test_triage_node_out_of_scope_slots(self):
         """triage_node: OUT_OF_SCOPE action이면 out_of_scope_type이 state에 채워진다."""
@@ -543,6 +583,62 @@ class TestTriageNodeStatePropagation:
         assert update["action"] == ActionType.OUT_OF_SCOPE
         assert update["out_of_scope_type"] == "domain_outside"
         assert update["user_rationale"] == "범위 밖입니다."
+
+
+class TestRouterNodeStatePropagation:
+    async def test_router_node_sets_intent_and_plan(self):
+        """router_node가 intent/refined_query/post-filter/secondary_intent를 채운다."""
+        router = make_router(
+            IntentType.SQL_SEARCH,
+            refined_query="마포구 풋살장",
+            max_class_name="체육시설",
+            area_name="마포구",
+            secondary_intent=IntentType.VECTOR_SEARCH,
+        )
+        nodes = GraphNodes(
+            triage=make_triage(ActionType.RETRIEVE),
+            router=router,
+            answer_agent=_answer_agent(),
+        )
+        with patch_node_sessions():
+            update = await nodes.router_node(_state(message="마포구 풋살장"))
+
+        assert update["intent"] == IntentType.SQL_SEARCH
+        assert update["refined_query"] == "마포구 풋살장"
+        assert update["max_class_name"] == "체육시설"
+        assert update["area_name"] == "마포구"
+        assert update["secondary_intent"] == IntentType.VECTOR_SEARCH
+
+    async def test_router_node_omits_none_fields(self):
+        """router_node: None 필드는 update에 포함하지 않는다."""
+        router = make_router(IntentType.VECTOR_SEARCH)
+        nodes = GraphNodes(
+            triage=make_triage(ActionType.RETRIEVE),
+            router=router,
+            answer_agent=_answer_agent(),
+        )
+        with patch_node_sessions():
+            update = await nodes.router_node(_state())
+        assert update["intent"] == IntentType.VECTOR_SEARCH
+        assert "secondary_intent" not in update
+        assert "max_class_name" not in update
+
+    async def test_router_node_honors_forced_intent(self):
+        """forced_intent가 있으면 LLM 미호출하고 그 intent를 그대로 반환한다(triage에서 이관)."""
+        router = make_router(IntentType.SQL_SEARCH)
+        nodes = GraphNodes(
+            triage=make_triage(ActionType.RETRIEVE),
+            router=router,
+            answer_agent=_answer_agent(),
+        )
+        structured = router._llm.with_structured_output.return_value
+        with patch_node_sessions():
+            update = await nodes.router_node(
+                _state(forced_intent=IntentType.VECTOR_SEARCH)
+            )
+        assert update["intent"] == IntentType.VECTOR_SEARCH
+        assert update["forced_intent"] is None
+        structured.ainvoke.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -564,8 +660,10 @@ class TestStreamEventsWithTriage:
 
         events = await self._collect(
             stream_graph(
-                graph, _state(message="안녕하세요"),
-                data_session=MagicMock(), ai_session=make_ai_session()
+                graph,
+                _state(message="안녕하세요"),
+                data_session=MagicMock(),
+                ai_session=make_ai_session(),
             )
         )
         steps = [d["step"] for t, d in events if t == "progress"]
@@ -574,10 +672,12 @@ class TestStreamEventsWithTriage:
 
     async def test_retrieve_sql_emits_searching(self):
         """RETRIEVE/SQL_SEARCH action은 searching progress 방출."""
-        triage = make_triage(ActionType.RETRIEVE, IntentType.SQL_SEARCH)
+        triage = make_triage(ActionType.RETRIEVE)
+        router = make_router(IntentType.SQL_SEARCH)
         sql_agent, data_session = make_sql_agent([])
         graph = AgentGraph(
             triage=triage,
+            router=router,
             sql_agent=sql_agent,
             answer_agent=_answer_agent(),
         )
@@ -588,3 +688,96 @@ class TestStreamEventsWithTriage:
         )
         steps = [d["step"] for t, d in events if t == "progress"]
         assert "searching" in steps
+
+
+# ---------------------------------------------------------------------------
+# 8. QA 회귀 — retry → router_node 재진입 (triage 미경유) + recursion_limit 경계
+# ---------------------------------------------------------------------------
+
+
+class TestRetryReentersRouterNotTriage:
+    """책임 분리 핵심 불변식: self-correction 재시도는 router_node 로 재진입하고
+    triage_node 는 재실행되지 않는다(action 은 이미 RETRIEVE 로 확정).
+
+    검증 방법: triage/router LLM mock 의 with_structured_output().ainvoke 호출
+    횟수를 센다. 0건 → retry_prep → 재진입의 E2E 사이클에서
+      - triage LLM 호출 == 1 (재시도에도 재분류 없음)
+      - router LLM 호출 == 2 (1차 + 재진입)
+    node_path 에는 router 가 2회, triage 가 1회 누적된다.
+    """
+
+    async def test_retry_reenters_router_triage_runs_once(self):
+        triage = make_triage(ActionType.RETRIEVE, user_rationale="검색합니다")
+        # router 는 VECTOR_SEARCH 를 반환 — _RETRY_FALLBACK_INTENT 전환 없이
+        # 케이스 C(완화)로 router 재진입만 시키기 위해 VECTOR 경로를 쓴다.
+        router = make_router(IntentType.VECTOR_SEARCH)
+        answer_agent = _answer_agent("재시도 후 답변")
+
+        triage_ainvoke = triage._llm.with_structured_output.return_value.ainvoke
+        router_ainvoke = router._llm.with_structured_output.return_value.ainvoke
+
+        with patch(
+            "agents.hydration_node.hydrate_services", AsyncMock(return_value=[])
+        ), patch(
+            "agents.vector_agent.VectorAgent.search",
+            AsyncMock(return_value=[]),
+        ):
+            graph = AgentGraph(
+                triage=triage,
+                router=router,
+                answer_agent=answer_agent,
+            )
+            result = await run_graph(
+                graph,
+                _state(),
+                data_session=make_ai_session(),
+                ai_session=make_ai_session(),
+            )
+
+        path = result["node_path"]
+        # 재시도가 실제로 일어났는지 먼저 확인 (전제 보호)
+        assert "retry_prep" in path, f"retry_prep 미발생: {path}"
+        assert result["retry_count"] == 1
+
+        # 핵심 불변식: triage 1회, router 2회.
+        assert path.count("triage") == 1, f"triage 재실행됨: {path}"
+        assert path.count("router") == 2, f"router 재진입 누락: {path}"
+        assert triage_ainvoke.await_count == 1, "triage LLM 이 재시도에 재호출됨"
+        assert router_ainvoke.await_count == 2, "router LLM 이 재진입에 미호출됨"
+
+    async def test_retry_within_recursion_limit_completes(self):
+        """recursion_limit=28 경계: retry 1회 포함 최악 RETRIEVE 경로가
+        recursion 예외 없이 완주한다(off-by-one 회귀 가드).
+
+        retry_prep → router → cache_check → search → hydration → rrf_fusion →
+        pre_answer_gate → answer → cache_write → search_persist → trace 전 구간을
+        다시 도는 사이클이 limit 안에서 종단되어야 한다.
+        """
+        triage = make_triage(ActionType.RETRIEVE, user_rationale="검색")
+        router = make_router(IntentType.VECTOR_SEARCH)
+        answer_agent = _answer_agent("완주 답변")
+
+        with patch(
+            "agents.hydration_node.hydrate_services", AsyncMock(return_value=[])
+        ), patch(
+            "agents.vector_agent.VectorAgent.search",
+            AsyncMock(return_value=[]),
+        ):
+            graph = AgentGraph(
+                triage=triage,
+                router=router,
+                answer_agent=answer_agent,
+            )
+            result = await run_graph(
+                graph,
+                _state(),
+                data_session=make_ai_session(),
+                ai_session=make_ai_session(),
+            )
+
+        path = result["node_path"]
+        # recursion 예외가 나면 graph.run 의 except 핸들러가 trace 미경유로
+        # fallback answer 를 주입한다. trace 도달은 정상 완주의 증거다.
+        assert "trace" in path, f"종단 trace 미도달(recursion 한계 의심): {path}"
+        assert result["retry_count"] == 1
+        assert result.get("answer")

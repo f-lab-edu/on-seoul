@@ -92,11 +92,32 @@ def make_agent_state(**overrides: Any) -> AgentState:
 # ---------------------------------------------------------------------------
 
 
-def make_router(intent: IntentType) -> RouterAgent:
-    """주어진 intent 를 항상 반환하는 RouterAgent mock."""
+def make_router(
+    intent: IntentType,
+    *,
+    refined_query: str | None = None,
+    max_class_name: str | None = None,
+    area_name: str | None = None,
+    service_status: str | None = None,
+    payment_type: str | None = None,
+    vector_sub_intent: str | None = None,
+    secondary_intent: IntentType | None = None,
+) -> RouterAgent:
+    """주어진 intent + 검색 계획(refined_query/post-filter/secondary)을 반환하는 RouterAgent mock."""
     agent = RouterAgent.__new__(RouterAgent)
     structured = MagicMock()
-    structured.ainvoke = AsyncMock(return_value=_IntentOutput(intent=intent))
+    structured.ainvoke = AsyncMock(
+        return_value=_IntentOutput(
+            intent=intent,
+            refined_query=refined_query,
+            max_class_name=max_class_name,
+            area_name=area_name,
+            service_status=service_status,
+            payment_type=payment_type,
+            vector_sub_intent=vector_sub_intent,  # type: ignore[arg-type]
+            secondary_intent=secondary_intent,
+        )
+    )
     llm = MagicMock()
     llm.with_structured_output = MagicMock(return_value=structured)
     agent._llm = llm
@@ -117,24 +138,22 @@ def make_triage(
     out_of_scope_type: str | None = None,
     user_rationale: str | None = None,
 ) -> TriageAgent:
-    """주어진 action/intent를 항상 반환하는 TriageAgent mock."""
+    """주어진 action 을 항상 반환하는 TriageAgent mock (action 결정 전담).
+
+    검색 계획 인자(intent/refined_query/post-filter/secondary_intent)는 더 이상
+    TriageOutput 에 들어가지 않는다(RouterAgent 책임). 그래프 E2E 테스트는
+    `make_triage(...)` 와 `make_triage_router(...)` 를 짝지어 사용하거나,
+    AgentGraph 에 `router=make_router(...)` 를 함께 주입한다.
+
+    하위호환: 본 헬퍼는 검색 계획 키워드 인자를 받아도 무시한다(시그니처 호환용).
+    """
+    del intent, refined_query, max_class_name, area_name, service_status
+    del payment_type, vector_sub_intent, secondary_intent
     agent = TriageAgent.__new__(TriageAgent)
-    # primary_intent 결정
-    primary = intent if action == ActionType.RETRIEVE else None
-    resolved_intent = intent if intent is not None else IntentType.FALLBACK
     structured = MagicMock()
     structured.ainvoke = AsyncMock(
         return_value=TriageOutput(
             action=action,
-            primary_intent=primary,
-            secondary_intent=secondary_intent,
-            intent=resolved_intent,
-            refined_query=refined_query,
-            max_class_name=max_class_name,
-            area_name=area_name,
-            service_status=service_status,
-            payment_type=payment_type,
-            vector_sub_intent=vector_sub_intent,  # type: ignore[arg-type]
             out_of_scope_type=out_of_scope_type,  # type: ignore[arg-type]
             user_rationale=user_rationale,
         )
@@ -144,6 +163,43 @@ def make_triage(
     agent._llm = llm
     agent._build_context_block = lambda history: ""
     return agent
+
+
+def make_triage_router(
+    action: ActionType,
+    intent: IntentType | None = None,
+    *,
+    refined_query: str | None = None,
+    max_class_name: str | None = None,
+    area_name: str | None = None,
+    service_status: str | None = None,
+    payment_type: str | None = None,
+    vector_sub_intent: str | None = None,
+    secondary_intent: IntentType | None = None,
+    out_of_scope_type: str | None = None,
+    user_rationale: str | None = None,
+) -> tuple[TriageAgent, RouterAgent]:
+    """(triage, router) 한 쌍을 생성한다 — RETRIEVE E2E 테스트용.
+
+    triage 는 action 을, router 는 intent + 검색 계획을 산출한다.
+    RETRIEVE 경로에서 intent 가 router_node 로부터 흐르도록 짝지어 준다.
+    """
+    triage = make_triage(
+        action,
+        out_of_scope_type=out_of_scope_type,
+        user_rationale=user_rationale,
+    )
+    router = make_router(
+        intent if intent is not None else IntentType.FALLBACK,
+        refined_query=refined_query,
+        max_class_name=max_class_name,
+        area_name=area_name,
+        service_status=service_status,
+        payment_type=payment_type,
+        vector_sub_intent=vector_sub_intent,
+        secondary_intent=secondary_intent,
+    )
+    return triage, router
 
 
 def make_sql_agent(

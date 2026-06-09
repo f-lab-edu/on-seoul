@@ -174,15 +174,16 @@ class TestStreamDecisionEvent:
         return events
 
     async def test_decision_event_emitted_after_triage(self):
-        """triage_node 완료 직후 decision 이벤트가 방출된다."""
+        """RETRIEVE 경로에서 router_node 완료 후 decision 이벤트가 방출된다."""
         triage = make_triage(
             ActionType.RETRIEVE,
-            IntentType.SQL_SEARCH,
             user_rationale="수영장 관련 질문으로 판단합니다.",
         )
+        router = make_router(IntentType.SQL_SEARCH)
         sql_agent, data_session = make_sql_agent([])
         graph = AgentGraph(
             triage=triage,
+            router=router,
             sql_agent=sql_agent,
             answer_agent=make_answer_agent(),
         )
@@ -201,13 +202,16 @@ class TestStreamDecisionEvent:
         """방출된 decision 이벤트 데이터가 올바른 필드를 포함한다."""
         triage = make_triage(
             ActionType.RETRIEVE,
+            user_rationale="마포구 풋살장 검색입니다.",
+        )
+        router = make_router(
             IntentType.SQL_SEARCH,
             secondary_intent=IntentType.VECTOR_SEARCH,
-            user_rationale="마포구 풋살장 검색입니다.",
         )
         sql_agent, data_session = make_sql_agent([])
         graph = AgentGraph(
             triage=triage,
+            router=router,
             sql_agent=sql_agent,
             answer_agent=make_answer_agent(),
         )
@@ -225,7 +229,7 @@ class TestStreamDecisionEvent:
 
         assert data["event"] == "decision"
         assert data["action"] == ActionType.RETRIEVE.value
-        # primary + secondary 모두 포함
+        # primary + secondary 모두 포함 (routes는 router_node에서 확정)
         assert "SQL_SEARCH" in data["routes"]
         assert "VECTOR_SEARCH" in data["routes"]
         assert data["user_rationale"] == "마포구 풋살장 검색입니다."
@@ -235,12 +239,13 @@ class TestStreamDecisionEvent:
         """user_rationale=None이면 decision 이벤트가 방출되지 않는다."""
         triage = make_triage(
             ActionType.RETRIEVE,
-            IntentType.SQL_SEARCH,
             user_rationale=None,  # None → emit 스킵
         )
+        router = make_router(IntentType.SQL_SEARCH)
         sql_agent, data_session = make_sql_agent([])
         graph = AgentGraph(
             triage=triage,
+            router=router,
             sql_agent=sql_agent,
             answer_agent=make_answer_agent(),
         )
@@ -277,7 +282,9 @@ class TestStreamDecisionEvent:
         ):
             with patch(
                 "agents.nodes.hydrate_services",
-                AsyncMock(return_value=[{"service_id": "S001", "service_name": "수영장"}]),
+                AsyncMock(
+                    return_value=[{"service_id": "S001", "service_name": "수영장"}]
+                ),
             ):
                 events = await self._collect(
                     graph,
@@ -332,22 +339,30 @@ class TestStreamDecisionEvent:
 
         triage = make_triage(
             ActionType.RETRIEVE,
-            IntentType.SQL_SEARCH,
             user_rationale="캐시 히트 경로 테스트입니다.",
         )
+        router = make_router(IntentType.SQL_SEARCH, refined_query="수영장")
         sql_agent, data_session = make_sql_agent([])
         graph = AgentGraph(
             triage=triage,
+            router=router,
             sql_agent=sql_agent,
             answer_agent=make_answer_agent(),
         )
 
-        # cache hit → triage는 실행(user_rationale 있음), 검색 노드는 스킵
+        # cache hit → triage·router 실행(user_rationale 있음), 검색 노드는 스킵
         cache_payload = {
             "payload": {"answer": "캐시 답변", "title": None, "service_cards": []},
-            "state": {"vector_results": None, "sql_results": None, "hydrated_services": None,
-                      "max_class_name": None, "area_name": None, "service_status": None,
-                      "payment_type": None, "refined_query": "수영장"},
+            "state": {
+                "vector_results": None,
+                "sql_results": None,
+                "hydrated_services": None,
+                "max_class_name": None,
+                "area_name": None,
+                "service_status": None,
+                "payment_type": None,
+                "refined_query": "수영장",
+            },
         }
         with _patch("agents.nodes.get_cached_answer", return_value=cache_payload):
             events = await self._collect(
@@ -385,21 +400,25 @@ class TestStreamDecisionEvent:
         assert len(decision_events) == 0, "router_node 경로에서는 decision 미방출"
 
     async def test_decision_emitted_once_on_retry(self):
-        """self-correction 재시도 시 decision 이벤트는 2차 triage에서 user_rationale이
-        None(forced_intent 경로)이므로 1회만 방출된다."""
+        """self-correction 재시도 시 decision 이벤트는 1회만 방출된다.
+
+        1차 router_node에서 triage 보류 rationale로 decision emit. 재시도 재진입은
+        router_node(forced_intent 경로)지만 _decision_emitted 가드로 재방출되지 않는다.
+        """
         triage = make_triage(
             ActionType.RETRIEVE,
-            IntentType.SQL_SEARCH,
             user_rationale="수영장 검색입니다.",
         )
+        router = make_router(IntentType.SQL_SEARCH)
         sql_agent, data_session = make_sql_agent([])
         graph = AgentGraph(
             triage=triage,
+            router=router,
             sql_agent=sql_agent,
             answer_agent=make_answer_agent("재시도 후 답변"),
         )
 
-        # hydration 0건 → retry_prep → triage 재진입(forced_intent → user_rationale=None)
+        # hydration 0건 → retry_prep → router_node 재진입(forced_intent)
         with patch(
             "agents.hydration_node.hydrate_services",
             AsyncMock(return_value=[]),
@@ -412,8 +431,7 @@ class TestStreamDecisionEvent:
             )
 
         decision_events = [(t, d) for t, d in events if t == "decision"]
-        # 1차 triage는 user_rationale 있으므로 1회 방출.
-        # 2차 triage는 forced_intent 경로라 user_rationale=None → 미방출.
+        # router_node 1차에서 1회 방출, 재시도 재진입은 가드로 미방출.
         assert len(decision_events) == 1
 
 
@@ -427,9 +445,9 @@ def _parse_sse_events(content: bytes) -> list[dict]:
     current: dict = {}
     for line in content.decode().splitlines():
         if line.startswith("event: "):
-            current["event"] = line[len("event: "):]
+            current["event"] = line[len("event: ") :]
         elif line.startswith("data: "):
-            current["data"] = json.loads(line[len("data: "):])
+            current["data"] = json.loads(line[len("data: ") :])
         elif line == "" and current:
             events.append(current)
             current = {}
@@ -471,13 +489,16 @@ class TestDecisionSSEFrame:
         async def _gen(*args, **kwargs):
             yield "progress", {"step": "routing", "message": "분석 중..."}
             if rationale:
-                yield "decision", {
-                    "event": "decision",
-                    "action": "RETRIEVE",
-                    "routes": ["SQL_SEARCH"],
-                    "user_rationale": rationale,
-                    "sources": [],
-                }
+                yield (
+                    "decision",
+                    {
+                        "event": "decision",
+                        "action": "RETRIEVE",
+                        "routes": ["SQL_SEARCH"],
+                        "user_rationale": rationale,
+                        "sources": [],
+                    },
+                )
             yield "progress", {"step": "searching", "message": "검색 중..."}
             yield "result", final_state
 
@@ -520,3 +541,64 @@ class TestDecisionSSEFrame:
         events = _parse_sse_events(response.content)
         decision_events = [e for e in events if e.get("event") == "decision"]
         assert len(decision_events) == 0
+
+
+# ---------------------------------------------------------------------------
+# 8. QA 회귀 — 재시도 재진입에도 decision 이벤트 1회 보장 (_decision_emitted 가드)
+# ---------------------------------------------------------------------------
+
+
+class TestDecisionEmitOnceAcrossRetry:
+    """RETRIEVE 0건 → retry_prep → router_node 재진입 사이클에서도 decision
+    이벤트는 정확히 1회만 방출되어야 한다(_decision_emitted 가드).
+
+    책임 분리 후 RETRIEVE 의 decision 은 router_node 완료 시점에 emit 된다.
+    retry 가 router_node 를 재실행시키므로 가드가 없으면 2회 emit 될 위험이 있다.
+    """
+
+    async def _collect(self, graph, state, **kwargs):
+        events = []
+        async for ev in stream_graph(graph, state, **kwargs):
+            events.append(ev)
+        return events
+
+    async def test_decision_emitted_once_when_router_reenters_on_retry(self):
+        triage = make_triage(
+            ActionType.RETRIEVE,
+            user_rationale="수영장 검색입니다.",
+        )
+        # VECTOR_SEARCH 0건 → 케이스 C 완화 재시도 → router_node 재진입.
+        router = make_router(IntentType.VECTOR_SEARCH)
+
+        with patch(
+            "agents.hydration_node.hydrate_services", AsyncMock(return_value=[])
+        ), patch(
+            "agents.vector_agent.VectorAgent.search",
+            AsyncMock(return_value=[]),
+        ):
+            graph = AgentGraph(
+                triage=triage,
+                router=router,
+                answer_agent=make_answer_agent("재시도 후 답변"),
+            )
+            events = await self._collect(
+                graph,
+                make_agent_state(),
+                data_session=make_ai_session(),
+                ai_session=make_ai_session(),
+            )
+
+        # 전제: 재시도가 실제로 일어나 router 가 2회 실행되었는지 progress 로 확인.
+        searching = [
+            d for t, d in events if t == "progress" and d.get("step") == "searching"
+        ]
+        assert searching, "searching progress 미방출 — 검색 경로 미진입"
+
+        decision_events = [(t, d) for t, d in events if t == "decision"]
+        assert len(decision_events) == 1, (
+            f"재진입에도 decision 은 1회여야 한다: {len(decision_events)}회 방출"
+        )
+        _, data = decision_events[0]
+        assert data["action"] == "RETRIEVE"
+        assert "VECTOR_SEARCH" in data["routes"]
+        assert data["user_rationale"] == "수영장 검색입니다."

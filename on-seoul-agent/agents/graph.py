@@ -7,10 +7,11 @@
       ├─ referential → rehydrate_node → describe_node → search_persist_node → trace_node
       └─ non-referential → triage_node
            ↓
-    triage_node                 — TriageAgent.classify(), action·intent·refined_query 설정
-      ├─ RETRIEVE     → cache_check_node → [sql/vector/map/analytics]
+    triage_node                 — TriageAgent.classify(), action 결정만(action·out_of_scope_type·user_rationale)
+      ├─ RETRIEVE     → router_node (RouterAgent.classify(), intent·refined_query·post-filter·secondary_intent)
+      │                  → cache_check_node → [sql/vector/map/analytics]
       │                  → hydration_node → rrf_fusion_node → pre_answer_gate_node
-      │                       ├─ 0건(C2) → retry_prep_node → triage_node 재진입
+      │                       ├─ 0건(C2) → retry_prep_node → router_node 재진입
       │                       └─ 유건    → answer_node
       ├─ DIRECT_ANSWER → direct_answer_node → 종단 체인
       ├─ AMBIGUOUS     → ambiguous_node → 종단 체인
@@ -23,7 +24,7 @@
       ↓
     (self_correction)           — 비-RETRIEVE는 제외. 빈 답변/0건 시 retry_prep 경유
       ↓ (정상) 또는 사이클
-    [retry_prep_node]           — retry_count 증가 + 이전 검색 결과 초기화 → triage_node 재진입
+    [retry_prep_node]           — retry_count 증가 + 이전 검색 결과 초기화 → router_node 재진입
     cache_write_node            — 정상 결과만(SQL_SEARCH / VECTOR_SEARCH) 캐시 저장
       ↓
     search_persist_node         — chat_search_queries + chat_search_results 적재 (best-effort)
@@ -228,11 +229,12 @@ def _build_shared_graph() -> Any:
     그래프 구조 ([C] W2 확장):
     START → reference_resolution_node
       ├─ referential → rehydrate_node → describe_node → search_persist_node → trace_node
-      └─ non-referential → triage_node (router_node alias)
+      └─ non-referential → triage_node (action 결정)
            │
-           ├─ action=RETRIEVE     → cache_check_node → [sql/vector/map/analytics]
+           ├─ action=RETRIEVE     → router_node (검색 계획) → cache_check_node
+           │                           → [sql/vector/map/analytics]
            │                           → hydration_node → pre_answer_gate_node
-           │                                ├─ 0건(C2) → retry_prep_node
+           │                                ├─ 0건(C2) → retry_prep_node → router_node 재진입
            │                                └─ 유건    → rrf_fusion_node → answer_node
            ├─ action=DIRECT_ANSWER → direct_answer_node → 종단 체인
            ├─ action=AMBIGUOUS     → ambiguous_node → 종단 체인
@@ -250,9 +252,9 @@ def _build_shared_graph() -> Any:
     builder.add_node("reference_resolution_node", _dispatch_reference_resolution_node)
     builder.add_node("rehydrate_node", _dispatch_rehydrate_node)
     builder.add_node("describe_node", _dispatch_describe_node)
-    # triage_node = router_node (alias 제공)
+    # 책임 분리: triage_node(action 결정) → router_node(검색 계획) → cache_check.
     builder.add_node("triage_node", _dispatch_triage_node)
-    builder.add_node("router_node", _dispatch_router_node)  # 하위호환 alias
+    builder.add_node("router_node", _dispatch_router_node)
     builder.add_node("cache_check_node", _dispatch_cache_check_node)
     builder.add_node("cache_write_node", _dispatch_cache_write_node)
     builder.add_node("retry_prep_node", _dispatch_retry_prep_node)
@@ -288,11 +290,12 @@ def _build_shared_graph() -> Any:
     builder.add_edge("describe_node", "search_persist_node")
 
     # ── triage_node → route_by_action ──
+    # RETRIEVE 는 router_node(검색 계획)로, 나머지 4종 action 은 각 종단 노드로.
     builder.add_conditional_edges(
         "triage_node",
         _dispatch_route_by_action,
         {
-            "cache_check_node": "cache_check_node",
+            "router_node": "router_node",
             "direct_answer_node": "direct_answer_node",
             "ambiguous_node": "ambiguous_node",
             "out_of_scope_node": "out_of_scope_node",
@@ -301,7 +304,7 @@ def _build_shared_graph() -> Any:
         },
     )
 
-    # ── router_node(alias) → cache_check(하위호환) ──
+    # ── router_node(검색 계획) → cache_check ──
     builder.add_edge("router_node", "cache_check_node")
 
     # ── cache_check → fanout or intent 분기 ──
@@ -361,8 +364,11 @@ def _build_shared_graph() -> Any:
         },
     )
 
-    # ── 재시도 준비 → triage_node 재진입 ──
-    builder.add_edge("retry_prep_node", "triage_node")
+    # ── 재시도 준비 → router_node 재진입 ──
+    # self-correction 은 RETRIEVE 경로 전용이고(비-RETRIEVE 제외), 방향성 재시도
+    # (SQL→VECTOR 전환·MAP 반경 확장)는 검색 *계획* 재수립이므로 Router 의 책임이다.
+    # action 은 이미 RETRIEVE 로 확정됐으므로 triage 를 다시 거치지 않는다.
+    builder.add_edge("retry_prep_node", "router_node")
 
     # ── 비-RETRIEVE action 종단 체인 ──
     # direct_answer / ambiguous / explain → 검색 없이 종단 체인
@@ -429,13 +435,18 @@ class AgentGraph:
         redis: Any = None,
         triage: TriageAgent | None = None,
     ) -> None:
-        # triage 우선, router(TriageAgent 인스턴스)는 하위호환 경로.
-        # triage/TriageAgent router가 없고 RouterAgent도 없으면 TriageAgent()로 기본 초기화.
-        # RouterAgent가 명시 주입된 경우는 하위호환 router_node alias 경로를 유지한다.
+        # 책임 분리: TriageAgent(action 결정) + RouterAgent(검색 계획) 둘 다 노드에서 쓰인다.
+        #   - triage: action 결정 노드(triage_node)
+        #   - router: 검색 계획 노드(router_node, RETRIEVE 경로에서만 실행)
+        # `router` 인자가 TriageAgent 인스턴스이면 하위호환으로 triage 로 받아들인다.
         _triage = triage or (router if isinstance(router, TriageAgent) else None)
         _router = router if isinstance(router, RouterAgent) else None
+        # 하위호환: RouterAgent 만 명시 주입(triage 미주입)된 경우 triage 를 기본 생성하지
+        # 않는다 — triage_node 가 RouterAgent fallback 분기로 action 을 결정한다.
         if _triage is None and _router is None:
             _triage = TriageAgent()
+        if _triage is not None and _router is None:
+            _router = RouterAgent()
         self._nodes = GraphNodes(
             router=_router,
             sql_agent=sql_agent or SqlAgent(),
@@ -464,19 +475,22 @@ class AgentGraph:
 
         token = _ACTIVE_NODES.set(self._nodes)
         try:
-            # recursion_limit=22:
-            # 1회 정상 흐름(W2 기준 최악 경로):
-            #   reference_resolution(1) → triage(2) → cache_check(3) → search(4) →
-            #   hydration(5) → rrf_fusion(6) → pre_answer_gate(7) → answer(8) →
-            #   cache_write(9) → search_persist(10) → trace(11) = 11 super-step.
-            # retry 1회 포함 시 retry_prep(+1) + triage/cache_check/search/hydration/
-            #   rrf_fusion/pre_answer_gate/answer 재실행(+7) = 합계 18 super-step.
+            # recursion_limit=28 (Triage/Router 책임 분리로 RETRIEVE 경로에 router 단계 +1):
+            # 1회 정상 흐름(최악 경로, RETRIEVE + secondary_intent 팬아웃):
+            #   reference_resolution(1) → triage(2) → router(3) → cache_check(4) →
+            #   sql_node+vector_node 병렬 팬아웃(5, 두 노드는 동일 super-step) →
+            #   hydration(6) → rrf_fusion(7) → pre_answer_gate(8) → answer(9) →
+            #   cache_write(10) → search_persist(11) → trace(12) = 12 super-step.
+            #   (병렬 팬아웃은 한 super-step 에 묶이므로 노드 수가 늘어도 step 은 +1만.)
+            # retry 1회 포함 시 retry_prep(+1) → router/cache_check/search/hydration/
+            #   rrf_fusion/pre_answer_gate/answer/cache_write/search_persist/trace
+            #   재실행(+10) = 합계 23 super-step (재시도는 triage 미경유 — router 재진입).
             # 참조 해소 경로는 더 짧다(reference → rehydrate → describe →
-            #   search_persist → trace = 5). 여유 4를 더해 22로 설정한다.
+            #   search_persist → trace = 5). 여유 5를 더해 28로 설정한다.
             # 세션은 노드 내부에서 acquire-use-release(제안 0-6: 노드 로컬 세션).
             result: AgentState = await AgentGraph._compiled_graph.ainvoke(
                 state,
-                config={"recursion_limit": 22},
+                config={"recursion_limit": 28},
             )  # type: ignore[arg-type]
         finally:
             _ACTIVE_NODES.reset(token)
@@ -498,9 +512,18 @@ class AgentGraph:
 
         진행 이벤트 타이밍:
             graph 시작 전        → routing  "질문을 분석하고 있습니다..."
+            triage_node 완료 후  → 비-RETRIEVE면 answering 즉시
             router_node 완료 후  → searching "관련 정보를 검색하고 있습니다..."
-                                   (FALLBACK/error 시 → answering 즉시)
             search node 완료 후  → answering "답변을 생성하고 있습니다..."
+
+        decision SSE 이벤트(W3) emit 타이밍 — 책임 분리 후 routes 가 router_node 에서야
+        확정되므로 action(triage)·routes(router)를 산출 노드별로 나눠 처리한다:
+          - 비-RETRIEVE action(DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE/EXPLAIN):
+            triage_node 직후 routes=[] 로 emit (검색 계획 없음).
+          - RETRIEVE action: triage 의 user_rationale 을 보류했다가 router_node 완료 후
+            routes=[intent, secondary_intent] 로 emit (action·rationale=triage, routes=router).
+          - user_rationale 이 None(RouterAgent 하위호환 경로, retry forced 경로)이면 미emit.
+          - 재시도 시 router_node 가 재실행돼도 _decision_emitted 가드로 1회만 emit.
         """
         state = _prepare_state(state)
 
@@ -512,6 +535,10 @@ class AgentGraph:
         # 중복 emit 방지 (self-correction 루프에서 노드가 재실행될 수 있음)
         _search_progress_emitted = False
         _answer_progress_emitted = False
+        # decision 이벤트는 전체 실행에서 최대 1회 (재시도 재진입에도 유지)
+        _decision_emitted = False
+        # RETRIEVE 경로에서 triage 가 산출한 user_rationale 을 router 완료 시점까지 보류한다.
+        _pending_rationale: str | None = None
 
         # hydration_node 완료 후 answering 이벤트로 이동 고려 (별도 이슈)
         _SEARCH_NODES = frozenset(
@@ -522,36 +549,56 @@ class AgentGraph:
         try:
             async for chunk in AgentGraph._compiled_graph.astream(
                 state,
-                config={"recursion_limit": 22},  # W2 최악 경로 18 super-step + 여유 4
+                config={"recursion_limit": 28},  # 최악 경로 23 super-step + 여유 5
             ):
                 node_name: str = next(iter(chunk))
                 node_updates: dict[str, Any] | None = chunk[node_name]
                 if node_updates:
                     accumulated.update(node_updates)
 
-                if node_name in ("triage_node", "router_node") and not _search_progress_emitted:
+                if node_name == "triage_node":
+                    action = accumulated.get("action")
+                    user_rationale = (node_updates or {}).get("user_rationale")
+                    if action == ActionType.RETRIEVE:
+                        # routes 는 router_node 완료 후에야 확정 — rationale 보류.
+                        _pending_rationale = user_rationale
+                    else:
+                        # 비-RETRIEVE: routes 없음. user_rationale 있으면 즉시 emit.
+                        if (
+                            user_rationale
+                            and action is not None
+                            and not _decision_emitted
+                        ):
+                            _decision_emitted = True
+                            yield (
+                                "decision",
+                                DecisionEvent(
+                                    action=action.value,
+                                    routes=[],
+                                    user_rationale=user_rationale,
+                                ).model_dump(),
+                            )
+                        # 비-RETRIEVE는 검색 없이 곧장 answering 단계로.
+                        if not _answer_progress_emitted:
+                            _answer_progress_emitted = True
+                            yield (
+                                "progress",
+                                {
+                                    "step": "answering",
+                                    "message": "답변을 생성하고 있습니다...",
+                                },
+                            )
+
+                elif node_name == "router_node" and not _search_progress_emitted:
                     _search_progress_emitted = True
-                    # triage_node는 항상 non-None dict를 반환하므로 node_updates는 여기서 항상 존재한다.
                     action = accumulated.get("action")
                     intent = accumulated.get("intent")
 
-                    # [D] W3: triage_node 완료 직후 decision 이벤트 emit.
-                    # 조건: triage_node가 LLM 분류를 실제 실행한 경우에만.
-                    # forced_intent 경로는 node_updates에 "user_rationale" 키를 포함하지
-                    # 않으므로 해당 키 존재 여부로 실행 여부를 판별한다.
-                    # router_node(하위호환 alias)는 user_rationale을 설정하지 않으므로 스킵.
-                    #
-                    # primary/secondary는 node_updates 전용으로 읽는다.
-                    # triage_node는 항상 intent/secondary_intent를 직접 반환하므로
-                    # accumulated fallback이 불필요하다(동일 값이 accumulated에도 반영됨).
-                    user_rationale = (
-                        node_updates.get("user_rationale")
-                        if node_name == "triage_node"
-                        else None
-                    )
-                    if user_rationale and action is not None:
-                        primary = node_updates.get("intent")
-                        secondary = node_updates.get("secondary_intent")
+                    # RETRIEVE 경로 decision: triage 보류 rationale + router 확정 routes.
+                    if _pending_rationale and not _decision_emitted:
+                        _decision_emitted = True
+                        primary = (node_updates or {}).get("intent")
+                        secondary = (node_updates or {}).get("secondary_intent")
                         routes: list[str] = []
                         if primary is not None:
                             routes.append(primary.value)
@@ -560,14 +607,17 @@ class AgentGraph:
                         yield (
                             "decision",
                             DecisionEvent(
-                                action=action.value,
+                                action=(
+                                    action.value
+                                    if action
+                                    else ActionType.RETRIEVE.value
+                                ),
                                 routes=routes,
-                                user_rationale=user_rationale,
+                                user_rationale=_pending_rationale,
                             ).model_dump(),
                         )
 
-                    # RETRIEVE action이고 검색 intent면 searching 이벤트
-                    if action == ActionType.RETRIEVE and intent in (
+                    if intent in (
                         IntentType.SQL_SEARCH,
                         IntentType.VECTOR_SEARCH,
                         IntentType.MAP,
@@ -581,14 +631,16 @@ class AgentGraph:
                             },
                         )
                     else:
-                        _answer_progress_emitted = True
-                        yield (
-                            "progress",
-                            {
-                                "step": "answering",
-                                "message": "답변을 생성하고 있습니다...",
-                            },
-                        )
+                        # FALLBACK/error 등 — 검색 없이 answering.
+                        if not _answer_progress_emitted:
+                            _answer_progress_emitted = True
+                            yield (
+                                "progress",
+                                {
+                                    "step": "answering",
+                                    "message": "답변을 생성하고 있습니다...",
+                                },
+                            )
 
                 elif node_name == "rehydrate_node" and not _answer_progress_emitted:
                     # W1 참조 해소 경로: 재-hydrate 완료 후 describe 답변 단계로.

@@ -124,21 +124,39 @@ class TestSqlIntentPersist:
 
 class TestZeroHitQueryRecorded:
     async def test_sql_zero_results_writes_query_row_only(self):
-        """SQL 0건이어도 chat_search_queries 에 sql 행이 기록되고 results 는 생략된다."""
+        """SQL 0건이어도 chat_search_queries 에 query 행이 기록되고 results 는 생략된다.
+
+        SQL 0건 → C2 게이트가 retry_prep 로 보내고 VECTOR 로 강제 전환된다(방향성 재시도).
+        재시도 경로의 vector_node 가 실 LLM 을 호출하지 않도록 mock vector_agent +
+        검색 도구 patch 로 0건을 강제한다. retry_prep 가 search_channels 를 리셋하므로
+        최종 persist 에는 vector 채널 query 행만 남지만, "0건이어도 query 행 기록 /
+        results 생략" 계약은 동일하게 검증된다.
+        """
         sql_agent, data_session = make_sql_agent([])
+        vector_agent = _vector_agent()
         ai_session = make_ai_session()
 
         graph = AgentGraph(
             router=make_router(IntentType.SQL_SEARCH),
             sql_agent=sql_agent,
+            vector_agent=vector_agent,
             answer_agent=make_answer_agent("결과가 없습니다."),
         )
-        await run_graph(
-            graph,
-            _state(message_id=20),
-            data_session=data_session,
-            ai_session=ai_session,
-        )
+        with (
+            patch("agents.vector_agent.vector_search", AsyncMock(return_value=[])),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
+            patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
+            patch(
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=[]),
+            ),
+        ):
+            await run_graph(
+                graph,
+                _state(message_id=20),
+                data_session=data_session,
+                ai_session=ai_session,
+            )
 
         assert _get_queries_rows(ai_session) is not None
         assert _get_results_rows(ai_session) is None, (

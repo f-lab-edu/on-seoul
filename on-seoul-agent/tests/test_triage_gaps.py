@@ -35,136 +35,22 @@ def _answer(text: str = "답변입니다."):
 
 
 # ---------------------------------------------------------------------------
-# 1. TriageOutput 필드 검증자 — 허용 외 값 → None 정규화
+# 1. TriageOutput 형태 — action 결정 전담 (검색 계획 필드 없음)
 # ---------------------------------------------------------------------------
 
 
-class TestTriageOutputFieldValidators:
-    def test_invalid_max_class_name_becomes_none(self):
-        """허용되지 않은 max_class_name은 None으로 정규화된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            max_class_name="잘못된카테고리",  # type: ignore[arg-type]
-        )
-        assert out.max_class_name is None
+class TestTriageOutputShape:
+    def test_triage_output_action_only(self):
+        """TriageOutput은 action/out_of_scope_type/user_rationale/reasoning만 가진다."""
+        fields = set(TriageOutput.model_fields.keys())
+        assert fields == {"reasoning", "action", "out_of_scope_type", "user_rationale"}
 
-    def test_valid_max_class_name_retained(self):
-        """허용된 max_class_name은 유지된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            max_class_name="체육시설",  # type: ignore[arg-type]
-        )
-        assert out.max_class_name == "체육시설"
-
-    def test_invalid_area_name_becomes_none(self):
-        """허용되지 않은 area_name은 None으로 정규화된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            area_name="부산광역시",  # type: ignore[arg-type]
-        )
-        assert out.area_name is None
-
-    def test_valid_area_name_retained(self):
-        """허용된 area_name(서울 자치구)은 유지된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            area_name="강남구",  # type: ignore[arg-type]
-        )
-        assert out.area_name == "강남구"
-
-    def test_invalid_service_status_becomes_none(self):
-        """허용되지 않은 service_status는 None으로 정규화된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            service_status="알수없는상태",  # type: ignore[arg-type]
-        )
-        assert out.service_status is None
-
-    def test_valid_service_status_retained(self):
-        """허용된 service_status는 유지된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            service_status="접수중",  # type: ignore[arg-type]
-        )
-        assert out.service_status == "접수중"
-
-    def test_payment_type_free_keyword_normalizes(self):
-        """'무료' 키워드가 포함된 payment_type은 '무료'로 정규화된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            payment_type="완전 무료입니다",  # type: ignore[arg-type]
-        )
-        assert out.payment_type == "무료"
-
-    def test_payment_type_paid_keyword_normalizes(self):
-        """'유료' 키워드가 포함된 payment_type은 '유료'로 정규화된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            payment_type="paid",  # type: ignore[arg-type]
-        )
-        assert out.payment_type == "유료"
-
-    def test_payment_type_unknown_becomes_none(self):
-        """무료/유료 키워드가 없는 payment_type은 None으로 정규화된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            payment_type="알수없음",  # type: ignore[arg-type]
-        )
-        assert out.payment_type is None
-
-    def test_payment_type_non_string_becomes_none(self):
-        """비문자열 payment_type은 None으로 정규화된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            payment_type=123,  # type: ignore[arg-type]
-        )
-        assert out.payment_type is None
-
-    def test_invalid_vector_sub_intent_becomes_none(self):
-        """허용되지 않은 vector_sub_intent는 None으로 정규화된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.VECTOR_SEARCH,
-            vector_sub_intent="unknown_type",  # type: ignore[arg-type]
-        )
-        assert out.vector_sub_intent is None
-
-    def test_secondary_intent_map_becomes_none(self):
-        """secondary_intent에 MAP은 허용되지 않아 None이 된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            secondary_intent="MAP",  # type: ignore[arg-type]
-        )
-        assert out.secondary_intent is None
-
-    def test_secondary_intent_analytics_becomes_none(self):
-        """secondary_intent에 ANALYTICS는 허용되지 않아 None이 된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.SQL_SEARCH,
-            secondary_intent="ANALYTICS",  # type: ignore[arg-type]
-        )
-        assert out.secondary_intent is None
-
-    def test_secondary_intent_sql_as_inttype(self):
-        """secondary_intent에 IntentType.SQL_SEARCH는 허용된다."""
-        out = TriageOutput(
-            action=ActionType.RETRIEVE,
-            primary_intent=IntentType.VECTOR_SEARCH,
-            secondary_intent=IntentType.SQL_SEARCH,
-        )
-        assert out.secondary_intent == IntentType.SQL_SEARCH
+    def test_minimal_construction(self):
+        """action만으로 구성된다."""
+        out = TriageOutput(action=ActionType.RETRIEVE)
+        assert out.action == ActionType.RETRIEVE
+        assert out.out_of_scope_type is None
+        assert out.user_rationale is None
 
 
 # ---------------------------------------------------------------------------
@@ -431,12 +317,18 @@ class TestTriageConnectedInMainLifespan:
             "main.py 또는 GraphNodes.__init__에서 TriageAgent()로 기본 초기화해야 합니다."
         )
 
-    def test_nodes_triage_used_over_router(self):
-        """triage 주입 시 _triage가 세팅되고 _router는 None이어야 한다."""
+    def test_nodes_triage_and_router_both_injected(self):
+        """triage만 주입해도 _triage가 세팅되고 _router(RouterAgent)가 기본 생성된다.
+
+        책임 분리: triage_node(action) + router_node(검색 계획) 둘 다 동작해야 하므로
+        AgentGraph가 RouterAgent를 자동 주입한다.
+        """
+        from agents.router_agent import RouterAgent
+
         triage = make_triage(ActionType.DIRECT_ANSWER)
         graph = AgentGraph(triage=triage)
         assert graph._nodes._triage is triage
-        assert graph._nodes._router is None
+        assert isinstance(graph._nodes._router, RouterAgent)
 
 
 # ---------------------------------------------------------------------------

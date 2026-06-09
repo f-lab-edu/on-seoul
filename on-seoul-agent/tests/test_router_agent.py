@@ -118,3 +118,55 @@ class TestRouterAgent:
         assert result.max_class_name == "체육시설"
         assert result.service_status == "접수중"
         assert result.vector_sub_intent is None
+
+
+class TestRouterSecondaryIntent:
+    """secondary_intent 추출·검증 (TriageOutput에서 _IntentOutput으로 이관)."""
+
+    async def test_secondary_intent_sql_vector(self):
+        """SQL↔VECTOR 경계 모호 시 secondary_intent가 채워진다."""
+        agent = RouterAgent.__new__(RouterAgent)
+        mock_llm = MagicMock()
+        mock_structured = MagicMock()
+        mock_structured.ainvoke = AsyncMock(
+            return_value=_IntentOutput(
+                intent=IntentType.SQL_SEARCH,
+                refined_query="마포구 풋살장",
+                secondary_intent=IntentType.VECTOR_SEARCH,
+            )
+        )
+        mock_llm.with_structured_output = MagicMock(return_value=mock_structured)
+        agent._llm = mock_llm
+
+        result = await agent.classify("마포구 풋살장")
+        assert result.intent == IntentType.SQL_SEARCH
+        assert result.secondary_intent == IntentType.VECTOR_SEARCH
+
+    def test_secondary_intent_map_normalized_to_none(self):
+        """secondary_intent에 MAP은 허용되지 않아 None이 된다."""
+        out = _IntentOutput(
+            intent=IntentType.SQL_SEARCH,
+            secondary_intent="MAP",  # type: ignore[arg-type]
+        )
+        assert out.secondary_intent is None
+
+    def test_secondary_intent_analytics_normalized_to_none(self):
+        """secondary_intent에 ANALYTICS는 허용되지 않아 None이 된다."""
+        out = _IntentOutput(
+            intent=IntentType.VECTOR_SEARCH,
+            secondary_intent="ANALYTICS",  # type: ignore[arg-type]
+        )
+        assert out.secondary_intent is None
+
+    def test_secondary_intent_vector_as_inttype(self):
+        """secondary_intent에 IntentType.VECTOR_SEARCH는 허용된다."""
+        out = _IntentOutput(
+            intent=IntentType.SQL_SEARCH,
+            secondary_intent=IntentType.VECTOR_SEARCH,
+        )
+        assert out.secondary_intent == IntentType.VECTOR_SEARCH
+
+    def test_secondary_intent_default_none(self):
+        """secondary_intent 기본값은 None."""
+        out = _IntentOutput(intent=IntentType.SQL_SEARCH)
+        assert out.secondary_intent is None

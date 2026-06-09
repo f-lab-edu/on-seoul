@@ -90,6 +90,22 @@ class _IntentOutput(BaseModel):
     # VECTOR_SEARCH 전용 서브 의도 — RRF 가중치 프로파일 선택에 사용.
     # intent가 VECTOR_SEARCH가 아니면 None. 허용 값 외 → None으로 정규화.
     vector_sub_intent: Literal["identification", "detail", "semantic"] | None = None
+    # SQL↔VECTOR 경계가 모호할 때 팬아웃용 보조 의도. SQL_SEARCH/VECTOR_SEARCH만 허용.
+    # 그 외(MAP/ANALYTICS/FALLBACK)는 None으로 정규화. None이면 단일 라우트(기존 동작).
+    secondary_intent: IntentType | None = None
+
+    @field_validator("secondary_intent", mode="before")
+    @classmethod
+    def _validate_secondary_intent(cls, v: object) -> IntentType | None:
+        """secondary_intent는 SQL_SEARCH 또는 VECTOR_SEARCH만 허용한다."""
+        if v is None:
+            return None
+        allowed = {IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH}
+        if isinstance(v, IntentType):
+            return v if v in allowed else None
+        if isinstance(v, str) and v in {i.value for i in allowed}:
+            return IntentType(v)
+        return None
 
     @field_validator("max_class_name", mode="before")
     @classmethod

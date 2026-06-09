@@ -78,8 +78,8 @@ def sanitize_user_rationale(text: str | None) -> str | None:
 
     정제 순서:
       1. None / 빈 문자열 → None 반환.
-      2. 내부 메시지 패턴 제거: 줄 시작이 '__'이거나 '__word' 식별자 형태를 포함한 줄 제거.
-         ("파이썬 __init__ 사용법" 같은 정상 기술 설명은 '__' 단독 등장이므로 보존.)
+      2. 내부 메시지 패턴 제거: 줄 시작이 '__'인 줄만 제거(정규식 ^__).
+         ("파이썬 __init__ 사용법"처럼 줄 중간에 '__'가 등장하는 정상 설명은 보존.)
       3. 최대 200자 truncate — 초과 시 말줄임표 추가.
       4. 결과가 빈 문자열이면 None 반환.
     """
@@ -99,7 +99,10 @@ def sanitize_user_rationale(text: str | None) -> str | None:
 
     # 최대 길이 truncate
     if len(cleaned) > _RATIONALE_MAX_LEN:
-        cleaned = cleaned[: _RATIONALE_MAX_LEN - len(_RATIONALE_ELLIPSIS)] + _RATIONALE_ELLIPSIS
+        cleaned = (
+            cleaned[: _RATIONALE_MAX_LEN - len(_RATIONALE_ELLIPSIS)]
+            + _RATIONALE_ELLIPSIS
+        )
 
     return cleaned if cleaned else None
 
@@ -275,92 +278,84 @@ class GraphNodes:
         """reference_resolution_node 직후 라우팅.
 
         referential(target_service_ids 채워짐) → rehydrate_node(검색 우회).
-        non-referential → triage_node(기존 흐름; router_node alias).
+        non-referential → triage_node(기존 흐름).
         """
         if state.get("target_service_ids"):
             return "rehydrate_node"
         return "triage_node"
 
     async def triage_node(self, state: AgentState) -> dict[str, Any]:
-        """TriageAgent.classify() 호출 — action · intent · refined_query 설정.
+        """TriageAgent.classify() 호출 — action 결정 전담.
 
-        기존 router_node와 동일한 출력 슬롯(intent, refined_query, post-filter)에 더해
-        action / out_of_scope_type / user_rationale / secondary_intent를 채운다.
+        action / out_of_scope_type / user_rationale 만 설정한다.
+        검색 방식(intent)·필터·refined_query·secondary_intent 는 router_node 가 담당한다
+        (RETRIEVE 로 판정된 경우에만 router_node 가 실행됨).
 
-        forced_intent honor:
-            retry_prep_node가 방향성 재시도로 intent를 강제하면 LLM 재분류를
-            skip하고 그 intent를 그대로 반환한다. action=RETRIEVE로 강제된다.
+        forced_intent honor 는 더 이상 이 노드가 처리하지 않는다(router_node 로 이동).
+        self-correction 재시도는 RETRIEVE 경로 전용이며 retry_prep_node 가 router_node 로
+        재진입시키므로, triage_node 는 재시도 시 재실행되지 않는다.
+
+        하위호환 RouterAgent-fallback 분기 (정상 경로 미도달):
+            AgentGraph.__init__ 은 triage 와 router 를 모두 자동 주입하므로 정상 요청
+            경로에서는 이 분기에 도달하지 않는다. 부분 dict 주입(triage 미주입 +
+            router 만 주입)에 의존하는 테스트만 도달하며, 이 경우 RouterAgent.classify
+            가 triage(여기) + router_node 에서 1회씩, 총 2회 실행된다(LLM 왕복 1회 중복).
+            테스트 의존성 때문에 제거하지 않고 유지한다.
         """
-        forced = state.get("forced_intent")
-        if forced is not None:
-            logger.info(
-                "triage.forced room=%s intent=%s",
-                state.get("room_id"),
-                forced.value,
-            )
-            return {
-                "intent": forced,
-                "action": ActionType.RETRIEVE,
-                "forced_intent": None,
-                "node_path": ["triage"],
-            }
-
-        # TriageAgent 우선, fallback → RouterAgent (하위호환)
-        agent = self._triage or self._router
-        if agent is None:
-            agent = TriageAgent()
-
-        try:
-            if isinstance(agent, TriageAgent):
-                result = await agent.classify(
-                    state["message"],
-                    history=state.get("history") or [],
-                    prev_reasoning=state.get("prev_reasoning"),
-                )
-                update: dict[str, Any] = {
-                    "intent": result.intent,
-                    "action": result.action,
-                    "secondary_intent": result.secondary_intent,
-                    "out_of_scope_type": result.out_of_scope_type,
-                    "user_rationale": sanitize_user_rationale(result.user_rationale),
-                    "node_path": ["triage"],
-                }
-            else:
-                # RouterAgent fallback (하위호환)
-                result = await agent.classify(
+        # 하위호환: RouterAgent 만 주입된 구 경로(triage 미주입)는 RouterAgent 로
+        # intent 를 분류하고 FALLBACK 만 DIRECT_ANSWER 로 매핑한다(action 결정 대체).
+        # 이 경우 router_node 가 동일 RouterAgent 로 다시 분류하므로 intent 는 거기서 확정된다.
+        if self._triage is None and self._router is not None:
+            try:
+                result = await self._router.classify(
                     state["message"],
                     history=state.get("history") or [],
                 )
-                update = {
-                    "intent": result.intent,
-                    "action": ActionType.RETRIEVE
-                    if result.intent != IntentType.FALLBACK
-                    else ActionType.DIRECT_ANSWER,
-                    "secondary_intent": None,
+                if result.intent == IntentType.FALLBACK:
+                    # FALLBACK 은 검색 없이 직접 답변 — intent 를 여기서 확정해
+                    # direct_answer_node→AnswerAgent 가 FALLBACK 분기를 타도록 한다.
+                    return {
+                        "action": ActionType.DIRECT_ANSWER,
+                        "intent": IntentType.FALLBACK,
+                        "out_of_scope_type": None,
+                        "user_rationale": None,
+                        "node_path": ["triage"],
+                    }
+                # 검색 필요 — router_node 가 intent 를 재분류해 확정한다.
+                return {
+                    "action": ActionType.RETRIEVE,
                     "out_of_scope_type": None,
                     "user_rationale": None,
                     "node_path": ["triage"],
                 }
-            if result.refined_query is not None:
-                update["refined_query"] = result.refined_query
-            if result.max_class_name is not None:
-                update["max_class_name"] = result.max_class_name
-            if result.area_name is not None:
-                update["area_name"] = result.area_name
-            if result.service_status is not None:
-                update["service_status"] = result.service_status
-            if result.payment_type is not None:
-                update["payment_type"] = result.payment_type
-            if result.vector_sub_intent is not None:
-                update["vector_sub_intent"] = result.vector_sub_intent
-            logger.info(
-                "triage.classify room=%s action=%s intent=%s refined=%r",
-                state.get("room_id"),
-                update.get("action"),
-                result.intent.value,
-                (result.refined_query or "")[:40],
+            except Exception as exc:
+                logger.exception("triage_node(router fallback) 실행 오류")
+                return {
+                    "error": str(exc),
+                    "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+                    "action": ActionType.DIRECT_ANSWER,
+                    "node_path": ["triage_error"],
+                }
+
+        agent = self._triage or TriageAgent()
+        try:
+            result = await agent.classify(
+                state["message"],
+                history=state.get("history") or [],
+                prev_reasoning=state.get("prev_reasoning"),
             )
-            return update
+            logger.info(
+                "triage.classify room=%s action=%s oos=%s",
+                state.get("room_id"),
+                result.action.value,
+                result.out_of_scope_type,
+            )
+            return {
+                "action": result.action,
+                "out_of_scope_type": result.out_of_scope_type,
+                "user_rationale": sanitize_user_rationale(result.user_rationale),
+                "node_path": ["triage"],
+            }
         except Exception as exc:
             logger.exception("triage_node 실행 오류")
             return {
@@ -371,22 +366,20 @@ class GraphNodes:
             }
 
     async def router_node(self, state: AgentState) -> dict[str, Any]:
-        """RouterAgent.classify() 호출 — intent · refined_query 설정.
+        """RouterAgent.classify() 호출 — 검색 계획 수립.
 
-        재시도 여부는 state["retry_count"] > 0으로 판단한다.
-        이전 검색 결과 초기화와 retry_count 증가는 retry_prep_node에서 완료되므로
-        이 노드는 순수하게 의도 분류만 담당한다.
+        RETRIEVE action 으로 판정된 경우에만 실행된다(route_by_action → router_node).
+        intent / refined_query / post-filter / secondary_intent 를 설정한다.
 
-        refined_query는 Router가 산출하여 후속 cache_check_node가 정확한
-        키 기반 lookup을 수행할 수 있도록 한다. None이면 cache_check는
-        pass-through되며 VectorAgent가 자체 refine 체인으로 대체 산출한다.
+        refined_query 는 Router 가 산출하여 후속 cache_check_node 가 정확한 키 기반
+        lookup 을 수행할 수 있도록 한다. None 이면 cache_check 는 pass-through 되며
+        VectorAgent 가 자체 refine 체인으로 대체 산출한다.
 
-        forced_intent honor:
-            retry_prep_node 가 방향성 재시도로 intent 를 강제하면 LLM 재분류를
-            skip 하고 그 intent 를 그대로 반환한다. forced_intent 는 즉시 None 으로
-            소비(1회성)하여 무한 전환을 막는다. refined_query/post-filter 는 채우지
-            않으므로 cache_check 는 pass-through 되고(0건이던 원 질의 오hit 방지),
-            전환된 경로(VECTOR)가 자체 정제한다.
+        forced_intent honor (triage_node 에서 이관):
+            retry_prep_node 가 방향성 재시도로 intent 를 강제하면 LLM 재분류를 skip 하고
+            그 intent 를 그대로 반환한다. forced_intent 는 즉시 None 으로 소비(1회성)하여
+            무한 전환을 막는다. refined_query/post-filter 는 채우지 않으므로 cache_check 는
+            pass-through 되고(0건이던 원 질의 오hit 방지), 전환된 경로(VECTOR)가 자체 정제한다.
         """
         forced = state.get("forced_intent")
         if forced is not None:
@@ -396,6 +389,12 @@ class GraphNodes:
                 forced.value,
             )
             return {"intent": forced, "forced_intent": None, "node_path": ["router"]}
+
+        if self._router is None:
+            # RETRIEVE 로 판정됐으나 RouterAgent 미주입 — 안전망으로 FALLBACK 처리.
+            logger.warning("router_node — RouterAgent 미주입, intent=FALLBACK 처리")
+            return {"intent": IntentType.FALLBACK, "node_path": ["router"]}
+
         try:
             result = await self._router.classify(
                 state["message"],
@@ -417,11 +416,14 @@ class GraphNodes:
                 update["payment_type"] = result.payment_type
             if result.vector_sub_intent is not None:
                 update["vector_sub_intent"] = result.vector_sub_intent
+            if result.secondary_intent is not None:
+                update["secondary_intent"] = result.secondary_intent
             logger.info(
-                "router.classify room=%s intent=%s refined=%r "
+                "router.classify room=%s intent=%s secondary=%s refined=%r "
                 "max_class=%s area=%s status=%s",
                 state.get("room_id"),
                 result.intent.value,
+                result.secondary_intent.value if result.secondary_intent else None,
                 (result.refined_query or "")[:40],
                 result.max_class_name,
                 result.area_name,
@@ -444,11 +446,20 @@ class GraphNodes:
         """DIRECT_ANSWER action — DB 없이 LLM 직접 응답.
 
         기존 FALLBACK 안내문을 대체한다.
-        state["intent"] = FALLBACK으로 설정되어 AnswerAgent의 FALLBACK 분기를 탄다.
+        반환 dict에 intent=FALLBACK을 명시적으로 세팅하여 AnswerAgent가 FALLBACK
+        분기(대화형 프롬프트)를 타도록 보장한다. triage_node는 action만 채우고 intent를
+        세팅하지 않으므로, 여기서 보장해야 DIRECT_ANSWER 직접 진입과 EXPLAIN 폴백
+        (explain_node가 prev_reasoning 없을 때 이 노드로 위임) 두 경로 모두 카드형
+        페르소나 오적용 없이 일관되게 FALLBACK 답변을 생성한다.
+
+        intent를 답변 생성 *이전*에 주입해야 AnswerAgent.answer가 이를 읽으므로,
+        state를 갱신한 사본을 만들어 self._answer.answer에 전달한다.
         """
+        fallback_state = {**state, "intent": IntentType.FALLBACK}
         try:
-            new_state = await self._answer.answer(state)
+            new_state = await self._answer.answer(fallback_state)
             return {
+                "intent": IntentType.FALLBACK,
                 "answer": new_state.get("answer"),
                 "title": new_state.get("title"),
                 "service_cards": new_state.get("service_cards"),
@@ -505,7 +516,10 @@ class GraphNodes:
             }
         # domain_outside: 즉시 거절
         rationale = state.get("user_rationale")
-        answer = rationale or "죄송합니다, 해당 질문은 서울 공공서비스 예약 챗봇의 서비스 범위를 벗어납니다."
+        answer = (
+            rationale
+            or "죄송합니다, 해당 질문은 서울 공공서비스 예약 챗봇의 서비스 범위를 벗어납니다."
+        )
         logger.info("out_of_scope.domain_outside room=%s", state.get("room_id"))
         return {"answer": answer, "node_path": ["out_of_scope_domain_outside"]}
 
@@ -525,9 +539,7 @@ class GraphNodes:
 
         try:
             # prev_reasoning을 바탕으로 간결한 근거 설명 생성
-            answer = (
-                f"이전 답변에서의 판단 근거를 설명해드릴게요.\n\n{prev_reasoning}"
-            )
+            answer = f"이전 답변에서의 판단 근거를 설명해드릴게요.\n\n{prev_reasoning}"
             logger.info("explain_node room=%s", state.get("room_id"))
             return {"answer": answer, "node_path": ["explain_node"]}
         except Exception as exc:
@@ -1094,7 +1106,7 @@ class GraphNodes:
     def route_by_action(self, state: AgentState) -> str:
         """triage_node 직후 — action에 따라 다음 노드를 결정한다.
 
-        RETRIEVE → cache_check_node(기존 흐름)
+        RETRIEVE → router_node (검색 계획 수립 후 cache_check)
         DIRECT_ANSWER → direct_answer_node
         AMBIGUOUS → ambiguous_node
         OUT_OF_SCOPE/domain_outside → out_of_scope_node
@@ -1109,7 +1121,7 @@ class GraphNodes:
 
         action = state.get("action")
         if action == ActionType.RETRIEVE:
-            return "cache_check_node"
+            return "router_node"
         elif action == ActionType.DIRECT_ANSWER:
             return "direct_answer_node"
         elif action == ActionType.AMBIGUOUS:
@@ -1119,8 +1131,9 @@ class GraphNodes:
         elif action == ActionType.EXPLAIN:
             return "explain_node"
         else:
-            # fallback: action 미설정 또는 미지 값 → cache_check(기존 동작)
-            return "cache_check_node"
+            # fallback: action 미설정 또는 미지 값 → router_node(검색 계획 수립).
+            # RETRIEVE 경로와 동일하게 router 가 intent 를 채운 뒤 cache_check 로 이어진다.
+            return "router_node"
 
     def route_by_action_fanout(self, state: AgentState) -> list[str] | str:
         """RETRIEVE 경로 내 secondary_intent 팬아웃 분기.
@@ -1303,8 +1316,7 @@ class CacheCheckNode:
         if primary is None:
             return None
         parts = sorted(
-            {primary.value}
-            | ({secondary.value} if secondary is not None else set())
+            {primary.value} | ({secondary.value} if secondary is not None else set())
         )
         return ",".join(parts)
 
