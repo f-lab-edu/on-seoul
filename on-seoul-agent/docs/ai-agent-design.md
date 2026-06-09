@@ -174,7 +174,7 @@ LLM이 SQL을 직접 생성하지 않는다. 메시지에서 필터 파라미터
 
 **BM25 도입 배경**: ParadeDB Lindera의 `user_dictionary`는 SQL API 레벨에서 지원되지 않아 커스텀 사전 적용에 소스 빌드가 필요했다. 이를 우회하기 위해 Python 레이어(`tools/tokenizer.py`)에서 Kiwi(kiwipiepy)로 사전 토크나이징한 뒤 BM25 쿼리 조건을 구성한다. 도메인 용어(예: "따릉이", "한강공원")는 `DOMAIN_TOKENS` 화이트리스트로 보존된다.
 
-> **인덱스↔쿼리 토크나이저 불일치 주의**: DB BM25 인덱스(`scripts/ddl/service_embeddings.sql`)는 ParadeDB `korean_lindera`(KoDic) 토크나이저로 색인하는 반면, Python 쿼리 측은 Kiwi(kiwipiepy)로 토큰화한다. 두 토크나이저의 분절 결과가 다를 수 있어 recall에 영향을 줄 수 있다(설계상 둘을 KoDic으로 맞추려던 원안에서 구현이 분기됨). 정합 검토 필요 항목이다.
+> **토크나이저 2계층 구조**: 토크나이저는 역할이 다른 두 계층으로 나뉜다. ① **색인/매칭 계층** — DB BM25 인덱스(`scripts/ddl/service_embeddings.sql`)는 ParadeDB `korean_lindera`(KoDic)로 색인하고, `col @@@ 'token'` 평가 시 전달된 토큰도 동일 `korean_lindera`로 재분석해 매칭하므로 색인↔매칭 토크나이저는 일치한다. ② **쿼리 이해 계층** — Python(`tools/tokenizer.py`)은 Kiwi(kiwipiepy)로 의미 품사만 추출해 BM25에 보낼 검색어를 선별한다(노이즈 감소). 원안은 Python 측도 `lindera-py`였으나 PyPI 미등록으로 설치 불가하여 문맥 기반 분석이 더 정교한 Kiwi로 교체했다. 두 계층은 경쟁이 아니라 역할 분리다. 상세는 [`docs/hybrid-search-strategy.md`](hybrid-search-strategy.md#토크나이저-2계층-kiwi-쿼리-이해--korean_lindera-색인-매칭) 참조.
 
 ### 3-4. Analytics Agent — 집계 질의 처리
 

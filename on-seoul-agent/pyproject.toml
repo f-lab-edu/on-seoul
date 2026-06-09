@@ -31,11 +31,9 @@ dependencies = [
     "redis>=7.4.0",
     "sqlalchemy[asyncio]>=2.0.49",
     "uvicorn[standard]>=0.44.0",
-    # lindera-py: BM25 쿼리 토크나이징용 Rust 기반 한국어 형태소 분석기.
-    # PyPI에 소스 배포만 있어 Rust 빌드 환경이 필요하다.
-    # 프로덕션 Docker 이미지(Rust toolchain 포함)에서 별도 설치한다:
-    #   pip install lindera-py
-    # 미설치 환경에서는 llm/tokenizer.py가 공백 분리 폴백을 사용한다.
+    # 참고: BM25 쿼리 토크나이저는 kiwipiepy(위 의존성)를 사용한다.
+    # 원안인 lindera-py는 PyPI 미등록(설치 불가)이라 kiwipiepy로 교체했다.
+    # kiwipiepy 미설치 환경에서는 tools/tokenizer.py가 공백 분리 폴백을 사용한다.
 ]
 
 [dependency-groups]

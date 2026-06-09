@@ -83,8 +83,8 @@ _lindera_tokenize = _kiwi_tokenize
 def tokenize_query(text: str) -> list[str]:
     """사용자 쿼리를 형태소 단위로 분리한다.
 
-    1. Lindera KoDic으로 형태소 분석을 수행한다.
-    2. 입력 텍스트 전체가 DOMAIN_TOKENS에 등록된 경우, lindera가 해당 용어를
+    1. Kiwi(kiwipiepy)로 형태소 분석을 수행하고 의미 품사만 추출한다.
+    2. 입력 텍스트 전체가 DOMAIN_TOKENS에 등록된 경우, 분석기가 해당 용어를
        분리했더라도 원문을 결과 앞에 추가한다.
     3. 입력 텍스트 내에 DOMAIN_TOKENS 항목이 부분 포함된 경우, 해당 도메인
        토큰이 분석 결과에 포함되어 있지 않으면 앞에 추가한다. 이미 포함되어
