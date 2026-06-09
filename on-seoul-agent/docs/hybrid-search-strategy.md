@@ -157,50 +157,21 @@ LLM이 시설당 예상 질문을 생성한다(`HYQE_QUESTIONS_PER_SERVICE`, 현
 
 ---
 
-## 토크나이저: 2계층 (Kiwi 쿼리 이해 + korean_lindera 색인 매칭)
+## 토크나이저
 
-토크나이저는 서로 다른 역할을 하는 **두 계층**으로 나뉜다.
+BM25 토큰화는 두 지점에서 일어난다.
 
-| 계층 | 토크나이저 | 역할 |
-|---|---|---|
-| **색인 / 매칭** (DB) | ParadeDB `korean_lindera` (KoDic) | `service_embeddings` 색인 생성. `col @@@ 'token'` 평가 시 전달된 토큰도 **동일하게** `korean_lindera`로 재분석해 매칭한다 → 색인↔매칭 토크나이저는 항상 일치한다. |
-| **쿼리 이해 / 내용어 선별** (Python) | Kiwi(kiwipiepy) | 사용자 질의에서 **의미 품사(체언·용언 어간·외국어·숫자)만 추출**하고 조사·어미·특수문자를 버려 BM25에 보낼 검색어를 선별한다. |
+- **색인 / 매칭 (DB)**: ParadeDB `korean_lindera`(KoDic). `service_embeddings` 색인과 `col @@@ 'token'` 쿼리 평가가 동일 토크나이저를 사용하므로 색인↔매칭이 일치한다.
+- **쿼리 전처리 (Python, `tools/tokenizer.py`)**: Kiwi(kiwipiepy)로 사용자 질의에서 의미 품사(체언·용언 어간 등)만 추출해 BM25 검색어를 선별한다(조사·어미 제거로 노이즈 감소). 도메인 용어는 `DOMAIN_TOKENS`로 원형 보존. 미설치 시 공백 분리로 폴백하며, 고QPS에서는 `atokenize_query()`로 오프로드한다.
 
-> **왜 Python 측이 `lindera-py`가 아니라 Kiwi인가?**
-> 원안은 색인과 동일하게 Python 측도 `lindera-py`(KoDic)로 토크나이징하는 것이었으나, `lindera-py`가 **PyPI 미등록 패키지라 설치가 불가능**했다. 대신 `kiwipiepy`(≥0.23.1)를 채택했고, Kiwi는 문맥 기반 형태소 분석으로 분절이 더 정교하다. 애플리케이션 레벨에서 **의미 품사만 골라내(노이즈 감소)** BM25 검색어 품질을 높이는 역할에 더 적합하다.
->
-> Python(Kiwi)이 *어떤 형태소를 검색어로 쓸지* 고르는 단계이고, 실제 색인 매칭은 ParadeDB(`korean_lindera`)가 처리하므로, 두 토크나이저는 **경쟁 관계가 아니라 계층이 다르다**. 매칭 토크나이저(색인↔쿼리 평가)는 `korean_lindera`로 일관된다.
+### 동작 예시
 
-### 동작 방식 (Python/Kiwi 내용어 선별)
-
-- "강남 근처 무료 문화행사 알려줘" → "강남", "근처", "무료", "문화행사" (조사 "에서"·"알려줘" 등은 의미 품사가 아니거나 어간만 추출)
-- "한강공원 따릉이 대여소" → "한강공원", "따릉이", "대여소" (도메인 용어는 `DOMAIN_TOKENS`로 원형 보존)
+- "강남 근처 무료 문화행사 알려줘" → "강남", "근처", "무료", "문화행사"
+- "한강공원 따릉이 대여소" → "한강공원", "따릉이", "대여소"
 
 ### 한계와 대응
 
 `서울` 단독 검색 시 `서울시`, `서울역` 매칭이 불가능하다. 이는 BM25의 토큰 정확 매칭 특성상 정상 동작이며, 하이브리드 구조에서 Track A/B/C 시맨틱 채널이 보완한다.
-
-### Python 레이어 쿼리 토크나이징 (`tools/tokenizer.py`)
-
-Kiwi로 형태소를 분석해 의미 품사만 추출하고, `DOMAIN_TOKENS`(KoDic·일반 사전 미등록 도메인 용어)는 원형을 보존한다.
-
-```python
-# tools/tokenizer.py (요지)
-from kiwipiepy import Kiwi
-
-_kiwi = Kiwi()
-# BM25에 의미 있는 품사만: 체언(NNG/NNP/NNB/NR), 용언 어간(VV/VA/VX/XR), SL/SH/SN
-_CONTENT_POS = {"NNG", "NNP", "NNB", "NR", "VV", "VA", "VX", "XR", "SL", "SH", "SN"}
-DOMAIN_TOKENS = {"따릉이", "한강공원", "세빛섬", "노들섬", ...}  # 사전 미등록 도메인 용어
-
-def tokenize_query(text: str) -> list[str]:
-    tokens = [t.form for t in _kiwi.tokenize(text) if t.tag in _CONTENT_POS]
-    # text 내 DOMAIN_TOKENS가 분석 결과에 빠졌으면 원형을 앞에 보존
-    ...
-    return tokens
-```
-
-> kiwipiepy 미설치 환경에서는 `ImportError`를 포착해 공백·구두점 분리 폴백으로 임포트만 보장한다. `kiwipiepy.tokenize()`는 동기 C 확장이라 고QPS에서 `atokenize_query()`(`asyncio.to_thread` 오프로드)로 호출한다.
 
 토큰 목록은 BM25 쿼리 조건으로 변환하기 전에 특수문자·예약어를 제거한다.
 
