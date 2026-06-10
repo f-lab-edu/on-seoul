@@ -1,9 +1,18 @@
-"""Answer Cache — refined_query 기반 전역 캐싱.
+"""Answer Cache + Refine Cache — 전역 Redis 결과 캐싱.
 
-키:   answer_cache:{sha256(refined_query)[:16]}
-값:   JSON {payload, state}
-TTL:  정상 결과는 settings.answer_cache_ttl,
-      빈 검색 결과(vector/sql 모두 empty)는 settings.answer_cache_empty_ttl
+Answer Cache:
+  키:   answer_cache:{sha256(refined_query+filters+routes)[:32]}  (128-bit)
+  값:   JSON {payload, state}
+  TTL:  정상 결과는 settings.answer_cache_ttl,
+        빈 검색 결과(vector/sql 모두 empty)는 settings.answer_cache_empty_ttl
+  flush: /admin/cache/flush 대상(수집 시 데이터 무효화).
+
+Refine Cache (0-3-3):
+  키:   refine_cache:{version}:{sha256(norm_query[+history_hash])[:32]}  (128-bit)
+  값:   JSON {intent, refined_query, max_class_name, area_name, service_status,
+              payment_type, vector_sub_intent, secondary_intent}
+  TTL:  settings.refine_cache_ttl (장기 — 데이터 비의존).
+  flush: 비대상(데이터 비의존이라 수집 무효화 불필요, 네임스페이스도 분리됨).
 
 Redis 장애 시 fail-open. MAP/FALLBACK 및 error는 호출 측에서 가드한다.
 """
@@ -11,6 +20,7 @@ Redis 장애 시 fail-open. MAP/FALLBACK 및 error는 호출 측에서 가드한
 import hashlib
 import json
 import logging
+import re
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -20,6 +30,18 @@ from core.config import settings
 logger = logging.getLogger(__name__)
 
 _KEY_PREFIX = "answer_cache:"
+_REFINE_KEY_PREFIX = "refine_cache:"
+# refine 캐시 키 버전. 라우터 프롬프트/모델/분류 화이트리스트를 무중단 핫 변경하면
+# 구 매핑이 장수명 TTL(refine_cache_ttl) 동안 잔존하는데, flush_answer_cache 는
+# answer_cache:* 만 비우므로 refine 은 무효화되지 않는다. 그런 변경 시 이 상수만
+# bump 하면 키 네임스페이스가 갈라져 기존 refine 캐시 전체가 즉시 무효화된다.
+# (answer 캐시는 데이터 의존 → flush 로 무효화하므로 버전 prefix 불필요.)
+_REFINE_CACHE_VERSION = "v1"
+# digest 길이(hex). 128-bit(32 hex) — 동시 키 규모 O(1000)에서 충돌 확률 무시 가능하며
+# 64-bit 대비 생일 역설 충돌 여유 대폭 확대. answer/refine 양 캐시 키에 공통 적용.
+_DIGEST_HEX_LEN = 32
+
+_WS_RE = re.compile(r"\s+")
 
 
 def _cache_key(
@@ -50,10 +72,70 @@ def _cache_key(
         f"routes={routes or ''}",
     ]
     composite = "|".join(parts)
-    # 64-bit(16 hex) 잘라내기 — 동시 키 규모 O(1000)에서 충돌 확률 무시 가능.
-    # 규모 확장 시 32자(128-bit)로 늘릴 것.
-    digest = hashlib.sha256(composite.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(composite.encode("utf-8")).hexdigest()[:_DIGEST_HEX_LEN]
     return f"{_KEY_PREFIX}{digest}"
+
+
+def _normalize_query(query: str) -> str:
+    """raw query 정규화 — strip + 공백 collapse + 소문자. (과한 정규화 지양.)"""
+    return _WS_RE.sub(" ", query.strip()).lower()
+
+
+def _refine_cache_key(query: str, history: list[dict[str, str]] | None) -> str:
+    """refine 캐시 키 — 정규화 raw query (+ history 있으면 history 해시).
+
+    refine 출력 = f(raw_query, history) (router_node 가 history 를 프롬프트에 합성).
+    history 가 없으면 키에서 history 부분을 생략 → first-turn 사용자 간 공유(적중 최대).
+    """
+    norm = _normalize_query(query)
+    if history:
+        # role+content 를 순서 보존 직렬화 후 해시 — 동일 history 는 동일 해시.
+        hist_repr = json.dumps(history, ensure_ascii=False, sort_keys=False)
+        hist_hash = hashlib.sha256(hist_repr.encode("utf-8")).hexdigest()[
+            :_DIGEST_HEX_LEN
+        ]
+        composite = f"{norm}|h={hist_hash}"
+    else:
+        composite = norm
+    digest = hashlib.sha256(composite.encode("utf-8")).hexdigest()[:_DIGEST_HEX_LEN]
+    return f"{_REFINE_KEY_PREFIX}{_REFINE_CACHE_VERSION}:{digest}"
+
+
+async def get_cached_refine(
+    query: str,
+    history: list[dict[str, str]] | None,
+    redis: aioredis.Redis,
+) -> dict | None:
+    """캐시된 refine 출력(dict)을 반환. miss/장애 시 None."""
+    if not settings.refine_cache_enabled:
+        return None
+    try:
+        raw = await redis.get(_refine_cache_key(query, history))
+        if raw is None:
+            return None
+        return json.loads(raw)
+    except Exception:
+        logger.warning("refine cache GET 오류 — miss 처리", exc_info=True)
+        return None
+
+
+async def set_cached_refine(
+    query: str,
+    history: list[dict[str, str]] | None,
+    value: dict[str, Any],
+    redis: aioredis.Redis,
+) -> None:
+    """refine 출력(dict)을 저장. 장애 시 무시. 데이터 비의존이라 장기 TTL."""
+    if not settings.refine_cache_enabled:
+        return
+    try:
+        await redis.set(
+            _refine_cache_key(query, history),
+            json.dumps(value, ensure_ascii=False, default=str),
+            ex=settings.refine_cache_ttl,
+        )
+    except Exception:
+        logger.warning("refine cache SET 오류 — 캐싱 건너뜀", exc_info=True)
 
 
 def _is_empty_state(state: dict[str, Any]) -> bool:

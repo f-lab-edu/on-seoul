@@ -99,6 +99,131 @@ class TestCacheKey:
         )
 
 
+class TestDigestLength:
+    def test_answer_cache_key_digest_is_128bit(self):
+        """digest는 128-bit(32 hex)여야 한다 (0-3-4)."""
+        from core.cache import _KEY_PREFIX, _cache_key
+
+        digest = _cache_key("테니스장").removeprefix(_KEY_PREFIX)
+        assert len(digest) == 32
+
+    def test_refine_cache_key_digest_is_128bit(self):
+        from core.cache import (
+            _REFINE_CACHE_VERSION,
+            _REFINE_KEY_PREFIX,
+            _refine_cache_key,
+        )
+
+        prefix = f"{_REFINE_KEY_PREFIX}{_REFINE_CACHE_VERSION}:"
+        digest = _refine_cache_key("테니스장", None).removeprefix(prefix)
+        assert len(digest) == 32
+
+    def test_refine_cache_key_includes_version(self):
+        """버전 prefix 포함 — bump 시 구 매핑 즉시 무효화(네임스페이스 분리)."""
+        from core.cache import (
+            _REFINE_CACHE_VERSION,
+            _REFINE_KEY_PREFIX,
+            _refine_cache_key,
+        )
+
+        key = _refine_cache_key("테니스장", None)
+        assert key.startswith(f"{_REFINE_KEY_PREFIX}{_REFINE_CACHE_VERSION}:")
+
+
+class TestRefineCacheKey:
+    def test_strips_collapses_lowercases(self):
+        from core.cache import _refine_cache_key
+
+        assert _refine_cache_key("  서울   테니스장 ", None) == _refine_cache_key(
+            "서울 테니스장", None
+        )
+
+    def test_no_history_shared_across_users(self):
+        """history 없으면 동일 raw query는 같은 키 — first-turn 사용자 간 공유."""
+        from core.cache import _refine_cache_key
+
+        assert _refine_cache_key("테니스장", None) == _refine_cache_key("테니스장", [])
+
+    def test_history_present_includes_hash_and_differs(self):
+        """history가 있으면 키가 history-없는 키와 달라진다(미공유)."""
+        from core.cache import _refine_cache_key
+
+        no_hist = _refine_cache_key("성동구는?", None)
+        with_hist = _refine_cache_key(
+            "성동구는?",
+            [{"role": "user", "content": "테니스장 보여줘"}],
+        )
+        assert no_hist != with_hist
+
+    def test_different_history_differs(self):
+        from core.cache import _refine_cache_key
+
+        h1 = _refine_cache_key("성동구는?", [{"role": "user", "content": "테니스장"}])
+        h2 = _refine_cache_key("성동구는?", [{"role": "user", "content": "수영장"}])
+        assert h1 != h2
+
+    def test_namespace_separated_from_answer_cache(self):
+        from core.cache import _KEY_PREFIX, _REFINE_KEY_PREFIX
+
+        assert _REFINE_KEY_PREFIX != _KEY_PREFIX
+
+
+class TestGetCachedRefine:
+    async def test_miss_returns_none(self, mock_redis):
+        mock_redis.get.return_value = None
+        from core.cache import get_cached_refine
+
+        assert await get_cached_refine("테니스장", None, mock_redis) is None
+
+    async def test_hit_returns_dict(self, mock_redis):
+        stored = {"intent": "VECTOR_SEARCH", "refined_query": "서울 테니스장"}
+        mock_redis.get.return_value = json.dumps(stored)
+        from core.cache import get_cached_refine
+
+        assert await get_cached_refine("테니스장", None, mock_redis) == stored
+
+    async def test_disabled_skips_redis(self, mock_redis):
+        from core.cache import get_cached_refine
+        from core.config import settings
+
+        with patch.object(settings, "refine_cache_enabled", False):
+            assert await get_cached_refine("q", None, mock_redis) is None
+        mock_redis.get.assert_not_called()
+
+    async def test_redis_error_returns_none(self, mock_redis):
+        mock_redis.get.side_effect = RuntimeError("redis down")
+        from core.cache import get_cached_refine
+
+        assert await get_cached_refine("q", None, mock_redis) is None
+
+
+class TestSetCachedRefine:
+    async def test_set_stores_with_refine_ttl(self, mock_redis):
+        from core.cache import set_cached_refine
+        from core.config import settings
+
+        payload = {"intent": "VECTOR_SEARCH", "refined_query": "서울 테니스장"}
+        await set_cached_refine("테니스장", None, payload, mock_redis)
+        mock_redis.set.assert_called_once()
+        assert mock_redis.set.call_args.kwargs["ex"] == settings.refine_cache_ttl
+        body = json.loads(mock_redis.set.call_args.args[1])
+        assert body == payload
+
+    async def test_disabled_skips_set(self, mock_redis):
+        from core.cache import set_cached_refine
+        from core.config import settings
+
+        with patch.object(settings, "refine_cache_enabled", False):
+            await set_cached_refine("q", None, {"intent": "X"}, mock_redis)
+        mock_redis.set.assert_not_called()
+
+    async def test_redis_error_does_not_raise(self, mock_redis):
+        mock_redis.set.side_effect = RuntimeError("redis down")
+        from core.cache import set_cached_refine
+
+        await set_cached_refine("q", None, {"intent": "X"}, mock_redis)  # no raise
+
+
 class TestGetCachedAnswer:
     async def test_miss_returns_none(self, mock_redis):
         mock_redis.get.return_value = None
@@ -306,8 +431,14 @@ class TestFlush:
         deleted = await flush_answer_cache(mock_redis)
         assert deleted == 0
 
-    async def test_flush_logs_structured_event(self, mock_redis, caplog):
-        """flush 완료 시 cache.flush deleted=N 구조화 로그가 한 번 기록된다."""
+    async def test_flush_logs_structured_event(self, mock_redis):
+        """flush 완료 시 cache.flush deleted=N 구조화 로그가 한 번 기록된다.
+
+        실행 순서 독립 결정성: caplog/루트 핸들러에 의존하지 않고 전용 핸들러를
+        core.cache 로거에 직접 부착하고 propagate=False 로 고정한다. 이렇게 하면
+        setup_logging() 의 전역 propagate 상태(다른 테스트가 호출했는지 여부)와
+        무관하게 정확히 한 번만 캡처되어, 격리/전체 실행 결과가 항상 일치한다.
+        """
         import logging
 
         async def _scan_iter(match):
@@ -317,18 +448,28 @@ class TestFlush:
         mock_redis.scan_iter = _scan_iter
         from core.cache import flush_answer_cache
 
-        # setup_logging()이 core.* propagate=False를 설정할 수 있으므로
-        # caplog.handler를 직접 core.cache 로거에 연결한다.
+        records: list[logging.LogRecord] = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record)
+
         cache_logger = logging.getLogger("core.cache")
+        handler = _Capture(level=logging.INFO)
         prev_propagate = cache_logger.propagate
-        cache_logger.addHandler(caplog.handler)
-        cache_logger.propagate = True
+        prev_level = cache_logger.level
+        cache_logger.addHandler(handler)
+        # propagate=False 로 고정 → 루트(또는 pytest 캡처 핸들러)로 전파되지 않아
+        # 중복 캡처가 구조적으로 불가능. 전역 logging 상태와 독립적.
+        cache_logger.propagate = False
+        cache_logger.setLevel(logging.INFO)
         try:
-            with caplog.at_level(logging.INFO, logger="core.cache"):
-                await flush_answer_cache(mock_redis)
+            await flush_answer_cache(mock_redis)
         finally:
-            cache_logger.removeHandler(caplog.handler)
+            cache_logger.removeHandler(handler)
             cache_logger.propagate = prev_propagate
-        flush_logs = [r for r in caplog.records if "cache.flush" in r.getMessage()]
+            cache_logger.setLevel(prev_level)
+
+        flush_logs = [r for r in records if "cache.flush" in r.getMessage()]
         assert len(flush_logs) == 1
         assert "deleted=2" in flush_logs[0].getMessage()

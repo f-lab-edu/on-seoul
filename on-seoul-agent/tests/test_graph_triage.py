@@ -641,6 +641,161 @@ class TestRouterNodeStatePropagation:
         structured.ainvoke.assert_not_called()
 
 
+class TestRouterNodeRefineCache:
+    """router_node refine 캐싱 (0-3-3) — LLM 호출 skip 검증."""
+
+    def _nodes(self, router):
+        return GraphNodes(
+            triage=make_triage(ActionType.RETRIEVE),
+            router=router,
+            answer_agent=_answer_agent(),
+        )
+
+    async def test_hit_skips_llm_and_restores_state(self):
+        """refine 캐시 hit 시 LLM 미호출 + 저장값으로 update 복원."""
+        router = make_router(IntentType.SQL_SEARCH)
+        nodes = self._nodes(router)
+        structured = router._llm.with_structured_output.return_value
+        cached = {
+            "intent": "VECTOR_SEARCH",
+            "refined_query": "서울 테니스장",
+            "max_class_name": "체육시설",
+            "area_name": None,
+            "service_status": None,
+            "payment_type": None,
+            "vector_sub_intent": "identification",
+            "secondary_intent": None,
+        }
+        with (
+            patch_node_sessions(),
+            patch(
+                "agents.nodes.get_cached_refine",
+                AsyncMock(return_value=cached),
+            ),
+            patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
+        ):
+            update = await nodes.router_node(_state(message="테니스장"))
+
+        structured.ainvoke.assert_not_called()
+        mock_set.assert_not_called()
+        assert update["intent"] == IntentType.VECTOR_SEARCH
+        assert update["refined_query"] == "서울 테니스장"
+        assert update["max_class_name"] == "체육시설"
+        assert update["vector_sub_intent"] == "identification"
+        assert "refine_cache_hit" in update["node_path"]
+
+    async def test_miss_calls_llm_and_sets_cache(self):
+        """refine 캐시 miss 시 LLM 호출 후 set 으로 채운다."""
+        router = make_router(
+            IntentType.SQL_SEARCH,
+            refined_query="마포구 풋살장",
+            max_class_name="체육시설",
+        )
+        nodes = self._nodes(router)
+        structured = router._llm.with_structured_output.return_value
+        with (
+            patch_node_sessions(),
+            patch(
+                "agents.nodes.get_cached_refine",
+                AsyncMock(return_value=None),
+            ),
+            patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
+        ):
+            update = await nodes.router_node(_state(message="마포구 풋살장"))
+
+        structured.ainvoke.assert_called_once()
+        mock_set.assert_called_once()
+        # 저장값에 intent.value 직렬화 포함
+        stored = mock_set.call_args.args[2]
+        assert stored["intent"] == "SQL_SEARCH"
+        assert update["intent"] == IntentType.SQL_SEARCH
+
+    async def test_forced_intent_skips_cache(self):
+        """forced_intent 경로는 refine 캐시를 조회/저장하지 않는다."""
+        router = make_router(IntentType.SQL_SEARCH)
+        nodes = self._nodes(router)
+        with (
+            patch_node_sessions(),
+            patch("agents.nodes.get_cached_refine", AsyncMock()) as mock_get,
+            patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
+        ):
+            update = await nodes.router_node(
+                _state(forced_intent=IntentType.VECTOR_SEARCH)
+            )
+        mock_get.assert_not_called()
+        mock_set.assert_not_called()
+        assert update["intent"] == IntentType.VECTOR_SEARCH
+
+    async def test_llm_error_does_not_set_cache(self):
+        """classify 예외 시 캐시 SET 하지 않는다(에러 처리 유지)."""
+        router = make_router(IntentType.SQL_SEARCH)
+        nodes = self._nodes(router)
+        structured = router._llm.with_structured_output.return_value
+        structured.ainvoke = AsyncMock(side_effect=RuntimeError("llm down"))
+        with (
+            patch_node_sessions(),
+            patch(
+                "agents.nodes.get_cached_refine",
+                AsyncMock(return_value=None),
+            ),
+            patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
+        ):
+            update = await nodes.router_node(_state())
+        mock_set.assert_not_called()
+        assert "router_error" in update["node_path"]
+
+    def test_serialize_restore_roundtrip_secondary_intent(self):
+        """serialize→restore 대칭: secondary_intent(IntentType) round-trip 보존.
+
+        _serialize_refine 은 IntentType→.value(str), _restore_refine 은 .value→IntentType
+        로 복원한다. 캐시 SET 시 저장된 secondary_intent 가 HIT 복원 시 동일 enum 으로
+        돌아오는지(데이터 무손실) 검증한다. 직접 round-trip 으로 secondary 분기를 단언.
+        """
+        from agents.nodes import _restore_refine, _serialize_refine
+
+        update = {
+            "intent": IntentType.SQL_SEARCH,
+            "refined_query": "마포구 풋살장",
+            "max_class_name": "체육시설",
+            "secondary_intent": IntentType.VECTOR_SEARCH,
+        }
+        stored = _serialize_refine(update)
+        # JSON 직렬화 가능한 str 로 저장
+        assert stored["intent"] == "SQL_SEARCH"
+        assert stored["secondary_intent"] == "VECTOR_SEARCH"
+
+        restored = _restore_refine(stored)
+        assert restored["intent"] is IntentType.SQL_SEARCH
+        assert restored["secondary_intent"] is IntentType.VECTOR_SEARCH
+        assert restored["refined_query"] == "마포구 풋살장"
+        assert restored["max_class_name"] == "체육시설"
+
+    def test_serialize_restore_omits_none_fields(self):
+        """None 필드는 직렬화/복원 모두에서 생략(retry 경로 초기화 보존, 대칭)."""
+        from agents.nodes import _restore_refine, _serialize_refine
+
+        update = {"intent": IntentType.VECTOR_SEARCH}  # 선택 필드 전부 미존재
+        stored = _serialize_refine(update)
+        assert "refined_query" not in stored
+        assert "secondary_intent" not in stored
+
+        restored = _restore_refine(stored)
+        assert restored == {"intent": IntentType.VECTOR_SEARCH}
+
+    def test_restore_skips_explicit_none_values(self):
+        """캐시 dict 에 명시적 None 이 있어도 update 에 키를 넣지 않는다(line 215-217)."""
+        from agents.nodes import _restore_refine
+
+        cached = {
+            "intent": "SQL_SEARCH",
+            "refined_query": None,
+            "area_name": None,
+            "secondary_intent": None,
+        }
+        restored = _restore_refine(cached)
+        assert restored == {"intent": IntentType.SQL_SEARCH}
+
+
 # ---------------------------------------------------------------------------
 # 7. stream() 이벤트 - W2 action 경로
 # ---------------------------------------------------------------------------

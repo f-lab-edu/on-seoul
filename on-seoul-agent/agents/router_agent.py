@@ -219,13 +219,19 @@ class RouterAgent:
             history: 직전 N턴 대화 이력(과거→최신). 기본값 None.
                 비어 있으면 system prompt에 컨텍스트 섹션을 추가하지 않는다.
         """
+        # OpenAI 자동 프롬프트 캐싱(1024토큰↑ 프리픽스): 정적 ROUTER_SYSTEM +
+        # ROUTER_FEW_SHOT 를 프롬프트 맨 앞 고정 프리픽스로 두고, 동적 history/message 는
+        # 그 *뒤*에 붙인다. history 를 SystemMessage 에 합성하면 정적 few-shot 블록 앞에
+        # 동적 텍스트가 끼어 프리픽스가 깨지므로, history 는 별도 SystemMessage 로 분리해
+        # few-shot 이후·user 메시지 이전에 위치시킨다.
         context_block = self._build_context_block(history)
-        system_text = ROUTER_SYSTEM + (f"\n\n{context_block}" if context_block else "")
-        messages = [
-            SystemMessage(content=system_text),
+        messages: list = [
+            SystemMessage(content=ROUTER_SYSTEM),
             *ROUTER_FEW_SHOT.format_messages(),
-            HumanMessage(content=f"사용자 메시지: {message}"),
         ]
+        if context_block:
+            messages.append(SystemMessage(content=context_block))
+        messages.append(HumanMessage(content=f"사용자 메시지: {message}"))
         structured = self._llm.with_structured_output(_IntentOutput)
         result: _IntentOutput = await structured.ainvoke(messages)
         return result

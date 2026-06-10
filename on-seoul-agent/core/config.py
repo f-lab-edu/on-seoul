@@ -31,6 +31,17 @@ class Settings(BaseSettings):
     answer_cache_empty_ttl: int = 300  # 빈 결과 캐시 5분
     answer_cache_eligible_intents: tuple[str, ...] = ("SQL_SEARCH", "VECTOR_SEARCH")
 
+    # Refine Cache (0-3-3) — router_node LLM(검색 계획 수립) 결과 캐시.
+    # 키 = 정규화 raw query (+ history 해시). history 없으면 first-turn 사용자 간 공유.
+    # answer_cache 와 별개 네임스페이스(refine_cache:).
+    refine_cache_enabled: bool = True
+    # refine 출력(query→intent/필터 매핑)은 **데이터 비의존**이다: 예약 데이터가 바뀌어도
+    # 동일 질의의 검색 계획은 불변. 따라서 answer_cache_ttl(15분, 데이터 의존)보다 길게 둔다.
+    # 6시간 — 프롬프트/모델 변경 시 자연 만료로 점진 반영되도록 무한이 아닌 장기값.
+    refine_cache_ttl: int = 21600
+    # flush 비대상: 데이터 비의존이라 수집 무효화(/admin/cache/flush, answer_cache 한정)와
+    # 무관하다. refine_cache:* 는 flush_answer_cache 스캔 패턴(answer_cache:*)에 걸리지 않는다.
+
     # Admin
     admin_internal_token: str = ""  # /admin/* 보호용 공유 토큰
 

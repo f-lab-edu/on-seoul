@@ -39,7 +39,12 @@ from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
-from core.cache import get_cached_answer, set_cached_answer
+from core.cache import (
+    get_cached_answer,
+    get_cached_refine,
+    set_cached_answer,
+    set_cached_refine,
+)
 from core.config import settings
 from core.database import ai_session_ctx, data_session_ctx
 from core.exceptions import RateLimitException
@@ -152,6 +157,73 @@ _ANALYTICS_DROP_ORDER: tuple[str, ...] = (
 # MAP 0건 완화 — 반경 확장(1회). 기본 1000m → 3000m.
 _MAP_RETRY_RADIUS_M: int = 3000
 
+# refine 캐시 직렬화 필드 — RouterAgent 출력 전체(IntentType 은 .value 로 저장).
+_REFINE_OPTIONAL_FIELDS: tuple[str, ...] = (
+    "refined_query",
+    "max_class_name",
+    "area_name",
+    "service_status",
+    "payment_type",
+    "vector_sub_intent",
+)
+
+
+def _build_router_update(result: Any) -> dict[str, Any]:
+    """RouterAgent.classify 결과 → router_node update dict.
+
+    None 필드는 포함하지 않아 retry 경로에서 초기화된 값을 덮어쓰지 않는다.
+    intent 는 항상 포함하고 node_path 는 호출 측이 설정한다.
+    """
+    update: dict[str, Any] = {"intent": result.intent}
+    if result.refined_query is not None:
+        update["refined_query"] = result.refined_query
+    if result.max_class_name is not None:
+        update["max_class_name"] = result.max_class_name
+    if result.area_name is not None:
+        update["area_name"] = result.area_name
+    if result.service_status is not None:
+        update["service_status"] = result.service_status
+    if result.payment_type is not None:
+        update["payment_type"] = result.payment_type
+    if result.vector_sub_intent is not None:
+        update["vector_sub_intent"] = result.vector_sub_intent
+    if result.secondary_intent is not None:
+        update["secondary_intent"] = result.secondary_intent
+    return update
+
+
+def _serialize_refine(update: dict[str, Any]) -> dict[str, Any]:
+    """router_node update → refine 캐시 저장 dict (IntentType → .value).
+
+    intent 는 _IntentOutput.intent 가 required 이므로 구조적으로 항상 non-None.
+    (_restore_refine 의 IntentType(cached["intent"]) 와 대칭.)
+    """
+    intent: IntentType = update["intent"]
+    stored: dict[str, Any] = {"intent": intent.value}
+    for field in _REFINE_OPTIONAL_FIELDS:
+        if field in update:
+            stored[field] = update[field]
+    secondary = update.get("secondary_intent")
+    if secondary is not None:
+        stored["secondary_intent"] = secondary.value
+    return stored
+
+
+def _restore_refine(cached: dict[str, Any]) -> dict[str, Any]:
+    """refine 캐시 dict → router_node update dict (.value → IntentType).
+
+    저장값이 None 인 필드는 update 에서 생략한다(retry 경로 초기화 보존, 직렬화 대칭).
+    """
+    update: dict[str, Any] = {"intent": IntentType(cached["intent"])}
+    for field in _REFINE_OPTIONAL_FIELDS:
+        val = cached.get(field)
+        if val is not None:
+            update[field] = val
+    secondary = cached.get("secondary_intent")
+    if secondary is not None:
+        update["secondary_intent"] = IntentType(secondary)
+    return update
+
 
 class GraphNodes:
     """AgentGraph 노드·엣지 구현 (무상태).
@@ -193,6 +265,7 @@ class GraphNodes:
         self._answer = answer_agent or AnswerAgent()
         self._analytics = analytics_agent or AnalyticsAgent()
         self._hydration = hydration or HydrationNode()
+        self._redis = redis  # refine 캐시(router_node) 공유 — answer 캐시 노드와 동일 클라이언트
         self._cache_check = CacheCheckNode(redis=redis)
         self._cache_write = CacheWriteNode(redis=redis)
 
@@ -395,29 +468,31 @@ class GraphNodes:
             logger.warning("router_node — RouterAgent 미주입, intent=FALLBACK 처리")
             return {"intent": IntentType.FALLBACK, "node_path": ["router"]}
 
+        # (0-3-3) refine 캐시 — raw query(+history) 기준 LLM(검색 계획) 결과 공유.
+        # forced_intent 분기 이후, classify 이전에 GET. 적중 시 LLM skip.
+        message = state["message"]
+        history = state.get("history") or []
+        redis = self._redis
+        cached = await get_cached_refine(message, history, redis)
+        if cached is not None:
+            logger.info(
+                "router.refine_cache_hit room=%s intent=%s",
+                state.get("room_id"),
+                cached.get("intent"),
+            )
+            update = _restore_refine(cached)
+            update["node_path"] = ["router", "refine_cache_hit"]
+            return update
+
         try:
             result = await self._router.classify(
-                state["message"],
-                history=state.get("history") or [],
+                message,
+                history=history,
             )
-            update: dict[str, Any] = {"intent": result.intent, "node_path": ["router"]}
-            if result.refined_query is not None:
-                update["refined_query"] = result.refined_query
-            # post-filter는 추출 성공한 필드만 state로 전파한다.
-            # None은 keys()에 포함시키지 않아 retry 경로에서 초기화된 값을
-            # 무의미하게 덮어쓰지 않도록 한다.
-            if result.max_class_name is not None:
-                update["max_class_name"] = result.max_class_name
-            if result.area_name is not None:
-                update["area_name"] = result.area_name
-            if result.service_status is not None:
-                update["service_status"] = result.service_status
-            if result.payment_type is not None:
-                update["payment_type"] = result.payment_type
-            if result.vector_sub_intent is not None:
-                update["vector_sub_intent"] = result.vector_sub_intent
-            if result.secondary_intent is not None:
-                update["secondary_intent"] = result.secondary_intent
+            update = _build_router_update(result)
+            update["node_path"] = ["router"]
+            # miss → 정상 update 구성 후 SET. classify 예외 시 SET 안 함(아래 except).
+            await set_cached_refine(message, history, _serialize_refine(update), redis)
             logger.info(
                 "router.classify room=%s intent=%s secondary=%s refined=%r "
                 "max_class=%s area=%s status=%s",
