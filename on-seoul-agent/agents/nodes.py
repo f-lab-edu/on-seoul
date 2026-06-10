@@ -40,8 +40,12 @@ from agents.sql_agent import SqlAgent
 from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
 from core.cache import (
-    get_cached_answer,
+    acquire_answer_lock,
+    build_answer_cache_key,
+    get_cached_answer_by_key,
     get_cached_refine,
+    poll_for_answer,
+    release_answer_lock,
     set_cached_answer,
     set_cached_refine,
 )
@@ -1424,15 +1428,51 @@ class CacheCheckNode:
         payment_type = state.get("payment_type")
         routes = self._build_routes_key(intent, state.get("secondary_intent"))
 
-        envelope = await get_cached_answer(
+        key = build_answer_cache_key(
             refined,
-            self._redis,
             max_class_name=max_class_name,
             area_name=area_name,
             service_status=service_status,
             payment_type=payment_type,
             routes=routes,
         )
+
+        envelope = await get_cached_answer_by_key(key, self._redis)
+        if envelope is None:
+            # singleflight: 첫 miss 호출자만 LLM 실행, 나머지는 결과 대기.
+            acquired = await acquire_answer_lock(
+                key, self._redis, ttl=settings.answer_cache_lock_ttl
+            )
+            if not acquired:
+                logger.info(
+                    "cache.singleflight.wait room=%s intent=%s refined=%r",
+                    state.get("room_id"),
+                    intent.value,
+                    refined[:40],
+                )
+                envelope = await poll_for_answer(
+                    key,
+                    self._redis,
+                    retries=settings.answer_cache_lock_poll_retries,
+                    interval=settings.answer_cache_lock_poll_interval,
+                )
+                if envelope is not None:
+                    logger.info(
+                        "cache.singleflight.hit room=%s intent=%s refined=%r",
+                        state.get("room_id"),
+                        intent.value,
+                        refined[:40],
+                    )
+                else:
+                    # fail-open: poll 타임아웃 → 각자 LLM 실행
+                    logger.info(
+                        "cache.singleflight.timeout room=%s intent=%s refined=%r",
+                        state.get("room_id"),
+                        intent.value,
+                        refined[:40],
+                    )
+                    return {"cache_hit": False}
+
         if envelope is None:
             logger.info(
                 "cache.miss room=%s intent=%s refined=%r",
@@ -1503,6 +1543,15 @@ class CacheWriteNode:
         payment_type = state.get("payment_type")
         routes = CacheCheckNode._build_routes_key(intent, state.get("secondary_intent"))
 
+        key = build_answer_cache_key(
+            refined,
+            max_class_name=max_class_name,
+            area_name=area_name,
+            service_status=service_status,
+            payment_type=payment_type,
+            routes=routes,
+        )
+
         payload = {
             "message_id": state.get("message_id"),
             "answer": answer,
@@ -1535,6 +1584,8 @@ class CacheWriteNode:
             payment_type=payment_type,
             routes=routes,
         )
+        # singleflight 락 조기 해제 — waiter가 poll 주기를 기다리지 않고 즉시 hit.
+        await release_answer_lock(key, self._redis)
         empty = not snap["vector_results"] and not snap["sql_results"]
         logger.info("cache.write intent=%s empty=%s", intent.value, empty)
         return {}

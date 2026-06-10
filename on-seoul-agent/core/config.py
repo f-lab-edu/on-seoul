@@ -31,6 +31,17 @@ class Settings(BaseSettings):
     answer_cache_empty_ttl: int = 300  # 빈 결과 캐시 5분
     answer_cache_eligible_intents: tuple[str, ...] = ("SQL_SEARCH", "VECTOR_SEARCH")
 
+    # Answer Cache Singleflight (0-3-2) — flush 후 thundering herd 방지.
+    # 동시 cold miss 시 첫 호출자만 LLM을 실행하고 나머지는 결과를 기다린다.
+    # Redis 장애 시 fail-open: 각자 LLM 호출(last-write-wins, 정합성 유지).
+    answer_cache_singleflight_enabled: bool = True
+    # lock TTL — LLM 응답 여유(일반 ~3s, 최대 ~10s + 마진). 만료되면 waiter가 fail-open.
+    answer_cache_lock_ttl: int = 30
+    # waiter 재시도: retries × interval 초 동안 캐시 키를 주기 재조회.
+    # 6 × 0.5 = 3s: 정상 LLM 응답 내 결과를 받아 hit으로 전환.
+    answer_cache_lock_poll_retries: int = 6
+    answer_cache_lock_poll_interval: float = 0.5
+
     # Refine Cache (0-3-3) — router_node LLM(검색 계획 수립) 결과 캐시.
     # 키 = 정규화 raw query (+ history 해시). history 없으면 first-turn 사용자 간 공유.
     # answer_cache 와 별개 네임스페이스(refine_cache:).

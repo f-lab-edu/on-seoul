@@ -134,7 +134,7 @@ class TestCacheCheckNodeHydratedServicesRestore:
             },
         }
         with patch(
-            "agents.nodes.get_cached_answer",
+            "agents.nodes.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())
@@ -155,7 +155,7 @@ class TestCacheCheckNodeHydratedServicesRestore:
             },
         }
         with patch(
-            "agents.nodes.get_cached_answer",
+            "agents.nodes.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())

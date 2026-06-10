@@ -14,9 +14,17 @@ Refine Cache (0-3-3):
   TTL:  settings.refine_cache_ttl (장기 — 데이터 비의존).
   flush: 비대상(데이터 비의존이라 수집 무효화 불필요, 네임스페이스도 분리됨).
 
+Singleflight (0-3-2):
+  락 키: answer_cache:{digest}:lock  (캐시 키 + ":lock" 접미사)
+  획득:  SET NX EX lock_ttl — True면 이 호출자가 락 보유, False면 대기.
+  대기:  miss + 락 미획득 → poll_for_answer()로 캐시 키를 retries×interval 초 주기 재조회.
+  해제:  CacheWriteNode가 set_cached_answer 완료 후 DEL → 대기자 즉시 hit.
+  fail-open: Redis 장애 또는 poll 타임아웃 → 각자 LLM 호출(중복 허용, 안전한 퇴행).
+
 Redis 장애 시 fail-open. MAP/FALLBACK 및 error는 호출 측에서 가드한다.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -30,6 +38,7 @@ from core.config import settings
 logger = logging.getLogger(__name__)
 
 _KEY_PREFIX = "answer_cache:"
+_LOCK_SUFFIX = ":lock"
 _REFINE_KEY_PREFIX = "refine_cache:"
 # refine 캐시 키 버전. 라우터 프롬프트/모델/분류 화이트리스트를 무중단 핫 변경하면
 # 구 매핑이 장수명 TTL(refine_cache_ttl) 동안 잔존하는데, flush_answer_cache 는
@@ -74,6 +83,94 @@ def _cache_key(
     composite = "|".join(parts)
     digest = hashlib.sha256(composite.encode("utf-8")).hexdigest()[:_DIGEST_HEX_LEN]
     return f"{_KEY_PREFIX}{digest}"
+
+
+def build_answer_cache_key(
+    query: str,
+    *,
+    max_class_name: str | None = None,
+    area_name: str | None = None,
+    service_status: str | None = None,
+    payment_type: str | None = None,
+    routes: str | None = None,
+) -> str:
+    """answer cache 키를 외부에서 미리 계산할 수 있도록 공개 래퍼 제공.
+
+    CacheCheckNode / CacheWriteNode가 동일 키로 GET·lock·SET·unlock을 수행하기
+    위해 키를 한 번만 계산해 재사용한다.
+    """
+    return _cache_key(
+        query,
+        max_class_name=max_class_name,
+        area_name=area_name,
+        service_status=service_status,
+        payment_type=payment_type,
+        routes=routes,
+    )
+
+
+async def get_cached_answer_by_key(key: str, redis: aioredis.Redis) -> dict | None:
+    """미리 계산된 키로 answer cache 조회. miss/장애 시 None."""
+    try:
+        raw = await redis.get(key)
+        if raw is None:
+            return None
+        return json.loads(raw)
+    except Exception:
+        logger.warning("answer cache GET 오류(by_key) — miss 처리", exc_info=True)
+        return None
+
+
+async def acquire_answer_lock(
+    key: str, redis: aioredis.Redis, *, ttl: int
+) -> bool:
+    """캐시 키에 대한 분산 singleflight 락 획득 시도.
+
+    SET NX EX ttl — 성공(True)이면 이 호출자가 LLM을 실행해야 한다.
+    실패(False)이면 다른 호출자가 이미 진행 중 → poll_for_answer()로 결과 대기.
+    Redis 장애 시 True(fail-open): 락 없이 각자 진행해 중복 LLM이 발생하지만
+    결과의 정합성은 유지된다(last-write-wins).
+    """
+    if not settings.answer_cache_singleflight_enabled:
+        return True
+    try:
+        result = await redis.set(f"{key}{_LOCK_SUFFIX}", "1", nx=True, ex=ttl)
+        return bool(result)
+    except Exception:
+        logger.warning("answer cache lock 획득 오류 — fail-open(True)", exc_info=True)
+        return True
+
+
+async def release_answer_lock(key: str, redis: aioredis.Redis) -> None:
+    """singleflight 락 조기 해제.
+
+    CacheWriteNode가 캐시 쓰기 직후 호출 → 대기 중인 waiter가 즉시 hit.
+    DEL 실패 시 무시(lock은 TTL에 의해 자동 만료됨).
+    """
+    if not settings.answer_cache_singleflight_enabled:
+        return
+    try:
+        await redis.delete(f"{key}{_LOCK_SUFFIX}")
+    except Exception:
+        pass
+
+
+async def poll_for_answer(
+    key: str, redis: aioredis.Redis, *, retries: int, interval: float
+) -> dict | None:
+    """락 보유자가 캐시를 채울 때까지 주기적으로 재조회(waiter 전용).
+
+    retries × interval 초 대기 후에도 결과가 없으면 None 반환(fail-open).
+    """
+    for _ in range(retries):
+        await asyncio.sleep(interval)
+        try:
+            raw = await redis.get(key)
+            if raw is not None:
+                return json.loads(raw)
+        except Exception:
+            return None
+    return None
 
 
 def _normalize_query(query: str) -> str:

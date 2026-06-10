@@ -69,7 +69,7 @@ class TestCacheCheckNode:
             },
         }
         with patch(
-            "agents.nodes.get_cached_answer",
+            "agents.nodes.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())
@@ -89,7 +89,7 @@ class TestCacheCheckNode:
 
         base_state["intent"] = IntentType.VECTOR_SEARCH
         with patch(
-            "agents.nodes.get_cached_answer",
+            "agents.nodes.get_cached_answer_by_key",
             AsyncMock(return_value=None),
         ):
             node = CacheCheckNode(redis=AsyncMock())
@@ -102,7 +102,7 @@ class TestCacheCheckNode:
         from agents.nodes import CacheCheckNode
 
         base_state["intent"] = IntentType.MAP
-        with patch("agents.nodes.get_cached_answer", AsyncMock()) as mock_get:
+        with patch("agents.nodes.get_cached_answer_by_key", AsyncMock()) as mock_get:
             node = CacheCheckNode(redis=AsyncMock())
             result = await node(base_state)
 
@@ -149,7 +149,7 @@ class TestCacheCheckNode:
 
         base_state["intent"] = IntentType.VECTOR_SEARCH
         base_state["refined_query"] = None
-        with patch("agents.nodes.get_cached_answer", AsyncMock()) as mock_get:
+        with patch("agents.nodes.get_cached_answer_by_key", AsyncMock()) as mock_get:
             node = CacheCheckNode(redis=AsyncMock())
             result = await node(base_state)
 
@@ -243,7 +243,7 @@ class TestCacheWriteNode:
             "state": {"refined_query": "서울 테니스장"},
         }
         with patch(
-            "agents.nodes.get_cached_answer",
+            "agents.nodes.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())
@@ -264,7 +264,7 @@ class TestCacheWriteNode:
             "state": {"refined_query": "서울 테니스장"},
         }
         with patch(
-            "agents.nodes.get_cached_answer",
+            "agents.nodes.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())
@@ -380,7 +380,7 @@ class TestGraphRouting:
         )
 
         with patch(
-            "agents.nodes.get_cached_answer",
+            "agents.nodes.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             graph = AgentGraph(

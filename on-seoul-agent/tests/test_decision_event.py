@@ -364,7 +364,7 @@ class TestStreamDecisionEvent:
                 "refined_query": "수영장",
             },
         }
-        with _patch("agents.nodes.get_cached_answer", return_value=cache_payload):
+        with _patch("agents.nodes.get_cached_answer_by_key", return_value=cache_payload):
             events = await self._collect(
                 graph,
                 make_agent_state(

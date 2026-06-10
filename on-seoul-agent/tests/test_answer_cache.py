@@ -378,6 +378,126 @@ class TestEmptyStateTTL:
         assert mock_redis.set.call_args.kwargs["ex"] == settings.answer_cache_ttl
 
 
+class TestSingleflight:
+    """acquire_answer_lock / release_answer_lock / poll_for_answer 단위 테스트."""
+
+    async def test_acquire_returns_true_on_set_nx_success(self, mock_redis):
+        mock_redis.set.return_value = True
+        from core.cache import acquire_answer_lock
+
+        assert await acquire_answer_lock("answer_cache:abc", mock_redis, ttl=30)
+
+    async def test_acquire_returns_false_on_set_nx_fail(self, mock_redis):
+        """SET NX 실패(다른 홀더 존재) → False."""
+        mock_redis.set.return_value = None
+        from core.cache import acquire_answer_lock
+
+        assert not await acquire_answer_lock("answer_cache:abc", mock_redis, ttl=30)
+
+    async def test_acquire_redis_error_returns_true_fail_open(self, mock_redis):
+        """Redis 장애 → fail-open True (각자 LLM 실행)."""
+        mock_redis.set.side_effect = RuntimeError("redis down")
+        from core.cache import acquire_answer_lock
+
+        assert await acquire_answer_lock("answer_cache:abc", mock_redis, ttl=30)
+
+    async def test_acquire_lock_key_has_lock_suffix(self, mock_redis):
+        """락 키 = 캐시 키 + ':lock'."""
+        mock_redis.set.return_value = True
+        from core.cache import _LOCK_SUFFIX, acquire_answer_lock
+
+        cache_key = "answer_cache:abc"
+        await acquire_answer_lock(cache_key, mock_redis, ttl=30)
+        call_key = mock_redis.set.call_args.args[0]
+        assert call_key == f"{cache_key}{_LOCK_SUFFIX}"
+
+    async def test_acquire_uses_nx_and_ex(self, mock_redis):
+        """SET NX EX ttl 인자 정확성."""
+        mock_redis.set.return_value = True
+        from core.cache import acquire_answer_lock
+
+        await acquire_answer_lock("answer_cache:abc", mock_redis, ttl=30)
+        kwargs = mock_redis.set.call_args.kwargs
+        assert kwargs.get("nx") is True
+        assert kwargs.get("ex") == 30
+
+    async def test_release_deletes_lock_key(self, mock_redis):
+        from core.cache import _LOCK_SUFFIX, release_answer_lock
+
+        cache_key = "answer_cache:abc"
+        await release_answer_lock(cache_key, mock_redis)
+        mock_redis.delete.assert_called_once_with(f"{cache_key}{_LOCK_SUFFIX}")
+
+    async def test_release_redis_error_does_not_raise(self, mock_redis):
+        mock_redis.delete.side_effect = RuntimeError("redis down")
+        from core.cache import release_answer_lock
+
+        await release_answer_lock("answer_cache:abc", mock_redis)  # no raise
+
+    async def test_poll_returns_envelope_when_cache_populated(self, mock_redis):
+        """두 번째 poll에서 캐시 키가 채워지면 dict 반환."""
+        envelope = {"payload": {"answer": "ok"}, "state": {}}
+        mock_redis.get.side_effect = [None, json.dumps(envelope)]
+        from unittest.mock import patch
+
+        from core.cache import poll_for_answer
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_answer(
+                "answer_cache:abc", mock_redis, retries=3, interval=0.01
+            )
+        assert result == envelope
+
+    async def test_poll_returns_none_on_timeout(self, mock_redis):
+        """retries 소진 후 결과 없으면 None (fail-open)."""
+        mock_redis.get.return_value = None
+        from unittest.mock import patch
+
+        from core.cache import poll_for_answer
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_answer(
+                "answer_cache:abc", mock_redis, retries=3, interval=0.01
+            )
+        assert result is None
+        assert mock_redis.get.call_count == 3
+
+    async def test_poll_redis_error_returns_none(self, mock_redis):
+        """GET 오류 시 None (fail-open)."""
+        mock_redis.get.side_effect = RuntimeError("redis down")
+        from unittest.mock import patch
+
+        from core.cache import poll_for_answer
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_answer(
+                "answer_cache:abc", mock_redis, retries=3, interval=0.01
+            )
+        assert result is None
+
+    async def test_disabled_acquire_always_true(self, mock_redis):
+        """singleflight 비활성화 시 acquire는 항상 True(락 우회)."""
+        from unittest.mock import patch
+
+        from core.cache import acquire_answer_lock
+        from core.config import settings
+
+        with patch.object(settings, "answer_cache_singleflight_enabled", False):
+            result = await acquire_answer_lock("answer_cache:abc", mock_redis, ttl=30)
+        assert result is True
+        mock_redis.set.assert_not_called()
+
+    async def test_disabled_release_skips_delete(self, mock_redis):
+        from unittest.mock import patch
+
+        from core.cache import release_answer_lock
+        from core.config import settings
+
+        with patch.object(settings, "answer_cache_singleflight_enabled", False):
+            await release_answer_lock("answer_cache:abc", mock_redis)
+        mock_redis.delete.assert_not_called()
+
+
 class TestFlush:
     async def test_flush_scans_and_deletes(self, mock_redis):
         async def _scan_iter(match):
