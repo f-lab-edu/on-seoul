@@ -106,15 +106,8 @@ flowchart TD
 
 ### 3-1. Triage Agent — 무엇을 할지 정한다 (action)
 
-`TriageAgent`(`agents/triage_agent.py`)는 사용자 메시지를 받아 **무엇을 할지(action)**를 정하는 첫 관문이다.
-
-초기 설계는 의도 하나(`SQL_SEARCH`/`VECTOR_SEARCH` 등)만 분류하는 단일 라우터였다. 그런데 "안녕", "넌 뭘 할 수 있어?", "방금 그건 왜 추천했어?", "서울 인구 알려줘"(서비스 범위 밖) 같은 질문까지 전부 검색 경로로 흘러 어색한 답이 나왔다. 근본 원인은 **"검색을 할지 말지"와 "검색이라면 어떻게 할지"가 서로 다른 차원**인데 이를 한 축에 뭉뚱그렸다는 점이다.
-
-그래서 이 둘을 **두 에이전트로 분리**했다. Triage는 **action**만 정하고, 검색이 필요할 때의 "어떻게 검색할지"는 Router(3-2)에게 맡긴다. 한 LLM 호출에 검색 방식·필터까지 떠안지 않으므로 책임이 가볍고, 잡담·범위 밖 질문은 Router 호출을 아예 건너뛴다.
-
-- **action** — `RETRIEVE`(검색한다), `DIRECT_ANSWER`(바로 답한다), `AMBIGUOUS`(되묻는다), `OUT_OF_SCOPE`(범위 밖), `EXPLAIN`(직전 판단 근거를 설명한다).
-
-`RETRIEVE`면 `router_node`로 넘겨 검색을 계획하고(3-2), 나머지 4종은 검색 없이 곧바로 답한다. 기존 코드는 여전히 단일 `intent` 필드를 읽으므로, RETRIEVE 경로에서는 Router가 `intent`를 채우고 비-RETRIEVE에서는 `FALLBACK`으로 동기화해 하위호환을 지킨다.
+`TriageAgent`(`agents/triage_agent.py`)는 사용자 메시지를 받아 **무엇을 할지(action)를 정하는 시작점**이다.
+`action`은 여러 유형에 대해 유연하게 대응하여 자연스러운 사용 경험을 제공하기 위한 방향을 결정한다.
 
 #### action 라우팅 + decision 이벤트
 
@@ -122,22 +115,17 @@ flowchart TD
 
 | action | 노드 | 동작 |
 |---|---|---|
-| `RETRIEVE` | `router_node` | 검색 계획 단계로 진행(3-2) |
-| `DIRECT_ANSWER` | `direct_answer_node` | DB 없이 바로 답변. `intent=FALLBACK`으로 대화형 분기. 일상 대화·기존 FALLBACK 안내문을 대체한다 |
-| `AMBIGUOUS` | `ambiguous_node` | 무엇을 찾는지 되묻는 명확화 질문 1개를 만든다 |
+| `RETRIEVE` | `router_node` | 검색 계획 단계로 진행 |
+| `DIRECT_ANSWER` | `direct_answer_node` | DB 없이 바로 답변. `intent=FALLBACK`으로 대화형 분기. 일상 대화, 기존 FALLBACK 안내문을 대체한다 |
+| `AMBIGUOUS` | `ambiguous_node` | LLM이 대화 맥락(history)을 반영해 무엇을 찾는지 되묻는 명확화 질문 1개를 생성한다 (`AnswerAgent.clarify`). 추측 답변 금지 |
 | `OUT_OF_SCOPE` | `out_of_scope_node` | 범위 밖(`domain_outside`)이면 즉시 거절한다. 단, 시설은 맞는데 속성만 모자란 경우(`attribute_gap`)는 시설 식별을 위해 `vector_node`로 합류한다 |
 | `EXPLAIN` | `explain_node` | 직전 턴의 판단 근거(`prev_reasoning`)를 설명한다. 근거가 없으면 `DIRECT_ANSWER`로 폴백한다 |
 
-**decision 이벤트**: Triage가 LLM 분류를 수행하면 `stream()`이 `decision` SSE 이벤트(`schemas/events.py`의 `DecisionEvent`)를 한 번 방출한다. "왜 이렇게 판단했는지"를 사용자에게 투명하게 보여주기 위한 것으로, action과 사용자 노출용 근거 한 문장(`user_rationale`)은 triage에서, 검색 경로(`routes`)는 — RETRIEVE라면 — Router 완료 후 채워진다(비-RETRIEVE는 `routes=[]`). 근거 문장은 내부 식별자가 새지 않도록 정제(`sanitize_user_rationale`)하며, LLM 분류를 건너뛴 경우(forced 재시도·레거시 경로)에는 방출하지 않는다.
-
-> **참고사항**
-> - triage 내부에서 예외가 나면 사용자에게 안내 메시지를 답으로 주고 종료한다(무한 루프 방지).
-> - 프로덕션에서는 `AgentGraph()`가 `TriageAgent`와 `RouterAgent`를 함께 주입한다.
-> - **참조 해소**: "두 번째 거 알려줘"처럼 직전 턴 결과를 가리키는 후속 질문은 Triage *이전* 단계인 `reference_resolution_node`가 규칙 기반(LLM 미사용)으로 가려낸다. 이 경우 검색을 건너뛰고 직전 시설을 최신 원본으로 다시 읽어(`rehydrate_node`) 설명형 답변(`describe_node`)을 만든다. 직전 카드(`prev_entities`)가 없으면 기존 흐름과 동일하다.
+**decision 이벤트**: Triage가 LLM 분류를 수행하면 `stream()`이 `decision` SSE 이벤트(`schemas/events.py`의 `DecisionEvent`)를 한 번 발송한다. "왜 이렇게 판단했는지"를 사용자에게 투명하게 보여주기 위한 것으로, action과 사용자 노출용 근거 한 문장(`user_rationale`)은 triage에서, 검색 경로(`routes`)는 — RETRIEVE라면 — Router 완료 후 채워진다(비-RETRIEVE는 `routes=[]`). 근거 문장은 내부 식별자가 새지 않도록 정제(`sanitize_user_rationale`)하며, LLM 분류를 건너뛴 경우(forced 재시도, 레거시 경로)에는 발송하지 않는다.
 
 ### 3-2. Router Agent — 어떻게 검색할지 정한다 (retrieval_intent)
 
-action이 `RETRIEVE`일 때만 `RouterAgent`(`agents/router_agent.py`)가 이어받아 **어떤 검색으로, 어떤 조건으로** 찾을지 계획한다. 검색 방식(`retrieval_intent`)을 고르고, 같은 LLM 호출에서 정제 질의(`refined_query`)·post-filter 메타데이터(자치구·상태·카테고리·결제유형)·벡터 세부 의도를 함께 뽑는다. 비-RETRIEVE action은 Router에 도달하지 않으므로 `intent`는 `FALLBACK`으로 남는다.
+action이 `RETRIEVE`일 때만 `RouterAgent`(`agents/router_agent.py`)가 이어받아 **어떤 검색으로, 어떤 조건으로** 찾을지 계획한다. 검색 방식(`retrieval_intent`)을 고르고, 같은 LLM 호출에서 정제 질의(`refined_query`), post-filter 메타데이터(자치구, 상태, 카테고리, 결제유형), 벡터 세부 의도를 함께 뽑는다. 비-RETRIEVE action은 Router에 도달하지 않으므로 `intent`는 `FALLBACK`으로 남는다.
 
 | IntentType | 분류 기준 | 예시 |
 |---|---|---|
@@ -146,7 +134,7 @@ action이 `RETRIEVE`일 때만 `RouterAgent`(`agents/router_agent.py`)가 이어
 | `MAP` | 지도, 위치, 반경 탐색 | "내 주변 500m 이내 체육관" |
 | `ANALYTICS` | 개수, 분포, 종류 등 집계 질의 | "강남구에 체육시설이 몇 개야?" |
 
-SQL↔VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬아웃할 수 있다(`enable_secondary_intent` 플래그, 기본 off).
+SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬아웃할 수 있다(`enable_secondary_intent` 플래그, 기본 off).
 
 > **참고사항**
 > - 추출한 필터(`area_name`, `service_status`, `payment_type` 등)는 도메인 화이트리스트 밖 값이면 `None`으로 정규화한다 — 잘못된 값이 캐시 키를 오염시키거나 빈 검색을 만들지 않도록.

@@ -56,7 +56,7 @@ agents/
             │          ├─ MAP          → map_search()          → on_data DB (earthdistance) → answer
             │          └─ ANALYTICS    → AnalyticsAgent.run()  → on_data DB (집계) → answer
             ├─ DIRECT_ANSWER → direct_answer_node              # DB 없이 LLM 직접 응답
-            ├─ AMBIGUOUS     → ambiguous_node                  # 명확화 질문 1개
+            ├─ AMBIGUOUS     → ambiguous_node                  # AnswerAgent.clarify — LLM 명확화 질문(history 반영)
             ├─ OUT_OF_SCOPE  → out_of_scope_node               # domain_outside 거절 / attribute_gap → vector
             └─ EXPLAIN       → explain_node                    # prev_reasoning 설명
                  └─ AnswerAgent.answer() / action 노드 답변
