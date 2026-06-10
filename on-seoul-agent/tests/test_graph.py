@@ -721,6 +721,58 @@ class TestAgentGraphStream:
         _, result = result_events[0]
         assert result["answer"] == "스트림 답변"
 
+    async def test_stream_result_matches_run_on_reduced_state(self):
+        """stream() 최종 result 가 run()(ainvoke) 결과와 reducer 누적 필드에서 일치한다.
+
+        회귀(작업 2): stream() 이 노드별 델타를 수동 합산하면 node_path
+        (append reducer) / search_channels (or_ 병합 reducer) 가 마지막 델타로
+        덮어써져 누적이 깨진다. 멀티모드 "values" 스냅샷을 쓰면 LangGraph 가
+        reducer 를 적용한 전체 state 와 동일해야 한다.
+        """
+        rows = [
+            {"service_id": "S1", "service_name": "수영장", "service_url": "https://x"},
+        ]
+
+        run_agent, run_ds = _sql_agent(rows)
+        run_graph_obj = AgentGraph(
+            router=_router(IntentType.SQL_SEARCH),
+            sql_agent=run_agent,
+            answer_agent=_answer_agent("안내입니다."),
+        )
+        run_result = await run_graph(
+            run_graph_obj,
+            _state(),
+            data_session=run_ds,
+            ai_session=_ai_session(),
+        )
+
+        stream_agent, stream_ds = _sql_agent(rows)
+        stream_graph_obj = AgentGraph(
+            router=_router(IntentType.SQL_SEARCH),
+            sql_agent=stream_agent,
+            answer_agent=_answer_agent("안내입니다."),
+        )
+        events = await self._collect(
+            stream_graph(
+                stream_graph_obj,
+                _state(),
+                data_session=stream_ds,
+                ai_session=_ai_session(),
+            )
+        )
+        result_events = [d for t, d in events if t == "result"]
+        assert len(result_events) == 1
+        stream_result = result_events[0]
+
+        # node_path: append reducer 누적이 그대로 보존돼야 한다.
+        assert stream_result["node_path"] == run_result["node_path"]
+        assert len(stream_result["node_path"]) > 1  # 수동 덮어쓰기였다면 1로 붕괴
+        # search_channels: or_ 병합 reducer 결과가 동일해야 한다.
+        assert (
+            stream_result["search_channels"].keys()
+            == run_result["search_channels"].keys()
+        )
+
     async def test_result_carries_service_cards_through_graph(self):
         """answer_node 가 AnswerAgent.service_cards 를 그래프 최종 state 로 전달한다.
 

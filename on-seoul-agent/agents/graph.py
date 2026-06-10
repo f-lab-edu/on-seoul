@@ -388,8 +388,10 @@ class AgentGraph:
         # 그래프 시작 전: routing 단계 진입 알림
         yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
 
-        # state 누적 — astream()은 노드별 업데이트만 반환하므로 직접 합산
-        accumulated: dict[str, Any] = dict(state)
+        # 최종 결과는 LangGraph가 reducer를 적용한 "values" 스냅샷을 사용한다.
+        # (수동 합산은 node_path/search_channels reducer를 우회해 정합성이 깨짐.)
+        # 가장 최근 "values" 청크를 보관했다가 루프 종료 후 yield.
+        last_values: dict[str, Any] = dict(state)
         # 중복 emit 방지 (self-correction 루프에서 노드가 재실행될 수 있음)
         _search_progress_emitted = False
         _answer_progress_emitted = False
@@ -403,17 +405,29 @@ class AgentGraph:
             {"sql_node", "vector_node", "map_node", "analytics_node"}
         )
 
-        async for chunk in self._compiled_graph.astream(
+        # 멀티모드: "updates"(노드별 델타)로 progress/decision 구동,
+        # "values"(reducer 적용 전체 state)로 최종 result 스냅샷 확보.
+        # 한 super-step에서 updates/values 도착 순서에 의존하지 않도록
+        # 가장 최근 values 스냅샷을 들고 있다가 루프 종료 후 yield한다.
+        async for mode, chunk in self._compiled_graph.astream(
             state,
+            stream_mode=["updates", "values"],
             config={"recursion_limit": 28},  # 최악 경로 23 super-step + 여유 5
         ):
+            if mode == "values":
+                # reducer가 적용된 전체 state 스냅샷.
+                last_values = chunk
+                continue
+
+            # mode == "updates": {node_name: updates_dict}
             node_name: str = next(iter(chunk))
             node_updates: dict[str, Any] | None = chunk[node_name]
-            if node_updates:
-                accumulated.update(node_updates)
 
             if node_name == "triage_node":
-                action = accumulated.get("action")
+                # action 은 triage 가 산출 — 델타 우선, 미존재 시 values 스냅샷.
+                action = (node_updates or {}).get("action") or last_values.get(
+                    "action"
+                )
                 user_rationale = (node_updates or {}).get("user_rationale")
                 if action == ActionType.RETRIEVE:
                     # routes 는 router_node 완료 후에야 확정 — rationale 보류.
@@ -447,8 +461,14 @@ class AgentGraph:
 
             elif node_name == "router_node" and not _search_progress_emitted:
                 _search_progress_emitted = True
-                action = accumulated.get("action")
-                intent = accumulated.get("intent")
+                # intent 는 router 가 산출, action 은 앞선 triage 산출.
+                # 델타 우선, 미존재 시 values 스냅샷으로 보강(도착 순서 무관).
+                action = (node_updates or {}).get("action") or last_values.get(
+                    "action"
+                )
+                intent = (node_updates or {}).get("intent") or last_values.get(
+                    "intent"
+                )
 
                 # RETRIEVE 경로 decision: triage 보류 rationale + router 확정 routes.
                 if _pending_rationale and not _decision_emitted:
@@ -527,4 +547,4 @@ class AgentGraph:
                     {"step": "answering", "message": "답변을 생성하고 있습니다..."},
                 )
 
-        yield "result", accumulated  # type: ignore[misc]
+        yield "result", last_values  # type: ignore[misc]
