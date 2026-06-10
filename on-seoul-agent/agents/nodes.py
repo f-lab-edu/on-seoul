@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agents._reference_resolution import resolve_reference
 from agents._search_channel_utils import _to_hits
 from agents.analytics_agent import AnalyticsAgent
-from agents.answer_agent import AnswerAgent
+from agents.answer_agent import _CLARIFY_FALLBACK, AnswerAgent
 from agents.hydration_node import HydrationNode
 from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
@@ -474,23 +474,33 @@ class GraphNodes:
             }
 
     async def ambiguous_node(self, state: AgentState) -> dict[str, Any]:
-        """AMBIGUOUS action — 명확화 질문 1개 생성.
+        """AMBIGUOUS action — 대화 맥락 기반 명확화 질문 1개를 LLM으로 생성.
 
         TriageAgent가 이미 AMBIGUOUS로 판정한 경우에만 도달하므로
         신뢰도 게이팅은 triage 단계에서 완료됐다.
-        user_rationale이 있으면 답변으로 사용하고, 없으면 기본 안내를 반환한다.
+
+        AnswerAgent.clarify() 가 history(state 내)·user_rationale 을 컨텍스트로
+        삼아 되물음을 생성한다. clarify() 자체도 LLM 오류 시 고정 폴백으로 graceful
+        degrade 하지만, 노드 차원에서도 예외를 잡아 폴백 답변 + ambiguous_error
+        node_path 를 둔다(describe/direct_answer 패턴과 동일). 비-RETRIEVE 경로라
+        self-correction 대상은 아니다.
         """
-        rationale = state.get("user_rationale")
-        if rationale:
-            answer = rationale
-        else:
-            answer = (
-                "어떤 종류의 시설이나 서비스를 찾으시는지 조금 더 알려주시겠어요? "
-                "예를 들어 '수영장', '문화행사', '강남구 체육시설' 처럼 구체적으로 말씀해 주시면 "
-                "더 정확한 정보를 안내해드릴 수 있습니다."
-            )
         logger.info("ambiguous_node room=%s", state.get("room_id"))
-        return {"answer": answer, "node_path": ["ambiguous_node"]}
+        try:
+            new_state = await self._answer.clarify(state)
+            return {
+                "answer": new_state.get("answer"),
+                "service_cards": new_state.get("service_cards"),
+                "node_path": ["ambiguous_node"],
+            }
+        except Exception as exc:
+            logger.exception("ambiguous_node 실행 오류")
+            return {
+                "error": str(exc),
+                # 폴백 문구는 AnswerAgent._CLARIFY_FALLBACK 단일 출처를 재사용한다(drift 방지).
+                "answer": _CLARIFY_FALLBACK,
+                "node_path": ["ambiguous_error"],
+            }
 
     async def out_of_scope_node(self, state: AgentState) -> dict[str, Any]:
         """OUT_OF_SCOPE action — 서브타입 분기.

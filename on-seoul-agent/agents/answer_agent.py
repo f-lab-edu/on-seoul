@@ -22,7 +22,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
-from agents.router_agent import SEOUL_DISTRICTS
+from agents.router_agent import SEOUL_DISTRICTS, build_context_block
 from llm.client import get_chat_model
 from schemas.state import AgentState, IntentType
 
@@ -130,6 +130,20 @@ _STRUCT_DESCRIBE = """\
 
 - 전달된 검색 결과(JSON)에 있는 사실만 사용하세요. 없는 속성은 "정보가 없다"고 정직하게 안내합니다.
 - 중괄호 기호나 JSON 키 이름을 그대로 노출하지 말고 실제 값으로 치환해서 출력하세요."""
+
+# AMBIGUOUS 명확화 — triage가 모호로 판정한 경우 되물음 1문장 생성.
+# 추측 답변 금지: 무엇을 찾는지 좁히는 짧고 친근한 한국어 질문 1개만 생성한다.
+# history는 _compose 시점이 아니라 clarify() 런타임에 경계 마커로 감싸 주입한다.
+_STRUCT_CLARIFY = """\
+사용자 질의가 모호하여 무엇을 찾는지 명확하지 않습니다.
+대화 맥락을 고려해, 사용자가 무엇을 찾는지 좁히는 짧고 친근한 되물음 1개를 한국어로 생성하세요.
+
+# 규칙
+
+- 추측해서 답하지 마세요. 검색 결과를 안내하지 말고, 무엇을 확인하면 되는지 되묻기만 하세요.
+- 직전 대화 흐름이 있으면 그 맥락(직전에 본 시설·지역·조건)을 근거로 무엇을 말하는지/어떤 조건인지 되물으세요.
+- 맥락이 없으면 어떤 종류의 시설·서비스·지역을 찾는지 일반적으로 되물으세요.
+- 친근한 한국어 한 문장으로만 답하세요."""
 
 # 재-hydrate 0건 — 직전 service_id 가 그새 soft-delete/마감된 경우.
 _STRUCT_DESCRIBE_EMPTY = """\
@@ -316,6 +330,13 @@ _TITLE_HUMAN = "사용자 질문: {message}"
 
 _FALLBACK_URL = "https://yeyak.seoul.go.kr"
 
+# AMBIGUOUS 폴백 안내문 — LLM 오류/빈 출력 시 사용자 응답이 비지 않도록 보장한다.
+_CLARIFY_FALLBACK = (
+    "어떤 종류의 시설이나 서비스를 찾으시는지 조금 더 알려주시겠어요? "
+    "예를 들어 '수영장', '문화행사', '강남구 체육시설' 처럼 구체적으로 말씀해 주시면 "
+    "더 정확한 정보를 안내해드릴 수 있습니다."
+)
+
 # 카드 상세 표시 상한. 이 값 초과분의 건수(extra_count)만 숫자로 LLM에 전달된다.
 # 클래스 밖 모듈 상수로 두어 인스턴스 오버라이드로 프롬프트와 불일치하는 사고를 방지한다.
 _DISPLAY_LIMIT: int = 5
@@ -393,6 +414,11 @@ class AnswerAgent:
             # W1 describe-known-entity (참조 해소 경로). intent 와 무관한 전용 키.
             "DESCRIBE": _compose(_ROLE, _STRUCT_DESCRIBE, _OUTPUT_RULES),
             "DESCRIBE_EMPTY": _compose(_ROLE, _STRUCT_DESCRIBE_EMPTY, _OUTPUT_RULES),
+            # AMBIGUOUS 명확화 — history/user_rationale 는 clarify() 런타임에 주입한다.
+            # CLARIFY 는 FALLBACK 과 동일 위협 모델(임의 발화 + history.content + unescaped
+            # {message} 가 되물음에 반향될 표면)이므로 _FALLBACK_GUARDRAILS 를 끼워
+            # 역할 주입·내부정보 유출·지시 반향을 차단한다. 출력은 여전히 "되물음 1문장".
+            "CLARIFY": _compose(_ROLE, _STRUCT_CLARIFY, _FALLBACK_GUARDRAILS),
         }
 
     async def describe(self, state: AgentState) -> AgentState:
@@ -432,6 +458,50 @@ class AnswerAgent:
             "answer": answer_text,
             "service_cards": [dict(card) for card in display],
         }
+
+    async def clarify(self, state: AgentState) -> AgentState:
+        """AMBIGUOUS 경로 — 대화 맥락을 반영한 명확화 질문 1개를 생성한다.
+
+        history(직전 N턴)를 build_context_block 으로 변환해 system 컨텍스트에 주입한다
+        (triage/router/describe 와 동일 헬퍼 재사용 — 일관성·injection 경계 유지).
+        user_rationale 이 있으면 힌트로 경계 마커에 감싸 system 에 포함한다(역할 지시
+        삽입 차단). 추측 답변이 아니라 무엇을 좁힐지 되묻는 한 문장을 생성한다.
+
+        LLM 오류/빈 출력 시 고정 폴백 안내문으로 graceful fallback 하여 사용자 응답이
+        절대 비지 않도록 한다. 명확화는 카드가 없으므로 service_cards=[] 를 반환한다.
+        """
+        message = state["message"]
+        system_parts = [self._static_prompts["CLARIFY"]]
+
+        context_block = build_context_block(state.get("history"))
+        if context_block:
+            system_parts.append(context_block)
+
+        # user_rationale: triage 가 산출한 모호 근거 힌트. 경계 마커로 감싸 주입한다.
+        rationale = state.get("user_rationale")
+        if rationale:
+            system_parts.append(
+                "참고용 모호성 힌트(user_rationale):\n"
+                "---RATIONALE_START---\n"
+                f"{rationale}\n"
+                "---RATIONALE_END---"
+            )
+
+        system_prompt = _compose(*system_parts)
+        try:
+            answer_text = await self._answer_chain.ainvoke(
+                {
+                    "system": system_prompt,
+                    "message": message,
+                    "results_json": "[]",
+                    "more_notice": _more_notice(0),
+                }
+            )
+        except Exception:
+            answer_text = ""
+        if not (answer_text or "").strip():
+            answer_text = _CLARIFY_FALLBACK
+        return {**state, "answer": answer_text, "service_cards": []}
 
     async def answer(self, state: AgentState) -> AgentState:
         """검색 결과를 종합해 answer(+title)을 채운 AgentState를 반환한다.
