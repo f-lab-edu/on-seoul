@@ -322,8 +322,8 @@ class TestStreamDecisionEvent:
         assert len(decision_events) == 1
         _, data = decision_events[0]
         assert data["action"] == ActionType.DIRECT_ANSWER.value
-        # 비-RETRIEVE action 시 intent가 FALLBACK이므로 routes에는 FALLBACK이 포함된다.
-        # None은 제거되어야 하므로 None이 없어야 한다.
+        # 비-RETRIEVE action 시 routes는 하드코딩된 빈 리스트([])로 방출된다.
+        # 따라서 None을 포함한 어떤 항목도 들어 있어선 안 된다.
         assert None not in data["routes"]
         assert data["sources"] == []
 

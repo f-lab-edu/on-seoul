@@ -274,7 +274,10 @@ def make_answer_agent(
     agent._static_prompts = {
         IntentType.MAP.value: _compose(_ROLE, _STRUCT_MAP, _OUTPUT_RULES),
         IntentType.ANALYTICS.value: _compose(_ROLE, _STRUCT_ANALYTICS, _OUTPUT_RULES),
-        IntentType.FALLBACK.value: _compose(_ROLE, _STRUCT_FALLBACK, _OUTPUT_RULES),
+        # FALLBACK 은 가드레일 블록을 추가로 끼워 조립한다(실제 __init__과 동기화).
+        IntentType.FALLBACK.value: _compose(
+            _ROLE, _STRUCT_FALLBACK, _FALLBACK_GUARDRAILS, _OUTPUT_RULES
+        ),
         "DESCRIBE": _compose(_ROLE, _STRUCT_DESCRIBE, _OUTPUT_RULES),
         "DESCRIBE_EMPTY": _compose(_ROLE, _STRUCT_DESCRIBE_EMPTY, _OUTPUT_RULES),
         "CLARIFY": _compose(_ROLE, _STRUCT_CLARIFY, _FALLBACK_GUARDRAILS),
