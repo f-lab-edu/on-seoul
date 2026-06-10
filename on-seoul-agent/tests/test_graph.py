@@ -927,24 +927,18 @@ class TestSelfCorrectionInfiniteLoopRegression:
             answer_agent=_answer_agent("불릴 일 없는 답"),
         )
 
-        from agents.graph import _ACTIVE_NODES
-
         state = {**_state(), "retry_count": 0, "node_path": [], "started_at": None}
 
-        token = _ACTIVE_NODES.set(graph._nodes)
-        try:
-            result = await AgentGraph._compiled_graph.ainvoke(
-                state,
-                config={
-                    "recursion_limit": 8,
-                    "configurable": {
-                        "data_session": data_session,
-                        "ai_session": _ai_session(),
-                    },
+        result = await graph._compiled_graph.ainvoke(
+            state,
+            config={
+                "recursion_limit": 8,
+                "configurable": {
+                    "data_session": data_session,
+                    "ai_session": _ai_session(),
                 },
-            )
-        finally:
-            _ACTIVE_NODES.reset(token)
+            },
+        )
 
         # fallback answer 가 설정되어 정상 종료된다.
         assert result["answer"], "fallback answer 가 비어있으면 안 된다"
