@@ -68,6 +68,12 @@ class SendQueryServiceTest {
                 OffsetDateTime.now());
     }
 
+    private ChatMessage assistant(long roomId, long seq, String content, String serviceCards, String intent,
+                                  String decision) {
+        return new ChatMessage(seq, roomId, seq, ChatMessageRole.ASSISTANT, content, serviceCards, intent,
+                decision, OffsetDateTime.now());
+    }
+
     @Test
     @DisplayName("prepare() - roomId가 null이면 새 ChatRoom을 생성하고 USER 메시지를 저장한 뒤 PrepareResult를 반환한다")
     void prepare_newRoom_createsRoomAndSavesUserMessage() {
@@ -386,7 +392,7 @@ class SendQueryServiceTest {
         when(saveChatMessagePort.nextSeq()).thenReturn(6L);
         when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.saveAnswer(roomId, answer, null, null);
+        service.saveAnswer(roomId, answer, null, null, null);
 
         ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
         verify(saveChatMessagePort).save(captor.capture());
@@ -407,7 +413,7 @@ class SendQueryServiceTest {
         when(saveChatMessagePort.nextSeq()).thenReturn(6L);
         when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.saveAnswer(roomId, "강남구 안내", cardsJson, null);
+        service.saveAnswer(roomId, "강남구 안내", cardsJson, null, null);
 
         ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
         verify(saveChatMessagePort).save(captor.capture());
@@ -424,7 +430,7 @@ class SendQueryServiceTest {
         when(saveChatMessagePort.nextSeq()).thenReturn(6L);
         when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.saveAnswer(roomId, "강남구 안내", null, "SQL_SEARCH");
+        service.saveAnswer(roomId, "강남구 안내", null, "SQL_SEARCH", null);
 
         ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
         verify(saveChatMessagePort).save(captor.capture());
@@ -440,7 +446,7 @@ class SendQueryServiceTest {
         when(saveChatMessagePort.nextSeq()).thenReturn(6L);
         when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.saveAnswer(roomId, "답변", null, null);
+        service.saveAnswer(roomId, "답변", null, null, null);
 
         ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
         verify(saveChatMessagePort).save(captor.capture());
@@ -456,7 +462,7 @@ class SendQueryServiceTest {
         when(saveChatMessagePort.nextSeq()).thenReturn(6L);
         when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.saveAnswer(roomId, "답변", null, null);
+        service.saveAnswer(roomId, "답변", null, null, null);
 
         ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
         verify(saveChatMessagePort).save(captor.capture());
@@ -470,7 +476,7 @@ class SendQueryServiceTest {
         when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1))
                 .thenReturn(List.of(msg(roomId, 6L, ChatMessageRole.ASSISTANT, "이미 저장된 답변")));
 
-        service.saveAnswer(roomId, "중복 답변", "[{\"service_id\":\"S1\"}]", null);
+        service.saveAnswer(roomId, "중복 답변", "[{\"service_id\":\"S1\"}]", null, null);
 
         verify(saveChatMessagePort, never()).save(any(ChatMessage.class));
         verify(saveChatMessagePort, never()).nextSeq();
@@ -485,7 +491,7 @@ class SendQueryServiceTest {
         when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1))
                 .thenReturn(List.of(msg(roomId, 6L, ChatMessageRole.ASSISTANT, "이미 저장된 답변")));
 
-        service.saveAnswer(roomId, "중복 답변", null, null);
+        service.saveAnswer(roomId, "중복 답변", null, null, null);
 
         verify(saveChatMessagePort, never()).save(any(ChatMessage.class));
         verify(saveChatMessagePort, never()).nextSeq();
@@ -499,7 +505,7 @@ class SendQueryServiceTest {
         when(saveChatMessagePort.nextSeq()).thenReturn(1L);
         when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.saveAnswer(roomId, "답변", null, null);
+        service.saveAnswer(roomId, "답변", null, null, null);
 
         verify(saveChatMessagePort).save(any(ChatMessage.class));
     }
@@ -630,5 +636,124 @@ class SendQueryServiceTest {
 
         assertThat(carryover.prevEntities()).isEmpty();
         assertThat(carryover.prevIntent()).isEqualTo("FALLBACK");
+    }
+
+    // ── prev_reasoning (decision.user_rationale carryover) ─────────
+
+    @Test
+    @DisplayName("prepare() - 직전 assistant의 decision.user_rationale을 prev_reasoning으로 복원한다")
+    void prepare_buildsPrevReasoningFromLastAssistantDecision() {
+        Long roomId = 5L;
+        SendQueryCommand command = new SendQueryCommand(1L, roomId, "후속", null, null);
+        String decision = "{\"event\":\"decision\",\"action\":\"RETRIEVE\",\"routes\":[\"VECTOR_SEARCH\"],"
+                + "\"user_rationale\":\"직전 turn은 검색이 필요했습니다\",\"sources\":[]}";
+
+        when(loadChatRoomPort.findActiveByIdAndUserId(roomId, 1L)).thenReturn(Optional.of(savedRoom(roomId)));
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 10)).thenReturn(List.of(
+                assistant(roomId, 1L, "강남구 안내", null, "VECTOR_SEARCH", decision)));
+        when(saveChatMessagePort.nextSeq()).thenReturn(2L);
+        when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Carryover carryover = service.prepare(command).carryover();
+
+        assertThat(carryover.prevReasoning()).isEqualTo("직전 turn은 검색이 필요했습니다");
+        assertThat(carryover.prevIntent()).isEqualTo("VECTOR_SEARCH");
+    }
+
+    @Test
+    @DisplayName("prepare() - 직전 assistant에 decision이 없으면(미수신) prev_reasoning은 null이다(하위호환)")
+    void prepare_noDecision_prevReasoningNull() {
+        Long roomId = 5L;
+        SendQueryCommand command = new SendQueryCommand(1L, roomId, "후속", null, null);
+
+        when(loadChatRoomPort.findActiveByIdAndUserId(roomId, 1L)).thenReturn(Optional.of(savedRoom(roomId)));
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 10)).thenReturn(List.of(
+                assistant(roomId, 1L, "강남구 안내", null, "SQL_SEARCH", null)));
+        when(saveChatMessagePort.nextSeq()).thenReturn(2L);
+        when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Carryover carryover = service.prepare(command).carryover();
+
+        assertThat(carryover.prevReasoning()).isNull();
+        assertThat(carryover.prevIntent()).isEqualTo("SQL_SEARCH");
+    }
+
+    @Test
+    @DisplayName("prepare() - 가장 최신 assistant의 decision만 prev_reasoning에 쓴다")
+    void prepare_prevReasoningUsesMostRecentAssistant() {
+        Long roomId = 5L;
+        SendQueryCommand command = new SendQueryCommand(1L, roomId, "후속", null, null);
+        String oldDecision = "{\"event\":\"decision\",\"action\":\"DIRECT_ANSWER\",\"routes\":[],"
+                + "\"user_rationale\":\"이전 근거\",\"sources\":[]}";
+        String newDecision = "{\"event\":\"decision\",\"action\":\"RETRIEVE\",\"routes\":[\"SQL_SEARCH\"],"
+                + "\"user_rationale\":\"최신 근거\",\"sources\":[]}";
+
+        when(loadChatRoomPort.findActiveByIdAndUserId(roomId, 1L)).thenReturn(Optional.of(savedRoom(roomId)));
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 10)).thenReturn(List.of(
+                assistant(roomId, 1L, "A1", null, "DIRECT_ANSWER", oldDecision),
+                msg(roomId, 2L, ChatMessageRole.USER, "Q2"),
+                assistant(roomId, 3L, "A2", null, "SQL_SEARCH", newDecision)));
+        when(saveChatMessagePort.nextSeq()).thenReturn(4L);
+        when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Carryover carryover = service.prepare(command).carryover();
+
+        assertThat(carryover.prevReasoning()).isEqualTo("최신 근거");
+    }
+
+    @Test
+    @DisplayName("prepare() - 직전 assistant의 decision이 깨진 JSON이어도 prev_reasoning만 null이고 prev_intent/prev_entities는 보존된다(부분 폴백)")
+    void prepare_malformedDecision_onlyPrevReasoningNull_carryoverNotEmptied() {
+        Long roomId = 5L;
+        SendQueryCommand command = new SendQueryCommand(1L, roomId, "후속", null, null);
+        String cards = "[{\"service_id\":\"S1\",\"label\":\"문화행사\"}]";
+
+        when(loadChatRoomPort.findActiveByIdAndUserId(roomId, 1L)).thenReturn(Optional.of(savedRoom(roomId)));
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 10)).thenReturn(List.of(
+                assistant(roomId, 1L, "강남구 안내", cards, "VECTOR_SEARCH", "{broken json")));
+        when(saveChatMessagePort.nextSeq()).thenReturn(2L);
+        when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Carryover carryover = service.prepare(command).carryover();
+
+        // 파서가 decision 파싱 실패를 삼키므로 buildCarryover는 빈 carryover로 떨어지지 않는다.
+        assertThat(carryover.prevReasoning()).isNull();
+        assertThat(carryover.prevIntent()).isEqualTo("VECTOR_SEARCH");
+        assertThat(carryover.prevEntities()).hasSize(1);
+        assertThat(carryover.prevEntities().get(0).serviceId()).isEqualTo("S1");
+    }
+
+    @Test
+    @DisplayName("saveAnswer() - decisionJson이 주어지면 ASSISTANT 메시지에 그대로 저장된다")
+    void saveAnswer_withDecision_persistsDecision() {
+        Long roomId = 10L;
+        String decisionJson = "{\"event\":\"decision\",\"action\":\"RETRIEVE\",\"routes\":[\"VECTOR_SEARCH\"],"
+                + "\"user_rationale\":\"검색 필요\",\"sources\":[]}";
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1))
+                .thenReturn(List.of(msg(roomId, 5L, ChatMessageRole.USER, "질문")));
+        when(saveChatMessagePort.nextSeq()).thenReturn(6L);
+        when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.saveAnswer(roomId, "강남구 안내", null, "VECTOR_SEARCH", decisionJson);
+
+        ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
+        verify(saveChatMessagePort).save(captor.capture());
+        assertThat(captor.getValue().getDecision()).isEqualTo(decisionJson);
+    }
+
+    @Test
+    @DisplayName("saveAnswer() - decisionJson이 null이면 ASSISTANT 메시지의 decision도 null(하위호환)")
+    void saveAnswer_nullDecision_storesNull() {
+        Long roomId = 10L;
+        when(loadChatMessagePort.findRecentByRoomIdOrderBySeqAsc(roomId, 1))
+                .thenReturn(List.of(msg(roomId, 5L, ChatMessageRole.USER, "질문")));
+        when(saveChatMessagePort.nextSeq()).thenReturn(6L);
+        when(saveChatMessagePort.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.saveAnswer(roomId, "답변", null, null, null);
+
+        ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
+        verify(saveChatMessagePort).save(captor.capture());
+        assertThat(captor.getValue().getDecision()).isNull();
     }
 }

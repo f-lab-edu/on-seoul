@@ -105,7 +105,7 @@ class ChatStreamServiceTest {
                 .verifyComplete();
 
         // re_searching은 중간 진행 이벤트이므로 이력에는 final.answer만 저장된다.
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "강남구 안내", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "강남구 안내", null, (String) null, (String) null);
     }
 
     @Test
@@ -152,7 +152,7 @@ class ChatStreamServiceTest {
                 .expectComplete()
                 .verify(Duration.ofSeconds(2));
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "맑음입니다", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "맑음입니다", null, (String) null, (String) null);
     }
 
     @Test
@@ -171,7 +171,7 @@ class ChatStreamServiceTest {
                 .expectComplete()
                 .verify(Duration.ofSeconds(2));
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "강남구 안내", cardsJson, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "강남구 안내", cardsJson, (String) null, (String) null);
     }
 
     @Test
@@ -187,7 +187,7 @@ class ChatStreamServiceTest {
                 .expectComplete()
                 .verify(Duration.ofSeconds(2));
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "", null, (String) null, (String) null);
     }
 
     @Test
@@ -214,14 +214,14 @@ class ChatStreamServiceTest {
         when(aiServiceStreamPort.stream("진료 예약 안내", 7L, 4L, null, null, List.of(), Carryover.empty()))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"진료안내\"}", "진료안내")));
         doThrow(new RuntimeException("DB 저장 실패"))
-                .when(sendQueryUseCase).saveAnswer(anyLong(), anyString(), any(), any());
+                .when(sendQueryUseCase).saveAnswer(anyLong(), anyString(), any(), any(), any());
 
         StepVerifier.create(service.streamAndSave(command).tokens())
                 .expectNextCount(1)
                 .expectComplete()
                 .verify(Duration.ofSeconds(2));
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(7L, "진료안내", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(7L, "진료안내", null, (String) null, (String) null);
     }
 
     @Test
@@ -236,7 +236,7 @@ class ChatStreamServiceTest {
                 .expectComplete()
                 .verify(Duration.ofSeconds(2));
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(3L, "", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(3L, "", null, (String) null, (String) null);
     }
 
     @Test
@@ -252,7 +252,7 @@ class ChatStreamServiceTest {
                 .expectComplete()
                 .verify(Duration.ofSeconds(2));
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(3L, "", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(3L, "", null, (String) null, (String) null);
     }
 
     @Test
@@ -274,8 +274,8 @@ class ChatStreamServiceTest {
                 .verify(Duration.ofSeconds(2));
 
         // 이력에는 폴백/에러 텍스트가 남지 않는다 — 빈 문자열만 저장.
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(3L, "", null, (String) null);
-        verify(sendQueryUseCase, never()).saveAnswer(eq(3L), eq("폴백 답변"), any(), any());
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(3L, "", null, (String) null, (String) null);
+        verify(sendQueryUseCase, never()).saveAnswer(eq(3L), eq("폴백 답변"), any(), any(), any());
     }
 
     @Test
@@ -292,7 +292,7 @@ class ChatStreamServiceTest {
                 .expectComplete()
                 .verify(Duration.ofSeconds(2));
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(3L, "", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(3L, "", null, (String) null, (String) null);
     }
 
     @Test
@@ -343,7 +343,64 @@ class ChatStreamServiceTest {
                 .verify(Duration.ofSeconds(2));
 
         // intent가 null이 아닌 실제 값으로 끝까지 전달되는지 검증(다음 턴 prev_intent로 영속).
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "강남구 안내", cardsJson, "SQL_SEARCH");
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "강남구 안내", cardsJson, "SQL_SEARCH", (String) null);
+    }
+
+    @Test
+    @DisplayName("streamAndSave() — decision 이벤트가 캡처되어 final answer/intent와 함께 saveAnswer로 전달되고 raw가 relay된다")
+    void streamAndSave_capturesDecision_passesToSaveAnswerAndRelays() {
+        String decisionJson = "{\"event\":\"decision\",\"action\":\"RETRIEVE\",\"routes\":[\"VECTOR_SEARCH\"],"
+                + "\"user_rationale\":\"검색 필요\",\"sources\":[]}";
+        SendQueryCommand command = new SendQueryCommand(1L, 5L, "강남구 문화행사", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
+        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty()))
+                .thenReturn(Flux.just(
+                        AiStreamEvent.decisionEvent(decisionJson, decisionJson),
+                        AiStreamEvent.relay("{\"step\":\"searching\"}"),
+                        AiStreamEvent.finalEvent("{\"answer\":\"강남구 안내\"}", "강남구 안내", null, "VECTOR_SEARCH")));
+
+        // decision raw도 프론트로 그대로 통과되어야 한다(name 없는 data relay).
+        StepVerifier.create(service.streamAndSave(command).tokens())
+                .expectNext(decisionJson)
+                .expectNext("{\"step\":\"searching\"}")
+                .expectNext("{\"answer\":\"강남구 안내\"}")
+                .verifyComplete();
+
+        // decision은 final보다 먼저 도착하지만 캡처되어 saveAnswer에 함께 전달된다.
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "강남구 안내", null, "VECTOR_SEARCH", decisionJson);
+    }
+
+    @Test
+    @DisplayName("streamAndSave() — decision 미수신이면 saveAnswer로 decision=null이 전달된다(하위호환)")
+    void streamAndSave_noDecision_passesNullDecision() {
+        SendQueryCommand command = new SendQueryCommand(1L, 5L, "질문", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+                .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답", null, "SQL_SEARCH")));
+
+        StepVerifier.create(service.streamAndSave(command).tokens())
+                .expectNextCount(1)
+                .verifyComplete();
+
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, "SQL_SEARCH", (String) null);
+    }
+
+    @Test
+    @DisplayName("detach — 클라 끊김(relay 미구독)에도 캡처된 decision이 doFinally 저장 경로로 보존된다")
+    void streamAndSave_relayNeverSubscribed_decisionStillSaved() {
+        String decisionJson = "{\"event\":\"decision\",\"action\":\"EXPLAIN\",\"routes\":[],"
+                + "\"user_rationale\":\"설명 요청\",\"sources\":[]}";
+        SendQueryCommand command = new SendQueryCommand(1L, 5L, "질문", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+                .thenReturn(Flux.just(
+                        AiStreamEvent.decisionEvent(decisionJson, decisionJson),
+                        AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답", null, "FALLBACK")));
+
+        // relay 미구독 = 즉시 끊김. 저장 구독은 살아서 decision까지 저장해야 한다.
+        service.streamAndSave(command);
+
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, "FALLBACK", decisionJson);
     }
 
     @Test
@@ -358,7 +415,7 @@ class ChatStreamServiceTest {
                 .expectNextCount(1)
                 .verifyComplete();
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, (String) null, (String) null);
     }
 
     @Test
@@ -393,7 +450,7 @@ class ChatStreamServiceTest {
         // relay(tokens) 미구독 = 클라 즉시 끊김. 저장 구독은 살아서 intent까지 저장해야 한다.
         service.streamAndSave(command);
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", cardsJson, "VECTOR_SEARCH");
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", cardsJson, "VECTOR_SEARCH", (String) null);
     }
 
     // ── disconnect 내성(detach) ────────────────────────────────────────────
@@ -418,7 +475,7 @@ class ChatStreamServiceTest {
                 .verifyComplete();
 
         // 저장 구독은 별도로 살아 있으므로, final.answer가 결국 저장된다.
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "행사 안내", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "행사 안내", null, (String) null, (String) null);
     }
 
     @Test
@@ -436,7 +493,7 @@ class ChatStreamServiceTest {
         StreamResult result = service.streamAndSave(command);
         StepVerifier.create(result.tokens()).expectNextCount(1).verifyComplete();
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, (String) null, (String) null);
         // 저장 구독 + relay 구독이 하나의 업스트림을 공유 → 1회 구독
         assertThat(subscribeCount.get()).isEqualTo(1);
     }
@@ -452,7 +509,7 @@ class ChatStreamServiceTest {
         // result.tokens()를 구독하지 않는다(클라가 즉시 끊긴 상황)
         service.streamAndSave(command);
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, (String) null, (String) null);
     }
 
     // ── 가드: 동시성 cap ───────────────────────────────────────────────────
@@ -478,7 +535,7 @@ class ChatStreamServiceTest {
 
     @Test
     @DisplayName("cap — 스트림이 정상 완료되면 permit이 해제되어 다시 생성할 수 있다(누수 없음)")
-    void streamAndSave_completes_releasesPermit() {
+    void streamAndSave_completes_releasesPermit() throws InterruptedException {
         ChatConcurrencyGuard tight = new ChatConcurrencyGuard(new ChatConcurrencyProperties(1, 50, 5));
         ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight);
 
@@ -488,7 +545,17 @@ class ChatStreamServiceTest {
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
 
         StepVerifier.create(svc.streamAndSave(cmd).tokens()).expectNextCount(1).verifyComplete();
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, (String) null, (String) null);
+
+        // permit 해제(doFinally의 finally)는 saveAnswer 직후 일어난다. verify 반환 시점엔
+        // 아직 해제 전일 수 있으므로, per-user 카운트가 0으로 돌아올 때까지 대기해 레이스를 제거한다.
+        long deadlineNanos = System.nanoTime() + java.time.Duration.ofSeconds(2).toNanos();
+        while (tight.trackedUserEntryCount() != 0) {
+            if (System.nanoTime() >= deadlineNanos) {
+                throw new AssertionError("permit이 2초 내 해제되지 않음 (trackedUserEntryCount != 0)");
+            }
+            Thread.sleep(10);
+        }
 
         // 첫 스트림이 완료되어 permit이 해제됐으므로 perUser=1이어도 다시 가능
         StepVerifier.create(svc.streamAndSave(cmd).tokens()).expectNextCount(1).verifyComplete();
@@ -509,7 +576,7 @@ class ChatStreamServiceTest {
                 .expectError().verify(Duration.ofSeconds(2));
 
         // 에러 종료 경로에서도 저장은 시도되고(빈 문자열), permit은 해제된다.
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "", null, (String) null, (String) null);
         StepVerifier.create(svc.streamAndSave(cmd).tokens())
                 .expectError().verify(Duration.ofSeconds(2));
     }
@@ -528,7 +595,7 @@ class ChatStreamServiceTest {
                 .expectNext("{\"step\":\"routing\"}")
                 .expectError().verify(Duration.ofSeconds(2));
 
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "", null, (String) null, (String) null);
     }
 
     // ── QA 보강: 타임아웃 / permit 누수 / 획득 순서 / 멱등 한계 / replay 불변 ──────
@@ -555,7 +622,7 @@ class ChatStreamServiceTest {
                 .verify(Duration.ofSeconds(3));
 
         // 타임아웃 종료 경로에서도 doFinally가 저장을 보장한다(final 미수신 → "").
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "", null, (String) null, (String) null);
     }
 
     @Test
@@ -573,7 +640,7 @@ class ChatStreamServiceTest {
         svc.streamAndSave(cmd); // relay 미구독(클라 즉시 끊김). 저장 구독은 살아서 1s 뒤 timeout.
 
         // timeout 종료 경로에서 permit이 해제되어야 perUser=1이어도 재획득 가능.
-        verify(sendQueryUseCase, timeout(3000)).saveAnswer(5L, "", null, (String) null);
+        verify(sendQueryUseCase, timeout(3000)).saveAnswer(5L, "", null, (String) null, (String) null);
         StepVerifier.create(svc.streamAndSave(cmd).tokens())
                 .expectError(java.util.concurrent.TimeoutException.class)
                 .verify(Duration.ofSeconds(3));
@@ -598,7 +665,7 @@ class ChatStreamServiceTest {
         // permit이 누수됐다면 global=1/perUser=1이 막혀 아래 호출이 429로 떨어졌을 것.
         // 정상 해제됐으므로 재획득되어 스트림이 끝까지 흐른다.
         StepVerifier.create(svc.streamAndSave(cmd).tokens()).expectNextCount(1).verifyComplete();
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, (String) null, (String) null);
     }
 
     @Test
@@ -639,7 +706,7 @@ class ChatStreamServiceTest {
 
         // 같은 답이 (멱등 DB 제약 부재로) 최대 2회까지 저장 시도될 수 있음을 회귀로 고정.
         // 멱등 강제는 SendQueryService.saveAnswer의 last-message 판정에 위임(원자성은 DB 제약 미도입).
-        verify(sendQueryUseCase, timeout(2000).times(2)).saveAnswer(5L, "답", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000).times(2)).saveAnswer(5L, "답", null, (String) null, (String) null);
     }
 
     @Test
@@ -656,7 +723,7 @@ class ChatStreamServiceTest {
         StreamResult result = service.streamAndSave(command);
 
         // 저장 구독이 완료될 때까지 기다린 뒤(= 토큰이 이미 다 흘러간 뒤) relay를 늦게 구독한다.
-        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "완성 답", null, (String) null);
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "완성 답", null, (String) null, (String) null);
 
         // replay().all() 버퍼 덕에 늦은 구독자도 처음부터 3개 토큰을 모두 본다(메모리: 답변 1건 분량).
         StepVerifier.create(result.tokens())

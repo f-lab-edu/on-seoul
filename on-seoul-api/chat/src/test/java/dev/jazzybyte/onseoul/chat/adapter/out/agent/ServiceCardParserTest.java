@@ -143,4 +143,44 @@ class ServiceCardParserTest {
         assertThat(parser.parsePrevEntities("not json", 10)).isEmpty();
         assertThat(parser.parsePrevEntities("[]", 10)).isEmpty();
     }
+
+    // ── parseUserRationale (decision → prev_reasoning) ───────────────
+
+    @Test
+    @DisplayName("parseUserRationale() — decision JSON에서 user_rationale을 추출한다")
+    void parseUserRationale_extractsField() {
+        String json = "{\"event\":\"decision\",\"action\":\"RETRIEVE\",\"routes\":[\"VECTOR_SEARCH\"],"
+                + "\"user_rationale\":\"문화행사 검색이 필요해 보입니다\",\"sources\":[]}";
+
+        assertThat(parser.parseUserRationale(json)).isEqualTo("문화행사 검색이 필요해 보입니다");
+    }
+
+    @Test
+    @DisplayName("parseUserRationale() — null/빈문자열/blank rationale/키 부재/null/비객체/파싱실패는 null(하위호환)")
+    void parseUserRationale_invalidInputs_returnNull() {
+        assertThat(parser.parseUserRationale(null)).isNull();
+        assertThat(parser.parseUserRationale("")).isNull();
+        assertThat(parser.parseUserRationale("  ")).isNull();
+        assertThat(parser.parseUserRationale("{\"action\":\"RETRIEVE\"}")).isNull(); // 키 부재
+        assertThat(parser.parseUserRationale("{\"user_rationale\":null}")).isNull();
+        assertThat(parser.parseUserRationale("{\"user_rationale\":\"   \"}")).isNull(); // blank
+        assertThat(parser.parseUserRationale("[\"not\",\"object\"]")).isNull(); // 비객체
+        assertThat(parser.parseUserRationale("not json")).isNull();
+    }
+
+    @Test
+    @DisplayName("parseUserRationale() — user_rationale이 객체/배열이면 asText()가 빈 문자열→blank→null로 폴백한다")
+    void parseUserRationale_nonStringRationale_objectOrArray_returnsNull() {
+        // Jackson asText()는 컨테이너 노드(객체/배열)에 대해 ""를 반환 → blank 가드로 null.
+        assertThat(parser.parseUserRationale("{\"user_rationale\":{\"nested\":\"x\"}}")).isNull();
+        assertThat(parser.parseUserRationale("{\"user_rationale\":[\"a\",\"b\"]}")).isNull();
+    }
+
+    @Test
+    @DisplayName("parseUserRationale() — 트림 후 비-blank면 원본(미트림) 문자열을 그대로 반환한다(앞뒤 공백 보존)")
+    void parseUserRationale_preservesOriginalWhitespace() {
+        // isBlank() 가드는 트림 판정용이고, 반환은 원본 asText() 값(공백 보존) — prev_reasoning에 그대로 전달.
+        assertThat(parser.parseUserRationale("{\"user_rationale\":\"  근거 있음  \"}"))
+                .isEqualTo("  근거 있음  ");
+    }
 }

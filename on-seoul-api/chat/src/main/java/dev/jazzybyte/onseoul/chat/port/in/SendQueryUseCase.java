@@ -21,8 +21,10 @@ public interface SendQueryUseCase {
      *                         없으면 null. ASSISTANT 메시지에만 채워지며 그대로 저장된다.
      * @param intent           AI final 이벤트의 intent 문자열(예: "SQL_SEARCH"). 없으면 null.
      *                         다음 턴 carryover(prev_intent)로 사용한다. 검증 없이 그대로 저장된다.
+     * @param decisionJson     AI decision 이벤트의 payload(opaque JSON). decision 미수신이면 null.
+     *                         user_rationale을 다음 턴 carryover(prev_reasoning)로 추출한다. 그대로 저장된다.
      */
-    void saveAnswer(long roomId, String answer, String serviceCardsJson, String intent);
+    void saveAnswer(long roomId, String answer, String serviceCardsJson, String intent, String decisionJson);
 
     /**
      * @param created   이번 질의로 새 ChatRoom이 생성되었으면 true, 기존 방이면 false.

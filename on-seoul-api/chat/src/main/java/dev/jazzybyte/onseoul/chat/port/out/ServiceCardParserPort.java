@@ -17,4 +17,11 @@ public interface ServiceCardParserPort {
      * 입력이 null/빈 문자열/배열이 아님/파싱 실패면 빈 리스트를 반환한다.
      */
     List<PrevEntity> parsePrevEntities(String serviceCardsJson, int limit);
+
+    /**
+     * decision(opaque JSON)에서 {@code user_rationale}을 추출해 다음 턴 prev_reasoning으로 쓴다.
+     * decision JSON 해석도 AI 계약의 일부이므로 adapter가 구현한다(도메인은 opaque String).
+     * 입력이 null/빈 문자열/객체 아님/키 부재/null/blank/파싱 실패면 null을 반환한다(하위호환).
+     */
+    String parseUserRationale(String decisionJson);
 }

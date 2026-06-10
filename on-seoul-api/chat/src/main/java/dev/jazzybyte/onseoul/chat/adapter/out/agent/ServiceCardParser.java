@@ -52,4 +52,26 @@ public class ServiceCardParser implements ServiceCardParserPort {
             return List.of();
         }
     }
+
+    @Override
+    public String parseUserRationale(String decisionJson) {
+        if (decisionJson == null || decisionJson.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(decisionJson);
+            if (!root.isObject()) {
+                return null;
+            }
+            JsonNode node = root.get("user_rationale");
+            if (node == null || node.isNull()) {
+                return null;
+            }
+            String rationale = node.asText();
+            return rationale.isBlank() ? null : rationale;
+        } catch (Exception e) {
+            log.debug("[Chat] decision user_rationale 파싱 실패 - prev_reasoning null로 폴백");
+            return null;
+        }
+    }
 }

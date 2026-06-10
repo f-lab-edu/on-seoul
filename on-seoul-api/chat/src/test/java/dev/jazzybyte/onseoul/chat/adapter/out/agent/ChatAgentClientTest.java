@@ -477,6 +477,117 @@ class ChatAgentClientTest {
         assertThat(json.has("prev_reasoning")).isFalse();
     }
 
+    // ── decision 이벤트 (AI triage 라우팅 결정) ──────────────────────
+
+    @Test
+    @DisplayName("stream() - event:decision payload(answer 없음)는 decision 이벤트로 인식되고 payload 전체가 decisionJson으로 캡처된다")
+    void stream_decisionEvent_capturesDecisionJson() throws Exception {
+        String decisionData = "{\"event\":\"decision\",\"action\":\"RETRIEVE\",\"routes\":[\"VECTOR_SEARCH\"],"
+                + "\"user_rationale\":\"문화행사 검색이 필요해 보입니다\",\"sources\":[]}";
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("event: decision\ndata: " + decisionData + "\n\n"
+                        + "data: {\"message_id\":84,\"answer\":\"강남구 안내\",\"intent\":\"VECTOR_SEARCH\"}\n\n")
+                .setResponseCode(200));
+
+        List<AiStreamEvent> events = adapter.stream("강남구 문화행사", 1L, 84L, null, null,
+                java.util.List.of(), Carryover.empty()).collectList().block();
+
+        assertThat(events).hasSize(2);
+        AiStreamEvent decision = events.get(0);
+        assertThat(decision.isDecision()).isTrue();
+        assertThat(decision.isFinal()).isFalse();
+        // payload 전체가 opaque로 캡처되고, raw로도 그대로 relay된다.
+        JsonNode parsed = new ObjectMapper().readTree(decision.decisionJson());
+        assertThat(parsed.get("action").asText()).isEqualTo("RETRIEVE");
+        assertThat(parsed.get("routes").get(0).asText()).isEqualTo("VECTOR_SEARCH");
+        assertThat(parsed.get("user_rationale").asText()).isEqualTo("문화행사 검색이 필요해 보입니다");
+        assertThat(decision.raw()).isEqualTo(decisionData);
+        // 이어지는 final은 정상 인식된다.
+        assertThat(events.get(1).isFinal()).isTrue();
+        assertThat(events.get(1).isDecision()).isFalse();
+    }
+
+    @Test
+    @DisplayName("stream() - decision 이벤트도 raw가 프론트로 그대로 relay된다(name 없는 data 통과)")
+    void stream_decisionEvent_relayedRaw() {
+        String decisionData = "{\"event\":\"decision\",\"action\":\"DIRECT_ANSWER\",\"routes\":[],"
+                + "\"user_rationale\":\"단순 안내\",\"sources\":[]}";
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("event: decision\ndata: " + decisionData + "\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), Carryover.empty())
+                .blockLast();
+
+        assertThat(ev.isDecision()).isTrue();
+        assertThat(ev.raw()).isEqualTo(decisionData);
+    }
+
+    @Test
+    @DisplayName("stream() - event=decision이지만 answer 키도 있으면 final로 인식된다(answer 우선)")
+    void stream_decisionWithAnswer_treatedAsFinal() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"event\":\"decision\",\"answer\":\"답\",\"intent\":\"SQL_SEARCH\"}\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), Carryover.empty())
+                .blockLast();
+
+        assertThat(ev.isFinal()).isTrue();
+        assertThat(ev.isDecision()).isFalse();
+    }
+
+    @Test
+    @DisplayName("stream() - progress(step) 이벤트는 event!=decision이므로 decision으로 캡처되지 않는다(하위호환)")
+    void stream_progressEvent_notDecision() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("event: progress\ndata: {\"step\":\"routing\",\"message\":\"분석 중\"}\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), Carryover.empty())
+                .blockLast();
+
+        assertThat(ev.isDecision()).isFalse();
+        assertThat(ev.isFinal()).isFalse();
+        assertThat(ev.decisionJson()).isNull();
+    }
+
+    @Test
+    @DisplayName("stream() - decision 미수신(기존 흐름)이면 어떤 이벤트도 decision으로 캡처되지 않는다(하위호환)")
+    void stream_noDecisionEvent_backwardCompatible() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"step\":\"routing\"}\n\n"
+                        + "data: {\"message_id\":1,\"answer\":\"답\",\"intent\":\"SQL_SEARCH\"}\n\n")
+                .setResponseCode(200));
+
+        List<AiStreamEvent> events = adapter.stream("질문", 1L, 1L, null, null,
+                java.util.List.of(), Carryover.empty()).collectList().block();
+
+        assertThat(events).noneMatch(AiStreamEvent::isDecision);
+    }
+
+    @Test
+    @DisplayName("stream() - 직전 턴 prev_reasoning이 채워지면 요청 본문에 prev_reasoning이 포함된다")
+    void stream_prevReasoning_includedInRequestBody() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: ok\n\n")
+                .setResponseCode(200));
+
+        Carryover carryover = new Carryover(java.util.List.of(), "VECTOR_SEARCH", "직전 turn은 검색이 필요했습니다");
+
+        adapter.stream("후속", 5L, 7L, null, null, java.util.List.of(), carryover).collectList().block();
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        JsonNode json = new ObjectMapper().readTree(recorded.getBody().readUtf8());
+        assertThat(json.get("prev_reasoning").asText()).isEqualTo("직전 turn은 검색이 필요했습니다");
+    }
+
     @Test
     @DisplayName("stream() - 요청이 /chat/stream 경로로 POST 전송된다")
     void stream_requestSentToCorrectPath() throws Exception {

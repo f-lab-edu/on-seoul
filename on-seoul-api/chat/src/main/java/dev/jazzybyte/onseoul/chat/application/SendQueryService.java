@@ -80,7 +80,8 @@ public class SendQueryService implements SendQueryUseCase {
     /**
      * 직전(가장 최신) ASSISTANT 메시지에서 carryover를 조립한다.
      * service_cards(opaque JSON)는 adapter(ServiceCardParserPort)가 [{service_id, label}]로 파싱한다(최대 10건).
-     * prev_intent는 그 메시지의 intent(없으면 null). prev_reasoning은 현 단계 미사용 → 항상 null.
+     * prev_intent는 그 메시지의 intent(없으면 null). prev_reasoning은 그 메시지 decision의 user_rationale을
+     * adapter가 추출한 값(decision 미수신/추출 실패면 null — 하위호환).
      * 직전 ASSISTANT가 없거나 파싱 실패면 빈 carryover로 폴백한다.
      */
     private Carryover buildCarryover(List<ChatMessage> recent) {
@@ -96,7 +97,8 @@ public class SendQueryService implements SendQueryUseCase {
             }
             List<PrevEntity> prevEntities =
                     serviceCardParserPort.parsePrevEntities(lastAssistant.getServiceCards(), MAX_PREV_ENTITIES);
-            return new Carryover(prevEntities, lastAssistant.getIntent(), null);
+            String prevReasoning = serviceCardParserPort.parseUserRationale(lastAssistant.getDecision());
+            return new Carryover(prevEntities, lastAssistant.getIntent(), prevReasoning);
         } catch (Exception e) {
             log.warn("[Chat] carryover 조립 실패 - 빈 carryover로 폴백", e);
             return Carryover.empty();
@@ -105,7 +107,7 @@ public class SendQueryService implements SendQueryUseCase {
 
     @Override
     @Transactional
-    public void saveAnswer(long roomId, String answer, String serviceCardsJson, String intent) {
+    public void saveAnswer(long roomId, String answer, String serviceCardsJson, String intent, String decisionJson) {
         // 멱등 가드: 직전 USER 메시지 이후 ASSISTANT가 이미 있으면(= 마지막 메시지가 ASSISTANT) 저장 생략.
         // 재시도/중복 요청/모든-종료-경로-저장이 겹쳐도 같은 턴에 ASSISTANT가 중복 INSERT되지 않게 한다.
         if (lastMessageIsAssistant(roomId)) {
@@ -113,8 +115,8 @@ public class SendQueryService implements SendQueryUseCase {
             return;
         }
         Long seq = saveChatMessagePort.nextSeq();
-        ChatMessage assistantMessage =
-                ChatMessage.create(roomId, seq, ChatMessageRole.ASSISTANT, answer, serviceCardsJson, intent);
+        ChatMessage assistantMessage = ChatMessage.create(
+                roomId, seq, ChatMessageRole.ASSISTANT, answer, serviceCardsJson, intent, decisionJson);
         saveChatMessagePort.save(assistantMessage);
     }
 

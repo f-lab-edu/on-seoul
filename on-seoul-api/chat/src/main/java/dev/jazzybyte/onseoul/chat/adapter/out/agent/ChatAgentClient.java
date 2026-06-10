@@ -74,8 +74,13 @@ public class ChatAgentClient implements AiServiceStreamPort {
      *
      * <p>final 식별: data가 JSON 객체이고 {@code answer} 키를 가지며 {@code error} 키가 없을 때.
      * AI 서비스의 {@code workflow_error}/{@code error} 이벤트도 answer를 담을 수 있으나 {@code error}
-     * 키가 함께 있으므로 final로 저장하지 않는다(이력에는 정상 답변만 남긴다). 원본 data는 어떤
-     * 이벤트든 그대로 프론트로 relay된다.
+     * 키가 함께 있으므로 final로 저장하지 않는다(이력에는 정상 답변만 남긴다).
+     *
+     * <p>decision 식별: data가 JSON 객체이고 {@code "event":"decision"}이며 {@code answer} 키가 없을 때.
+     * decision payload(action/routes/user_rationale/sources) 전체를 opaque로 캡처해 final과 함께 저장한다.
+     * triage가 LLM 분류한 턴에만 1회 도착할 수 있고(미수신 가능, 하위호환), final보다 먼저 온다.
+     *
+     * <p>원본 data는 final/decision/progress 어떤 이벤트든 그대로 프론트로 relay된다.
      */
     private AiStreamEvent toStreamEvent(ServerSentEvent<String> sse) {
         String data = sse.data();
@@ -95,10 +100,20 @@ public class ChatAgentClient implements AiServiceStreamPort {
                 return AiStreamEvent.finalEvent(data, answer.isNull() ? "" : answer.asText(),
                         serviceCardsJson, intent);
             }
+            if (node.isObject() && !node.has("answer") && isDecisionEvent(node)) {
+                // decision payload 전체를 opaque로 캡처(action/routes/user_rationale/sources). raw도 그대로 relay.
+                return AiStreamEvent.decisionEvent(data, data);
+            }
         } catch (Exception e) {
             // JSON이 아니거나 파싱 실패 — relay 전용 이벤트로 취급(프론트 스트림에는 영향 없음).
             log.debug("[Chat] SSE data를 JSON으로 파싱하지 못해 relay 전용으로 처리합니다.");
         }
         return AiStreamEvent.relay(data);
+    }
+
+    /** payload의 {@code "event"} 필드가 "decision"이면 decision 이벤트로 식별한다. */
+    private static boolean isDecisionEvent(JsonNode node) {
+        JsonNode eventNode = node.get("event");
+        return eventNode != null && !eventNode.isNull() && "decision".equals(eventNode.asText());
     }
 }
