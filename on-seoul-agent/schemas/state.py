@@ -162,3 +162,13 @@ class AgentState(TypedDict):
     # reference_resolution_node 가 referential 판정 시 채운다. None([]) 이면 비-referential
     # (기존 흐름). 다중 참조("1번이랑 3번") 시 복수 바인딩.
     target_service_ids: list[str] | None
+    # ─── 작업 3: SSE 이벤트 노드-내부 emit 1회성 가드 슬롯 ───
+    # 노드가 get_stream_writer 로 progress/decision 을 직접 emit 한다(stream() 역추론 제거).
+    # 노드는 self-correction 루프에서 재실행될 수 있으므로 emit-once 를 state 슬롯으로 보장한다.
+    # 단순 overwrite 필드(reducer 불필요). 미설정 시 노드가 .get(..., False) 로 읽는다.
+    #   decision_emitted  — decision 은 전체 실행 1회만. retry 재진입에도 유지(리셋 안 함).
+    #   searching_emitted / answering_emitted — progress 단계별 1회. retry_prep_node 가
+    #     False 로 리셋해 재검색 시 searching/answering 이 다시 흐른다(기존 동작 보존).
+    decision_emitted: bool
+    searching_emitted: bool
+    answering_emitted: bool

@@ -69,7 +69,7 @@ from agents.sql_agent import SqlAgent
 from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
 from schemas.events import DecisionEvent
-from schemas.state import AgentState, ActionType, IntentType
+from schemas.state import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -361,57 +361,44 @@ class AgentGraph:
     ) -> AsyncGenerator[_StreamEvent, None]:
         """그래프를 실행하며 진행 이벤트와 최종 결과를 yield한다.
 
-        LangGraph astream()으로 노드 완료 시점마다 진행 이벤트를 emit한다.
-        각 progress 이벤트는 "방금 완료된 노드" 기준으로 "다음 단계"를 안내한다.
+        작업 3: 노드가 get_stream_writer 로 자기 progress/decision 이벤트를 직접
+        emit 한다(agents/_helpers.py). stream() 은 더 이상 "어느 단계인지" 를
+        node_name 으로 역추론하지 않는다 — "custom" 청크의 `_evt` 타입으로만 분기해
+        그대로 SSE 튜플로 변환한다(가드 플래그·보류 변수 일체 제거).
 
         Yields:
             ("progress", {"step": str, "message": str}) — 각 단계 전환 시점
+            ("decision", DecisionEvent dict)            — W3 판단 근거 (조건부)
             ("result", AgentState)                      — 최종 완료 상태
 
-        진행 이벤트 타이밍:
-            graph 시작 전        → routing  "질문을 분석하고 있습니다..."
-            triage_node 완료 후  → 비-RETRIEVE면 answering 즉시
-            router_node 완료 후  → searching "관련 정보를 검색하고 있습니다..."
-            search node 완료 후  → answering "답변을 생성하고 있습니다..."
+        emit 위치(노드 측, agents/nodes.py)와 타이밍:
+            graph 시작 전(여기)  → routing  (노드 진입 전이라 writer 못 씀)
+            triage_node          → 비-RETRIEVE면 decision(routes=[]) + answering
+            router_node          → RETRIEVE면 decision(routes) + searching/answering
+            rehydrate_node       → answering (W1 참조 해소 경로)
+            retry_prep_node      → re_searching (+ progress 가드 리셋)
+            search node          → answering
 
-        decision SSE 이벤트(W3) emit 타이밍 — 책임 분리 후 routes 가 router_node 에서야
-        확정되므로 action(triage)·routes(router)를 산출 노드별로 나눠 처리한다:
-          - 비-RETRIEVE action(DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE/EXPLAIN):
-            triage_node 직후 routes=[] 로 emit (검색 계획 없음).
-          - RETRIEVE action: triage 의 user_rationale 을 보류했다가 router_node 완료 후
-            routes=[intent, secondary_intent] 로 emit (action·rationale=triage, routes=router).
-          - user_rationale 이 None(RouterAgent 하위호환 경로, retry forced 경로)이면 미emit.
-          - 재시도 시 router_node 가 재실행돼도 _decision_emitted 가드로 1회만 emit.
+        decision 은 전체 실행 1회(노드의 decision_emitted 슬롯 가드), progress 의
+        searching/answering 은 단계별 1회(searching/answering_emitted 슬롯,
+        retry_prep_node 가 리셋해 재검색 시 다시 흐름).
         """
         state = _prepare_state(state)
 
-        # 그래프 시작 전: routing 단계 진입 알림
+        # 그래프 시작 전: routing 단계 진입 알림 (노드 진입 전이라 writer 사용 불가).
         yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
 
         # 최종 결과는 LangGraph가 reducer를 적용한 "values" 스냅샷을 사용한다.
         # (수동 합산은 node_path/search_channels reducer를 우회해 정합성이 깨짐.)
         # 가장 최근 "values" 청크를 보관했다가 루프 종료 후 yield.
         last_values: dict[str, Any] = dict(state)
-        # 중복 emit 방지 (self-correction 루프에서 노드가 재실행될 수 있음)
-        _search_progress_emitted = False
-        _answer_progress_emitted = False
-        # decision 이벤트는 전체 실행에서 최대 1회 (재시도 재진입에도 유지)
-        _decision_emitted = False
-        # RETRIEVE 경로에서 triage 가 산출한 user_rationale 을 router 완료 시점까지 보류한다.
-        _pending_rationale: str | None = None
 
-        # hydration_node 완료 후 answering 이벤트로 이동 고려 (별도 이슈)
-        _SEARCH_NODES = frozenset(
-            {"sql_node", "vector_node", "map_node", "analytics_node"}
-        )
-
-        # 멀티모드: "updates"(노드별 델타)로 progress/decision 구동,
-        # "values"(reducer 적용 전체 state)로 최종 result 스냅샷 확보.
-        # 한 super-step에서 updates/values 도착 순서에 의존하지 않도록
-        # 가장 최근 values 스냅샷을 들고 있다가 루프 종료 후 yield한다.
+        # 멀티모드: "values"(reducer 적용 전체 state)로 최종 result 스냅샷,
+        # "custom"(노드가 writer 로 보낸 progress/decision 페이로드)으로 SSE 이벤트.
+        # "updates" 는 더 이상 progress/decision 산출에 쓰이지 않으므로 받지 않는다.
         async for mode, chunk in self._compiled_graph.astream(
             state,
-            stream_mode=["updates", "values"],
+            stream_mode=["values", "custom"],
             config={"recursion_limit": 28},  # 최악 경로 23 super-step + 여유 5
         ):
             if mode == "values":
@@ -419,132 +406,18 @@ class AgentGraph:
                 last_values = chunk
                 continue
 
-            # mode == "updates": {node_name: updates_dict}
-            node_name: str = next(iter(chunk))
-            node_updates: dict[str, Any] | None = chunk[node_name]
-
-            if node_name == "triage_node":
-                # action 은 triage 가 산출 — 델타 우선, 미존재 시 values 스냅샷.
-                action = (node_updates or {}).get("action") or last_values.get(
-                    "action"
-                )
-                user_rationale = (node_updates or {}).get("user_rationale")
-                if action == ActionType.RETRIEVE:
-                    # routes 는 router_node 완료 후에야 확정 — rationale 보류.
-                    _pending_rationale = user_rationale
-                else:
-                    # 비-RETRIEVE: routes 없음. user_rationale 있으면 즉시 emit.
-                    if (
-                        user_rationale
-                        and action is not None
-                        and not _decision_emitted
-                    ):
-                        _decision_emitted = True
-                        yield (
-                            "decision",
-                            DecisionEvent(
-                                action=action.value,
-                                routes=[],
-                                user_rationale=user_rationale,
-                            ).model_dump(),
-                        )
-                    # 비-RETRIEVE는 검색 없이 곧장 answering 단계로.
-                    if not _answer_progress_emitted:
-                        _answer_progress_emitted = True
-                        yield (
-                            "progress",
-                            {
-                                "step": "answering",
-                                "message": "답변을 생성하고 있습니다...",
-                            },
-                        )
-
-            elif node_name == "router_node" and not _search_progress_emitted:
-                _search_progress_emitted = True
-                # intent 는 router 가 산출, action 은 앞선 triage 산출.
-                # 델타 우선, 미존재 시 values 스냅샷으로 보강(도착 순서 무관).
-                action = (node_updates or {}).get("action") or last_values.get(
-                    "action"
-                )
-                intent = (node_updates or {}).get("intent") or last_values.get(
-                    "intent"
-                )
-
-                # RETRIEVE 경로 decision: triage 보류 rationale + router 확정 routes.
-                if _pending_rationale and not _decision_emitted:
-                    _decision_emitted = True
-                    primary = (node_updates or {}).get("intent")
-                    secondary = (node_updates or {}).get("secondary_intent")
-                    routes: list[str] = []
-                    if primary is not None:
-                        routes.append(primary.value)
-                    if secondary is not None:
-                        routes.append(secondary.value)
-                    yield (
-                        "decision",
-                        DecisionEvent(
-                            action=(
-                                action.value
-                                if action
-                                else ActionType.RETRIEVE.value
-                            ),
-                            routes=routes,
-                            user_rationale=_pending_rationale,
-                        ).model_dump(),
-                    )
-
-                if intent in (
-                    IntentType.SQL_SEARCH,
-                    IntentType.VECTOR_SEARCH,
-                    IntentType.MAP,
-                    IntentType.ANALYTICS,
-                ):
-                    yield (
-                        "progress",
-                        {
-                            "step": "searching",
-                            "message": "관련 정보를 검색하고 있습니다...",
-                        },
-                    )
-                else:
-                    # FALLBACK/error 등 — 검색 없이 answering.
-                    if not _answer_progress_emitted:
-                        _answer_progress_emitted = True
-                        yield (
-                            "progress",
-                            {
-                                "step": "answering",
-                                "message": "답변을 생성하고 있습니다...",
-                            },
-                        )
-
-            elif node_name == "rehydrate_node" and not _answer_progress_emitted:
-                # W1 참조 해소 경로: 재-hydrate 완료 후 describe 답변 단계로.
-                # 기존 "answering" 이벤트만 사용(신규 SSE 이벤트 미도입 — 하위호환).
-                _answer_progress_emitted = True
+            # mode == "custom": 노드가 get_stream_writer 로 보낸 페이로드.
+            evt = chunk.get("_evt")
+            if evt == "progress":
+                yield "progress", {"step": chunk["step"], "message": chunk["message"]}
+            elif evt == "decision":
                 yield (
-                    "progress",
-                    {"step": "answering", "message": "답변을 생성하고 있습니다..."},
-                )
-
-            elif node_name == "retry_prep_node":
-                # 재시도 경계: 검색/답변 진행 플래그를 리셋해 다음 순회의
-                # searching/answering 이벤트가 다시 흐르게 한다.
-                _search_progress_emitted = False
-                _answer_progress_emitted = False
-                yield (
-                    "progress",
-                    {
-                        "step": "re_searching",
-                        "message": "다른 방식으로 다시 검색하고 있습니다...",
-                    },
-                )
-
-            elif node_name in _SEARCH_NODES and not _answer_progress_emitted:
-                _answer_progress_emitted = True
-                yield (
-                    "progress",
-                    {"step": "answering", "message": "답변을 생성하고 있습니다..."},
+                    "decision",
+                    DecisionEvent(
+                        action=chunk["action"],
+                        routes=chunk["routes"],
+                        user_rationale=chunk["user_rationale"],
+                    ).model_dump(),
                 )
 
         yield "result", last_values  # type: ignore[misc]

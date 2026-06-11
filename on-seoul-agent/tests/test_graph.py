@@ -21,7 +21,7 @@ from agents.nodes import (
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.vector_agent import VectorAgent, _RefinedQuery
 from core.exceptions import RateLimitException
-from schemas.state import AgentState, IntentType
+from schemas.state import ActionType, AgentState, IntentType
 from tests.helpers import (
     make_agent_state,
     make_ai_session,
@@ -29,6 +29,8 @@ from tests.helpers import (
     make_answer_agent,
     make_router,
     make_sql_agent,
+    make_triage,
+    make_triage_router,
     patch_node_sessions,
     run_graph,
     stream_graph,
@@ -888,6 +890,181 @@ class TestAgentGraphStream:
         # searching 은 answering 보다 먼저 방출돼야 한다 (조기 answering 회귀 방어).
         assert progress_steps.index("searching") < progress_steps.index("answering")
 
+    async def test_secondary_intent_fanout_emits_answering_once(self):
+        """secondary_intent 팬아웃(sql+vector 병렬)에서 answering progress 가 정확히 1회.
+
+        회귀 방어: sql_node·vector_node 가 동일 super-step 에 병렬 실행될 때 둘 다 자체
+        answering 을 emit 하면 2회 흐른다(또는 answering_emitted 가드 슬롯에 두 값이
+        동시 기록되어 InvalidUpdateError). answering emit 을 합류 머지점 hydration_node
+        단일 지점으로 옮겨, 팬아웃이 실제로 발생해도 1회만 흐르는지 검증한다.
+
+        실제 팬아웃을 발생시키기 위해 cache_check 직후의 라우팅 함수를
+        route_by_action_fanout(secondary_intent + enable_secondary_intent=True 시
+        ["sql_node","vector_node"] 반환)으로 패치한다.
+        """
+        sql_agent, data_session = _sql_agent(
+            [{"service_id": "S1", "service_name": "수영장"}], keyword="수영장"
+        )
+        vector_agent, ai_session, mock_bm25 = _vector_agent(
+            [{"service_id": "V1", "service_name": "체험관", "similarity": 0.8}]
+        )
+        triage, router = make_triage_router(
+            ActionType.RETRIEVE,
+            IntentType.SQL_SEARCH,
+            user_rationale="복합 검색",
+            secondary_intent=IntentType.VECTOR_SEARCH,
+        )
+        hydrated = [{"service_id": "S1", "service_name": "수영장"}]
+
+        with (
+            patch(
+                "agents.vector_agent.vector_search",
+                AsyncMock(
+                    return_value=[
+                        {"service_id": "V1", "service_name": "체험관", "similarity": 0.8}
+                    ]
+                ),
+            ),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
+            patch("agents.vector_agent.bm25_search", mock_bm25),
+            patch(
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=hydrated),
+            ),
+            # 실제 그래프에 와이어된 라우팅 함수를 팬아웃 분기로 교체해 sql+vector 병렬화.
+            patch.object(
+                GraphNodes, "post_cache_check", GraphNodes.route_by_action_fanout
+            ),
+            patch("agents.nodes.settings") as mock_settings,
+        ):
+            mock_settings.enable_secondary_intent = True
+            mock_settings.rrf_k_constant = 60
+            mock_settings.rrf_top_k_final = 10
+            graph = AgentGraph(
+                triage=triage,
+                router=router,
+                sql_agent=sql_agent,
+                vector_agent=vector_agent,
+                answer_agent=_answer_agent("복합 안내입니다."),
+            )
+            events = await self._collect(
+                stream_graph(
+                    graph,
+                    _state(message="마포구 풋살장 알려줘"),
+                    data_session=data_session,
+                    ai_session=ai_session,
+                )
+            )
+
+        progress_steps = [d["step"] for t, d in events if t == "progress"]
+        # 팬아웃에서 sql_node·vector_node 가 둘 다 실행됐는지(병렬 super-step) 확인.
+        result = [c for t, c in events if t == "result"][0]
+        node_path = result.get("node_path") or []
+        assert "sql_node" in node_path
+        assert "vector_node" in node_path
+        # answering 은 합류점 hydration_node 에서만 emit — 정확히 1회.
+        assert progress_steps.count("answering") == 1
+        # 관측 가능한 시퀀스는 기존과 동일: routing → searching → answering.
+        assert progress_steps.index("routing") < progress_steps.index("searching")
+        assert progress_steps.index("searching") < progress_steps.index("answering")
+
+    async def test_attribute_gap_path_emits_answering_once(self):
+        """OUT_OF_SCOPE/attribute_gap → vector_node → hydration_node 경로에서
+        answering progress 가 정확히 1회.
+
+        QA 회귀(작업 3): attribute_gap 은 triage 가 RETRIEVE 가 아니라 OUT_OF_SCOPE 를
+        산출하므로 router_node 의 RETRIEVE emit 경로를 타지 않고, out_of_scope_node 가
+        intent=VECTOR_SEARCH 로 vector_node 를 거쳐 hydration_node 로 합류한다. 이 경로의
+        answering 도 단일 머지점 hydration_node 에서만 1회 흘러야 한다(vector_node 자체
+        emit 으로 중복되거나, triage 비-RETRIEVE 분기가 추가 answering 을 넣어 2회가
+        되면 안 됨).
+        """
+        triage = make_triage(
+            ActionType.OUT_OF_SCOPE,
+            out_of_scope_type="attribute_gap",
+            user_rationale="속성 질의 — 시설 안내로 전환합니다.",
+        )
+        vrows = [
+            {"service_id": "V001", "service_name": "마루공원 테니스장", "similarity": 0.9}
+        ]
+        hydrated = [
+            {
+                "service_id": "V001",
+                "service_name": "마루공원 테니스장",
+                "service_url": "https://example.com",
+            }
+        ]
+        vector_agent, ai_session, mock_bm25 = _vector_agent(vrows)
+
+        with (
+            patch("agents.vector_agent.vector_search", AsyncMock(return_value=vrows)),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
+            patch("agents.vector_agent.bm25_search", mock_bm25),
+            patch(
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=hydrated),
+            ),
+        ):
+            graph = AgentGraph(
+                triage=triage,
+                vector_agent=vector_agent,
+                answer_agent=_answer_agent("시설 페이지를 확인하세요."),
+            )
+            events = await self._collect(
+                stream_graph(
+                    graph,
+                    _state(message="마루공원 테니스장 보수 공사"),
+                    data_session=MagicMock(),
+                    ai_session=ai_session,
+                )
+            )
+
+        result = [c for t, c in events if t == "result"][0]
+        node_path = result.get("node_path") or []
+        # 경로 전제: vector_node 를 거쳐 hydration_node 로 합류했는지 확인.
+        assert "vector_node" in node_path
+        assert "hydration_node" in node_path
+        progress_steps = [d["step"] for t, d in events if t == "progress"]
+        # attribute_gap 도 answering 은 합류점에서 1회만.
+        assert progress_steps.count("answering") == 1, (
+            f"attribute_gap 경로 answering 이 1회가 아님: {progress_steps}"
+        )
+        # 비-RETRIEVE(OUT_OF_SCOPE) 라도 user_rationale 이 있으면 decision(routes=[]) 1회.
+        decision_events = [d for t, d in events if t == "decision"]
+        assert len(decision_events) == 1
+        assert decision_events[0]["routes"] == []
+
+    async def test_router_only_path_no_decision_but_answering_flows(self):
+        """rationale=None(router-only 하위호환·forced 경로): decision 미emit, 그러나
+        progress(searching/answering)는 정상으로 흐른다.
+
+        QA 회귀(작업 3): decision emit 가드(rationale 없으면 skip)가 progress emit 까지
+        막아버리면 router-only 경로에서 사용자가 진행 표시를 못 본다. decision 만 빠지고
+        searching→answering 시퀀스는 그대로여야 한다.
+        """
+        sql_agent, data_session = _sql_agent(
+            [{"service_id": "S1", "service_name": "수영장", "service_url": "https://x"}]
+        )
+        # triage 미주입 → reference_resolution 후 router_node 가 RETRIEVE 별칭 경로로
+        # 진입하며 user_rationale 이 채워지지 않는다(하위호환).
+        graph = AgentGraph(
+            router=_router(IntentType.SQL_SEARCH),
+            sql_agent=sql_agent,
+            answer_agent=_answer_agent("수영장 안내입니다."),
+        )
+        events = await self._collect(
+            stream_graph(
+                graph, _state(), data_session=data_session, ai_session=_ai_session()
+            )
+        )
+
+        decision_events = [d for t, d in events if t == "decision"]
+        assert len(decision_events) == 0, "rationale=None 이면 decision 미emit"
+        progress_steps = [d["step"] for t, d in events if t == "progress"]
+        assert progress_steps.count("searching") == 1
+        assert progress_steps.count("answering") == 1
+        assert progress_steps.index("searching") < progress_steps.index("answering")
+
 
 # ---------------------------------------------------------------------------
 # 6. DB 세션 라우팅 검증 (SQL → data_session, Vector → ai_session)
@@ -1726,3 +1903,86 @@ class TestVectorNodeRateLimitPropagation:
 
         assert "error" in result
         assert "일반 오류" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# get_stream_writer 안전 래퍼 (agents/_helpers.py) — 노드 컨텍스트 밖 no-op
+# ---------------------------------------------------------------------------
+
+
+class TestEmitHelpersOutsideNodeContext:
+    """노드 컨텍스트(runnable) 밖에서 emit 헬퍼가 크래시 없이 no-op 인지 검증.
+
+    QA 회귀(작업 3): 단위 테스트가 노드를 직접 호출하거나 run()(비스트리밍 ainvoke)
+    으로 그래프를 돌릴 때 get_stream_writer 가 RuntimeError/LookupError 를 던지면
+    노드가 미처리 예외로 죽는다. _writer 가 이를 흡수해 emit 이 무해해야 한다.
+    """
+
+    def test_writer_returns_none_outside_runnable_context(self):
+        """runnable 컨텍스트 밖에서 _writer() 는 None 을 반환한다(예외 흡수)."""
+        from agents._helpers import _writer
+
+        assert _writer() is None
+
+    def test_emit_progress_is_noop_outside_context(self):
+        """emit_progress 가 컨텍스트 밖에서 예외 없이 no-op."""
+        from agents._helpers import emit_progress
+
+        # 예외가 나면 테스트 실패. 반환값 없음(None).
+        assert emit_progress("searching") is None
+        assert emit_progress("answering") is None
+
+    def test_emit_decision_is_noop_outside_context(self):
+        """emit_decision 이 컨텍스트 밖에서 예외 없이 no-op."""
+        from agents._helpers import emit_decision
+
+        assert emit_decision("RETRIEVE", ["SQL_SEARCH"], "근거") is None
+
+    def test_emit_progress_unknown_step_raises_keyerror(self):
+        """알 수 없는 step 은 _PROGRESS_MESSAGES KeyError 로 조기 노출된다.
+
+        오타/미정의 step 이 조용히 빈 메시지로 새지 않도록 보장(컨텍스트 안에서만
+        writer 호출 전에 메시지를 조회하므로, 컨텍스트 밖이면 writer=None 으로
+        조회 전에 빠져나가 KeyError 가 나지 않는다 — 이 경로는 no-op).
+        """
+        from agents._helpers import emit_progress
+
+        # 컨텍스트 밖이라 writer=None → 메시지 조회 전에 반환, KeyError 미발생.
+        assert emit_progress("does_not_exist") is None
+
+
+class TestRunNonStreamingEmitNoop:
+    """run()(비스트리밍 ainvoke) 경로에서 노드 내부 emit 이 no-op 으로 흡수되고
+    그래프가 정상 결과를 내는지 검증.
+
+    QA 회귀(작업 3): ainvoke 에는 stream_mode custom 이 없어 writer 가 no-op 기본값
+    이다. 노드가 emit 을 호출해도 결과 state 에 영향이 없어야 하고 크래시도 없어야
+    한다(stream_graph 와 동일 결과).
+    """
+
+    async def test_run_completes_with_emit_calls_as_noop(self):
+        """RETRIEVE 경로를 run()(ainvoke)으로 돌려도 answer 가 정상으로 채워진다."""
+        rows = [
+            {"service_id": "S1", "service_name": "수영장", "service_url": "https://x"}
+        ]
+        triage, router = make_triage_router(
+            ActionType.RETRIEVE,
+            IntentType.SQL_SEARCH,
+            user_rationale="수영장 검색입니다.",
+        )
+        sql_agent, data_session = _sql_agent(rows)
+        graph = AgentGraph(
+            triage=triage,
+            router=router,
+            sql_agent=sql_agent,
+            answer_agent=_answer_agent("수영장 안내입니다."),
+        )
+        result = await run_graph(
+            graph, _state(), data_session=data_session, ai_session=_ai_session()
+        )
+
+        # emit 이 no-op 으로 흡수되어 정상 흐름 — answer 채워지고 가드 슬롯이 흐름 중
+        # 정상 갱신됐는지 확인(크래시 없음 + decision/answering 단계 통과).
+        assert result["answer"] == "수영장 안내입니다."
+        assert result.get("answering_emitted") is True
+        assert result.get("decision_emitted") is True

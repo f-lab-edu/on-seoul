@@ -84,6 +84,9 @@ def make_agent_state(**overrides: Any) -> AgentState:
         user_rationale=None,
         secondary_intent=None,
         rrf_merged_ids=None,
+        decision_emitted=False,
+        searching_emitted=False,
+        answering_emitted=False,
     )
     base.update(overrides)
     return base

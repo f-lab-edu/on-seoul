@@ -133,6 +133,10 @@ async def _stream(
         prev_intent=request.prev_intent,
         prev_reasoning=request.prev_reasoning,
         target_service_ids=None,
+        # 작업 3: SSE emit 1회성 가드 슬롯 (노드-내부 emit).
+        decision_emitted=False,
+        searching_emitted=False,
+        answering_emitted=False,
     )
 
     try:
