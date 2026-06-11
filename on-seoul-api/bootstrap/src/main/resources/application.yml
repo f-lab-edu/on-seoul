@@ -108,6 +108,10 @@ ai:
     # Phase 7: 임베딩 동기화(POST /embeddings/services/sync) 호출 timeout.
     # 청크당 최대 500건이므로 템플릿 생성보다 넉넉하게 설정한다.
     embedding-sync-timeout-seconds: 30
+    # AI 내부 관리 엔드포인트(POST /admin/cache/flush) X-Internal-Token 공유 시크릿. 평문 금지 — env 주입.
+    admin-internal-token: ${ADMIN_INTERNAL_TOKEN:}
+    # answer cache flush 호출 timeout. best-effort라 짧게 설정한다.
+    admin-cache-flush-timeout-seconds: 3
 
 chat:
   history:

@@ -132,7 +132,7 @@ class NotificationSchedulerTest {
 
         Thread eventThread = new Thread(
                 () -> scheduler.onEmbeddingSyncCompleted(
-                        new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent()),
+                        new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent(java.time.Instant.now())),
                 "embedding-event");
         eventThread.start();
         assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
@@ -688,7 +688,7 @@ class NotificationSchedulerTest {
     void onEmbeddingSyncCompleted_runsBatchOnce() {
         when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
 
-        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent(java.time.Instant.now()));
 
         verify(saveBatchPort).insertRunning(any());
         verify(saveBatchPort).update(any());
@@ -699,8 +699,8 @@ class NotificationSchedulerTest {
     void onEmbeddingSyncCompleted_releasesFlagAfterRun_allowingNextEvent() {
         when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of());
 
-        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
-        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent(java.time.Instant.now()));
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent(java.time.Instant.now()));
 
         // 두 번의 순차 이벤트 → 두 번 실행 (flag가 finally에서 해제됨)
         verify(saveBatchPort, org.mockito.Mockito.times(2)).insertRunning(any());
@@ -718,9 +718,9 @@ class NotificationSchedulerTest {
                 .thenAnswer(inv -> inv.getArgument(0));
 
         // 1회차: update 예외를 내부에서 삼키고 종료 (flag 해제 기대)
-        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent(java.time.Instant.now()));
         // 2회차: flag가 해제되었으므로 다시 실행되어야 한다
-        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent(java.time.Instant.now()));
 
         // flag가 매번 해제됨을 증명 — insertRunning이 2회 호출됨
         verify(saveBatchPort, org.mockito.Mockito.times(2)).insertRunning(any());
@@ -741,14 +741,14 @@ class NotificationSchedulerTest {
         });
 
         Thread first = new Thread(() ->
-                scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent()));
+                scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent(java.time.Instant.now())));
         first.start();
 
         // 첫 이벤트가 배치 내부(running=true)에 진입할 때까지 대기
         assertThat(insideBatch.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
 
         // 두 번째 이벤트: running=true이므로 즉시 무시되어야 한다 (insertRunning 추가 호출 없음)
-        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent());
+        scheduler.onEmbeddingSyncCompleted(new dev.jazzybyte.onseoul.event.EmbeddingSyncCompletedEvent(java.time.Instant.now()));
 
         releaseBatch.countDown();
         first.join(5_000);
