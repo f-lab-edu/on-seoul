@@ -66,7 +66,7 @@ agents/
                                      └─ trace_node     # chat_agent_traces 적재 (best-effort)
 ```
 
-`decision` SSE 이벤트(`DecisionEvent`)는 1회 방출된다 — action·`user_rationale`은 `triage_node`에서, 검색 경로(`routes`)는 RETRIEVE면 `router_node` 완료 후 확정된다(비-RETRIEVE는 `routes=[]`).
+progress·decision SSE 이벤트는 **각 노드가 직접 emit** 한다 — `agents/_helpers.py`의 `get_stream_writer` 안전 래퍼(`emit_progress`/`emit_decision`)로 `{"_evt": ...}` custom 페이로드를 흘려보내고, `stream()`은 이를 `_evt` 타입으로만 분기해 SSE 튜플로 통과시킨다(`stream()`은 더 이상 node_name으로 단계를 역추론하지 않는다). `decision` 이벤트(`DecisionEvent`)는 전체 실행 1회 방출된다 — 비-RETRIEVE면 `triage_node`가 `routes=[]`로(`user_rationale` 있을 때만), RETRIEVE면 `router_node`가 검색 경로(`routes`)를 확정한 뒤 emit 한다. emit-once는 `AgentState`의 가드 슬롯(`decision_emitted`/`searching_emitted`/`answering_emitted`)으로 보장하며, `retry_prep_node`가 progress 가드(`searching_emitted`/`answering_emitted`)만 리셋해 재검색 시 다시 흐르게 한다(`decision_emitted`는 유지). `answering` progress는 검색 팬아웃(sql/vector)이 합류하는 단일 머지점 `hydration_node`에서 1회 emit 한다(map/analytics는 hydration을 거치지 않아 자체 emit).
 
 검색 노드(sql/vector/map)는 `AgentState.search_channels: dict[str, ChannelData]` 에 채널별 입력(query)·출력(hits) 쌍을 채우고, 종단 `search_persist_node` 가 일괄 적재한다. `retry_prep_node` 가 재시도 시 `search_channels = RESET_CHANNELS` sentinel 을 보내 UNIQUE 위반을 방지한다 (빈 dict 는 더 이상 리셋이 아니라 no-op). 자세한 적재 정책은 `docs/chat-search-persistence.md` 참조.
 
@@ -129,6 +129,8 @@ DB를 쓰는 노드는 노드 내부에서 `data_session_ctx()` / `ai_session_ct
 | `error` | `str \| None` | 각 노드 | 오류 메시지 |
 | `retry_count` | `int` | retry_prep_node | 자기 교정 재시도 횟수 (0 = 아직 재시도 없음, 최대 1) |
 | `retry_relaxed` | `bool` | retry_prep_node | 0건 완화 재시도 신호 |
+| `decision_emitted` | `bool` | triage/router_node | decision SSE emit-once 가드. 전체 실행 1회(재시도에도 유지) |
+| `searching_emitted`, `answering_emitted` | `bool` | router/검색/hydration_node | progress SSE emit-once 가드(단계별 1회). `retry_prep_node`가 리셋해 재검색 시 다시 흐름 |
 
 ---
 
@@ -160,6 +162,8 @@ result = await graph.run(
 graph = AgentGraph(router=mock_router, sql_agent=mock_sql)
 ```
 
+**스트리밍**: `stream()`은 `astream(stream_mode=["values","custom"])`으로 실행합니다. `"values"`는 LangGraph가 reducer(`node_path`/`search_channels` 등)를 적용한 전체 state 스냅샷으로, 가장 최근 값을 최종 `("result", state)`로 yield 합니다(수동 `accumulated.update` 누적 없음 — reducer 정합성 보존). `"custom"`은 노드가 `get_stream_writer`로 보낸 progress/decision 페이로드로, `_evt` 타입에 따라 그대로 SSE 튜플로 통과시킵니다.
+
 **오류 처리**: `triage_node` 예외 시 fallback answer를 state에 주입하고 `action=DIRECT_ANSWER`로 설정하여 Self-Correction 없이 종단 체인(cache_write → search_persist → trace)으로 진행합니다. trace / search_persist 적재는 모두 best-effort로 실행되어 저장 실패가 워크플로우 결과에 영향을 주지 않습니다.
 
 **Self-Correction**: RETRIEVE action에서 answer가 비어 있거나 검색 0건이고 `retry_count == 0`이면 `retry_prep_node` 를 거쳐 `router_node`로 재진입해 재검색을 시도합니다(triage는 거치지 않음 — action은 이미 RETRIEVE 확정. 비-RETRIEVE action은 제외). 0건 게이트(`pre_answer_gate_node`)는 hydrated 0건 시 answer LLM 호출 없이 곧장 재시도로 보냅니다. `retry_prep_node` 는 `retry_count` 증가와 함께 `search_channels = RESET_CHANNELS` sentinel 을 보내 이전 시도의 채널 데이터를 비웁니다. 최대 1회로 제한됩니다 (`recursion_limit=28`).
@@ -174,12 +178,12 @@ LangGraph는 데이터(상태)와 제어(엣지)를 분리합니다. 노드는 `
 |---|---|---|---|
 | `reference_resolution_node` | `route_after_reference` | `target_service_ids` | referential → `rehydrate_node`. 비참조 → `triage_node`. |
 | `triage_node` | `route_by_action` | `action`, `error`, `answer` | `RETRIEVE` → `router_node`(→ `cache_check_node`). 그 외 action → 동명 노드. error+answer → `answer_node`. |
-| `out_of_scope_node` | `_dispatch_out_of_scope_route` | `out_of_scope_type` | `attribute_gap` → `vector_node`. `domain_outside` → `search_persist_node`. |
+| `out_of_scope_node` | `_out_of_scope_route` | `out_of_scope_type` | `attribute_gap` → `vector_node`. `domain_outside` → `search_persist_node`. |
 | `cache_check_node` | `post_cache_check` | `cache_hit`, `intent` | hit → `search_persist_node`. miss → `intent`로 sql/vector/map/analytics 분기. |
 | `pre_answer_gate_node` | `route_pre_answer_gate` | `action`, `hydrated_services`, `retry_count` | hydrated 0건(retry=0) → `retry_prep_node`. 그 외 → `answer_node`. |
 | `answer_node` | `self_correction_edge` | `action`, `retry_count`, `answer`, `*_results` | 재시도 필요 시 `retry_prep_node`, 아니면 `cache_write_node`. |
 
-분기 함수·노드는 모듈 수준 `_dispatch_*` 함수로 그래프에 등록되고, 실제 `GraphNodes` 인스턴스는 `_ACTIVE_NODES` ContextVar로 조회합니다(`CompiledStateGraph → AgentGraph` 순환 참조 회피).
+노드 함수와 분기 함수는 `GraphNodes`의 **바운드 메서드**로 `_build_graph(nodes)`에서 그래프에 직접 등록됩니다(`builder.add_node(..., nodes.xxx)`). `_out_of_scope_route`만 graph.py 모듈 수준 순수 함수입니다. `GraphNodes`는 무상태 싱글톤이고 `AgentGraph`를 역참조하지 않으므로 순환 참조가 없으며, `_dispatch_*` 우회 함수나 `_ACTIVE_NODES` ContextVar 같은 회피 계층은 없습니다. 그래프는 `AgentGraph.__init__`에서 인스턴스 단위로 1회 컴파일됩니다(`self._compiled_graph = _build_graph(self._nodes)` — 컴파일 비용이 저렴해 클래스 수준 캐시는 두지 않습니다).
 
 ---
 
