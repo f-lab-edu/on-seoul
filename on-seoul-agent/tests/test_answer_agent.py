@@ -1114,7 +1114,7 @@ class TestAnswerAgentMap:
 
 
 class TestAnswerAgentDescribe:
-    """W1 describe-known-entity 단위 테스트 (QA 갭 보강).
+    """describe-known-entity 단위 테스트 (QA 갭 보강).
 
     invariant #5: describe()는 예약 카드 목록 템플릿(_STRUCT_CARD_LIST)이 아니라
     설명형 프롬프트(_STRUCT_DESCRIBE / _STRUCT_DESCRIBE_EMPTY)를 사용해야 한다.

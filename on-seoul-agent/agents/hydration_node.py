@@ -129,7 +129,7 @@ class HydrationNode:
 
         intent = state.get("intent")
 
-        # [C] W2 RRF 팬아웃 경로: rrf_merged_ids 가 있으면 SQL/VECTOR 혼합 결과.
+        # RRF 팬아웃 경로: rrf_merged_ids 가 있으면 SQL/VECTOR 혼합 결과.
         # hydrate_services 로 통합 원본 조회 후 rrf 랭킹 순으로 정렬한다.
         rrf_ids = state.get("rrf_merged_ids")
         if rrf_ids:

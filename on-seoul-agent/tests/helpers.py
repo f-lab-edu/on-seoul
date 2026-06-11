@@ -78,7 +78,7 @@ def make_agent_state(**overrides: Any) -> AgentState:
         prev_intent=None,
         prev_reasoning=None,
         target_service_ids=None,
-        # [C] W2
+        # action 축 슬롯
         action=None,
         out_of_scope_type=None,
         user_rationale=None,

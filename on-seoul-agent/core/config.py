@@ -115,7 +115,7 @@ class Settings(BaseSettings):
     rrf_scan_k_per_track: int = 50
     rrf_top_k_final: int = 10
 
-    # [C] W2: secondary_intent 팬아웃 단계적 롤아웃 플래그.
+    # secondary_intent 팬아웃 단계적 롤아웃 플래그.
     # False(기본): primary_intent만으로 단일 라우트(기존 동작과 완전 동일).
     # True: secondary_intent가 있을 때 SQL+VECTOR 병렬 팬아웃 → RRF fusion.
     # 활성화 전제: TriageAgent secondary_intent 분류 정확도 검증 후 수동 전환.

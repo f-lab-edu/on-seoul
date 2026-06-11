@@ -1,4 +1,4 @@
-"""W1 그래프 수준 테스트 — 참조 해소·재-hydrate·describe-known-entity.
+"""그래프 수준 테스트 — 참조 해소·재-hydrate·describe-known-entity.
 
 검증:
 - 지시 참조 → target_service_ids 바인딩 + 검색(router/cache/sql/vector) 스킵 + 재-hydrate
@@ -75,7 +75,7 @@ class TestReferentialPath:
         assert "reference_resolution" in result["node_path"]
         assert "rehydrate_node" in result["node_path"]
         assert "describe_node" in result["node_path"]
-        # W2: router -> triage 교체; 참조 해소 경로는 triage도 거치지 않아야 함
+        # 참조 해소 경로는 triage도 거치지 않아야 함
         assert "router" not in result["node_path"]
         assert "triage" not in result["node_path"]
 
@@ -335,7 +335,7 @@ class TestNonReferentialBackcompat:
         )
         assert result.get("target_service_ids") is None
         assert result["intent"] == IntentType.SQL_SEARCH
-        # W2: router -> triage 교체; 하위호환 alias "router"도 허용
+        # 하위호환 alias "router"도 허용
         assert "triage" in result["node_path"] or "router" in result["node_path"]
         assert "describe_node" not in result["node_path"]
         assert any(r["service_id"] == "N1" for r in result["sql_results"])
@@ -359,7 +359,7 @@ class TestNonReferentialBackcompat:
         )
         assert result.get("target_service_ids") is None
         assert result["intent"] == IntentType.SQL_SEARCH
-        # W2: router -> triage 교체; 하위호환 alias "router"도 허용
+        # 하위호환 alias "router"도 허용
         assert "triage" in result["node_path"] or "router" in result["node_path"]
         assert "describe_node" not in result["node_path"]
 

@@ -108,7 +108,7 @@ _STRUCT_ANALYTICS = """\
 
 3) 마무리: 특정 카테고리나 지역을 지정하면 더 자세히 안내할 수 있다는 안내."""
 
-# W1 describe-known-entity — 참조 해소 경로 전용.
+# describe-known-entity — 참조 해소 경로 전용.
 # 직전 턴의 결과 엔티티를 재-hydrate 한 원본을 받아 "어떤 곳인지" 서술한다.
 # 예약 카드 템플릿(목록 나열)이 아니라, 시설의 성격·분류·대상·위치를 설명한다.
 _STRUCT_DESCRIBE = """\
@@ -411,7 +411,7 @@ class AnswerAgent:
             IntentType.FALLBACK.value: _compose(
                 _ROLE, _STRUCT_FALLBACK, _FALLBACK_GUARDRAILS, _OUTPUT_RULES
             ),
-            # W1 describe-known-entity (참조 해소 경로). intent 와 무관한 전용 키.
+            # describe-known-entity (참조 해소 경로). intent 와 무관한 전용 키.
             "DESCRIBE": _compose(_ROLE, _STRUCT_DESCRIBE, _OUTPUT_RULES),
             "DESCRIBE_EMPTY": _compose(_ROLE, _STRUCT_DESCRIBE_EMPTY, _OUTPUT_RULES),
             # AMBIGUOUS 명확화 — history/user_rationale 는 clarify() 런타임에 주입한다.
@@ -422,7 +422,7 @@ class AnswerAgent:
         }
 
     async def describe(self, state: AgentState) -> AgentState:
-        """W1 참조 해소 경로 — 재-hydrate 한 엔티티를 "어떤 곳인지" 서술한다.
+        """참조 해소 경로 — 재-hydrate 한 엔티티를 "어떤 곳인지" 서술한다.
 
         hydrated_services 가 비어 있으면(재-hydrate 0건: soft-delete/마감) 정직한
         안내 + 재검색 제안만 답한다(환각·빈 카드 금지). 예약 카드 템플릿이 아니라

@@ -17,7 +17,7 @@ tools/
 └── _result_columns.py   # 검색 결과 공통 컬럼 정의
 ```
 
-> Vector Agent는 `vector_search`(identity/summary 트랙) + `question_search` + `bm25_search` 4채널을 RRF로 결합하고, 그래프의 `hydration_node`가 `hydrate_services`로 최신 원본을 채웁니다. W1/W2는 신규 도구를 추가하지 않았으며 `tools/tokenizer.py`(이전 `llm/tokenizer.py`에서 이동)는 BM25 토큰화 및 제안3의 `asyncio.to_thread` 오프로드(`atokenize_query`)에 쓰입니다.
+> Vector Agent는 `vector_search`(identity/summary 트랙) + `question_search` + `bm25_search` 4채널을 RRF로 결합하고, 그래프의 `hydration_node`가 `hydrate_services`로 최신 원본을 채웁니다. `tools/tokenizer.py`(이전 `llm/tokenizer.py`에서 이동)는 BM25 토큰화 및 제안3의 `asyncio.to_thread` 오프로드(`atokenize_query`)에 쓰입니다.
 
 ---
 

@@ -1,4 +1,4 @@
-"""[D] W3 — decision SSE 이벤트 emit 검증.
+"""decision SSE 이벤트 emit 검증.
 
 검증 대상:
   1. DecisionEvent 스키마 유효성 (필드/타입/기본값)

@@ -131,32 +131,32 @@ class AgentState(TypedDict):
     # operator.or_ reducer: 부분 dict 반환 시 LangGraph가 누적 병합한다.
     # self-correction 재시도 시 retry_prep_node 가 {} 로 명시 리셋 (UNIQUE 위반 방지).
     search_channels: Annotated[dict[str, ChannelData], search_channels_reducer]
-    # ─── [C] W2: RRF fusion 슬롯 ───
+    # ─── RRF fusion 슬롯 ───
     # rrf_fusion_node 가 SQL+VECTOR 병렬 팬아웃 결과를 RRF 통합한 service_id 순서 리스트.
     # HydrationNode 가 이 슬롯을 우선 참조하여 hydrate_services 를 호출한다.
     # None 이면 단일 라우트(기존 동작). enable_secondary_intent=True 시만 유효.
     rrf_merged_ids: list[str] | None
-    # ─── [C] W2: TriageAgent 2축 분리 슬롯 ───
+    # ─── TriageAgent 2축 분리 슬롯 ───
     # TriageAgent가 결정하는 행동 유형. None이면 구 router 경로(하위호환).
     # AgentGraph()는 항상 TriageAgent()를 기본 주입하므로 프로덕션에서는 항상 채워진다.
     action: ActionType | None
     # OUT_OF_SCOPE 서브타입: "domain_outside" | "attribute_gap"
     out_of_scope_type: str | None
     # 사용자 노출용 판단 근거 1문장 (TriageAgent.user_rationale).
-    # SSE router_decision 이벤트에 포함(W3 연계 기반).
+    # SSE router_decision 이벤트에 포함.
     user_rationale: str | None
     # secondary_intent: SQL↔VECTOR 경계 모호 시 팬아웃용. None이면 단일 라우트(기존 동작).
     secondary_intent: IntentType | None
-    # ─── W1: 대화 상태·결과 엔티티 carryover + 참조 해소 ───
+    # ─── 대화 상태·결과 엔티티 carryover + 참조 해소 ───
     # 직전 턴의 결과 엔티티(정체성). 각 항목 {"service_id": str, "label": str}.
     # ChatRequest.prev_entities 에서 주입(API 서비스가 영속 service_cards 로부터 조립).
     # 미전송 시 None([]) — reference_resolution_node 가 무조건 non-referential 처리(하위호환).
     prev_entities: list[dict[str, str]] | None
     # 직전 턴의 분류 intent. ChatRequest.prev_intent 에서 주입. 미전송 시 None.
-    # (현재는 carryover 슬롯으로만 보관. EXPLAIN 소비는 [C] 이후.)
+    # 현재는 carryover 슬롯으로만 보관(소비 경로 없음).
     prev_intent: IntentType | None
     # 직전 턴의 판단 근거(user_rationale). ChatRequest.prev_reasoning 에서 주입.
-    # 미전송 시 None. EXPLAIN action 소비는 [C] 이후 — 이번엔 슬롯·주입만(X7).
+    # 미전송 시 None. EXPLAIN action 이 판단 근거 설명에 소비한다.
     prev_reasoning: str | None
     # 참조 해소 결과: 현재 message 가 지시 참조일 때 바인딩된 service_id 리스트.
     # reference_resolution_node 가 referential 판정 시 채운다. None([]) 이면 비-referential

@@ -1,4 +1,4 @@
-"""참조 해소(reference resolution) 규칙 — W1.
+"""참조 해소(reference resolution) 규칙.
 
 현재 message 가 직전 턴의 결과 엔티티를 가리키는 "지시 참조"인지 판정하고,
 referential 이면 prev_entities 에서 대상 service_id 를 바인딩한다.

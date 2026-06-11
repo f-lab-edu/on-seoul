@@ -159,8 +159,8 @@ class TestConcurrentRequestIsolation:
             )
 
         # 각 요청의 node_path 는 reference_resolution → triage → sql → ... → trace 의
-        # 자기 경로만 가진다 (W1: START 직후 참조 해소 선판정 노드).
-        # W2: router 가 triage 로 교체되어 path[1] = "triage".
+        # 자기 경로만 가진다 (START 직후 참조 해소 선판정 노드).
+        # path[1] = "triage".
         for res in (res_a, res_b):
             path = res["node_path"]
             assert path[0] == "reference_resolution"

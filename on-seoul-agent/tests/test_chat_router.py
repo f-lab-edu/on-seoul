@@ -185,7 +185,7 @@ class TestChatStreamRouter:
     async def test_prev_entities_injected_into_state(
         self, client: AsyncClient, mock_graph
     ):
-        """W1: ChatRequest.prev_entities/prev_intent/prev_reasoning → AgentState 주입."""
+        """ChatRequest.prev_entities/prev_intent/prev_reasoning → AgentState 주입."""
         final_state = _make_final_state(message_id=2)
         captured: list[AgentState] = []
 
@@ -222,7 +222,7 @@ class TestChatStreamRouter:
     async def test_prev_fields_default_when_omitted(
         self, client: AsyncClient, mock_graph
     ):
-        """W1 하위호환: 신규 필드 미전송 시 빈 배열/None 으로 주입(기존 동작)."""
+        """하위호환: 신규 필드 미전송 시 빈 배열/None 으로 주입(기존 동작)."""
         final_state = _make_final_state(message_id=2)
         captured: list[AgentState] = []
 

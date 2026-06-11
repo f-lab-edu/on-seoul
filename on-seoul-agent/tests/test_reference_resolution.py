@@ -1,4 +1,4 @@
-"""W1 참조 해소 규칙 단위 테스트 (agents/_reference_resolution.py)."""
+"""참조 해소 규칙 단위 테스트 (agents/_reference_resolution.py)."""
 
 from agents._reference_resolution import resolve_reference
 

@@ -22,7 +22,7 @@
 agents/
 ├── graph.py                 # LangGraph StateGraph 조립·실행 (AgentGraph)
 ├── nodes.py                 # 노드·엣지 구현 (GraphNodes)
-├── _reference_resolution.py # W1 지시 참조 규칙 (LLM 미사용)
+├── _reference_resolution.py # 지시 참조 규칙 (LLM 미사용)
 ├── triage_agent.py          # action 결정 (TriageAgent) — 무엇을 할지
 ├── router_agent.py          # 검색 계획 (RouterAgent) — retrieval_intent + 파라미터, RETRIEVE 경로 전용
 ├── sql_agent.py             # LLM 파라미터 추출 + 파라미터화 SQL 조회
@@ -39,7 +39,7 @@ agents/
 
 ```
 사용자 메시지
-  └─ reference_resolution_node           # W1 규칙 기반 지시 참조 판정 (prev_entities 게이트)
+  └─ reference_resolution_node           # 규칙 기반 지시 참조 판정 (prev_entities 게이트)
        ├─ referential   → rehydrate_node (hydrate_services 재수화)
        │                    └─ describe_node (AnswerAgent.describe, 설명형 답변)
        │                         └─ search_persist_node → trace_node
@@ -95,11 +95,11 @@ DB를 쓰는 노드는 노드 내부에서 `data_session_ctx()` / `ai_session_ct
 
 에이전트 간 데이터는 `schemas.state.AgentState` (TypedDict)로 흐릅니다. 필드별 타입·작성 주체·세부 의미는 **`schemas/state.py` 주석이 단일 진실원**입니다. 여기서는 그룹별 역할만 요약합니다.
 
-- **호출자 입력** — `room_id`/`message_id`/`message`/`title_needed`/`user_lat`/`user_lng`/`history`, W1 carryover(`prev_entities`/`prev_intent`/`prev_reasoning`).
-- **참조 해소(W1)** — `target_service_ids`. referential 시 바인딩된 service_id, None=비참조.
+- **호출자 입력** — `room_id`/`message_id`/`message`/`title_needed`/`user_lat`/`user_lng`/`history`, carryover(`prev_entities`/`prev_intent`/`prev_reasoning`).
+- **참조 해소** — `target_service_ids`. referential 시 바인딩된 service_id, None=비참조.
 - **TriageAgent(action 축)** — `action`(5종)/`out_of_scope_type`/`user_rationale`(decision SSE 노출).
 - **RouterAgent(검색 계획)** — `intent`/`secondary_intent`/`refined_query`/`vector_sub_intent` + post-filter(`max_class_name`/`area_name`/`service_status`/`payment_type`), 방향성 재시도 신호(`forced_intent`/`retry_radius_m`).
-- **검색 결과 슬롯** — `sql_results`/`sql_keyword`/`vector_results`/`map_results`/`analytics_*`, 팬아웃 통합 `rrf_merged_ids`(W2).
+- **검색 결과 슬롯** — `sql_results`/`sql_keyword`/`vector_results`/`map_results`/`analytics_*`, 팬아웃 통합 `rrf_merged_ids`.
 - **hydration·카드·답변** — `hydrated_services`/`service_cards`/`answer`/`title`/`cache_hit`.
 - **관측** — `node_path`(reducer append)/`started_at`/`trace`/`error`.
 - **재시도** — `retry_count`(최대 1)/`retry_relaxed`.
@@ -197,7 +197,7 @@ LangGraph는 데이터(상태)와 제어(엣지)를 분리합니다. 노드는 `
 
 ---
 
-### _reference_resolution.py — 지시 참조 해소 (W1)
+### _reference_resolution.py — 지시 참조 해소
 
 `reference_resolution_node`가 START 직후 `resolve_reference(message, prev_entities)`로 현재 메시지가 직전 턴 시설을 가리키는 지시 참조인지 규칙 기반(LLM 미사용)으로 판정합니다. 신호 3종: 지시대명사("이곳/방금/해당"), 서수(한글 "첫번째"~"열번째" + 아라비아 "3번째"), 직전 라벨 부분일치. `prev_entities`가 비어 있으면 무조건 non-referential(하위호환). referential 시 `target_service_ids`를 바인딩하고 `rehydrate_node`(hydrate_services 재수화) → `describe_node`(설명형 답변)로 검색을 우회합니다.
 

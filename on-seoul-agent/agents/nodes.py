@@ -279,7 +279,7 @@ class GraphNodes:
     # ------------------------------------------------------------------
 
     async def reference_resolution_node(self, state: AgentState) -> dict[str, Any]:
-        """W1 참조 해소 게이트 — START 직후 선판정.
+        """참조 해소 게이트 — START 직후 선판정.
 
         현재 message 가 직전 턴 결과 엔티티를 가리키는 "지시 참조"인지 규칙 기반으로
         판정한다(LLM 미사용 — 결정적·저지연·무비용). prev_entities 가 비어 있으면
@@ -307,7 +307,7 @@ class GraphNodes:
         }
 
     async def rehydrate_node(self, state: AgentState) -> dict[str, Any]:
-        """W1 참조 해소 경로 — target_service_ids 의 최신 원본을 재-hydrate.
+        """참조 해소 경로 — target_service_ids 의 최신 원본을 재-hydrate.
 
         스냅샷 캐싱 금지(staleness 위험): 정체성(service_id)만 이어받고 사실(상태·
         일정)은 hydrate_services 로 최신 원본에서 재조회한다. 노드 로컬 data_session
@@ -317,7 +317,7 @@ class GraphNodes:
         가 정직한 안내 + 재검색 제안을 답한다(환각·빈 카드 금지).
         """
         target_ids = state.get("target_service_ids") or []
-        # W1 참조 해소 경로: 재-hydrate 후 describe 답변 단계로 — answering emit.
+        # 참조 해소 경로: 재-hydrate 후 describe 답변 단계로 — answering emit.
         # (기존 stream() 의 rehydrate_node 분기와 동일. 신규 SSE 이벤트 미도입.)
         guard = self._emit_answering(state)
         try:
@@ -343,7 +343,7 @@ class GraphNodes:
             }
 
     async def describe_node(self, state: AgentState) -> dict[str, Any]:
-        """W1 참조 해소 경로 — AnswerAgent.describe() 로 "어떤 곳인지" 서술.
+        """참조 해소 경로 — AnswerAgent.describe() 로 "어떤 곳인지" 서술.
 
         예약 카드 템플릿이 아니라 설명형 답변을 생성한다. 재-hydrate 0건이면
         AnswerAgent.describe 가 정직한 안내 + 재검색 제안을 반환한다.
@@ -630,7 +630,7 @@ class GraphNodes:
             return err_update
 
     # ------------------------------------------------------------------
-    # [C] W2 action별 노드
+    # action별 노드
     # ------------------------------------------------------------------
 
     async def direct_answer_node(self, state: AgentState) -> dict[str, Any]:
