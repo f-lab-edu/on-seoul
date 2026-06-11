@@ -1,6 +1,6 @@
-"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 ([C] W2 + Answer Cache + SearchPersist).
+"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 (Answer Cache + SearchPersist).
 
-그래프 구조 ([C] W2):
+그래프 구조:
     START
       ↓
     reference_resolution_node   — 지시 참조 선판정 (규칙 기반, LLM 미사용)
@@ -68,7 +68,7 @@ from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
-from schemas.events import DecisionEvent
+from schemas.events import DecisionEvent, SourcesUpdateEvent
 from schemas.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ def _out_of_scope_route(state: AgentState) -> str:
 def _build_graph(nodes: GraphNodes) -> Any:
     """StateGraph를 구성하고 컴파일한다. GraphNodes 바운드 메서드를 직접 등록한다.
 
-    그래프 구조 ([C] W2 확장):
+    그래프 구조:
     START → reference_resolution_node
       ├─ referential → rehydrate_node → describe_node → search_persist_node → trace_node
       └─ non-referential → triage_node (action 결정)
@@ -133,7 +133,7 @@ def _build_graph(nodes: GraphNodes) -> Any:
     builder.add_node("answer_node", nodes.answer_node)
     builder.add_node("search_persist_node", nodes.search_persist_node)
     builder.add_node("trace_node", nodes.trace_node)
-    # [C] W2 action 노드
+    # action 노드
     builder.add_node("direct_answer_node", nodes.direct_answer_node)
     builder.add_node("ambiguous_node", nodes.ambiguous_node)
     builder.add_node("out_of_scope_node", nodes.out_of_scope_node)
@@ -150,7 +150,7 @@ def _build_graph(nodes: GraphNodes) -> Any:
         },
     )
 
-    # ── W1 참조 해소 경로 ──
+    # ── 참조 해소 경로 ──
     builder.add_edge("rehydrate_node", "describe_node")
     builder.add_edge("describe_node", "search_persist_node")
 
@@ -251,8 +251,40 @@ def _build_graph(nodes: GraphNodes) -> Any:
 _StreamEvent = (
     tuple[Literal["progress"], dict[str, str]]
     | tuple[Literal["decision"], dict[str, Any]]
+    | tuple[Literal["sources_update"], dict[str, Any]]
     | tuple[Literal["result"], AgentState]
 )
+
+
+def _build_sources(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """AgentState(또는 last_values dict)에서 검색 채널별 hits를 추출한다.
+
+    빈 채널(None 또는 빈 리스트, hits==0)은 제외한다.
+    map_results는 GeoJSON dict이므로 features 배열의 길이를 hits로 산출하고,
+    features 키가 없는 경우 dict 자체 존재를 hits=1로 간주한다.
+    """
+    sources: list[dict[str, Any]] = []
+
+    sql = state.get("sql_results")
+    if sql:
+        sources.append({"channel": "sql", "hits": len(sql)})
+
+    vector = state.get("vector_results")
+    if vector:
+        sources.append({"channel": "vector", "hits": len(vector)})
+
+    map_res = state.get("map_results")
+    if map_res:
+        features = map_res.get("features") if isinstance(map_res, dict) else None
+        hits = len(features) if features is not None else 1
+        if hits > 0:
+            sources.append({"channel": "map", "hits": hits})
+
+    analytics = state.get("analytics_results")
+    if analytics:
+        sources.append({"channel": "analytics", "hits": len(analytics)})
+
+    return sources
 
 
 def _prepare_state(state: AgentState) -> AgentState:
@@ -368,14 +400,14 @@ class AgentGraph:
 
         Yields:
             ("progress", {"step": str, "message": str}) — 각 단계 전환 시점
-            ("decision", DecisionEvent dict)            — W3 판단 근거 (조건부)
+            ("decision", DecisionEvent dict)            — 판단 근거 (조건부)
             ("result", AgentState)                      — 최종 완료 상태
 
         emit 위치(노드 측, agents/nodes.py)와 타이밍:
             graph 시작 전(여기)  → routing  (노드 진입 전이라 writer 못 씀)
             triage_node          → 비-RETRIEVE면 decision(routes=[]) + answering
             router_node          → RETRIEVE면 decision(routes) + searching/answering
-            rehydrate_node       → answering (W1 참조 해소 경로)
+            rehydrate_node       → answering (참조 해소 경로)
             retry_prep_node      → re_searching (+ progress 가드 리셋)
             search node          → answering
 
@@ -419,5 +451,9 @@ class AgentGraph:
                         user_rationale=chunk["user_rationale"],
                     ).model_dump(),
                 )
+
+        sources = _build_sources(last_values)
+        if sources:
+            yield "sources_update", SourcesUpdateEvent(sources=sources).model_dump()
 
         yield "result", last_values  # type: ignore[misc]
