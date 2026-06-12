@@ -367,22 +367,10 @@ class AgentGraph:
         """
         state = _prepare_state(state)
 
-        # recursion_limit=28 (Triage/Router 책임 분리로 RETRIEVE 경로에 router 단계 +1):
-        # 1회 정상 흐름(최악 경로, RETRIEVE + secondary_intent 팬아웃):
-        #   reference_resolution(1) → triage(2) → router(3) → cache_check(4) →
-        #   sql_node+vector_node 병렬 팬아웃(5, 두 노드는 동일 super-step) →
-        #   hydration(6) → rrf_fusion(7) → pre_answer_gate(8) → answer(9) →
-        #   cache_write(10) → search_persist(11) → trace(12) = 12 super-step.
-        #   (병렬 팬아웃은 한 super-step 에 묶이므로 노드 수가 늘어도 step 은 +1만.)
-        # retry 1회 포함 시 retry_prep(+1) → router/cache_check/search/hydration/
-        #   rrf_fusion/pre_answer_gate/answer/cache_write/search_persist/trace
-        #   재실행(+10) = 합계 23 super-step (재시도는 triage 미경유 — router 재진입).
-        # 참조 해소 경로는 더 짧다(reference → rehydrate → describe →
-        #   search_persist → trace = 5). 여유 5를 더해 28로 설정한다.
-        # 세션은 노드 내부에서 acquire-use-release(제안 0-6: 노드 로컬 세션).
+        # recursion_limit: 최악 경로(RETRIEVE + secondary 팬아웃 + retry 1회) ~23 super-step + 여유.
         result: AgentState = await self._compiled_graph.ainvoke(
             state,
-            config={"recursion_limit": 28},
+            config={"recursion_limit": 50},
         )  # type: ignore[arg-type]
 
         return result
@@ -431,7 +419,7 @@ class AgentGraph:
         async for mode, chunk in self._compiled_graph.astream(
             state,
             stream_mode=["values", "custom"],
-            config={"recursion_limit": 28},  # 최악 경로 23 super-step + 여유 5
+            config={"recursion_limit": 50},  # 최악 경로 ~23 super-step + 여유
         ):
             if mode == "values":
                 # reducer가 적용된 전체 state 스냅샷.
