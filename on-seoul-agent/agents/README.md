@@ -140,7 +140,7 @@ graph = AgentGraph(router=mock_router, sql_agent=mock_sql)
 
 **오류 처리**: `triage_node` 예외 시 fallback answer를 state에 주입하고 `action=DIRECT_ANSWER`로 설정하여 Self-Correction 없이 종단 체인(cache_write → search_persist → trace)으로 진행합니다. trace / search_persist 적재는 모두 best-effort로 실행되어 저장 실패가 워크플로우 결과에 영향을 주지 않습니다.
 
-**Self-Correction**: RETRIEVE action에서 빈 답변/0건이면 `retry_prep_node`→`router_node` 재진입으로 최대 1회 재검색합니다(`recursion_limit=28`). 트리거·방향성 전환·0건 게이트 상세는 아래 [Self-Correction 방향성 재시도](#self-correction-방향성-재시도) 섹션 참조.
+**Self-Correction**: RETRIEVE action에서 빈 답변/0건이면 `retry_prep_node`→`router_node` 재진입으로 최대 1회 재검색합니다(`recursion_limit=50`). 트리거·방향성 전환·0건 게이트 상세는 아래 [Self-Correction 방향성 재시도](#self-correction-방향성-재시도) 섹션 참조.
 
 ---
 
@@ -172,7 +172,7 @@ LangGraph는 데이터(상태)와 제어(엣지)를 분리합니다. 노드는 `
 | `ANALYTICS` | 제약 큰 필터 1개 드롭 (status→area, `max_class_name` 유지) | `ANALYTICS` |
 | `MAP` | 반경 확장 (`retry_radius_m=3000`) | `MAP` |
 
-빈 검색 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 hydrated 0건이면 답변 생성 전에 곧장 재시도로 보냅니다(0건 게이트). `forced_intent`는 `router_node`가 honor 후 즉시 None으로 소비(1회성)하므로 무한 전환이 없고, 재시도는 `retry_count` 캡으로 최대 1회(`recursion_limit=28`)입니다. 재시도 시 `retry_relaxed=True`로 `AnswerAgent`가 완화 사실을 답변에 명시합니다.
+빈 검색 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 hydrated 0건이면 답변 생성 전에 곧장 재시도로 보냅니다(0건 게이트). `forced_intent`는 `router_node`가 honor 후 즉시 None으로 소비(1회성)하므로 무한 전환이 없고, 재시도는 `retry_count` 캡으로 최대 1회(`recursion_limit=50`)입니다. 재시도 시 `retry_relaxed=True`로 `AnswerAgent`가 완화 사실을 답변에 명시합니다.
 
 ---
 

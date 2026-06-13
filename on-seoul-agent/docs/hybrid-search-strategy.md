@@ -258,7 +258,7 @@ VectorAgent.search(state, ai_session)
 
 Router Agent가 `vector_sub_intent`(`identification` / `detail` / `semantic`)를 분류하면 `VectorAgent`가 해당 프로파일의 채널별 가중치로 RRF를 실행한다. 현재 운영값은 `rrf_unweighted_baseline=True`(비가중치, 모든 채널 1.0) + `vector_sub_intent_enabled=False`(`semantic` 단일 프로파일)다.
 
-가중치 프로파일 수치, sub_intent 분류 기준, 단계적 활성화(Phase 1/2/3) 절차는 [RRF 결합 전략](superpowers/plans/RRF-Strategy.md)에서 단일 관리한다. 수치 원본은 `core/config.py`의 `rrf_weight_profiles`다.
+가중치 프로파일 수치, sub_intent 분류 기준, 단계적 활성화(Phase 1/2/3) 절차는 [RRF 결합 전략](./RRF-Strategy)에서 단일 관리한다. 수치 원본은 `core/config.py`의 `rrf_weight_profiles`다.
 
 ---
 

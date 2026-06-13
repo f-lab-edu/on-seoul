@@ -89,13 +89,13 @@ flowchart TD
     SEARCH_PERSIST --> TRACE
 ```
 
-각 노드는 공유 상태인 **`AgentState`** 를 입력받아 바뀐 부분만 담은 dict를 반환한다. 상태를 합치는 일은 LangGraph가 맡으므로 노드 안에서 상태를 직접 고치지 않는다. 그래프 전체에는 진행 단계(super-step)를 28로 제한(`recursion_limit=28`)하고 재시도는 1회로 묶어(`retry_count==0`) 무한 반복을 막는다. RETRIEVE 경로에 router 단계가 더해지면서 재시도 1회까지 포함한 가장 긴 경로가 길어졌고, 여유를 더해 28로 잡았다.
+각 노드는 공유 상태인 **`AgentState`** 를 입력받아 바뀐 부분만 담은 dict를 반환한다. 상태를 합치는 일은 LangGraph가 맡으므로 노드 안에서 상태를 직접 고치지 않는다. 그래프 전체에는 진행 단계(super-step)를 50으로 제한(`recursion_limit=50`)하고 재시도는 1회로 묶어(`retry_count==0`) 무한 반복을 막는다. 가장 긴 경로(RETRIEVE + secondary 팬아웃 + 재시도 1회)가 약 23 super-step이고, 여유를 더해 50으로 잡았다.
 
 > **참고사항**
 > - **참조 해소 경로**: `reference_resolution_node`에서 직전 답변에 나왔던 시설 목록(`prev_entities`)을 근거로 하여, 지금 들어온 메시지가 그 시설들을 가리키는 말("거기", "두 번째 그곳"처럼)인지 규칙으로 판정한다. 지시대명사, 서수("첫 번째"), 직전 시설 이름의 부분 일치만 판단하면 되기 때문에 LLM을 쓰지 않도록 하여 지연과 비용을 절감한다. 직전 답변을 지시했다면 검색을 건너뛰고 `rehydrate_node → describe_node`로 곧장 설명 답변을 만들며, 그렇지 않으면 평소대로 `triage_node`로 넘어간다(기존 흐름 그대로 유지)
 > - **Triage / Router 분리**: `triage_node`가 `action`(무엇을 할지)을 정하고, `RETRIEVE`일 때만 `router_node`가 `retrieval_intent`(어떤 검색인지)와 파라미터를 정한다. RETRIEVE가 아닌 나머지 4종은 router를 건너뛰고 곧바로 답변한다. `OUT_OF_SCOPE`의 `attribute_gap`만 예외적으로 `vector_node`로 합류해 시설 식별 검색을 수행한다.
 > - **종단 체인 일관성**: 캐시 적중, 참조 해소, RETRIEVE가 아닌 action 경로 모두 `search_persist_node`를 거친다. `search_channels`가 비어 있으면 곧장 건너뛰므로, 추가 비용 없이 "cache_write → search_persist → trace"라는 종단 체인 형태를 항상 똑같이 유지한다.
-> - **응답 캐시**: 흐름도의 `cache_check_node`/`cache_write_node`는 같은 질문이 반복될 때의 지연과 LLM 비용을 줄인다. 
+> - **응답 캐시**: 흐름도의 `cache_check_node`/`cache_write_node`는 같은 질문이 반복될 때의 지연과 LLM 비용을 줄인다. 캐시 대상, 키, TTL, 무효화 정책은 아래 7장에서 다룬다.
 
 ---
 
@@ -156,9 +156,9 @@ SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬
 - **Track A (identity)** — 시설 신원 임베딩. 자치구, 상태 등은 검색 뒤 후처리 필터(post-filter)로 거른다.
 - **Track B (summary)** — 자연어 요약 임베딩.
 - **Track C (question)** — "이 시설로 답할 만한 예상 질문" 임베딩.
-- **BM25** — 정확 키워드 매칭(전문 검색). 한국어는 `tools/tokenizer.py`가 Kiwi로 의미 형태소만 추려 검색어로 쓴다. 토크나이저가 두 계층(쿼리 전처리 Kiwi + 색인 매칭 `korean_lindera`)으로 나뉜 배경은 [하이브리드 검색 전략](hybrid-search-strategy.md)을 참조한다.
+- **BM25** — 정확 키워드 매칭(전문 검색). 한국어는 `tools/tokenizer.py`가 Kiwi로 의미 형태소만 추려 검색어로 쓴다. 토크나이저가 두 계층(쿼리 전처리 Kiwi + 색인 매칭 `korean_lindera`)으로 나뉜 배경은 [하이브리드 검색 전략](./hybrid-search-strategy)을 참조한다.
 
-채널마다 점수 척도가 달라 단순 합산이 어렵다. 그래서 각 채널의 *순위*만 모아 통합하는 **RRF(Reciprocal Rank Fusion)**를 쓴다(`core/rrf.py`). 4채널은 채널별 독립 세션을 열어 병렬 실행하며, 세마포어로 커넥션 풀 고갈을 막는다. RRF를 택한 이유와 채널 가중치 설계는 [RRF 결합 전략](superpowers/plans/RRF-Strategy.md)에서 자세히 다룬다.
+채널마다 점수 척도가 달라 단순 합산이 어렵다. 그래서 각 채널의 *순위*만 모아 통합하는 **RRF(Reciprocal Rank Fusion)**를 쓴다(`core/rrf.py`). 4채널은 채널별 독립 세션을 열어 병렬 실행하며, 세마포어로 커넥션 풀 고갈을 막는다. RRF를 택한 이유와 채널 가중치 설계는 [RRF 결합 전략](./RRF-Strategy)에서 자세히 다룬다.
 
 > **원본 재조회 분리**: 검색은 임베딩에 붙은 메타데이터를 쓰는데, 이 값(상태, 접수일 등)은 시간이 지나면 실제와 어긋난다(stale). 그래서 검색이 끝나면 별도 `hydration_node`가 `service_id`로 원본 테이블을 다시 읽어 `hydrated_services`에 채운다. Answer Agent는 검색 경로와 무관하게 이 단일 슬롯만 본다 — SQL 경로는 이미 원본 행이라 그대로 통과한다.
 
@@ -186,7 +186,7 @@ SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬
 - **집계** (`analytics_search`) — GROUP BY COUNT / DISTINCT. 컬럼명은 화이트리스트 dict 값만 삽입한다.
 - **원본 hydration** (`hydrate_services`) — 검색이 끝난 뒤 `service_id`로 원본 테이블 최신 행을 다시 읽는 보조 도구. 임베딩 메타데이터의 stale 값이 답변에 새지 않게 한다.
 
-각 도구의 파라미터, 반환 스키마, DB 세션 라우팅은 [`tools/README.md`](../tools/README.md)와 `docs/tools/` 하위 문서가 단일 출처다. 토큰화 동작은 [하이브리드 검색 전략](hybrid-search-strategy.md)을 참조한다.
+각 도구의 파라미터, 반환 스키마, DB 세션 라우팅은 [`tools/README.md`](../tools/README.md)와 `docs/tools/` 하위 문서가 단일 출처다. 토큰화 동작은 [하이브리드 검색 전략](./hybrid-search-strategy)을 참조한다.
 
 ---
 
@@ -220,7 +220,7 @@ SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬
 
 **상태와 제어의 분리** — 노드는 `AgentState`를 읽어 부분 업데이트 dict를 반환할 뿐, 다음 노드를 직접 지목하지 않는다. 전이는 그래프 빌드 시점에 무조건 엣지와 조건부 엣지로 선언되고, 조건부 엣지의 분기 함수는 state만 읽는 순수 함수다. "어디로 갈지"를 결정하는 신호(`action`, `intent`, `cache_hit`, `hydrated_services` 등)는 모두 앞선 노드가 state에 써 둔 값이다. 분기를 코드가 아니라 데이터로 다루므로 경로를 추적, 테스트하기 쉽다. 조건부 엣지 6개의 구체적 규칙은 [`agents/README.md`](../agents/README.md)를 참조한다.
 
-**자기 교정(Self-Correction)** — 검색이 0건이거나 답변이 비면 한 번만 다시 시도한다. 단순히 조건을 푸는 게 아니라 방향을 바꾼다 — 정형 검색(SQL)이 비면 의미 검색(VECTOR)으로 강제 전환하고, 지도 검색이 비면 반경을 넓히는 식이다. 빈 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 0건을 감지하면 답변 생성 전에 곧장 재시도로 보낸다(0건 게이트). 무한 루프는 재시도 1회 캡(`retry_count`)과 `recursion_limit=28`로 막는다. **왜 하필 1회인가**: 0회면 SQL→VECTOR 전환·반경 확장 같은 방향 전환의 복구 기회를 통째로 잃고, 2회 이상이면 검색·LLM 호출이 누적되어 지연·비용이 커지는 데 비해 추가 복구율은 미미하다. 빈 결과의 대부분이 한 번의 방향 전환으로 해소된다고 보고, 복구 가능성과 응답 지연 사이에서 1회를 택했다. 재시도는 triage를 거치지 않고 `router_node`로 재진입한다(action은 이미 RETRIEVE로 확정). intent별 재시도 동작 표는 [`agents/README.md`](../agents/README.md)를 참조한다.
+**자기 교정(Self-Correction)** — 검색이 0건이거나 답변이 비면 한 번만 다시 시도한다. 단순히 조건을 푸는 게 아니라 방향을 바꾼다 — 정형 검색(SQL)이 비면 의미 검색(VECTOR)으로 강제 전환하고, 지도 검색이 비면 반경을 넓히는 식이다. 빈 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 0건을 감지하면 답변 생성 전에 곧장 재시도로 보낸다(0건 게이트). 무한 루프는 재시도 1회 캡(`retry_count`)과 `recursion_limit=50`으로 막는다. **왜 하필 1회인가**: 0회면 SQL→VECTOR 전환·반경 확장 같은 방향 전환의 복구 기회를 통째로 잃고, 2회 이상이면 검색·LLM 호출이 누적되어 지연·비용이 커지는 데 비해 추가 복구율은 미미하다. 빈 결과의 대부분이 한 번의 방향 전환으로 해소된다고 보고, 복구 가능성과 응답 지연 사이에서 1회를 택했다. 재시도는 triage를 거치지 않고 `router_node`로 재진입한다(action은 이미 RETRIEVE로 확정). intent별 재시도 동작 표는 [`agents/README.md`](../agents/README.md)를 참조한다.
 
 ---
 
