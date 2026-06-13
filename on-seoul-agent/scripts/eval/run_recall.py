@@ -259,13 +259,16 @@ async def _search_sql(
     """SqlAgent → service_id 순위 리스트."""
     state: dict = {
         "message": row.query,
-        "refined_query": None,
-        "max_class_name": None,
-        "area_name": None,
-        "service_status": None,
+        "plan": {"refined_query": None},
+        "filters": {
+            "max_class_name": None,
+            "area_name": None,
+            "service_status": None,
+            "payment_type": None,
+        },
     }
     result_state = await sql_agent.search(state, data_session, top_k=_SQL_TOP_K)  # type: ignore[arg-type]
-    rows = result_state.get("sql_results") or []
+    rows = result_state["sql"].get("results") or []
     return [r["service_id"] for r in rows]
 
 

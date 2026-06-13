@@ -251,17 +251,20 @@ async def _run_sql(
     # 라우터 필터(max_class_name/area_name/service_status)는 SqlAgent가 원본에서 재추출.
     state: dict = {
         "message": query,
-        "refined_query": None,
-        "max_class_name": None,
-        "area_name": None,
-        "service_status": None,
-        "payment_type": None,
+        "plan": {"refined_query": None},
+        "filters": {
+            "max_class_name": None,
+            "area_name": None,
+            "service_status": None,
+            "payment_type": None,
+        },
     }
     result_state = await sql_agent.search(  # type: ignore[arg-type]
         state, data_session, top_k=_EVAL_TOP_K
     )
-    rows: list[dict] = result_state.get("sql_results") or []
-    sql_keyword: str = result_state.get("sql_keyword") or ""
+    sql_state: dict = result_state.get("sql") or {}
+    rows: list[dict] = sql_state.get("results") or []
+    sql_keyword: str = sql_state.get("keyword") or ""
     candidates = [
         Candidate(
             service_id=r["service_id"],
