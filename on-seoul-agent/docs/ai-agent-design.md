@@ -186,7 +186,7 @@ SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬
 - **집계** (`analytics_search`) — GROUP BY COUNT / DISTINCT. 컬럼명은 화이트리스트 dict 값만 삽입한다.
 - **원본 hydration** (`hydrate_services`) — 검색이 끝난 뒤 `service_id`로 원본 테이블 최신 행을 다시 읽는 보조 도구. 임베딩 메타데이터의 stale 값이 답변에 새지 않게 한다.
 
-각 도구의 파라미터, 반환 스키마, DB 세션 라우팅은 [`tools/README.md`](../tools/README.md)와 `docs/tools/` 하위 문서가 단일 출처다. 토큰화 동작은 [하이브리드 검색 전략](./hybrid-search-strategy)을 참조한다.
+각 도구의 파라미터, 반환 스키마, DB 세션 라우팅 같은 세부는 저장소의 `tools/` 모듈에 코드와 함께 정리돼 있다. 토큰화 동작은 [하이브리드 검색 전략](./hybrid-search-strategy)을 참조한다.
 
 ---
 
@@ -218,9 +218,9 @@ SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬
 
 설계의 핵심은 두 가지다.
 
-**상태와 제어의 분리** — 노드는 `AgentState`를 읽어 부분 업데이트 dict를 반환할 뿐, 다음 노드를 직접 지목하지 않는다. 전이는 그래프 빌드 시점에 무조건 엣지와 조건부 엣지로 선언되고, 조건부 엣지의 분기 함수는 state만 읽는 순수 함수다. "어디로 갈지"를 결정하는 신호(`action`, `intent`, `cache_hit`, `hydrated_services` 등)는 모두 앞선 노드가 state에 써 둔 값이다. 분기를 코드가 아니라 데이터로 다루므로 경로를 추적, 테스트하기 쉽다. 조건부 엣지 6개의 구체적 규칙은 [`agents/README.md`](../agents/README.md)를 참조한다.
+**상태와 제어의 분리** — 노드는 `AgentState`를 읽어 부분 업데이트 dict를 반환할 뿐, 다음 노드를 직접 지목하지 않는다. 전이는 그래프 빌드 시점에 무조건 엣지와 조건부 엣지로 선언되고, 조건부 엣지의 분기 함수는 state만 읽는 순수 함수다. "어디로 갈지"를 결정하는 신호(`action`, `intent`, `cache_hit`, `hydrated_services` 등)는 모두 앞선 노드가 state에 써 둔 값이다. 분기를 코드가 아니라 데이터로 다루므로 경로를 추적, 테스트하기 쉽다. 조건부 엣지는 참조 판정, action 분기, 범위 밖 처리, 캐시 적중, 0건 게이트, 자기 교정 여섯 곳에서 state 신호만 읽어 다음 노드를 정한다.
 
-**자기 교정(Self-Correction)** — 검색이 0건이거나 답변이 비면 한 번만 다시 시도한다. 단순히 조건을 푸는 게 아니라 방향을 바꾼다 — 정형 검색(SQL)이 비면 의미 검색(VECTOR)으로 강제 전환하고, 지도 검색이 비면 반경을 넓히는 식이다. 빈 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 0건을 감지하면 답변 생성 전에 곧장 재시도로 보낸다(0건 게이트). 무한 루프는 재시도 1회 캡(`retry_count`)과 `recursion_limit=50`으로 막는다. **왜 하필 1회인가**: 0회면 SQL→VECTOR 전환·반경 확장 같은 방향 전환의 복구 기회를 통째로 잃고, 2회 이상이면 검색·LLM 호출이 누적되어 지연·비용이 커지는 데 비해 추가 복구율은 미미하다. 빈 결과의 대부분이 한 번의 방향 전환으로 해소된다고 보고, 복구 가능성과 응답 지연 사이에서 1회를 택했다. 재시도는 triage를 거치지 않고 `router_node`로 재진입한다(action은 이미 RETRIEVE로 확정). intent별 재시도 동작 표는 [`agents/README.md`](../agents/README.md)를 참조한다.
+**자기 교정(Self-Correction)** — 검색이 0건이거나 답변이 비면 한 번만 다시 시도한다. 단순히 조건을 푸는 게 아니라 방향을 바꾼다 — 정형 검색(SQL)이 비면 의미 검색(VECTOR)으로 강제 전환하고, 지도 검색이 비면 반경을 넓히는 식이다. 빈 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 0건을 감지하면 답변 생성 전에 곧장 재시도로 보낸다(0건 게이트). 무한 루프는 재시도 1회 캡(`retry_count`)과 `recursion_limit=50`으로 막는다. **왜 하필 1회인가**: 0회면 SQL→VECTOR 전환·반경 확장 같은 방향 전환의 복구 기회를 통째로 잃고, 2회 이상이면 검색·LLM 호출이 누적되어 지연·비용이 커지는 데 비해 추가 복구율은 미미하다. 빈 결과의 대부분이 한 번의 방향 전환으로 해소된다고 보고, 복구 가능성과 응답 지연 사이에서 1회를 택했다. 재시도는 triage를 거치지 않고 `router_node`로 재진입한다(action은 이미 RETRIEVE로 확정). intent별 재시도 동작은 `retry_prep_node`가 분기한다 — SQL은 VECTOR로 강제 전환, ANALYTICS는 필터를 드롭, MAP은 반경을 넓힌다.
 
 ---
 
