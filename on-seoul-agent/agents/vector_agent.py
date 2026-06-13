@@ -30,11 +30,11 @@ from core.rrf import reciprocal_rank_fusion
 from llm.client import get_chat_model, get_embeddings
 from schemas.search import ChannelData, ChannelQuery, SearchChannel, SearchKind
 from schemas.state import AgentState
+from tools.bm25_search import BM25_LIMIT as _BM25_LIMIT
 from tools.bm25_search import bm25_search
 from tools.question_search import question_search
 from tools.tokenizer import atokenize_query
-from tools.vector_search import MIN_SIMILARITY, TOP_K as _VECTOR_TOP_K
-from tools.vector_search import vector_search
+from tools.vector_search import resolve_min_similarity, vector_search
 
 logger = logging.getLogger(__name__)
 
@@ -268,13 +268,15 @@ class VectorAgent:
         (state["refined_query"] 존재), 중복 LLM 호출을 피하기 위해 refine 체인을 skip하고
         state["max_class_name"/"area_name"/"service_status"] 값을 그대로 사용한다.
         """
-        router_refined = state.get("refined_query")
+        plan = state.get("plan") or {}
+        filters = state.get("filters") or {}
+        router_refined = plan.get("refined_query")
         if router_refined:
             refined = _RefinedQuery(
                 refined_query=router_refined,
-                max_class_name=state.get("max_class_name"),
-                area_name=state.get("area_name"),
-                service_status=state.get("service_status"),
+                max_class_name=filters.get("max_class_name"),
+                area_name=filters.get("area_name"),
+                service_status=filters.get("service_status"),
             )
         else:
             refined = await self._refine_chain.ainvoke({"message": state["message"]})
@@ -337,7 +339,7 @@ class VectorAgent:
             logger.debug("유효 BM25 토큰 없음 — 벡터 단독 검색으로 진행")
 
         # 가중치 결정
-        sub_intent = state.get("vector_sub_intent")
+        sub_intent = plan.get("vector_sub_intent")
         weights = _resolve_weights(sub_intent)
 
         # 4채널 RRF 결합
@@ -359,6 +361,8 @@ class VectorAgent:
         ]
 
         # --- search_channels 구성 (5채널) ---
+        # 트랙별 실제 운영값(config)을 그대로 기록한다.
+        track_top_k = settings.vector_track_top_k
         search_channels: dict[str, ChannelData] = {
             SearchChannel.VECTOR_A: ChannelData(
                 kind=SearchKind.VECTOR,
@@ -366,8 +370,8 @@ class VectorAgent:
                     query_text=refined.refined_query,
                     parameters={
                         "row_kind": "identity",
-                        "top_k": _VECTOR_TOP_K,
-                        "min_similarity": MIN_SIMILARITY,
+                        "top_k": track_top_k,
+                        "min_similarity": resolve_min_similarity("identity"),
                         "max_class_name": refined.max_class_name,
                         "area_name": refined.area_name,
                         "service_status": refined.service_status,
@@ -381,8 +385,8 @@ class VectorAgent:
                     query_text=refined.refined_query,
                     parameters={
                         "row_kind": "summary",
-                        "top_k": _VECTOR_TOP_K,
-                        "min_similarity": MIN_SIMILARITY,
+                        "top_k": track_top_k,
+                        "min_similarity": resolve_min_similarity("summary"),
                     },
                 ),
                 hits=_to_hits(b_rows, score_field="similarity"),
@@ -393,8 +397,8 @@ class VectorAgent:
                     query_text=refined.refined_query,
                     parameters={
                         "row_kind": "question",
-                        "top_k": _VECTOR_TOP_K,
-                        "min_similarity": MIN_SIMILARITY,
+                        "top_k": track_top_k,
+                        "min_similarity": resolve_min_similarity("question"),
                     },
                 ),
                 hits=_to_hits(c_rows, score_field="similarity"),
@@ -403,7 +407,7 @@ class VectorAgent:
                 kind=SearchKind.BM25,
                 query=ChannelQuery(
                     query_text=" ".join(bm25_tokens) if bm25_tokens else None,
-                    parameters={"tokens": bm25_tokens, "top_k": _VECTOR_TOP_K},
+                    parameters={"tokens": bm25_tokens, "top_k": _BM25_LIMIT},
                 ),
                 hits=_to_hits(d_rows, score_field="bm25_score"),
             ),
@@ -430,7 +434,7 @@ class VectorAgent:
         }
 
         return {
-            "refined_query": refined.refined_query,
-            "vector_results": meta_results,
+            "plan": {"refined_query": refined.refined_query},
+            "vector": {"results": meta_results},
             "search_channels": search_channels,
         }

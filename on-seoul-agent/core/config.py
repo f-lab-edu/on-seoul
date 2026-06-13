@@ -112,8 +112,21 @@ class Settings(BaseSettings):
 
     # Triple-track + RRF 결합
     rrf_k_constant: int = 60
+    # post-filter 적용 측정에서 깊이30/scan100의 recall@k 이득 미확인 → 두 값 모두 원본 유지.
+    #   rrf_scan_k_per_track: 트랙당 ANN 1차 스캔 깊이 (top_k보다 커 post-filter 탈락 완충).
+    #   vector_track_top_k  : 트랙별 RRF 입력 깊이.
     rrf_scan_k_per_track: int = 50
     rrf_top_k_final: int = 10
+    vector_track_top_k: int = 10
+
+    # 트랙별 코사인 유사도 하한 — 3트랙 공통 0.65 uniform.
+    # 하한 0.55/0.60/0.65/0.70 스윕에서 0.65가 정점(역U자), 0.70 급락,
+    # identification recall 1.0 유지 — 2026-06 측정. recall@k 기준.
+    # 현재 3트랙 동일(0.65)이나, 트랙별로 다르게 둘 수 있는 구조(3개 키)는
+    # 향후 트랙별 조정 여지를 위해 유지한다.
+    vector_min_similarity_identity: float = 0.65
+    vector_min_similarity_summary: float = 0.65
+    vector_min_similarity_question: float = 0.65
 
     # secondary_intent 팬아웃 단계적 롤아웃 플래그.
     # False(기본): primary_intent만으로 단일 라우트(기존 동작과 완전 동일).
