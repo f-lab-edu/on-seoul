@@ -91,52 +91,46 @@ async def _stream(
         request.message[:60],
     )
     state = AgentState(
+        # ── 보편 입력 (평면) ──
         room_id=request.room_id,
         message_id=request.message_id,
         message=request.message,
         title_needed=(request.message_id == 1),
-        intent=None,
-        forced_intent=None,
-        retry_radius_m=None,
         user_lat=request.lat,
         user_lng=request.lng,
-        refined_query=None,
-        max_class_name=None,
-        area_name=None,
-        service_status=None,
-        payment_type=None,
-        sql_results=None,
-        sql_keyword=None,
-        vector_sub_intent=None,
-        vector_results=None,
-        map_results=None,
-        analytics_results=None,
-        analytics_group_by=None,
-        analytics_metric=None,
-        analytics_keyword=None,
-        service_cards=None,
-        hydrated_services=None,
-        answer=None,
-        title=None,
-        trace=None,
-        node_path=[],
-        started_at=None,
-        error=None,
-        retry_count=0,
-        retry_relaxed=False,
         history=[h.model_dump() for h in request.history],
-        cache_hit=False,
-        search_channels={},
+        # ── carryover 입력 (평면) ──
         # 결과 엔티티 carryover + 참조 해소. 미전송 시 빈 배열/None →
         # reference_resolution_node 가 non-referential 로 처리(기존 흐름 보존).
         prev_entities=[e.model_dump() for e in request.prev_entities],
         prev_intent=request.prev_intent,
         prev_reasoning=request.prev_reasoning,
         target_service_ids=None,
-        # 작업 3: SSE emit 1회성 가드 슬롯 (노드-내부 emit).
-        decision_emitted=False,
-        searching_emitted=False,
-        answering_emitted=False,
+        # ── 재시도 제어 (평면) ──
+        retry_count=0,
+        retry_relaxed=False,
+        forced_intent=None,
+        retry_radius_m=None,
+        # ── 오류/캐시 (평면) ──
+        error=None,
+        cache_hit=False,
+        # ── 인프라/관측 (평면) ──
+        node_path=[],
+        search_channels={},
+        trace=None,
+        started_at=None,
+        rrf_merged_ids=None,
+        # ── 도메인 working state (중첩, §6: 모두 {} 초기화) ──
+        triage={},
+        plan={},
+        filters={},
+        sql={},
+        vector={},
+        map={},
+        analytics={},
+        hydration={},
+        output={},
+        emit={},
     )
 
     try:
@@ -154,14 +148,16 @@ async def _stream(
 
             elif event_type == "result":
                 result = data
-                intent = result.get("intent")
+                plan = result.get("plan") or {}
+                output = result.get("output") or {}
+                intent = plan.get("intent")
                 payload = {
                     "message_id": result["message_id"],
-                    "answer": result.get("answer") or "",
+                    "answer": output.get("answer") or "",
                     "intent": intent.value if intent is not None else None,
-                    "title": result.get("title"),
+                    "title": output.get("title"),
                     "cache_hit": bool(result.get("cache_hit")),
-                    "service_cards": result.get("service_cards") or [],
+                    "service_cards": output.get("service_cards") or [],
                 }
                 if result.get("error"):
                     logger.error(

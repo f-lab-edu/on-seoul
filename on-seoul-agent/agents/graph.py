@@ -78,7 +78,7 @@ def _out_of_scope_route(state: AgentState) -> str:
 
     GraphNodes 메서드가 아닌 graph.py 모듈 수준 라우팅 함수다(상태만 읽는 순수 함수).
     """
-    if state.get("out_of_scope_type") == "attribute_gap":
+    if state["triage"].get("out_of_scope_type") == "attribute_gap":
         return "vector_node"
     return "search_persist_node"
 
@@ -265,22 +265,22 @@ def _build_sources(state: dict[str, Any]) -> list[dict[str, Any]]:
     """
     sources: list[dict[str, Any]] = []
 
-    sql = state.get("sql_results")
+    sql = (state.get("sql") or {}).get("results")
     if sql:
         sources.append({"channel": "sql", "hits": len(sql)})
 
-    vector = state.get("vector_results")
+    vector = (state.get("vector") or {}).get("results")
     if vector:
         sources.append({"channel": "vector", "hits": len(vector)})
 
-    map_res = state.get("map_results")
+    map_res = (state.get("map") or {}).get("results")
     if map_res:
         features = map_res.get("features") if isinstance(map_res, dict) else None
         hits = len(features) if features is not None else 1
         if hits > 0:
             sources.append({"channel": "map", "hits": hits})
 
-    analytics = state.get("analytics_results")
+    analytics = (state.get("analytics") or {}).get("results")
     if analytics:
         sources.append({"channel": "analytics", "hits": len(analytics)})
 
@@ -302,6 +302,22 @@ def _prepare_state(state: AgentState) -> AgentState:
         overrides["retry_count"] = 0
     overrides["started_at"] = time.monotonic()
     overrides["node_path"] = []
+    # 중첩 채널 방어 초기화(§6): 부분 dict 주입 테스트에서 leaf .get() 접근이
+    # KeyError 로 새지 않도록 미존재 채널을 {} 로 채운다(정상 경로는 chat.py 가 채움).
+    for _ch in (
+        "triage",
+        "plan",
+        "filters",
+        "sql",
+        "vector",
+        "map",
+        "analytics",
+        "hydration",
+        "output",
+        "emit",
+    ):
+        if _ch not in state:
+            overrides[_ch] = {}
     return {**state, **overrides}  # type: ignore[return-value]
 
 

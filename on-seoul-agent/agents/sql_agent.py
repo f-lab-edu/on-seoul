@@ -127,7 +127,9 @@ class SqlAgent:
             평가 스크립트처럼 더 많은 후보가 필요한 경우에만 지정한다.
         """
         today_str = datetime.now(tz=timezone.utc).date().isoformat()
-        router_refined = state.get("refined_query")
+        plan = state.get("plan") or {}
+        filters = state.get("filters") or {}
+        router_refined = plan.get("refined_query")
 
         # Router refined_query가 있으면 더 짧고 정제된 텍스트를 LLM에 전달
         input_message = router_refined or state["message"]
@@ -139,10 +141,10 @@ class SqlAgent:
         )
 
         if router_refined:
-            max_class_name = state.get("max_class_name")
-            area_name = state.get("area_name")
-            service_status = state.get("service_status")
-            payment_type = state.get("payment_type")
+            max_class_name = filters.get("max_class_name")
+            area_name = filters.get("area_name")
+            service_status = filters.get("service_status")
+            payment_type = filters.get("payment_type")
         else:
             max_class_name = params.max_class_name
             area_name = params.area_name
@@ -160,4 +162,4 @@ class SqlAgent:
             receipt_date_to=params.receipt_date_to,
             top_k=top_k if top_k is not None else _TOP_K,
         )
-        return {**state, "sql_results": rows, "sql_keyword": params.keyword}
+        return {**state, "sql": {"results": rows, "keyword": params.keyword}}

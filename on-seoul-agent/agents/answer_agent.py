@@ -429,7 +429,7 @@ class AnswerAgent:
         시설 성격·분류·대상 설명을 생성한다.
         """
         message = state["message"]
-        hydrated = state.get("hydrated_services") or []
+        hydrated = state["hydration"].get("hydrated_services") or []
 
         if not hydrated:
             answer_text = await self._answer_chain.ainvoke(
@@ -478,7 +478,7 @@ class AnswerAgent:
             system_parts.append(context_block)
 
         # user_rationale: triage 가 산출한 모호 근거 힌트. 경계 마커로 감싸 주입한다.
-        rationale = state.get("user_rationale")
+        rationale = state["triage"].get("user_rationale")
         if rationale:
             system_parts.append(
                 "참고용 모호성 힌트(user_rationale):\n"
@@ -513,14 +513,14 @@ class AnswerAgent:
         - SQL_SEARCH / VECTOR_SEARCH / None: _build_card_system으로 Tier 2 조립.
           상위 _DISPLAY_LIMIT건 슬라이스 + extra_count.
         """
-        intent = state.get("intent")
+        intent = state["plan"].get("intent")
         message = state["message"]
 
         if intent == IntentType.ANALYTICS:
-            # ANALYTICS: analytics_results를 직접 LLM에 전달. _normalize 미경유.
+            # ANALYTICS: analytics 결과를 직접 LLM에 전달. _normalize 미경유.
             # 카드 미표시 개념이 없으므로 _more_notice(0)('외 N건' 금지 문구)을 주입한다.
             system_prompt = self._static_prompts[IntentType.ANALYTICS.value]
-            raw_analytics = state.get("analytics_results") or []
+            raw_analytics = state["analytics"].get("results") or []
             results_json = json.dumps(raw_analytics, ensure_ascii=False, default=str)
             answer_text: str = await self._answer_chain.ainvoke(
                 {
@@ -558,7 +558,7 @@ class AnswerAgent:
                 system_prompt = _build_card_system(
                     message,
                     display,
-                    state.get("area_name"),
+                    state["filters"].get("area_name"),
                     retry_relaxed=bool(state.get("retry_relaxed")),
                 )
 
@@ -609,19 +609,22 @@ class AnswerAgent:
         """
         raw: list[dict] = []
 
-        hydrated = state.get("hydrated_services")
+        hydrated = state["hydration"].get("hydrated_services")
         if hydrated is not None:
             raw.extend(hydrated)
         else:
             # 폴백 — hydrated_services 슬롯이 비었을 때만 검색 경로별 슬롯에서 채집.
-            if state.get("sql_results"):
-                raw.extend(state["sql_results"])
-            if state.get("vector_results"):
-                raw.extend(state["vector_results"])
+            sql_results = state["sql"].get("results")
+            vector_results = state["vector"].get("results")
+            if sql_results:
+                raw.extend(sql_results)
+            if vector_results:
+                raw.extend(vector_results)
 
-        if state.get("map_results"):
-            # map_results는 GeoJSON dict — features 배열 언팩
-            features = state["map_results"].get("features", [])
+        map_results = state["map"].get("results")
+        if map_results:
+            # map 결과는 GeoJSON dict — features 배열 언팩
+            features = map_results.get("features", [])
             raw.extend(f.get("properties", {}) for f in features)
 
         return [self._normalize(r) for r in raw]

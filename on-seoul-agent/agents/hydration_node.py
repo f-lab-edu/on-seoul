@@ -47,11 +47,11 @@ def _extract_service_ids(state: AgentState) -> list[str]:
     Returns:
         intent 가 VECTOR_SEARCH / SQL_SEARCH 가 아니거나, 해당 결과 슬롯이 비어 있으면 []
     """
-    intent = state.get("intent")
+    intent = state["plan"].get("intent")
     if intent == IntentType.VECTOR_SEARCH:
-        rows = state.get("vector_results") or []
+        rows = state["vector"].get("results") or []
     elif intent == IntentType.SQL_SEARCH:
-        rows = state.get("sql_results") or []
+        rows = state["sql"].get("results") or []
     else:
         return []
     return [r["service_id"] for r in rows if r.get("service_id")]
@@ -122,12 +122,13 @@ class HydrationNode:
         data_session: AsyncSession,
     ) -> dict[str, Any]:
         # 재호출 안전 — None 이 아니면(빈 리스트 포함) 이미 처리된 상태이므로 skip.
-        # retry_prep_node 는 hydrated_services=None 으로 명시 리셋하므로
+        # retry_prep_node 는 hydration 그룹을 {} 로 리셋(hydrated_services 미존재)하므로
         # retry 경로에서 [] 상태가 가드를 통과해 중복 실행되는 문제가 없다.
-        if state.get("hydrated_services") is not None:
+        if state["hydration"].get("hydrated_services") is not None:
             return {}
 
-        intent = state.get("intent")
+        intent = state["plan"].get("intent")
+        payment_type = state["filters"].get("payment_type")
 
         # RRF 팬아웃 경로: rrf_merged_ids 가 있으면 SQL/VECTOR 혼합 결과.
         # hydrate_services 로 통합 원본 조회 후 rrf 랭킹 순으로 정렬한다.
@@ -141,24 +142,24 @@ class HydrationNode:
                     len(rrf_ids),
                     exc_info=True,
                 )
-                return {"hydrated_services": []}
+                return {"hydration": {"hydrated_services": []}}
             # rrf 랭킹 순으로 정렬
             order = {sid: i for i, sid in enumerate(rrf_ids)}
             hydrated.sort(key=lambda r: order.get(r.get("service_id", ""), 9999))
             # 결제유형 post-filter
-            hydrated = _filter_by_payment(hydrated, state.get("payment_type"))
-            return {"hydrated_services": hydrated}
+            hydrated = _filter_by_payment(hydrated, payment_type)
+            return {"hydration": {"hydrated_services": hydrated}}
 
-        # SQL_SEARCH — sql_results 가 이미 원본 행이므로 그대로 통과.
+        # SQL_SEARCH — sql.results 가 이미 원본 행이므로 그대로 통과.
         if intent == IntentType.SQL_SEARCH:
-            sql_results = state.get("sql_results") or []
-            return {"hydrated_services": list(sql_results)}
+            sql_results = state["sql"].get("results") or []
+            return {"hydration": {"hydrated_services": list(sql_results)}}
 
         # VECTOR_SEARCH — service_id 추출 + hydrate_services 호출 + 검색 메타 머지.
         if intent == IntentType.VECTOR_SEARCH:
             service_ids = _extract_service_ids(state)
             if not service_ids:
-                return {"hydrated_services": []}
+                return {"hydration": {"hydrated_services": []}}
             try:
                 hydrated = await hydrate_services(data_session, service_ids)
             except Exception:
@@ -167,8 +168,8 @@ class HydrationNode:
                     len(service_ids),
                     exc_info=True,
                 )
-                return {"hydrated_services": []}
-            source_rows = state.get("vector_results") or []
+                return {"hydration": {"hydrated_services": []}}
+            source_rows = state["vector"].get("results") or []
             hydrated = _merge_search_meta(hydrated, source_rows)
             # 벡터 경로 payment 필터 — metadata 에 payment_type 이 없으므로
             # hydration 직후 원본 컬럼으로 post-filter (무료=정확/유료=접두).
@@ -178,8 +179,8 @@ class HydrationNode:
             # 남는 recall 손실이 발생할 수 있다. 현재는 동작을 단순하게 유지하고
             # (절단 전 넉넉히 확보 후 필터링하는 방식은 범위가 커 후속 과제로 남김),
             # payment 필터가 결과 수를 줄일 수 있음을 명시만 한다.
-            hydrated = _filter_by_payment(hydrated, state.get("payment_type"))
-            return {"hydrated_services": hydrated}
+            hydrated = _filter_by_payment(hydrated, payment_type)
+            return {"hydration": {"hydrated_services": hydrated}}
 
         # MAP / FALLBACK — hydration 대상 아님 (MAP 은 GeoJSON 구조라 별도 처리).
-        return {"hydrated_services": []}
+        return {"hydration": {"hydrated_services": []}}
