@@ -8,7 +8,7 @@
    - Track C: question_search(row_kind='question') — PARTITION BY dedup
    - Track D: bm25_search — ParadeDB 전문 검색
 4. 4채널 결과를 가중 RRF(Reciprocal Rank Fusion)로 결합한다.
-5. vector_results 에는 검색 메타데이터만 채운다 ({service_id, rrf_score}).
+5. vector.results 에는 검색 메타데이터만 채운다 ({service_id, rrf_score}).
    hydration(원본 조회)은 HydrationNode 가 단독으로 담당한다.
 """
 
@@ -52,9 +52,6 @@ _REFINE_SYSTEM = """\
 
 _REFINE_HUMAN = "사용자 질의: {message}"
 
-_RRF_K: int = 60  # RRF 공식 상수 (표준값 60)
-_TOP_K: int = 10  # RRF 결합 결과 최대 반환 수
-
 _ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(
     ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
 )
@@ -96,61 +93,6 @@ class _RefinedQuery(BaseModel):
         if v in _ALLOWED_SERVICE_STATUSES:
             return v  # type: ignore[return-value]
         return None
-
-
-def _rrf_merge(
-    vector_rows: list[dict],
-    bm25_rows: list[dict],
-    *,
-    k: int = _RRF_K,
-    top_k: int = 10,
-) -> list[dict]:
-    """Reciprocal Rank Fusion으로 두 검색 결과를 결합한다.
-
-    Phase 1 호환 함수. 기존 test_vector_agent.py에서 직접 사용.
-    Phase RRF에서는 core.rrf.reciprocal_rank_fusion을 사용하되,
-    이 함수는 하위 호환성을 위해 유지한다.
-
-    Parameters
-    ----------
-    vector_rows:
-        vector_search 반환값. service_id, service_name, metadata, similarity 포함.
-    bm25_rows:
-        bm25_search 반환값. service_id, bm25_score 포함.
-    k:
-        RRF 공식 상수. 기본값 60.
-    top_k:
-        최종 반환 결과 수.
-
-    Returns
-    -------
-    list[dict]
-        rrf_score 내림차순 정렬된 딕셔너리 리스트.
-        각 dict는 service_id, rrf_score 외에 vector_search 메타데이터를 포함한다.
-    """
-    scores: dict[str, float] = {}
-
-    for rank, row in enumerate(vector_rows, start=1):
-        sid = row["service_id"]
-        scores[sid] = scores.get(sid, 0.0) + 1.0 / (k + rank)
-
-    for rank, row in enumerate(bm25_rows, start=1):
-        sid = row["service_id"]
-        scores[sid] = scores.get(sid, 0.0) + 1.0 / (k + rank)
-
-    # 메타데이터 인덱싱 — 벡터 결과 우선, 없으면 BM25 결과에서 보완
-    vector_meta: dict[str, dict] = {r["service_id"]: r for r in vector_rows}
-    bm25_meta: dict[str, dict] = {r["service_id"]: r for r in bm25_rows}
-
-    merged = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
-
-    result = []
-    for sid, rrf_score in merged:
-        base = dict(vector_meta.get(sid, bm25_meta.get(sid, {"service_id": sid})))
-        base["rrf_score"] = rrf_score
-        result.append(base)
-
-    return result
 
 
 def _resolve_weights(sub_intent: str | None) -> dict[str, float] | None:
