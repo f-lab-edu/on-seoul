@@ -45,7 +45,7 @@ class _RecordingSqlAgent(SqlAgent):
         self.seen_sessions.append(data_session)
         if self._on_search is not None:
             await self._on_search()
-        return {**state, "sql_results": self._rows, "sql_keyword": "kw"}
+        return {**state, "sql": {"results": self._rows, "keyword": "kw"}}
 
 
 class _RecordingAnswerAgent:
@@ -107,7 +107,7 @@ class TestSessionAcquireRelease:
         ):
             result = await graph.run(_state())
 
-        assert result["answer"] == "답변"
+        assert result["output"]["answer"] == "답변"
         # answer 시점에 data_session ctx 가 (sql + hydration) 적어도 한 번은 닫혀 있어야
         # 한다 = answer 가 data 커넥션을 점유하지 않음.
         assert observed_exits_at_answer and observed_exits_at_answer[0] >= 1
@@ -128,7 +128,7 @@ class TestSessionAcquireRelease:
             ),
         ):
             result = await graph.run(_state())
-        assert result["answer"] == "답변"
+        assert result["output"]["answer"] == "답변"
 
 
 class TestConcurrentIsolationNodeLocal:
@@ -193,8 +193,8 @@ class TestConcurrentIsolationNodeLocal:
         ids_b = set(map(id, sql_b.seen_sessions))
         assert ids_a and ids_b
         assert ids_a.isdisjoint(ids_b)
-        assert res_a["answer"] == "A"
-        assert res_b["answer"] == "B"
+        assert res_a["output"]["answer"] == "A"
+        assert res_b["output"]["answer"] == "B"
 
 
 class TestSearchPersistTraceIndependentSessions:
@@ -263,7 +263,7 @@ class TestSearchPersistTraceIndependentSessions:
             result = await graph.run(_state(message_id=100))
 
         # 워크플로우 결과는 정상(best-effort).
-        assert result["answer"] == "답변"
+        assert result["output"]["answer"] == "답변"
         # trace 세션은 persist 실패와 무관하게 정상 commit.
         trace_session.commit.assert_awaited()
 
@@ -312,7 +312,7 @@ class TestSessionAcquireFailureBestEffort:
             result = await graph.run(_state(message_id=777))
 
         # 세션 획득 실패가 그래프로 전파되지 않고 answer 정상.
-        assert result["answer"] == "답변"
+        assert result["output"]["answer"] == "답변"
         # trace node_path 는 그대로 반환된다(best-effort 종단).
         assert "trace" in result["node_path"]
         # trace 세션 획득이 실제로 시도되고 실패 경로를 탔다.
@@ -370,6 +370,6 @@ class TestRetrySessionReacquire:
             result = await graph.run(_state())
 
         assert result["retry_count"] == 1
-        assert result["answer"] == "체험관 안내"
+        assert result["output"]["answer"] == "체험관 안내"
         # data_session ctx 가 여러 번 acquire 됐다(sql + hydration + 재시도 hydration).
         assert len(data_ctx.used) >= 2

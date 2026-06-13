@@ -53,7 +53,7 @@ class TestHydrationNodeExceptionHandler:
             result = await graph.run(make_agent_state(intent=IntentType.SQL_SEARCH))
 
         # hydration 예외에도 불구하고 그래프가 정상 종료되어야 한다
-        assert result["answer"] == "답변"
+        assert result["output"]["answer"] == "답변"
         # hydration_error node_path 기록 확인
         assert "hydration_error" in result["node_path"]
 
@@ -74,7 +74,7 @@ class TestHydrationNodeExceptionHandler:
         with patch_node_sessions(data_session=data_session):
             result = await graph._nodes.hydration_node(state)
 
-        assert result["hydrated_services"] == []
+        assert result["hydration"]["hydrated_services"] == []
         assert "hydration_error" in result["node_path"]
 
 
@@ -97,10 +97,10 @@ class TestRetryPrepNodeResetsHydratedServices:
 
         result = await graph._nodes.retry_prep_node(stale_state)
 
-        assert result["hydrated_services"] is None
-        # 다른 리셋 필드도 함께 확인
-        assert result["sql_results"] is None
-        assert result["vector_results"] is None
+        # 그룹 통째 리셋({}) — 다음 순회 재실행 시 재-hydrate / 재검색.
+        assert result["hydration"] == {}
+        assert result["sql"] == {}
+        assert result["vector"] == {}
         assert result["retry_count"] == 1
 
 
@@ -141,7 +141,7 @@ class TestCacheCheckNodeHydratedServicesRestore:
             result = await node(self._base_state())
 
         assert result["cache_hit"] is True
-        assert result["hydrated_services"] == hydrated
+        assert result["hydration"]["hydrated_services"] == hydrated
 
     async def test_hit_envelope_without_hydrated_services_returns_none(self):
         """구버전 cache envelope(hydrated_services 미포함) — None 으로 복원된다."""
@@ -163,7 +163,7 @@ class TestCacheCheckNodeHydratedServicesRestore:
 
         assert result["cache_hit"] is True
         assert (
-            result["hydrated_services"] is None
+            result["hydration"]["hydrated_services"] is None
         )  # snap.get("hydrated_services") → None
 
 
@@ -339,4 +339,4 @@ class TestMakeAgentStateHelperHydratedServices:
         schema_keys = set(AgentState.__annotations__.keys())
         missing = schema_keys - set(state.keys())
         assert missing == set(), f"make_agent_state 에서 누락된 키: {missing}"
-        assert state.get("hydrated_services") is None
+        assert state["hydration"].get("hydrated_services") is None

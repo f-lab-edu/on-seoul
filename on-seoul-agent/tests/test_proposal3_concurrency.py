@@ -255,7 +255,7 @@ class TestGlobalSemaphoreInRunChannel:
             state = make_agent_state(message="테스트", intent=IntentType.VECTOR_SEARCH)
             result = await agent.search(state)
 
-        assert result["vector_results"] is not None
+        assert result["vector"]["results"] is not None
 
     async def test_global_sema_limits_total_concurrent_channels(self):
         """글로벌 세마포어(cap=2)가 채널(4)보다 작을 때 동시 실행 수가 cap 이하이다."""

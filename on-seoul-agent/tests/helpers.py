@@ -35,60 +35,117 @@ from agents.triage_agent import TriageAgent, TriageOutput
 from schemas.state import ActionType, AgentState, IntentType
 
 
+# 평면 도메인 키 → 중첩 채널/leaf 매핑.
+# AgentState 도메인 중첩 리팩터 후에도 기존 테스트가 평면 kwargs 로 상태를 조립할 수
+# 있도록, make_agent_state 가 아래 매핑으로 평면 override 를 중첩 채널에 분배한다.
+# 중첩 override(triage={...}/plan={...} 등)도 그대로 받아 머지한다.
+_FLAT_TO_NESTED: dict[str, tuple[str, str]] = {
+    # plan
+    "intent": ("plan", "intent"),
+    "refined_query": ("plan", "refined_query"),
+    "vector_sub_intent": ("plan", "vector_sub_intent"),
+    "secondary_intent": ("plan", "secondary_intent"),
+    # filters
+    "max_class_name": ("filters", "max_class_name"),
+    "area_name": ("filters", "area_name"),
+    "service_status": ("filters", "service_status"),
+    "payment_type": ("filters", "payment_type"),
+    # triage
+    "action": ("triage", "action"),
+    "out_of_scope_type": ("triage", "out_of_scope_type"),
+    "user_rationale": ("triage", "user_rationale"),
+    # sql
+    "sql_results": ("sql", "results"),
+    "sql_keyword": ("sql", "keyword"),
+    # vector
+    "vector_results": ("vector", "results"),
+    # map
+    "map_results": ("map", "results"),
+    # analytics
+    "analytics_results": ("analytics", "results"),
+    "analytics_group_by": ("analytics", "group_by"),
+    "analytics_metric": ("analytics", "metric"),
+    "analytics_keyword": ("analytics", "keyword"),
+    # hydration
+    "hydrated_services": ("hydration", "hydrated_services"),
+    # output
+    "answer": ("output", "answer"),
+    "title": ("output", "title"),
+    "service_cards": ("output", "service_cards"),
+    # emit
+    "decision_emitted": ("emit", "decision_emitted"),
+    "searching_emitted": ("emit", "searching_emitted"),
+    "answering_emitted": ("emit", "answering_emitted"),
+}
+
+_NESTED_CHANNELS: frozenset[str] = frozenset(
+    {
+        "triage",
+        "plan",
+        "filters",
+        "sql",
+        "vector",
+        "map",
+        "analytics",
+        "hydration",
+        "output",
+        "emit",
+    }
+)
+
+
 def make_agent_state(**overrides: Any) -> AgentState:
-    """AgentState 테스트 팩토리 — 최소 유효 상태를 기본값으로 반환한다."""
+    """AgentState 테스트 팩토리 — 최소 유효 상태를 기본값으로 반환한다.
+
+    평면 도메인 kwargs(intent/sql_results/...)는 _FLAT_TO_NESTED 매핑으로 중첩
+    채널에 분배된다. 중첩 채널 override(plan={...} 등)도 그대로 받아 머지한다.
+    """
     base = AgentState(
+        # ── 보편/carryover/재시도/오류/인프라 (평면) ──
         room_id=1,
         message_id=1,
         message="수영장 알려줘",
         title_needed=False,
-        intent=None,
-        forced_intent=None,
-        retry_radius_m=None,
         user_lat=None,
         user_lng=None,
-        refined_query=None,
-        max_class_name=None,
-        area_name=None,
-        service_status=None,
-        payment_type=None,
-        sql_results=None,
-        sql_keyword=None,
-        vector_sub_intent=None,
-        vector_results=None,
-        map_results=None,
-        analytics_results=None,
-        analytics_group_by=None,
-        analytics_metric=None,
-        analytics_keyword=None,
-        answer=None,
-        title=None,
-        trace=None,
-        node_path=[],
-        started_at=None,
-        error=None,
-        retry_count=0,
-        retry_relaxed=False,
         history=[],
-        cache_hit=False,
-        search_channels={},
-        hydrated_services=None,
-        service_cards=None,
         prev_entities=None,
         prev_intent=None,
         prev_reasoning=None,
         target_service_ids=None,
-        # action 축 슬롯
-        action=None,
-        out_of_scope_type=None,
-        user_rationale=None,
-        secondary_intent=None,
+        retry_count=0,
+        retry_relaxed=False,
+        forced_intent=None,
+        retry_radius_m=None,
+        error=None,
+        cache_hit=False,
+        node_path=[],
+        search_channels={},
+        trace=None,
+        started_at=None,
         rrf_merged_ids=None,
-        decision_emitted=False,
-        searching_emitted=False,
-        answering_emitted=False,
+        # ── 도메인 working state (중첩) ──
+        triage={},
+        plan={},
+        filters={},
+        sql={},
+        vector={},
+        map={},
+        analytics={},
+        hydration={},
+        output={},
+        emit={},
     )
-    base.update(overrides)
+    for key, value in overrides.items():
+        nested = _FLAT_TO_NESTED.get(key)
+        if nested is not None:
+            channel, leaf = nested
+            base[channel][leaf] = value  # type: ignore[literal-required]
+        elif key in _NESTED_CHANNELS and isinstance(value, dict):
+            # 중첩 채널 override(plan={...} 등) — 머지.
+            base[key].update(value)  # type: ignore[literal-required]
+        else:
+            base[key] = value  # type: ignore[literal-required]
     return base
 
 

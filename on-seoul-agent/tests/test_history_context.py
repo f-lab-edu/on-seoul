@@ -9,6 +9,7 @@ from agents.nodes import GraphNodes
 from schemas.chat import ChatRequest, HistoryTurn
 from schemas.state import AgentState
 from tests.helpers import (
+    make_agent_state,
     make_analytics_agent,
     make_answer_agent,
     make_router,
@@ -104,39 +105,10 @@ async def test_router_node_passes_history_to_classify():
         {"role": "user", "content": "강남구 수영장"},
         {"role": "assistant", "content": "3건입니다."},
     ]
-    state = AgentState(
-        room_id=1,
+    state = make_agent_state(
         message_id=2,
         message="그 중 무료인 것만",
-        title_needed=False,
-        intent=None,
-        forced_intent=None,
-        retry_radius_m=None,
-        user_lat=None,
-        user_lng=None,
-        refined_query=None,
-        max_class_name=None,
-        area_name=None,
-        service_status=None,
-        sql_results=None,
-        sql_keyword=None,
-        vector_sub_intent=None,
-        vector_results=None,
-        map_results=None,
-        analytics_results=None,
-        analytics_group_by=None,
-        analytics_metric=None,
-        analytics_keyword=None,
-        answer=None,
-        title=None,
-        trace=None,
-        error=None,
-        retry_count=0,
         history=history,
-        cache_hit=False,
-        search_channels={},
-        hydrated_services=None,
-        service_cards=None,
     )
 
     await nodes.router_node(state)

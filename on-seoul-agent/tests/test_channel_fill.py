@@ -132,13 +132,12 @@ class TestSqlNodeChannelData:
     def _make_sql_agent(
         self, rows: list[dict], keyword: str | None = "수영장"
     ) -> MagicMock:
-        """search() 가 sql_results + sql_keyword 를 반환하는 mock SqlAgent."""
+        """search() 가 sql 채널(results + keyword)을 반환하는 mock SqlAgent."""
         agent = MagicMock()
         agent.search = AsyncMock(
             return_value={
                 **make_agent_state(),
-                "sql_results": rows,
-                "sql_keyword": keyword,
+                "sql": {"results": rows, "keyword": keyword},
             }
         )
         return agent
@@ -220,13 +219,12 @@ class TestSqlNodeChannelData:
         assert "search_channels" not in result
 
     async def test_sql_node_results_none_gives_empty_hits(self):
-        """sql_results=None 을 반환하면 hits=[] 로 처리된다."""
+        """sql.results=None 을 반환하면 hits=[] 로 처리된다."""
         agent = MagicMock()
         agent.search = AsyncMock(
             return_value={
                 **make_agent_state(),
-                "sql_results": None,
-                "sql_keyword": None,
+                "sql": {"results": None, "keyword": None},
             }
         )
         nodes = _make_nodes(sql_agent=agent)
@@ -477,7 +475,7 @@ class TestMapNodeChannelData:
 
         result = await _call_node(nodes.map_node, state, session)
 
-        assert result["map_results"] is None
+        assert result["map"]["results"] is None
         assert "search_channels" not in result
 
     async def test_map_node_error_returns_no_search_channels(self):

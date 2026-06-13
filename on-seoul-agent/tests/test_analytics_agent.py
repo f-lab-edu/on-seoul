@@ -100,7 +100,7 @@ class TestAnalyticsAgentRun:
         ) as mock_search:
             result = await agent.run(state, session)
 
-        assert result["analytics_group_by"] == "max_class_name"
+        assert result["analytics"]["group_by"] == "max_class_name"
         # analytics_search 에도 폴백된 group_by 가 전달돼야 한다 (KeyError 방어).
         assert mock_search.await_args.kwargs["group_by"] == "max_class_name"
 
@@ -119,7 +119,7 @@ class TestAnalyticsAgentRun:
         ) as mock_search:
             result = await agent.run(state, session)
 
-        assert result["analytics_group_by"] == "min_class_name"
+        assert result["analytics"]["group_by"] == "min_class_name"
         assert mock_search.await_args.kwargs["group_by"] == "min_class_name"
         assert mock_search.await_args.kwargs["max_class_name"] == "체육시설"
 
@@ -157,11 +157,11 @@ class TestAnalyticsAgentRun:
         ) as mock_search:
             result = await agent.run(state, session)
 
-        assert result["analytics_results"] == rows
-        assert result["analytics_group_by"] == "area_name"
-        assert result["analytics_metric"] == "count"
+        assert result["analytics"]["results"] == rows
+        assert result["analytics"]["group_by"] == "area_name"
+        assert result["analytics"]["metric"] == "count"
         # LLM 추출 키워드는 trace 관측을 위해 state 에 보존돼야 한다 (MAJOR 1).
-        assert result["analytics_keyword"] == "테니스장"
+        assert result["analytics"]["keyword"] == "테니스장"
         assert mock_search.await_args.kwargs["keyword"] == "테니스장"
 
     async def test_group_by_always_in_whitelist(self):
@@ -177,7 +177,7 @@ class TestAnalyticsAgentRun:
         ) as mock_search:
             result = await agent.run(state, session)
 
-        assert result["analytics_group_by"] in _DIMENSION_COLUMNS
+        assert result["analytics"]["group_by"] in _DIMENSION_COLUMNS
         assert mock_search.await_args.kwargs["group_by"] in _DIMENSION_COLUMNS
 
 

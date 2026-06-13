@@ -24,7 +24,7 @@ def _make_state(
     vector_sub_intent: str | None = None,
 ) -> AgentState:
     state = make_agent_state(message=message, intent=IntentType.VECTOR_SEARCH)
-    state["vector_sub_intent"] = vector_sub_intent
+    state["plan"]["vector_sub_intent"] = vector_sub_intent
     return state
 
 
@@ -143,9 +143,9 @@ class TestVectorAgentHybrid:
         with _patch_all_searches(a_rows=a_rows):
             result = await agent.search(_make_state())
 
-        assert result["vector_results"] is not None
-        assert result["vector_results"][0]["service_id"] == "S001"
-        assert "rrf_score" in result["vector_results"][0]
+        assert result["vector"]["results"] is not None
+        assert result["vector"]["results"][0]["service_id"] == "S001"
+        assert "rrf_score" in result["vector"]["results"][0]
 
     async def test_empty_bm25_tokens_skips_bm25(self):
         """모든 토큰이 stopword이면 bm25_search를 호출하지 않는다."""
@@ -255,7 +255,7 @@ class TestVectorAgentHybrid:
             result = await agent.search(_make_state())
 
         # 실패해도 빈 결과 대신 다른 채널 결과가 들어온다
-        assert result["vector_results"] is not None
+        assert result["vector"]["results"] is not None
 
 
 class TestResolveWeights:

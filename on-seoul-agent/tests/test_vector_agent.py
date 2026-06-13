@@ -117,10 +117,10 @@ class TestVectorAgentRouterPostFilter:
         agent._channel_sema = asyncio.Semaphore(4)
 
         state = _make_state()
-        state["refined_query"] = "강남구 체육시설"
-        state["max_class_name"] = "체육시설"
-        state["area_name"] = "강남구"
-        state["service_status"] = "접수중"
+        state["plan"]["refined_query"] = "강남구 체육시설"
+        state["filters"]["max_class_name"] = "체육시설"
+        state["filters"]["area_name"] = "강남구"
+        state["filters"]["service_status"] = "접수중"
 
         with (
             patch(
@@ -285,9 +285,9 @@ class TestVectorAgent:
         with _patch_search(vector_rows, []):
             result = await agent.search(_make_state())
 
-        assert result["vector_results"] is not None
-        assert len(result["vector_results"]) >= 1
-        assert result["vector_results"][0]["service_id"] == "S001"
+        assert result["vector"]["results"] is not None
+        assert len(result["vector"]["results"]) >= 1
+        assert result["vector"]["results"][0]["service_id"] == "S001"
 
     async def test_search_populates_refined_query(self):
         """search는 정제된 질의를 refined_query에 채운다."""
@@ -296,7 +296,7 @@ class TestVectorAgent:
         with _patch_search([], []):
             result = await agent.search(_make_state())
 
-        assert result["refined_query"] == "어린이 체험 시설"
+        assert result["plan"]["refined_query"] == "어린이 체험 시설"
 
     async def test_similarity_search_passes_query_vector(self):
         """vector_search에 query_vector가 전달된다."""
@@ -325,8 +325,8 @@ class TestVectorAgent:
         with _patch_search([], []):
             result = await agent.search(_make_state())
 
-        assert result["vector_results"] == []
-        assert result["vector_results"] is not None
+        assert result["vector"]["results"] == []
+        assert result["vector"]["results"] is not None
 
     async def test_bm25_skipped_when_all_tokens_are_stopwords(self):
         """모든 토큰이 stopword이면 bm25_search를 호출하지 않는다."""
@@ -385,7 +385,7 @@ class TestHybridSearchRrf:
         with _patch_search(vector_rows, bm25_rows):
             result = await agent.search(_make_state())
 
-        assert "rrf_score" in result["vector_results"][0]
+        assert "rrf_score" in result["vector"]["results"][0]
 
     async def test_rrf_merges_both_results(self):
         """vector_search와 bm25_search에 각각 다른 service_id가 있으면 모두 결합된다."""
@@ -398,7 +398,7 @@ class TestHybridSearchRrf:
         with _patch_search(vector_rows, bm25_rows):
             result = await agent.search(_make_state())
 
-        service_ids = {r["service_id"] for r in result["vector_results"]}
+        service_ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "S001" in service_ids
         assert "S002" in service_ids
 
@@ -419,10 +419,10 @@ class TestHybridSearchRrf:
         with _patch_search(vector_rows, bm25_rows):
             result = await agent.search(_make_state())
 
-        service_ids = {r["service_id"] for r in result["vector_results"]}
+        service_ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "S002" in service_ids
         bm25_only = next(
-            r for r in result["vector_results"] if r["service_id"] == "S002"
+            r for r in result["vector"]["results"] if r["service_id"] == "S002"
         )
         assert "rrf_score" in bm25_only
 
@@ -441,7 +441,7 @@ class TestHybridSearchRrf:
         with _patch_search(vector_rows, bm25_rows):
             result = await agent.search(_make_state())
 
-        scores = {r["service_id"]: r["rrf_score"] for r in result["vector_results"]}
+        scores = {r["service_id"]: r["rrf_score"] for r in result["vector"]["results"]}
         # S001은 두 결과에 모두 등장 → 가장 높은 점수
         assert scores["S001"] > scores["S002"]
         assert scores["S001"] > scores["S003"]
@@ -470,8 +470,8 @@ class TestVectorAgentSearchFailure:
         ):
             result = await agent.search(_make_state())
 
-        assert result["vector_results"] is not None
-        service_ids = {r["service_id"] for r in result["vector_results"]}
+        assert result["vector"]["results"] is not None
+        service_ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "S010" in service_ids
 
     async def test_bm25_search_failure_falls_back_to_vector_only(self):
@@ -497,8 +497,8 @@ class TestVectorAgentSearchFailure:
         ):
             result = await agent.search(_make_state())
 
-        assert result["vector_results"] is not None
-        service_ids = {r["service_id"] for r in result["vector_results"]}
+        assert result["vector"]["results"] is not None
+        service_ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "S020" in service_ids
 
     async def test_both_search_failure_returns_empty_vector_results(self):
@@ -521,7 +521,7 @@ class TestVectorAgentSearchFailure:
         ):
             result = await agent.search(_make_state())
 
-        assert result["vector_results"] == []
+        assert result["vector"]["results"] == []
 
 
 class TestServiceStatusValidation:
@@ -555,7 +555,7 @@ class TestRrfMergeTopKConstant:
         with _patch_search(vector_rows, []):
             result = await agent.search(_make_state())
 
-        assert len(result["vector_results"]) <= _TOP_K
+        assert len(result["vector"]["results"]) <= _TOP_K
 
 
 class TestRrfMerge:
@@ -660,8 +660,8 @@ class TestVectorAgentMetaOnlyResults:
         ):
             result = await agent.search(make_agent_state(message="수영장"))
 
-        assert len(result["vector_results"]) == 1
-        row = result["vector_results"][0]
+        assert len(result["vector"]["results"]) == 1
+        row = result["vector"]["results"][0]
         assert row["service_id"] == "S001"
         assert "rrf_score" in row
         # 원본 필드는 포함되지 않는다 — HydrationNode 책임
@@ -684,5 +684,5 @@ class TestVectorAgentMetaOnlyResults:
         ):
             result = await agent.search(_make_state())
 
-        ids = {r["service_id"] for r in result["vector_results"]}
+        ids = {r["service_id"] for r in result["vector"]["results"]}
         assert ids == {"S001", "S002"}

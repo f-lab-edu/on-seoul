@@ -87,7 +87,7 @@ class TestDirectAnswerNodeReturnsFallbackIntent:
 
         update = await nodes.direct_answer_node(_state(message="안녕하세요", intent=None))
 
-        assert update["intent"] == IntentType.FALLBACK
+        assert update["plan"]["intent"] == IntentType.FALLBACK
 
     async def test_answer_receives_fallback_intent_in_input_state(self):
         """answer()에 전달되는 입력 state에도 intent=FALLBACK이 주입돼야 한다.
@@ -171,7 +171,7 @@ class TestExplainFallbackSelectsFallbackBranch:
         update = await nodes.explain_node(_state(message="왜 그랬어?", prev_reasoning=None, intent=None))
 
         # 폴백 경로도 반환 dict에 FALLBACK intent를 싣는다.
-        assert update["intent"] == IntentType.FALLBACK
+        assert update["plan"]["intent"] == IntentType.FALLBACK
         system = _captured_system(agent)
         assert _STRUCT_FALLBACK[:30] in system
         assert _STRUCT_CARD_LIST[:30] not in system
@@ -216,8 +216,8 @@ class TestDirectAnswerBranchEndToEnd:
             ai_session=make_ai_session(),
         )
 
-        assert result["action"] == ActionType.DIRECT_ANSWER
-        assert result["intent"] == IntentType.FALLBACK
+        assert result["triage"]["action"] == ActionType.DIRECT_ANSWER
+        assert result["plan"]["intent"] == IntentType.FALLBACK
         assert "direct_answer_node" in result["node_path"]
 
         system = _captured_system(agent)
@@ -236,8 +236,8 @@ class TestDirectAnswerBranchEndToEnd:
             ai_session=make_ai_session(),
         )
 
-        assert result["action"] == ActionType.EXPLAIN
-        assert result["intent"] == IntentType.FALLBACK
+        assert result["triage"]["action"] == ActionType.EXPLAIN
+        assert result["plan"]["intent"] == IntentType.FALLBACK
         assert "direct_answer_node" in result["node_path"]
 
         system = _captured_system(agent)

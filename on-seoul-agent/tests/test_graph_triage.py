@@ -73,9 +73,9 @@ class TestTriageActionRouting:
         result = await run_graph(
             graph, _state(), data_session=data_session, ai_session=make_ai_session()
         )
-        assert result["intent"] == IntentType.SQL_SEARCH
-        assert result["action"] == ActionType.RETRIEVE
-        assert result["sql_results"] is not None
+        assert result["plan"]["intent"] == IntentType.SQL_SEARCH
+        assert result["triage"]["action"] == ActionType.RETRIEVE
+        assert result["sql"]["results"] is not None
 
     async def test_direct_answer_skips_db(self):
         """DIRECT_ANSWER action -> DB 미조회, LLM 직접 응답."""
@@ -93,10 +93,10 @@ class TestTriageActionRouting:
             data_session=data_session,
             ai_session=make_ai_session(),
         )
-        assert result["action"] == ActionType.DIRECT_ANSWER
-        assert result["sql_results"] is None
-        assert result["vector_results"] is None
-        assert result["answer"] is not None
+        assert result["triage"]["action"] == ActionType.DIRECT_ANSWER
+        assert result["sql"].get("results") is None
+        assert result["vector"].get("results") is None
+        assert result["output"]["answer"] is not None
         sql_agent._chain.ainvoke.assert_not_called()
 
     async def test_ambiguous_returns_clarification(self):
@@ -112,9 +112,9 @@ class TestTriageActionRouting:
             data_session=MagicMock(),
             ai_session=make_ai_session(),
         )
-        assert result["action"] == ActionType.AMBIGUOUS
-        assert result["answer"] is not None
-        assert len(result["answer"]) > 0
+        assert result["triage"]["action"] == ActionType.AMBIGUOUS
+        assert result["output"]["answer"] is not None
+        assert len(result["output"]["answer"]) > 0
 
     async def test_out_of_scope_domain_outside_rejects(self):
         """OUT_OF_SCOPE/domain_outside -> 즉시 거절, 검색 미실행."""
@@ -134,10 +134,10 @@ class TestTriageActionRouting:
             data_session=data_session,
             ai_session=make_ai_session(),
         )
-        assert result["action"] == ActionType.OUT_OF_SCOPE
-        assert result["out_of_scope_type"] == "domain_outside"
+        assert result["triage"]["action"] == ActionType.OUT_OF_SCOPE
+        assert result["triage"]["out_of_scope_type"] == "domain_outside"
         assert (
-            "범위" in result["answer"] or "날씨" in result["answer"] or result["answer"]
+            "범위" in result["output"]["answer"] or "날씨" in result["output"]["answer"] or result["output"]["answer"]
         )
         sql_agent._chain.ainvoke.assert_not_called()
 
@@ -203,9 +203,9 @@ class TestTriageActionRouting:
                 ai_session=make_ai_session(),
             )
 
-        assert result["action"] == ActionType.OUT_OF_SCOPE
-        assert result["vector_results"] is not None
-        assert result["answer"] is not None
+        assert result["triage"]["action"] == ActionType.OUT_OF_SCOPE
+        assert result["vector"]["results"] is not None
+        assert result["output"]["answer"] is not None
 
     async def test_explain_with_prev_reasoning(self):
         """EXPLAIN action + prev_reasoning -> 근거 설명 포함된 답변."""
@@ -221,10 +221,10 @@ class TestTriageActionRouting:
             data_session=MagicMock(),
             ai_session=make_ai_session(),
         )
-        assert result["action"] == ActionType.EXPLAIN
-        assert result["answer"] is not None
+        assert result["triage"]["action"] == ActionType.EXPLAIN
+        assert result["output"]["answer"] is not None
         # prev_reasoning 내용이 답변에 포함되어야 한다
-        assert "자연" in result["answer"] or len(result["answer"]) > 10
+        assert "자연" in result["output"]["answer"] or len(result["output"]["answer"]) > 10
 
     async def test_explain_without_prev_reasoning_falls_back(self):
         """EXPLAIN action + prev_reasoning 없음 -> DIRECT_ANSWER 폴백."""
@@ -240,7 +240,7 @@ class TestTriageActionRouting:
             data_session=MagicMock(),
             ai_session=make_ai_session(),
         )
-        assert result["answer"] is not None
+        assert result["output"]["answer"] is not None
         # prev_reasoning이 없으면 direct_answer 폴백으로 AnswerAgent가 실행된다
 
 
@@ -546,8 +546,8 @@ class TestTriageNodeStatePropagation:
         with patch_node_sessions():
             update = await nodes.triage_node(_state(message="마포구 풋살장"))
 
-        assert update["action"] == ActionType.RETRIEVE
-        assert update["user_rationale"] == "마포구 풋살장 검색"
+        assert update["triage"]["action"] == ActionType.RETRIEVE
+        assert update["triage"]["user_rationale"] == "마포구 풋살장 검색"
         # 검색 계획은 router_node 책임 — triage_node update에 없어야 한다.
         assert "intent" not in update
         assert "secondary_intent" not in update
@@ -565,7 +565,7 @@ class TestTriageNodeStatePropagation:
             )
 
         # triage_node는 forced_intent를 소비하지 않고 정상 LLM 분류를 수행한다.
-        assert update["action"] == ActionType.RETRIEVE
+        assert update["triage"]["action"] == ActionType.RETRIEVE
         assert "intent" not in update
         structured.ainvoke.assert_called_once()
 
@@ -580,9 +580,9 @@ class TestTriageNodeStatePropagation:
         with patch_node_sessions():
             update = await nodes.triage_node(_state())
 
-        assert update["action"] == ActionType.OUT_OF_SCOPE
-        assert update["out_of_scope_type"] == "domain_outside"
-        assert update["user_rationale"] == "범위 밖입니다."
+        assert update["triage"]["action"] == ActionType.OUT_OF_SCOPE
+        assert update["triage"]["out_of_scope_type"] == "domain_outside"
+        assert update["triage"]["user_rationale"] == "범위 밖입니다."
 
 
 class TestRouterNodeStatePropagation:
@@ -603,11 +603,11 @@ class TestRouterNodeStatePropagation:
         with patch_node_sessions():
             update = await nodes.router_node(_state(message="마포구 풋살장"))
 
-        assert update["intent"] == IntentType.SQL_SEARCH
-        assert update["refined_query"] == "마포구 풋살장"
-        assert update["max_class_name"] == "체육시설"
-        assert update["area_name"] == "마포구"
-        assert update["secondary_intent"] == IntentType.VECTOR_SEARCH
+        assert update["plan"]["intent"] == IntentType.SQL_SEARCH
+        assert update["plan"]["refined_query"] == "마포구 풋살장"
+        assert update["filters"]["max_class_name"] == "체육시설"
+        assert update["filters"]["area_name"] == "마포구"
+        assert update["plan"]["secondary_intent"] == IntentType.VECTOR_SEARCH
 
     async def test_router_node_omits_none_fields(self):
         """router_node: None 필드는 update에 포함하지 않는다."""
@@ -619,7 +619,7 @@ class TestRouterNodeStatePropagation:
         )
         with patch_node_sessions():
             update = await nodes.router_node(_state())
-        assert update["intent"] == IntentType.VECTOR_SEARCH
+        assert update["plan"]["intent"] == IntentType.VECTOR_SEARCH
         assert "secondary_intent" not in update
         assert "max_class_name" not in update
 
@@ -636,7 +636,7 @@ class TestRouterNodeStatePropagation:
             update = await nodes.router_node(
                 _state(forced_intent=IntentType.VECTOR_SEARCH)
             )
-        assert update["intent"] == IntentType.VECTOR_SEARCH
+        assert update["plan"]["intent"] == IntentType.VECTOR_SEARCH
         assert update["forced_intent"] is None
         structured.ainvoke.assert_not_called()
 
@@ -678,10 +678,10 @@ class TestRouterNodeRefineCache:
 
         structured.ainvoke.assert_not_called()
         mock_set.assert_not_called()
-        assert update["intent"] == IntentType.VECTOR_SEARCH
-        assert update["refined_query"] == "서울 테니스장"
-        assert update["max_class_name"] == "체육시설"
-        assert update["vector_sub_intent"] == "identification"
+        assert update["plan"]["intent"] == IntentType.VECTOR_SEARCH
+        assert update["plan"]["refined_query"] == "서울 테니스장"
+        assert update["filters"]["max_class_name"] == "체육시설"
+        assert update["plan"]["vector_sub_intent"] == "identification"
         assert "refine_cache_hit" in update["node_path"]
 
     async def test_miss_calls_llm_and_sets_cache(self):
@@ -708,7 +708,7 @@ class TestRouterNodeRefineCache:
         # 저장값에 intent.value 직렬화 포함
         stored = mock_set.call_args.args[2]
         assert stored["intent"] == "SQL_SEARCH"
-        assert update["intent"] == IntentType.SQL_SEARCH
+        assert update["plan"]["intent"] == IntentType.SQL_SEARCH
 
     async def test_forced_intent_skips_cache(self):
         """forced_intent 경로는 refine 캐시를 조회/저장하지 않는다."""
@@ -724,7 +724,7 @@ class TestRouterNodeRefineCache:
             )
         mock_get.assert_not_called()
         mock_set.assert_not_called()
-        assert update["intent"] == IntentType.VECTOR_SEARCH
+        assert update["plan"]["intent"] == IntentType.VECTOR_SEARCH
 
     async def test_llm_error_does_not_set_cache(self):
         """classify 예외 시 캐시 SET 하지 않는다(에러 처리 유지)."""
@@ -754,10 +754,12 @@ class TestRouterNodeRefineCache:
         from agents.nodes import _restore_refine, _serialize_refine
 
         update = {
-            "intent": IntentType.SQL_SEARCH,
-            "refined_query": "마포구 풋살장",
-            "max_class_name": "체육시설",
-            "secondary_intent": IntentType.VECTOR_SEARCH,
+            "plan": {
+                "intent": IntentType.SQL_SEARCH,
+                "refined_query": "마포구 풋살장",
+                "secondary_intent": IntentType.VECTOR_SEARCH,
+            },
+            "filters": {"max_class_name": "체육시설"},
         }
         stored = _serialize_refine(update)
         # JSON 직렬화 가능한 str 로 저장
@@ -765,22 +767,22 @@ class TestRouterNodeRefineCache:
         assert stored["secondary_intent"] == "VECTOR_SEARCH"
 
         restored = _restore_refine(stored)
-        assert restored["intent"] is IntentType.SQL_SEARCH
-        assert restored["secondary_intent"] is IntentType.VECTOR_SEARCH
-        assert restored["refined_query"] == "마포구 풋살장"
-        assert restored["max_class_name"] == "체육시설"
+        assert restored["plan"]["intent"] is IntentType.SQL_SEARCH
+        assert restored["plan"]["secondary_intent"] is IntentType.VECTOR_SEARCH
+        assert restored["plan"]["refined_query"] == "마포구 풋살장"
+        assert restored["filters"]["max_class_name"] == "체육시설"
 
     def test_serialize_restore_omits_none_fields(self):
         """None 필드는 직렬화/복원 모두에서 생략(retry 경로 초기화 보존, 대칭)."""
         from agents.nodes import _restore_refine, _serialize_refine
 
-        update = {"intent": IntentType.VECTOR_SEARCH}  # 선택 필드 전부 미존재
+        update = {"plan": {"intent": IntentType.VECTOR_SEARCH}}  # 선택 필드 전부 미존재
         stored = _serialize_refine(update)
         assert "refined_query" not in stored
         assert "secondary_intent" not in stored
 
         restored = _restore_refine(stored)
-        assert restored == {"intent": IntentType.VECTOR_SEARCH}
+        assert restored == {"plan": {"intent": IntentType.VECTOR_SEARCH}}
 
     def test_restore_skips_explicit_none_values(self):
         """캐시 dict 에 명시적 None 이 있어도 update 에 키를 넣지 않는다(line 215-217)."""
@@ -793,7 +795,7 @@ class TestRouterNodeRefineCache:
             "secondary_intent": None,
         }
         restored = _restore_refine(cached)
-        assert restored == {"intent": IntentType.SQL_SEARCH}
+        assert restored == {"plan": {"intent": IntentType.SQL_SEARCH}}
 
 
 # ---------------------------------------------------------------------------
@@ -935,4 +937,4 @@ class TestRetryReentersRouterNotTriage:
         # fallback answer 를 주입한다. trace 도달은 정상 완주의 증거다.
         assert "trace" in path, f"종단 trace 미도달(recursion 한계 의심): {path}"
         assert result["retry_count"] == 1
-        assert result.get("answer")
+        assert result["output"].get("answer")

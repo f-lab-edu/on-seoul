@@ -17,10 +17,23 @@ from tests.helpers import make_agent_state
 
 
 def _make_nodes(returned_state: AgentState) -> GraphNodes:
-    """_answer.answer()가 returned_state 를 그대로 반환하는 GraphNodes."""
+    """_answer.answer()가 평면 answer/title/service_cards 를 반환하는 GraphNodes.
+
+    실제 AnswerAgent 는 {**state, "answer": ..., "title": ..., "service_cards": ...}
+    평면 키를 반환한다(answer_node 가 이를 읽어 output 채널로 매핑). 테스트 fixture 는
+    make_agent_state(output 중첩)로 조립하므로, 여기서 output 채널을 평면 키로 풀어
+    실제 에이전트 반환 계약을 모사한다.
+    """
     nodes = GraphNodes.__new__(GraphNodes)
+    out = returned_state.get("output", {})
+    flat = {
+        **returned_state,
+        "answer": out.get("answer"),
+        "title": out.get("title"),
+        "service_cards": out.get("service_cards"),
+    }
     answer = MagicMock()
-    answer.answer = AsyncMock(return_value=returned_state)
+    answer.answer = AsyncMock(return_value=flat)
     nodes._answer = answer
     return nodes
 
@@ -53,9 +66,9 @@ async def test_cards_empty_with_results_warns():
 
     assert _count_cards_empty_warnings(mock_warning) == 1
     # 반환값은 그대로 보존 (동작 변경 없음).
-    assert result["answer"] == "안내드립니다."
-    assert result["service_cards"] == []
-    assert result["title"] == "수영장 안내"
+    assert result["output"]["answer"] == "안내드립니다."
+    assert result["output"]["service_cards"] == []
+    assert result["output"]["title"] == "수영장 안내"
 
 
 @pytest.mark.asyncio
@@ -80,9 +93,9 @@ async def test_vector_search_cards_empty_with_results_warns():
         result = await nodes.answer_node(state)
 
     assert _count_cards_empty_warnings(mock_warning) == 1
-    assert result["answer"] == "안내"
-    assert result["service_cards"] == []
-    assert result["title"] == "유사 시설"
+    assert result["output"]["answer"] == "안내"
+    assert result["output"]["service_cards"] == []
+    assert result["output"]["title"] == "유사 시설"
 
 
 @pytest.mark.asyncio
@@ -107,7 +120,7 @@ async def test_sql_results_only_cards_empty_warns():
         result = await nodes.answer_node(state)
 
     assert _count_cards_empty_warnings(mock_warning) == 1
-    assert result["service_cards"] is None
+    assert result["output"]["service_cards"] is None
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,7 @@ def _make_state(
     vector_sub_intent: str | None = None,
 ) -> AgentState:
     state = make_agent_state(message=message, intent=IntentType.VECTOR_SEARCH)
-    state["vector_sub_intent"] = vector_sub_intent
+    state["plan"]["vector_sub_intent"] = vector_sub_intent
     return state
 
 
@@ -144,7 +144,7 @@ class TestVectorAgentAllChannelsEmpty:
         with _patch_all_empty():
             result = await agent.search(_make_state())
 
-        assert result["vector_results"] == [], (
+        assert result["vector"]["results"] == [], (
             f"4채널 모두 빈 결과이면 vector_results=[] 이어야 하지만 {result['vector_results']!r}"
         )
 

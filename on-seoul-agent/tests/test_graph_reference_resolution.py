@@ -69,8 +69,8 @@ class TestReferentialPath:
         # hydrate_services 에 바인딩된 service_id 가 전달됐는지
         assert mock_hydrate.await_args.args[1] == ["S1"]
         # 검색 슬롯은 채워지지 않음(검색 스킵)
-        assert result.get("sql_results") is None
-        assert result["answer"] == "마루공원 테니스장은 노원구의 테니스 시설입니다."
+        assert result["sql"].get("results") is None
+        assert result["output"]["answer"] == "마루공원 테니스장은 노원구의 테니스 시설입니다."
         # describe 경로 node_path 확인
         assert "reference_resolution" in result["node_path"]
         assert "rehydrate_node" in result["node_path"]
@@ -120,7 +120,7 @@ class TestReferentialPath:
                 data_session=MagicMock(),
                 ai_session=MagicMock(),
             )
-        cards = result["service_cards"]
+        cards = result["output"]["service_cards"]
         assert len(cards) == 1
         assert cards[0]["service_id"] == "S1"
         assert cards[0]["service_name"] == "마루공원 테니스장"
@@ -141,8 +141,8 @@ class TestReferentialPath:
                 ai_session=MagicMock(),
             )
         assert result["target_service_ids"] == ["S1"]
-        assert result["service_cards"] == []
-        assert result["answer"]  # 비어 있지 않은 정직 안내
+        assert result["output"]["service_cards"] == []
+        assert result["output"]["answer"]  # 비어 있지 않은 정직 안내
         assert "describe_node" in result["node_path"]
 
     async def test_multi_reference_binding(self):
@@ -166,7 +166,7 @@ class TestReferentialPath:
             )
         assert result["target_service_ids"] == ["S1", "S3"]
         assert mock_hydrate.await_args.args[1] == ["S1", "S3"]
-        assert len(result["service_cards"]) == 2
+        assert len(result["output"]["service_cards"]) == 2
 
 
     async def test_partial_hydrate_only_existing_cards(self):
@@ -194,7 +194,7 @@ class TestReferentialPath:
         assert result["target_service_ids"] == ["S1", "S2", "S3"]
         assert mock_hydrate.await_args.args[1] == ["S1", "S2", "S3"]
         # 그러나 카드는 실제 hydrate 된 1건만 — 환각 카드 없음
-        cards = result["service_cards"]
+        cards = result["output"]["service_cards"]
         assert len(cards) == 1
         assert cards[0]["service_id"] == "S2"
         assert "describe_node" in result["node_path"]
@@ -255,8 +255,8 @@ class TestReferentialPath:
                 data_session=MagicMock(),
                 ai_session=MagicMock(),
             )
-        assert result["service_cards"] == []
-        assert result["answer"]  # 정직 안내 — 비어 있지 않음
+        assert result["output"]["service_cards"] == []
+        assert result["output"]["answer"]  # 정직 안내 — 비어 있지 않음
         assert "rehydrate_error" in result["node_path"]
         assert "describe_node" in result["node_path"]
 
@@ -282,7 +282,7 @@ class TestReferentialPath:
                 ai_session=MagicMock(),
             )
         assert "describe_error" in result["node_path"]
-        assert result["answer"]  # 친절 안내 폴백
+        assert result["output"]["answer"]  # 친절 안내 폴백
         assert result.get("error")
 
 
@@ -334,11 +334,11 @@ class TestNonReferentialBackcompat:
             ai_session=MagicMock(),
         )
         assert result.get("target_service_ids") is None
-        assert result["intent"] == IntentType.SQL_SEARCH
+        assert result["plan"]["intent"] == IntentType.SQL_SEARCH
         # 하위호환 alias "router"도 허용
         assert "triage" in result["node_path"] or "router" in result["node_path"]
         assert "describe_node" not in result["node_path"]
-        assert any(r["service_id"] == "N1" for r in result["sql_results"])
+        assert any(r["service_id"] == "N1" for r in result["sql"]["results"])
 
     async def test_topic_switch_shared_region_prefix_uses_router(self):
         """MUST-FIX 회귀: 라벨과 자치구 prefix("마포")만 공유하는 화제 전환은
@@ -358,7 +358,7 @@ class TestNonReferentialBackcompat:
             ai_session=MagicMock(),
         )
         assert result.get("target_service_ids") is None
-        assert result["intent"] == IntentType.SQL_SEARCH
+        assert result["plan"]["intent"] == IntentType.SQL_SEARCH
         # 하위호환 alias "router"도 허용
         assert "triage" in result["node_path"] or "router" in result["node_path"]
         assert "describe_node" not in result["node_path"]
@@ -379,5 +379,5 @@ class TestNonReferentialBackcompat:
             ai_session=MagicMock(),
         )
         assert result.get("target_service_ids") is None
-        assert result["intent"] == IntentType.SQL_SEARCH
+        assert result["plan"]["intent"] == IntentType.SQL_SEARCH
         assert "describe_node" not in result["node_path"]

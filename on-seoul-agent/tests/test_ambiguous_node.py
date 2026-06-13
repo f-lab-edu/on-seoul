@@ -34,8 +34,8 @@ class TestAmbiguousNode:
             )
         )
 
-        assert update["answer"] == "어느 시설을 말씀하시는 건가요?"
-        assert update["service_cards"] == []
+        assert update["output"]["answer"] == "어느 시설을 말씀하시는 건가요?"
+        assert update["output"]["service_cards"] == []
         assert update["node_path"] == ["ambiguous_node"]
 
     async def test_passes_history_through_to_clarify(self):
@@ -62,4 +62,4 @@ class TestAmbiguousNode:
 
         assert update["node_path"] == ["ambiguous_error"]
         assert update["error"]
-        assert update["answer"]  # 사용자 응답이 비지 않는다.
+        assert update["output"]["answer"]  # 사용자 응답이 비지 않는다.

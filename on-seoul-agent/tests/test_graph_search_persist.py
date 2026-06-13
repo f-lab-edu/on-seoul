@@ -391,5 +391,5 @@ class TestPersistFailureDoesNotBlockTrace:
             ai_session=ai_session,
         )
 
-        assert result["answer"] == "수영장 안내입니다."
+        assert result["output"]["answer"] == "수영장 안내입니다."
         assert result.get("trace") is not None

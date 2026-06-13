@@ -18,6 +18,7 @@ from schemas.search import (
     SearchChannel,
     SearchKind,
 )
+from tests.helpers import make_agent_state
 
 
 @asynccontextmanager
@@ -426,12 +427,11 @@ class TestRetryPrepResetsSearchChannels:
             answer_agent=MagicMock(),
             analytics_agent=MagicMock(),
         )
-        state = {
-            "room_id": 1,
-            "message_id": 42,
-            "retry_count": 0,
-            "search_channels": {SearchChannel.SQL: _make_channel(SearchKind.SQL)},
-        }
+        state = make_agent_state(
+            message_id=42,
+            retry_count=0,
+            search_channels={SearchChannel.SQL: _make_channel(SearchKind.SQL)},
+        )
 
         result = await nodes.retry_prep_node(state)
 

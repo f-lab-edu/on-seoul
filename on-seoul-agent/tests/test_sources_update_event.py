@@ -65,18 +65,18 @@ class TestSourcesUpdateEventSchema:
 
 class TestBuildSources:
     def test_all_none_returns_empty(self):
-        state = {"sql_results": None, "vector_results": None, "map_results": None}
+        state = {"sql": {"results": None}, "vector": {"results": None}, "map": {"results": None}}
         assert _build_sources(state) == []
 
     def test_all_empty_list_returns_empty(self):
-        state = {"sql_results": [], "vector_results": [], "map_results": None}
+        state = {"sql": {"results": []}, "vector": {"results": []}, "map": {"results": None}}
         assert _build_sources(state) == []
 
     def test_sql_results_included(self):
         state = {
-            "sql_results": [{"service_id": "S1"}, {"service_id": "S2"}],
-            "vector_results": None,
-            "map_results": None,
+            "sql": {"results": [{"service_id": "S1"}, {"service_id": "S2"}]},
+            "vector": {"results": None},
+            "map": {"results": None},
         }
         sources = _build_sources(state)
         assert len(sources) == 1
@@ -84,9 +84,9 @@ class TestBuildSources:
 
     def test_vector_results_included(self):
         state = {
-            "sql_results": None,
-            "vector_results": [{"service_id": "V1"}],
-            "map_results": None,
+            "sql": {"results": None},
+            "vector": {"results": [{"service_id": "V1"}]},
+            "map": {"results": None},
         }
         sources = _build_sources(state)
         assert len(sources) == 1
@@ -94,12 +94,12 @@ class TestBuildSources:
 
     def test_map_results_with_features(self):
         state = {
-            "sql_results": None,
-            "vector_results": None,
-            "map_results": {
+            "sql": {"results": None},
+            "vector": {"results": None},
+            "map": {"results": {
                 "type": "FeatureCollection",
                 "features": [{"id": 1}, {"id": 2}, {"id": 3}],
-            },
+            }},
         }
         sources = _build_sources(state)
         assert len(sources) == 1
@@ -108,9 +108,9 @@ class TestBuildSources:
     def test_map_results_without_features_key_hits_1(self):
         """features 키 없는 map_results dict는 hits=1로 처리한다."""
         state = {
-            "sql_results": None,
-            "vector_results": None,
-            "map_results": {"type": "FeatureCollection"},
+            "sql": {"results": None},
+            "vector": {"results": None},
+            "map": {"results": {"type": "FeatureCollection"}},
         }
         sources = _build_sources(state)
         assert len(sources) == 1
@@ -119,9 +119,9 @@ class TestBuildSources:
 
     def test_multiple_channels_all_included(self):
         state = {
-            "sql_results": [{"service_id": "S1"}],
-            "vector_results": [{"service_id": "V1"}, {"service_id": "V2"}],
-            "map_results": None,
+            "sql": {"results": [{"service_id": "S1"}]},
+            "vector": {"results": [{"service_id": "V1"}, {"service_id": "V2"}]},
+            "map": {"results": None},
         }
         sources = _build_sources(state)
         channels = {s["channel"] for s in sources}
@@ -137,9 +137,9 @@ class TestBuildSources:
     def test_map_results_empty_features_excluded(self):
         """features=[] 인 map_results는 hits=0이므로 채널에서 제외된다."""
         state = {
-            "sql_results": None,
-            "vector_results": None,
-            "map_results": {"type": "FeatureCollection", "features": []},
+            "sql": {"results": None},
+            "vector": {"results": None},
+            "map": {"results": {"type": "FeatureCollection", "features": []}},
         }
         sources = _build_sources(state)
         assert sources == []
@@ -147,13 +147,13 @@ class TestBuildSources:
     def test_analytics_results_included(self):
         """analytics_results가 있으면 analytics 채널이 포함된다."""
         state = {
-            "sql_results": None,
-            "vector_results": None,
-            "map_results": None,
-            "analytics_results": [
+            "sql": {"results": None},
+            "vector": {"results": None},
+            "map": {"results": None},
+            "analytics": {"results": [
                 {"group_value": "강남구", "count": 10},
                 {"group_value": "송파구", "count": 7},
-            ],
+            ]},
         }
         sources = _build_sources(state)
         assert len(sources) == 1
@@ -162,20 +162,20 @@ class TestBuildSources:
     def test_analytics_results_empty_list_excluded(self):
         """analytics_results=[] 이면 채널에서 제외된다."""
         state = {
-            "sql_results": None,
-            "vector_results": None,
-            "map_results": None,
-            "analytics_results": [],
+            "sql": {"results": None},
+            "vector": {"results": None},
+            "map": {"results": None},
+            "analytics": {"results": []},
         }
         assert _build_sources(state) == []
 
     def test_analytics_results_none_excluded(self):
         """analytics_results=None 이면 채널에서 제외된다."""
         state = {
-            "sql_results": None,
-            "vector_results": None,
-            "map_results": None,
-            "analytics_results": None,
+            "sql": {"results": None},
+            "vector": {"results": None},
+            "map": {"results": None},
+            "analytics": {"results": None},
         }
         assert _build_sources(state) == []
 

@@ -113,7 +113,7 @@ class TestParallelChannelCalls:
         ):
             result = await agent.search(_make_state())
 
-        service_ids = {r["service_id"] for r in result["vector_results"]}
+        service_ids = {r["service_id"] for r in result["vector"]["results"]}
         # 4채널 결과가 모두 RRF에 반영돼야 한다.
         assert "A001" in service_ids
         assert "B001" in service_ids
@@ -189,7 +189,7 @@ class TestBm25TokensAbsent:
 
         mock_bm25.assert_not_called()
         # RRF는 빈 bm25 채널로도 정상 결합 — 예외 없음.
-        assert result["vector_results"] is not None
+        assert result["vector"]["results"] is not None
 
     async def test_result_mapping_correct_when_bm25_absent(self):
         """bm25 채널 없어도 a/b/c 결과가 올바르게 매핑된다.
@@ -219,7 +219,7 @@ class TestBm25TokensAbsent:
         ):
             result = await agent.search(_make_state())
 
-        ids = {r["service_id"] for r in result["vector_results"]}
+        ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "A1" in ids
         assert "C1" in ids
 
@@ -252,7 +252,7 @@ class TestChannelIsolation:
             result = await agent.search(_make_state())
 
         # B 채널 결과는 살아 있다.
-        ids = {r["service_id"] for r in result["vector_results"]}
+        ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "B001" in ids
 
     async def test_bm25_channel_failure_isolated(self):
@@ -281,8 +281,8 @@ class TestChannelIsolation:
             result = await agent.search(_make_state())
 
         # A 채널 결과는 살아 있고, 전체 결과가 빈 리스트가 아니다.
-        assert result["vector_results"] is not None
-        ids = {r["service_id"] for r in result["vector_results"]}
+        assert result["vector"]["results"] is not None
+        ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "A001" in ids
 
     async def test_question_channel_failure_isolated(self):
@@ -308,7 +308,7 @@ class TestChannelIsolation:
         ):
             result = await agent.search(_make_state())
 
-        ids = {r["service_id"] for r in result["vector_results"]}
+        ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "B002" in ids
         assert "D002" in ids
 
@@ -334,7 +334,7 @@ class TestChannelIsolation:
             # 예외 전파 없이 정상 반환
             result = await agent.search(_make_state())
 
-        assert result["vector_results"] == []
+        assert result["vector"]["results"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +380,7 @@ class TestSessionIsolation:
             result = await agent.search(_make_state())
 
         # 채널 결과 정상.
-        ids = {r["service_id"] for r in result["vector_results"]}
+        ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "A99" in ids
 
         # rollback 된 세션은 bm25 채널 세션 하나뿐.
@@ -516,4 +516,4 @@ class TestSemaphore:
             result = await asyncio.wait_for(agent.search(_make_state()), timeout=5.0)
 
         assert len(reached_barrier) == 4
-        assert result["vector_results"] is not None
+        assert result["vector"]["results"] is not None

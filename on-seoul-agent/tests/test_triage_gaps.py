@@ -95,7 +95,7 @@ class TestOutOfScopeDomainOutsideNodePath:
             data_session=MagicMock(),
             ai_session=make_ai_session(),
         )
-        assert result["answer"] == rationale
+        assert result["output"]["answer"] == rationale
 
 
 # ---------------------------------------------------------------------------
@@ -134,8 +134,8 @@ class TestAmbiguousNodePath:
             data_session=MagicMock(),
             ai_session=make_ai_session(),
         )
-        assert result["answer"] is not None
-        assert len(result["answer"]) > 0
+        assert result["output"]["answer"] is not None
+        assert len(result["output"]["answer"]) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -355,11 +355,11 @@ class TestAttributeGapIntentSet:
             refined_query="마루공원 테니스장",
         )
         update = await nodes.out_of_scope_node(state)
-        assert update.get("intent") == IntentType.VECTOR_SEARCH, (
+        assert update["plan"].get("intent") == IntentType.VECTOR_SEARCH, (
             "attribute_gap 분기에서 intent=VECTOR_SEARCH가 설정되지 않으면 "
             "HydrationNode 가 hydrated_services=[] 로 떨어져 service_url 안내 불가."
         )
-        assert update.get("vector_sub_intent") == "identification"
+        assert update["plan"].get("vector_sub_intent") == "identification"
 
 
 # ---------------------------------------------------------------------------

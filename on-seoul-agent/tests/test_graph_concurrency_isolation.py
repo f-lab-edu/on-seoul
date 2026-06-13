@@ -124,8 +124,8 @@ class TestConcurrentRequestIsolation:
         ids_b = set(map(id, sql_b.seen_sessions))
         assert ids_a and ids_b
         assert ids_a.isdisjoint(ids_b)
-        assert res_a["answer"] == "답변"
-        assert res_b["answer"] == "답변"
+        assert res_a["output"]["answer"] == "답변"
+        assert res_b["output"]["answer"] == "답변"
 
     async def test_concurrent_requests_node_paths_do_not_cross(self):
         """동시 요청의 node_path 가 서로 섞이지 않고 각자 완전한 경로를 가진다."""

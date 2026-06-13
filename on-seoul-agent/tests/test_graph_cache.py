@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from schemas.state import AgentState, IntentType
-from tests.helpers import run_graph
+from tests.helpers import make_agent_state, run_graph
 
 
 @pytest.fixture
@@ -14,31 +14,13 @@ def base_state() -> AgentState:
 
     refined_query를 미리 채운 상태를 시뮬레이션한다. 실서비스 흐름에서
     이 값은 Router가 _IntentOutput.refined_query로 산출하여 router_node가
-    state["refined_query"]에 기록한다. Router가 산출하지 않은 경우
+    state["plan"]["refined_query"]에 기록한다. Router가 산출하지 않은 경우
     (refined_query=None) cache_check_node는 자연스럽게 lookup을 건너뛴다.
     """
-    return AgentState(
-        room_id=1,
-        message_id=1,
+    return make_agent_state(
         message="테니스장",
         title_needed=True,
-        intent=None,
-        user_lat=None,
-        user_lng=None,
         refined_query="서울 테니스장",
-        max_class_name=None,
-        area_name=None,
-        service_status=None,
-        sql_results=None,
-        vector_results=None,
-        map_results=None,
-        answer=None,
-        title=None,
-        trace=None,
-        error=None,
-        retry_count=0,
-        history=[],
-        cache_hit=False,
     )
 
 
@@ -51,7 +33,7 @@ class TestCacheCheckNode:
     async def test_eligible_hit_populates_state(self, base_state):
         from agents.nodes import CacheCheckNode
 
-        base_state["intent"] = IntentType.VECTOR_SEARCH
+        base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         envelope = {
             "payload": {
                 "answer": "캐시 답변",
@@ -76,18 +58,18 @@ class TestCacheCheckNode:
             result = await node(base_state)
 
         assert result["cache_hit"] is True
-        assert result["answer"] == "캐시 답변"
-        assert result["vector_results"] == [{"service_id": "S1"}]
-        assert result["sql_results"] is None
+        assert result["output"]["answer"] == "캐시 답변"
+        assert result["vector"]["results"] == [{"service_id": "S1"}]
+        assert result["sql"]["results"] is None
         # post-filter snapshot은 cache hit 시 state로 복원되어야 한다
-        assert result["max_class_name"] == "체육시설"
-        assert result["area_name"] == "강남구"
-        assert result["service_status"] == "접수중"
+        assert result["filters"]["max_class_name"] == "체육시설"
+        assert result["filters"]["area_name"] == "강남구"
+        assert result["filters"]["service_status"] == "접수중"
 
     async def test_eligible_miss_passes_through(self, base_state):
         from agents.nodes import CacheCheckNode
 
-        base_state["intent"] = IntentType.VECTOR_SEARCH
+        base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         with patch(
             "agents.nodes.get_cached_answer_by_key",
             AsyncMock(return_value=None),
@@ -101,7 +83,7 @@ class TestCacheCheckNode:
     async def test_non_eligible_intent_skips_lookup(self, base_state):
         from agents.nodes import CacheCheckNode
 
-        base_state["intent"] = IntentType.MAP
+        base_state["plan"]["intent"] = IntentType.MAP
         with patch("agents.nodes.get_cached_answer_by_key", AsyncMock()) as mock_get:
             node = CacheCheckNode(redis=AsyncMock())
             result = await node(base_state)
@@ -133,9 +115,9 @@ class TestCacheCheckNode:
         fake_redis.get.side_effect = _get
 
         # 새 사용자: 같은 refined_query, 다른 area_name → miss여야 한다
-        base_state["intent"] = IntentType.VECTOR_SEARCH
-        base_state["refined_query"] = "서울 테니스장"
-        base_state["area_name"] = "성동구"
+        base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
+        base_state["plan"]["refined_query"] = "서울 테니스장"
+        base_state["filters"]["area_name"] = "성동구"
 
         from agents.nodes import CacheCheckNode
 
@@ -147,8 +129,8 @@ class TestCacheCheckNode:
     async def test_none_refined_query_skips_lookup(self, base_state):
         from agents.nodes import CacheCheckNode
 
-        base_state["intent"] = IntentType.VECTOR_SEARCH
-        base_state["refined_query"] = None
+        base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
+        base_state["plan"]["refined_query"] = None
         with patch("agents.nodes.get_cached_answer_by_key", AsyncMock()) as mock_get:
             node = CacheCheckNode(redis=AsyncMock())
             result = await node(base_state)
@@ -166,9 +148,9 @@ class TestCacheWriteNode:
     async def test_writes_on_success(self, base_state):
         from agents.nodes import CacheWriteNode
 
-        base_state["intent"] = IntentType.VECTOR_SEARCH
-        base_state["answer"] = "신규 답변"
-        base_state["vector_results"] = [{"service_id": "S1"}]
+        base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
+        base_state["output"]["answer"] = "신규 답변"
+        base_state["vector"]["results"] = [{"service_id": "S1"}]
         with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
@@ -183,8 +165,8 @@ class TestCacheWriteNode:
     async def test_skips_on_error(self, base_state):
         from agents.nodes import CacheWriteNode
 
-        base_state["intent"] = IntentType.VECTOR_SEARCH
-        base_state["answer"] = "x"
+        base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
+        base_state["output"]["answer"] = "x"
         base_state["error"] = "boom"
         with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
@@ -195,9 +177,9 @@ class TestCacheWriteNode:
     async def test_skips_on_cache_hit(self, base_state):
         from agents.nodes import CacheWriteNode
 
-        base_state["intent"] = IntentType.VECTOR_SEARCH
+        base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         base_state["cache_hit"] = True
-        base_state["answer"] = "x"
+        base_state["output"]["answer"] = "x"
         with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
@@ -208,9 +190,9 @@ class TestCacheWriteNode:
         """write 시 payload 에 service_cards 가 포함된다 (snap 이 아닌 payload)."""
         from agents.nodes import CacheWriteNode
 
-        base_state["intent"] = IntentType.VECTOR_SEARCH
-        base_state["answer"] = "신규 답변"
-        base_state["service_cards"] = [
+        base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
+        base_state["output"]["answer"] = "신규 답변"
+        base_state["output"]["service_cards"] = [
             {"service_id": "S1", "service_name": "수영장"},
             {"service_id": "S2", "service_name": "체육관"},
         ]
@@ -232,7 +214,7 @@ class TestCacheWriteNode:
         """hit 시 envelope payload 의 service_cards 가 state 로 복원된다."""
         from agents.nodes import CacheCheckNode
 
-        base_state["intent"] = IntentType.VECTOR_SEARCH
+        base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         envelope = {
             "payload": {
                 "answer": "캐시 답변",
@@ -250,7 +232,7 @@ class TestCacheWriteNode:
             result = await node(base_state)
 
         assert result["cache_hit"] is True
-        assert result["service_cards"] == [
+        assert result["output"]["service_cards"] == [
             {"service_id": "S1", "service_name": "수영장"}
         ]
 
@@ -258,7 +240,7 @@ class TestCacheWriteNode:
         """구버전 envelope (payload 에 service_cards 없음) → None 으로 안전 복원."""
         from agents.nodes import CacheCheckNode
 
-        base_state["intent"] = IntentType.VECTOR_SEARCH
+        base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         envelope = {
             "payload": {"answer": "구버전 캐시", "title": None, "message_id": 1},
             "state": {"refined_query": "서울 테니스장"},
@@ -272,14 +254,14 @@ class TestCacheWriteNode:
 
         assert result["cache_hit"] is True
         # 키는 존재하되 None — 라우터의 `or []` 가 빈 배열로 노출함
-        assert "service_cards" in result
-        assert result["service_cards"] is None
+        assert "service_cards" in result["output"]
+        assert result["output"]["service_cards"] is None
 
     async def test_skips_non_eligible_intent(self, base_state):
         from agents.nodes import CacheWriteNode
 
-        base_state["intent"] = IntentType.MAP
-        base_state["answer"] = "x"
+        base_state["plan"]["intent"] = IntentType.MAP
+        base_state["output"]["answer"] = "x"
         with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
@@ -355,28 +337,9 @@ class TestGraphRouting:
         ai_session.commit = AsyncMock()
         ai_session.rollback = AsyncMock()
 
-        state = AgentState(
-            room_id=1,
-            message_id=1,
+        state = make_agent_state(
             message="테니스장",
-            title_needed=False,
-            intent=None,
-            lat=None,
-            lng=None,
             refined_query="서울 테니스장",  # cache_check가 lookup하도록 미리 채움
-            max_class_name=None,
-            area_name=None,
-            service_status=None,
-            sql_results=None,
-            vector_results=None,
-            map_results=None,
-            answer=None,
-            title=None,
-            trace=None,
-            error=None,
-            retry_count=0,
-            history=[],
-            cache_hit=False,
         )
 
         with patch(
@@ -399,8 +362,8 @@ class TestGraphRouting:
 
         # cache hit envelope가 state에 복원되었다
         assert result["cache_hit"] is True
-        assert result["answer"] == "캐시된 답변"
-        assert result["vector_results"] == [{"service_id": "S1"}]
+        assert result["output"]["answer"] == "캐시된 답변"
+        assert result["vector"]["results"] == [{"service_id": "S1"}]
 
         # sql/vector/answer agent의 LLM 호출이 일어나지 않았다
         sql_agent._chain.ainvoke.assert_not_called()
