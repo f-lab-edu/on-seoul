@@ -113,12 +113,12 @@ class SqlAgent:
         *,
         top_k: int | None = None,
     ) -> AgentState:
-        """메시지에서 파라미터 추출 후 DB 조회. sql_results를 채운 AgentState 반환.
+        """메시지에서 파라미터 추출 후 DB 조회. sql.results를 채운 AgentState 반환.
 
         Router가 이미 post-filter 메타데이터를 산출한 경우
-        (state["refined_query"] 존재) max_class_name/area_name/service_status는
-        state 값을 우선 사용한다. LLM에는 refined_query(더 짧고 정제된 텍스트)를
-        전달해 keyword와 날짜 파라미터만 추출한다.
+        (state["plan"]["refined_query"] 존재) max_class_name/area_name/service_status는
+        state["filters"] 값을 우선 사용한다. LLM에는 refined_query(더 짧고 정제된
+        텍스트)를 전달해 keyword와 날짜 파라미터만 추출한다.
 
         Parameters
         ----------

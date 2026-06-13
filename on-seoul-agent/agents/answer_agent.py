@@ -252,8 +252,8 @@ def _build_card_system(
     - _CLAUSE_REFINE_HINT: 자치구가 아직 해소되지 않았을 때만 추가.
 
     area_name 게이트:
-        Router가 이미 해소한 state["area_name"](현재 질문 또는 history 병합)을
-        우선 확인한다. area_name이 채워져 있으면 follow-up("그 중 무료인 것만")
+        Router가 이미 해소한 state["filters"]["area_name"](현재 질문 또는 history
+        병합)을 우선 확인한다. area_name이 채워져 있으면 follow-up("그 중 무료인 것만")
         에서도 refine hint를 생략하여 이미 지정한 자치구를 다시 묻지 않는다.
         _has_district_in_message는 area_name 미해소 시의 보조 fallback이다
         (원본 message에 비공식 표기가 있어도 area_name이 None일 수 있으므로).

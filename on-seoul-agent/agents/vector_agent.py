@@ -260,13 +260,14 @@ class VectorAgent:
         채널마다 독립 ai_session_ctx()로 세션을 열어 asyncio.gather로 동시 실행한다.
         asyncio.Semaphore(vector_channel_concurrency)로 동시 채널 수를 cap한다.
 
-        vector_results 에는 검색 메타데이터만 채운다:
+        반환 state 의 vector.results 에는 검색 메타데이터만 채운다:
           [{service_id, rrf_score}, ...]
         원본 데이터 hydration 은 HydrationNode 가 단독으로 담당한다.
 
         Router가 이미 refined_query와 post-filter를 산출한 경우
-        (state["refined_query"] 존재), 중복 LLM 호출을 피하기 위해 refine 체인을 skip하고
-        state["max_class_name"/"area_name"/"service_status"] 값을 그대로 사용한다.
+        (state["plan"]["refined_query"] 존재), 중복 LLM 호출을 피하기 위해 refine 체인을
+        skip하고 state["filters"]의 max_class_name/area_name/service_status 값을
+        그대로 사용한다.
         """
         plan = state.get("plan") or {}
         filters = state.get("filters") or {}
