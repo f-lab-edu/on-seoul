@@ -302,7 +302,7 @@ def _prepare_state(state: AgentState) -> AgentState:
         overrides["retry_count"] = 0
     overrides["started_at"] = time.monotonic()
     overrides["node_path"] = []
-    # 중첩 채널 방어 초기화(§6): 부분 dict 주입 테스트에서 leaf .get() 접근이
+    # 중첩 채널 방어 초기화: 부분 dict 주입 테스트에서 leaf .get() 접근이
     # KeyError 로 새지 않도록 미존재 채널을 {} 로 채운다(정상 경로는 chat.py 가 채움).
     for _ch in (
         "triage",

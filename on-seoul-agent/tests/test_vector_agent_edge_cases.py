@@ -1,6 +1,6 @@
 """agents/vector_agent.py 엣지케이스 단위 테스트.
 
-검증 절차 §2 에서 식별된 누락 경로:
+다음 누락 경로를 검증한다:
   - rrf_unweighted_baseline=True 일 때 reciprocal_rank_fusion에 weights=None 전달
   - 4채널 모두 빈 결과 → 빈 vector_results
   - search_channels에 6개 키 모두 존재 (기존 테스트 보완)

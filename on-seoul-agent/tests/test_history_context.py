@@ -1,6 +1,6 @@
 """대화 맥락 유지(history) 구조 회귀 테스트.
 
-§5-2 항목 중 AgentState 필드 / Redis 의존 제거 / router_node 주입을 검증한다.
+AgentState 필드 / Redis 의존 제거 / router_node 주입을 검증한다.
 """
 
 from unittest.mock import MagicMock
