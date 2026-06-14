@@ -22,7 +22,8 @@
 - `core/telemetry.py`: `setup_telemetry(app)` — fail-open 패턴, FastAPI·HTTPX·Redis·SQLAlchemy instrumentor 부착.
 - `core/config.py`: `otel_enabled`(기본 False), `otel_service_name`, `otel_exporter_otlp_endpoint`(=`http://on-seoul-signoz:4317`), `otel_environment`, `otel_exporter_otlp_timeout`.
 - `.env.example`: `OTEL_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_ENVIRONMENT` 정의.
-- **미비**: OTLP **로그 export 미구성** (현재 logging은 stdout만). 분산 트레이싱 수신(traceparent 추출)은 fastapi instrumentor로 이미 가능.
+- **로그 export도 이미 완성**: `telemetry.py`의 `_setup_logs`가 `OTLPLogExporter`(gRPC) + `LoggingHandler`를 root logger에 부착하고 `setup_telemetry`에서 호출. 즉 **트레이스·메트릭·로그 세 시그널 모두 구비**. 분산 트레이싱 수신(traceparent 추출)도 fastapi instrumentor로 이미 가능.
+- **AI 서비스에 필요한 추가 구현 없음** — `OTEL_ENABLED=true` 활성화 + 분산 트레이싱 연결 검증만.
 
 ### API 서비스 (on-seoul-api, Spring Boot 3.5.13, Gradle 멀티모듈) — OTEL 전무
 - OpenTelemetry/Micrometer-tracing 의존성 **없음**. actuator는 일부 모듈만.
@@ -103,12 +104,12 @@ exec java $JAVA_OPTS -jar /app/app.jar
 - **비채택 — 이벤트별 child span**: 토큰성 이벤트가 많으면 span 폭증(노이즈·비용) → 지양.
 - 구현 주의: reactive 파이프라인에서 `Span.current()`는 구독 스레드 컨텍스트에 의존하므로, `@WithSpan` 메서드에서 span 참조를 잡아 클로저로 `doOnNext`에 전달한다(스레드 전환 시 컨텍스트 유실 방지).
 
-### 4.2 AI 서비스 — OTLP 로그 export 추가
+### 4.2 AI 서비스 — 추가 구현 없음 (이미 완비)
 
-- 기존 트레이스·메트릭은 `core/telemetry.py`로 이미 동작. **로그 export만 신규**.
-- `opentelemetry-sdk`의 `LoggingHandler`(`opentelemetry.sdk._logs`)를 root logger에 부착하고 `OTLPLogExporter`(gRPC) + `BatchLogRecordProcessor` 구성. `core/telemetry.py`의 `setup_telemetry`에 fail-open으로 추가.
-- 표준 env로 제어: `OTEL_LOGS_EXPORTER=otlp`(기본 미설정 시 export 안 함 → 안전). 기존 stdout 로깅은 유지.
-- PII: 기존 정책(서드파티 logger quiet, 민감정보 WARN)을 OTLP 경로에도 동일 적용. 로그 export 활성 전 본문에 PII 없는지 재검토.
+- 트레이스·메트릭·로그 모두 `core/telemetry.py`로 이미 동작(`_setup_traces`/`_setup_metrics`/`_setup_logs`). 로그는 `OTLPLogExporter`(gRPC) + `LoggingHandler`로 root logger에 부착됨. **신규 코드 불필요**.
+- 토글은 프로그래밍 방식(`settings.otel_enabled`) — FastAPI는 `OTEL_LOGS_EXPORTER` 같은 표준 SDK env를 직접 읽지 않고 `_setup_logs`로 항상 로그를 export한다(enabled일 때). (`OTEL_LOGS_EXPORTER`는 §4.3에서 **Java Agent** 제어용)
+- PII: 기존 정책(서드파티 logger quiet, 민감정보 WARN)이 OTLP 로그 경로에도 그대로 적용됨. 활성 전 본문 PII 재확인.
+- 작업: `OTEL_ENABLED=true`로 전환 후 분산 트레이싱/로그 수신 검증(§6)뿐.
 
 ### 4.3 환경변수 (FastAPI와 대칭)
 
