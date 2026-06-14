@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager, ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.helpers import make_agent_state
-from agents.vector_agent import VectorAgent, _RefinedQuery, _rrf_merge
+from agents.vector_agent import VectorAgent, _RefinedQuery
 from schemas.state import AgentState, IntentType
 
 
@@ -538,93 +538,24 @@ class TestServiceStatusValidation:
         assert rq.service_status is None
 
 
-class TestRrfMergeTopKConstant:
-    """_rrf_merge 호출 시 _TOP_K 상수가 명시적으로 전달된다."""
+class TestVectorAgentRrfFinalCut:
+    """search() 최종 결과는 settings.rrf_top_k_final 로 절단된다."""
 
-    async def test_rrf_merge_uses_top_k_constant(self):
-        """search 결과가 _TOP_K 이하로 제한된다."""
-        from agents.vector_agent import _TOP_K
+    async def test_results_capped_at_rrf_top_k_final(self):
+        """search 결과 수가 settings.rrf_top_k_final 이하로 제한된다."""
+        from core.config import settings
 
-        # _TOP_K + 5개의 vector 결과를 생성하여 제한이 적용되는지 확인
+        # rrf_top_k_final + 5개의 vector 결과를 생성하여 절단이 적용되는지 확인
         vector_rows = [
             {"service_id": f"S{i:03d}", "service_name": f"X{i}", "similarity": 0.9}
-            for i in range(_TOP_K + 5)
+            for i in range(settings.rrf_top_k_final + 5)
         ]
         agent = _make_agent("정제됨", [0.1])
 
         with _patch_search(vector_rows, []):
             result = await agent.search(_make_state())
 
-        assert len(result["vector"]["results"]) <= _TOP_K
-
-
-class TestRrfMerge:
-    def test_empty_both_returns_empty(self):
-        """두 결과가 모두 빈 리스트이면 빈 리스트를 반환한다."""
-        assert _rrf_merge([], []) == []
-
-    def test_vector_only(self):
-        """vector_rows만 있을 때 RRF 점수가 정상 계산된다."""
-        vector_rows = [
-            {"service_id": "S001", "service_name": "A", "similarity": 0.9},
-            {"service_id": "S002", "service_name": "B", "similarity": 0.8},
-        ]
-        result = _rrf_merge(vector_rows, [])
-        assert len(result) == 2
-        assert result[0]["service_id"] == "S001"
-        assert result[0]["rrf_score"] > result[1]["rrf_score"]
-
-    def test_bm25_only(self):
-        """bm25_rows만 있을 때 RRF 점수가 정상 계산된다."""
-        bm25_rows = [
-            {"service_id": "S001", "bm25_score": 3.0},
-            {"service_id": "S002", "bm25_score": 1.5},
-        ]
-        result = _rrf_merge([], bm25_rows)
-        assert len(result) == 2
-        assert result[0]["service_id"] == "S001"
-
-    def test_overlap_gets_higher_score(self):
-        """두 결과에 모두 등장한 service_id가 단독 등장보다 높은 점수를 갖는다."""
-        vector_rows = [{"service_id": "S001", "service_name": "A", "similarity": 0.9}]
-        bm25_rows = [
-            {"service_id": "S001", "bm25_score": 3.0},
-            {"service_id": "S002", "bm25_score": 2.5},
-        ]
-        result = _rrf_merge(vector_rows, bm25_rows)
-        scores = {r["service_id"]: r["rrf_score"] for r in result}
-        assert scores["S001"] > scores["S002"]
-
-    def test_top_k_limits_result(self):
-        """top_k 파라미터가 반환 결과 수를 제한한다."""
-        vector_rows = [
-            {"service_id": f"S{i:03d}", "service_name": f"X{i}", "similarity": 0.9}
-            for i in range(20)
-        ]
-        result = _rrf_merge(vector_rows, [], top_k=5)
-        assert len(result) == 5
-
-    def test_rrf_score_formula(self):
-        """RRF 점수가 1/(k+rank) 공식을 따른다."""
-        k = 60
-        vector_rows = [{"service_id": "S001", "service_name": "A", "similarity": 0.9}]
-        result = _rrf_merge(vector_rows, [], k=k)
-        expected_score = 1.0 / (k + 1)
-        assert abs(result[0]["rrf_score"] - expected_score) < 1e-9
-
-    def test_result_preserves_vector_metadata(self):
-        """RRF 결과에 vector_search의 service_name, metadata 등이 보존된다."""
-        vector_rows = [
-            {
-                "service_id": "S001",
-                "service_name": "체험관",
-                "metadata": {"area_name": "강남구"},
-                "similarity": 0.85,
-            }
-        ]
-        result = _rrf_merge(vector_rows, [])
-        assert result[0]["service_name"] == "체험관"
-        assert result[0]["metadata"] == {"area_name": "강남구"}
+        assert len(result["vector"]["results"]) <= settings.rrf_top_k_final
 
 
 class TestVectorAgentMetaOnlyResults:

@@ -63,3 +63,6 @@ GEMINI.md
 .claude/_workspace/
 
 */docs/superpowers/
+
+# 평가 측정 출력물 (재현 가능, 입력 아님)
+on-seoul-agent/scripts/eval/eval_results/
