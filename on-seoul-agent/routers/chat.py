@@ -114,6 +114,7 @@ async def _stream(
         # ── 오류/캐시 (평면) ──
         error=None,
         cache_hit=False,
+        answer_lock_key=None,
         # ── 인프라/관측 (평면) ──
         node_path=[],
         search_channels={},

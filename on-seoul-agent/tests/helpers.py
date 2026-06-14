@@ -120,6 +120,7 @@ def make_agent_state(**overrides: Any) -> AgentState:
         retry_radius_m=None,
         error=None,
         cache_hit=False,
+        answer_lock_key=None,
         node_path=[],
         search_channels={},
         trace=None,

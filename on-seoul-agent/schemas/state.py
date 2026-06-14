@@ -173,6 +173,10 @@ class AgentState(TypedDict):
     # ── 오류/캐시 (평면) ──
     error: str | None  # 오류 메시지 (있을 경우)
     cache_hit: bool  # cache_check_node 결과 (기본값 False)
+    # singleflight 락 키 — cache_check_node 가 락을 획득한 패스에서 기록한다.
+    # 락 해제(retry_prep / cache_write)가 획득 시점과 동일 키를 쓰도록 보관해
+    # C2 0건 게이트(cache_write 우회) 경로에서도 락이 누수되지 않게 한다.
+    answer_lock_key: str | None
     # ── 인프라/관측 (평면) ──
     # 노드 실행 경로 누적 (관측용). node_path_reducer 가 부분 리스트를 append 병합한다.
     node_path: Annotated[list[str], node_path_reducer]

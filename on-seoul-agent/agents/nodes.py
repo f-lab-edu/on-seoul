@@ -919,6 +919,15 @@ class GraphNodes:
             action.value if action else None,
         )
 
+        # C2 0건 게이트 우회 경로 회귀 방지: 이 재시도는 cache_write 를 거치지 않고
+        # router_node 로 재진입하므로, 직전 패스의 cache_check 가 잡은 singleflight 락을
+        # 여기서 해제해야 한다(미해제 시 재진입 cache_check 가 SET NX 실패 → poll 타임아웃).
+        # Option B: 획득 시점 키를 평면 슬롯에서 그대로 읽어 해제 — refined_query/필터
+        # 리셋 이전·이후 순서와 무관하게 키 불일치 위험이 없다. release 는 멱등.
+        lock_key = state.get("answer_lock_key")
+        if lock_key:
+            await release_answer_lock(lock_key, self._redis)
+
         # 재시도 경계: re_searching emit + progress 가드 리셋(다음 순회의
         # searching/answering 이벤트가 다시 흐르게 한다 — 기존 stream() 동작 보존).
         # decision_emitted 는 리셋하지 않는다(decision 은 전체 실행 1회 — emit 머지로 보존).
@@ -933,6 +942,8 @@ class GraphNodes:
             "search_channels": RESET_CHANNELS,
             "node_path": ["retry_prep"],
             "emit": {"searching_emitted": False, "answering_emitted": False},
+            # 해제 완료 → 슬롯 비움(재진입 cache_check 가 새 락 키를 다시 기록).
+            "answer_lock_key": None,
         }
         # 전 분기 공통 필터 드롭 페이로드(머지) — 케이스 B(ANALYTICS)만 부분 드롭.
         _filters_clear = {
@@ -1670,12 +1681,21 @@ class CacheCheckNode:
             routes=routes,
         )
 
+        # 이 패스가 락 보유자가 될 때만 키를 기록한다(해제 책임 추적). hit/poll-hit/
+        # poll-timeout 경로는 락을 들지 않으므로 None 으로 둔다.
+        lock_key: str | None = None
+
         envelope = await get_cached_answer_by_key(key, self._redis)
         if envelope is None:
             # singleflight: 첫 miss 호출자만 LLM 실행, 나머지는 결과 대기.
             acquired = await acquire_answer_lock(
                 key, self._redis, ttl=settings.answer_cache_lock_ttl
             )
+            if acquired:
+                # 이 패스가 락 보유자 — 해제 책임을 위해 키를 state 에 기록한다.
+                # cache_write 정상 종료 또는 C2 0건 게이트의 retry_prep 우회 경로
+                # 양쪽이 이 키로 release 한다(획득 시점 키와 일치 → SET NX 락 해제).
+                lock_key = key
             if not acquired:
                 logger.info(
                     "cache.singleflight.wait room=%s intent=%s refined=%r",
@@ -1713,7 +1733,8 @@ class CacheCheckNode:
                 intent.value,
                 refined[:40],
             )
-            return {"cache_hit": False}
+            # 락 보유자면 키를 넘겨 후속 노드(retry_prep/cache_write)가 해제한다.
+            return {"cache_hit": False, "answer_lock_key": lock_key}
 
         payload = envelope.get("payload", {}) or {}
         snap = envelope.get("state", {}) or {}
@@ -1827,7 +1848,9 @@ class CacheWriteNode:
             routes=routes,
         )
         # singleflight 락 조기 해제 — waiter가 poll 주기를 기다리지 않고 즉시 hit.
-        await release_answer_lock(key, self._redis)
+        # cache_check 가 기록한 키(answer_lock_key)를 우선 사용해 획득 시점과 정확히
+        # 정합되게 해제한다. 없으면(구 경로/락 미보유) 재계산 키로 폴백(DEL 멱등).
+        await release_answer_lock(state.get("answer_lock_key") or key, self._redis)
         empty = not snap["vector_results"] and not snap["sql_results"]
         logger.info("cache.write intent=%s empty=%s", intent.value, empty)
-        return {}
+        return {"answer_lock_key": None}
