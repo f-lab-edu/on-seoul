@@ -26,6 +26,7 @@ from agents.answer_agent import (
     _STRUCT_CLARIFY,
     _STRUCT_DESCRIBE,
     _STRUCT_DESCRIBE_EMPTY,
+    _STRUCT_DETAIL,
     _STRUCT_FALLBACK,
     _STRUCT_MAP,
 )
@@ -338,6 +339,7 @@ def make_answer_agent(
         IntentType.FALLBACK.value: _compose(
             _ROLE, _STRUCT_FALLBACK, _FALLBACK_GUARDRAILS, _OUTPUT_RULES
         ),
+        "DETAIL": _compose(_ROLE, _STRUCT_DETAIL, _OUTPUT_RULES),
         "DESCRIBE": _compose(_ROLE, _STRUCT_DESCRIBE, _OUTPUT_RULES),
         "DESCRIBE_EMPTY": _compose(_ROLE, _STRUCT_DESCRIBE_EMPTY, _OUTPUT_RULES),
         "CLARIFY": _compose(_ROLE, _STRUCT_CLARIFY, _FALLBACK_GUARDRAILS),

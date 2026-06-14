@@ -108,6 +108,45 @@ _STRUCT_ANALYTICS = """\
 
 3) 마무리: 특정 카테고리나 지역을 지정하면 더 자세히 안내할 수 있다는 안내."""
 
+# 단일 엔티티 상세형 — VECTOR_SEARCH + vector_sub_intent=identification 전용.
+# 사용자가 특정 시설 1곳을 지목해 "자세히" 물을 때, 느슨한 목록 나열 대신
+# focal 시설(place_name) 중심으로 보유 구조화 필드를 충실히 서술한다.
+# 데이터셋은 예약 레코드라 브로셔식 설명 텍스트가 없으므로, "자세히"의 현실적
+# 최대치는 ①지목 시설 정확히 집기 ②해당 place_name 의 예약공간 묶음 ③보유 필드
+# (요금/접수기간/대상/상태/예약법) 충실 서술이다. 없는 정보는 날조하지 않는다.
+_STRUCT_DETAIL = """\
+사용자가 특정 시설 한 곳을 지목해 자세히 묻고 있습니다.
+전달된 검색 결과(JSON 배열)는 그 시설(및 비슷한 시설)의 예약 정보이며,
+배열 앞쪽이 사용자가 지목한 핵심 시설(focal)의 예약공간들입니다.
+
+# 출력 구조
+
+1) 도입문 (1문장) — focal 시설명(place_name)과 위치(area_name)를 언급하며
+   어떤 곳인지 짧게 소개. 매번 같은 문장을 반복하지 말고 자연스럽게 변형하세요.
+
+2) focal 시설 상세 (중심 본문) — focal place_name 에 속한 예약공간들을 묶어 서술:
+   - 제공 예약공간 목록: 각 공간의 이름(min_class_name 또는 service_name)과
+     현재 접수 상태(service_status)를 한 줄씩.
+   - 요금(payment_type), 대상(target_info), 접수기간
+     (receipt_start_dt ~ receipt_end_dt)을 본문에 실제 값으로 서술하세요.
+     카드에만 숨기지 말고 문장으로 풀어 안내합니다.
+   - 예약 방법: 접수중인 공간은 카드의 '바로가기' 링크(service_url)로
+     예약할 수 있다고 안내하세요.
+
+3) 이 외 비슷한 시설 (보조 목록, 있을 때만) — focal 이 아닌 다른 place_name 들이
+   결과에 있으면 "이 외 비슷한 시설"로 시설명만 1~2줄로 짧게 덧붙이세요. 없으면 생략.
+   표시하지 못한 비슷한 시설이 더 있으면 이 보조 목록 안에서 "외 N건"으로 합쳐
+   안내하세요. focal 상세 본문 끝에 "외 N건"을 평면 꼬리표로 붙이지 마세요.
+
+# 규칙
+
+- 전달된 검색 결과(JSON)에 있는 사실만 사용하세요. 시설 소개·사진·세부 요금표 등
+  데이터에 없는 상세는 지어내거나 추측하지 말고, "예약 정보 기준으로 안내드린다"
+  정도로 솔직하게 처리하세요.
+- 시설 소개·홍보 문구를 과장하거나 날조하지 마세요.
+- 일반 가입/통합회원 안내는 생략하거나 맨 끝에 한 줄로만 짧게 덧붙이세요.
+- 중괄호 기호나 JSON 키 이름을 그대로 노출하지 말고 실제 값으로 치환해서 출력하세요."""
+
 # describe-known-entity — 참조 해소 경로 전용.
 # 직전 턴의 결과 엔티티를 재-hydrate 한 원본을 받아 "어떤 곳인지" 서술한다.
 # 예약 카드 템플릿(목록 나열)이 아니라, 시설의 성격·분류·대상·위치를 설명한다.
@@ -342,6 +381,57 @@ _CLARIFY_FALLBACK = (
 _DISPLAY_LIMIT: int = 5
 
 
+def _group_by_place_name(
+    rows: list[dict],
+) -> tuple[dict | None, list[dict]]:
+    """결과를 place_name 기준으로 그룹핑한다 (입력 순서 = RRF 랭킹 순서).
+
+    focal 그룹 = 첫(RRF 최상위) 결과의 place_name 에 속한 모든 행. 결과는 이미
+    랭킹순으로 들어오므로 첫 결과의 place_name 을 사용자가 지목한 핵심 시설로 본다.
+    나머지 place_name 들은 등장 순서를 보존한 보조 그룹 목록으로 반환한다.
+
+    Args:
+        rows: 정규화 이전/이후 결과 목록 (place_name 키 접근, RRF 랭킹순).
+
+    Returns:
+        (focal, others):
+          - focal: {"place_name": <focal place_name>, "rows": [<focal 행들>]} 또는
+            rows 가 비면 None.
+          - others: focal 외 place_name 그룹 리스트. 각 항목 동일 구조.
+    """
+    if not rows:
+        return None, []
+
+    groups: dict[object, dict] = {}
+    order: list[object] = []
+    for row in rows:
+        key = row.get("place_name")
+        if key not in groups:
+            groups[key] = {"place_name": key, "rows": []}
+            order.append(key)
+        groups[key]["rows"].append(row)
+
+    focal_key = order[0]
+    focal = groups[focal_key]
+    others = [groups[k] for k in order[1:]]
+    return focal, others
+
+
+def _focal_first(rows: list[dict]) -> list[dict]:
+    """focal place_name 의 행들을 앞으로 끌어올려 재정렬한다.
+
+    focal 공간이 _DISPLAY_LIMIT 슬라이스에서 무관 시설에 밀려 잘리지 않도록,
+    focal 그룹을 맨 앞에 두고 나머지는 원래(RRF) 순서를 보존한다.
+    """
+    focal, others = _group_by_place_name(rows)
+    if focal is None:
+        return rows
+    ordered = list(focal["rows"])
+    for group in others:
+        ordered.extend(group["rows"])
+    return ordered
+
+
 def _iso_or_none(value):
     """datetime/date 값을 ISO 8601 문자열로 변환한다.
 
@@ -411,6 +501,8 @@ class AnswerAgent:
             IntentType.FALLBACK.value: _compose(
                 _ROLE, _STRUCT_FALLBACK, _FALLBACK_GUARDRAILS, _OUTPUT_RULES
             ),
+            # 단일 엔티티 상세형 (VECTOR_SEARCH + identification). 조건부 절 없음.
+            "DETAIL": _compose(_ROLE, _STRUCT_DETAIL, _OUTPUT_RULES),
             # describe-known-entity (참조 해소 경로). intent 와 무관한 전용 키.
             "DESCRIBE": _compose(_ROLE, _STRUCT_DESCRIBE, _OUTPUT_RULES),
             "DESCRIBE_EMPTY": _compose(_ROLE, _STRUCT_DESCRIBE_EMPTY, _OUTPUT_RULES),
@@ -547,11 +639,28 @@ class AnswerAgent:
         else:
             # MAP, SQL_SEARCH, VECTOR_SEARCH, None
             all_results = self._collect_results(state)
+
+            # 단일 엔티티 상세형 트리거: VECTOR_SEARCH + vector_sub_intent=identification.
+            # focal(첫=RRF 최상위) place_name 공간들을 앞으로 끌어올려 _DISPLAY_LIMIT
+            # 슬라이스에서 잘리지 않게 한다(C). 그 외 intent/sub_intent 는 현행 유지.
+            # 트리거는 vector_sub_intent == "identification" 정확 일치다.
+            # 라우터가 실제 산출하는 "detail" 값에는 의도적으로 발동하지 않는다
+            # — identification(단일 시설 지목) 만 상세형, "detail" 은 목록형 유지.
+            is_detail = (
+                intent == IntentType.VECTOR_SEARCH
+                and state["plan"].get("vector_sub_intent") == "identification"
+                and bool(all_results)
+            )
+            if is_detail:
+                all_results = _focal_first(all_results)
+
             display = all_results[:_DISPLAY_LIMIT]
             extra_count = max(0, len(all_results) - _DISPLAY_LIMIT)
             results_json = json.dumps(display, ensure_ascii=False, default=str)
 
-            if intent == IntentType.MAP:
+            if is_detail:
+                system_prompt = self._static_prompts["DETAIL"]
+            elif intent == IntentType.MAP:
                 system_prompt = self._static_prompts[IntentType.MAP.value]
             else:
                 # Tier 2: 카드형 (SQL_SEARCH / VECTOR_SEARCH / None)
@@ -562,12 +671,17 @@ class AnswerAgent:
                     retry_relaxed=bool(state.get("retry_relaxed")),
                 )
 
+            # 상세형은 평면 "외 N건" 꼬리표 지시를 주입하지 않는다(_more_notice(0)).
+            # overflow 는 _STRUCT_DETAIL 항목 3) 보조 목록("이 외 비슷한 시설")이
+            # 직접 처리하므로, 평면 more_notice 지시와 보조 섹션이 같은 출력 위치를
+            # 두고 경쟁하지 않도록 중립화한다.
+            notice = _more_notice(0) if is_detail else _more_notice(extra_count)
             answer_text = await self._answer_chain.ainvoke(
                 {
                     "system": system_prompt,
                     "message": message,
                     "results_json": results_json,
-                    "more_notice": _more_notice(extra_count),
+                    "more_notice": notice,
                 }
             )
 
