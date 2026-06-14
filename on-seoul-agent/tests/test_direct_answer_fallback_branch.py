@@ -176,10 +176,11 @@ class TestExplainFallbackSelectsFallbackBranch:
         assert _STRUCT_FALLBACK[:30] in system
         assert _STRUCT_CARD_LIST[:30] not in system
 
-    async def test_explain_with_prev_reasoning_does_not_call_answer(self):
-        """대조군: prev_reasoning이 있으면 폴백하지 않고 근거 설명만 — answer() 미호출.
+    async def test_explain_with_prev_reasoning_uses_explain_prompt_not_fallback(self):
+        """대조군: prev_reasoning이 있으면 폴백하지 않고 EXPLAIN 재서술(S2)을 탄다.
 
-        FALLBACK 분기 단언이 폴백 경로 전용임을 격리한다.
+        S2 이후 explain_node 는 단순 string 포맷팅 대신 AnswerAgent.explain() 으로
+        LLM 재서술한다. FALLBACK/카드 분기가 아니라 EXPLAIN 프롬프트를 고른다.
         """
         agent = _real_answer_agent_with_fake_llm()
         nodes = GraphNodes(triage=make_triage(ActionType.EXPLAIN), answer_agent=agent)
@@ -188,7 +189,10 @@ class TestExplainFallbackSelectsFallbackBranch:
             _state(message="왜 그랬어?", prev_reasoning="자연 체험 키워드가 있었습니다.")
         )
 
-        agent._answer_chain.ainvoke.assert_not_called()
+        agent._answer_chain.ainvoke.assert_called_once()
+        system = _captured_system(agent)
+        assert _STRUCT_FALLBACK[:30] not in system
+        assert _STRUCT_CARD_LIST[:30] not in system
 
 
 # ---------------------------------------------------------------------------

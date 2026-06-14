@@ -166,6 +166,9 @@ class AgentState(TypedDict):
     retry_count: int  # 재시도 횟수 (0 = 아직 재시도 없음)
     # 하드 필터 0건으로 인한 완화 재시도 신호. AnswerAgent 가 답변에 명시한다.
     retry_relaxed: bool
+    # 완화 재시도 시 retry_prep_node 가 드롭한 필터 키 목록(M1-b).
+    # AnswerAgent 가 사용자 라벨로 변환해 "무엇을 완화했는지" 답변에 명시한다.
+    relaxed_filters: list[str] | None
     # 방향성 재시도: retry_prep_node 가 다음 순회의 intent 를 강제할 때 세팅(1회성).
     forced_intent: IntentType | None
     # MAP 0건 재시도 시 확장 반경(m). 없으면 기본 반경(1000m) 적용.

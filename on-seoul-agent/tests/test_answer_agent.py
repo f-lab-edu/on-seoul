@@ -25,7 +25,6 @@ from agents.answer_agent import (
     _STRUCT_MAP,
     _CLAUSE_RESERVATION_GUIDE,
     _CLAUSE_REFINE_HINT,
-    _CLAUSE_RELAXED_NOTICE,
     _FALLBACK_GUARDRAILS,
 )
 from schemas.state import AgentState, IntentType
@@ -139,7 +138,7 @@ class TestAnswerAgent:
     def test_normalize_converts_datetime_to_isoformat(self):
         """receipt_*_dt datetime 객체는 ISO 8601('T' 구분자) 문자열로 변환된다.
 
-        프론트 계약(chat-service-cards-interface §5) 정합성 — sse_frame 의
+        프론트 계약 정합성 — sse_frame 의
         default=str 폴백(공백 구분자)에 의존하지 않고 _normalize 단에서 보장한다.
         """
         from datetime import date, datetime
@@ -716,7 +715,7 @@ class TestBuildCardSystem:
     def test_resolved_area_name_suppresses_refine_hint(self):
         """area_name이 해소돼 있으면(follow-up) message에 자치구 없어도 refine hint 생략.
 
-        §3e 핵심: raw message에 "강남구" 문자열이 없어도 Router가 area_name을
+        핵심: raw message에 "강남구" 문자열이 없어도 Router가 area_name을
         채웠으면(현재 질문 또는 history 병합) 이미 지정한 자치구를 다시 묻지 않는다.
         """
         results = [{"service_status": "예약마감"}]
@@ -759,12 +758,16 @@ class TestBuildCardSystem:
 
 
 class TestRelaxedNoticeGate:
-    """0건 완화 재시도(retry_relaxed) 시 완화 고지 절 게이트 (§3c / §6).
+    """0건 완화 재시도(retry_relaxed) 시 완화 고지 절 게이트.
 
     완화 사실은 결과가 1건 이상 노출될 때만 명시해야 하며,
     완화하지 않았거나(retry_relaxed=False) 완화 후에도 0건이면 노출하지 않는다
     (유료를 무료라고 오안내하거나 빈 결과에 무의미한 고지를 붙이지 않도록).
     """
+
+    # 완화 고지 절은 동적 구성(M1-b)이라 고정 상수 대신 안정 마커로 검증한다.
+    _RELAXED_MARKER = "완화한 결과입니다"
+    _RELAXED_GUARD = "유료 시설을 무료라고 표현하지 마세요"
 
     def test_relaxed_with_results_includes_notice(self):
         """retry_relaxed=True + 결과 있음 → 완화 고지 절 포함."""
@@ -772,20 +775,21 @@ class TestRelaxedNoticeGate:
         prompt = _build_card_system(
             "강남구 무료 문화행사", results, "강남구", retry_relaxed=True
         )
-        assert _CLAUSE_RELAXED_NOTICE in prompt
+        assert self._RELAXED_MARKER in prompt
+        assert self._RELAXED_GUARD in prompt
 
     def test_relaxed_with_zero_results_excludes_notice(self):
         """retry_relaxed=True 라도 결과 0건이면 완화 고지 미포함(빈 결과 오고지 방지)."""
         prompt = _build_card_system(
             "강남구 무료 문화행사", [], "강남구", retry_relaxed=True
         )
-        assert _CLAUSE_RELAXED_NOTICE not in prompt
+        assert self._RELAXED_MARKER not in prompt
 
     def test_not_relaxed_excludes_notice(self):
         """기본(retry_relaxed=False) 경로 — 결과가 있어도 완화 고지 미포함."""
         results = [{"service_status": "예약마감", "payment_type": "무료"}]
         prompt = _build_card_system("강남구 무료 문화행사", results, "강남구")
-        assert _CLAUSE_RELAXED_NOTICE not in prompt
+        assert self._RELAXED_MARKER not in prompt
 
     async def test_answer_passes_retry_relaxed_to_card_system(self):
         """answer()가 state['retry_relaxed']를 _build_card_system으로 전달해 고지 절이 실린다."""
@@ -798,7 +802,8 @@ class TestRelaxedNoticeGate:
         )
         await agent.answer(state)
         call_kwargs = agent._answer_chain.ainvoke.call_args[0][0]
-        assert _CLAUSE_RELAXED_NOTICE in call_kwargs["system"]
+        assert self._RELAXED_MARKER in call_kwargs["system"]
+        assert self._RELAXED_GUARD in call_kwargs["system"]
 
 
 class TestStructCardListPlaceFraming:

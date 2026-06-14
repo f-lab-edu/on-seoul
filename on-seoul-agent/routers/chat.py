@@ -109,6 +109,7 @@ async def _stream(
         # ── 재시도 제어 (평면) ──
         retry_count=0,
         retry_relaxed=False,
+        relaxed_filters=None,
         forced_intent=None,
         retry_radius_m=None,
         # ── 오류/캐시 (평면) ──
@@ -121,7 +122,7 @@ async def _stream(
         trace=None,
         started_at=None,
         rrf_merged_ids=None,
-        # ── 도메인 working state (중첩, §6: 모두 {} 초기화) ──
+        # ── 도메인 working state (중첩, 모두 {} 초기화) ──
         triage={},
         plan={},
         filters={},

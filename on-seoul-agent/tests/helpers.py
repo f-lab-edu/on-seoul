@@ -27,6 +27,7 @@ from agents.answer_agent import (
     _STRUCT_DESCRIBE,
     _STRUCT_DESCRIBE_EMPTY,
     _STRUCT_DETAIL,
+    _STRUCT_EXPLAIN,
     _STRUCT_FALLBACK,
     _STRUCT_MAP,
 )
@@ -116,6 +117,7 @@ def make_agent_state(**overrides: Any) -> AgentState:
         target_service_ids=None,
         retry_count=0,
         retry_relaxed=False,
+        relaxed_filters=None,
         forced_intent=None,
         retry_radius_m=None,
         error=None,
@@ -344,6 +346,7 @@ def make_answer_agent(
         "DESCRIBE": _compose(_ROLE, _STRUCT_DESCRIBE, _OUTPUT_RULES),
         "DESCRIBE_EMPTY": _compose(_ROLE, _STRUCT_DESCRIBE_EMPTY, _OUTPUT_RULES),
         "CLARIFY": _compose(_ROLE, _STRUCT_CLARIFY, _FALLBACK_GUARDRAILS),
+        "EXPLAIN": _compose(_ROLE, _STRUCT_EXPLAIN, _FALLBACK_GUARDRAILS),
     }
     return agent
 

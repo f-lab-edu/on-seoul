@@ -208,13 +208,16 @@ class TestTriageActionRouting:
         assert result["output"]["answer"] is not None
 
     async def test_explain_with_prev_reasoning(self):
-        """EXPLAIN action + prev_reasoning -> 근거 설명 포함된 답변."""
+        """EXPLAIN action + prev_reasoning -> LLM 재서술(S2) 답변 생성."""
         triage = make_triage(
             ActionType.EXPLAIN, user_rationale="판단 근거를 설명드립니다."
         )
         prev = "자연 체험 관련 키워드가 포함되어 있어 자연 체험으로 분류했습니다."
 
-        graph = AgentGraph(triage=triage, answer_agent=_answer_agent())
+        graph = AgentGraph(
+            triage=triage,
+            answer_agent=_answer_agent("자연 체험으로 안내드린 이유를 설명드릴게요."),
+        )
         result = await run_graph(
             graph,
             _state(message="왜 그렇게 판단했어?", prev_reasoning=prev),
@@ -223,8 +226,8 @@ class TestTriageActionRouting:
         )
         assert result["triage"]["action"] == ActionType.EXPLAIN
         assert result["output"]["answer"] is not None
-        # prev_reasoning 내용이 답변에 포함되어야 한다
-        assert "자연" in result["output"]["answer"] or len(result["output"]["answer"]) > 10
+        # S2: explain() 으로 재서술된 답변이 채워진다.
+        assert len(result["output"]["answer"]) > 10
 
     async def test_explain_without_prev_reasoning_falls_back(self):
         """EXPLAIN action + prev_reasoning 없음 -> DIRECT_ANSWER 폴백."""

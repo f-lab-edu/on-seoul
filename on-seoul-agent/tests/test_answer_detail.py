@@ -224,6 +224,69 @@ class TestSemanticDetailRegressionGuard:
         assert _STRUCT_DETAIL[:30] not in system
 
 
+class TestDetailRelaxedNotice:
+    """M1 gap #4: DETAIL 분기는 _build_card_system 을 미경유하므로, 완화 재시도
+    (attribute_gap) 결과를 상세형으로 답할 때도 _relaxed_notice 가 system 에
+    직접 덧붙는지 단언한다(누락 시 환각·오안내 위험). E2E 회귀를 unit 스코프로 고정.
+    """
+
+    def _detail_rows(self):
+        return [
+            {
+                "service_id": "A1",
+                "service_name": "마루공원 테니스장",
+                "place_name": "마루공원",
+                "payment_type": "유료",
+                "service_url": "https://yeyak.seoul.go.kr/a1",
+            }
+        ]
+
+    async def test_detail_relaxed_notice_appended_with_labels(self):
+        agent = make_answer_agent("말씀하신 곳은 못 찾았지만 대신 이런 곳은 어떠세요?")
+        state = _detail_state(
+            message="마루공원 테니스장 무료로 빌릴 수 있어?",
+            hydrated_services=self._detail_rows(),
+            retry_relaxed=True,
+            relaxed_filters=["payment_type", "area_name"],
+        )
+        await agent.answer(state)
+        system = agent._answer_chain.ainvoke.call_args[0][0]["system"]
+        # DETAIL 프롬프트 + 완화 고지 절이 함께 실린다.
+        assert _STRUCT_DETAIL[:30] in system
+        assert "완화한 결과입니다" in system
+        # 드롭 필터 라벨이 정확히 매핑된다.
+        assert "요금 조건" in system
+        assert "지역" in system
+        # 유료→무료 오안내 가드 보존.
+        assert "유료 시설을 무료라고 표현하지 마세요" in system
+
+    async def test_detail_no_relaxed_notice_when_not_relaxed(self):
+        """retry_relaxed 미설정이면 DETAIL 에 완화 고지가 새지 않는다(오고지 방지)."""
+        agent = make_answer_agent("마루공원 테니스장 상세 안내입니다.")
+        state = _detail_state(
+            message="마루공원 테니스장 알려줘",
+            hydrated_services=self._detail_rows(),
+        )
+        await agent.answer(state)
+        system = agent._answer_chain.ainvoke.call_args[0][0]["system"]
+        assert _STRUCT_DETAIL[:30] in system
+        assert "완화한 결과입니다" not in system
+
+    async def test_detail_relaxed_notice_generic_when_filters_none(self):
+        """relaxed_filters=None(드롭 필터 미상)이라도 일반 완화 문구가 붙는다."""
+        agent = make_answer_agent("대신 이런 곳은 어떠세요?")
+        state = _detail_state(
+            message="마루공원 테니스장",
+            hydrated_services=self._detail_rows(),
+            retry_relaxed=True,
+            relaxed_filters=None,
+        )
+        await agent.answer(state)
+        system = agent._answer_chain.ainvoke.call_args[0][0]["system"]
+        assert _STRUCT_DETAIL[:30] in system
+        assert "조건을 일부 완화한 결과입니다" in system
+
+
 class TestDetailFocalOrdering:
     """C: focal 시설 우선 배치 + 보조 목록 분리, truncate 보호."""
 

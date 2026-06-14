@@ -159,8 +159,23 @@ _ANALYTICS_DROP_ORDER: tuple[str, ...] = (
     "area_name",
 )
 
+# attribute_gap 완화(M1) — 드롭 우선순위. 케이스 C/ANALYTICS 완화와 일관되게
+# 제약 강도 순으로 드롭하되 max_class_name(카테고리)은 의미 보존상 유지(드롭 제외).
+# 동일 vector 질의를 "필터만 완화"해 재검색하기 위해 0건을 유발한 필터를 모두 드롭한다.
+_ATTRIBUTE_GAP_DROP_ORDER: tuple[str, ...] = (
+    "payment_type",
+    "service_status",
+    "area_name",
+)
+
 # MAP 0건 완화 — 반경 확장(1회). 기본 1000m → 3000m.
 _MAP_RETRY_RADIUS_M: int = 3000
+
+# LLM 예외 / 빈 답변 시 공유 폴백 문구.
+# direct_answer_node 의 except 블록과 빈 답변 가드(S1)가 같은 출처를 재사용한다(drift 방지).
+_FALLBACK_ANSWER = (
+    "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+)
 
 # refine 캐시 직렬화에서 plan(머지) 채널로 가는 필드.
 _REFINE_PLAN_FIELDS: tuple[str, ...] = (
@@ -274,7 +289,7 @@ class GraphNodes:
       - ai_session   : vector / search_persist / trace
     search_persist 와 trace 는 0-1 에서 한 ai_session 을 공유했으나, 노드 로컬에서는
     각자 독립 세션을 연다(서로 다른 테이블 INSERT 이고 search_persist 가 먼저 commit
-    하므로 트랜잭션 공유 의존성 없음 — §0-6 (1)).
+    하므로 트랜잭션 공유 의존성 없음).
     """
 
     def __init__(
@@ -700,10 +715,15 @@ class GraphNodes:
         }
         try:
             new_state = await self._answer.answer(fallback_state)
+            # S1 빈 답변 가드: LLM 성공 후에도 answer 가 None/빈 문자열이면 폴백 문구로
+            # 대체한다(UI 빈 말풍선 방지). AnswerAgent 보장이 1차, 이 가드가 2차 방어막.
+            answer = new_state.get("answer")
+            if not (answer or "").strip():
+                answer = _FALLBACK_ANSWER
             return {
                 "plan": {"intent": IntentType.FALLBACK},
                 "output": {
-                    "answer": new_state.get("answer"),
+                    "answer": answer,
                     "title": new_state.get("title"),
                     "service_cards": new_state.get("service_cards"),
                 },
@@ -713,9 +733,7 @@ class GraphNodes:
             logger.exception("direct_answer_node 실행 오류")
             return {
                 "error": str(exc),
-                "output": {
-                    "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
-                },
+                "output": {"answer": _FALLBACK_ANSWER},
                 "node_path": ["direct_answer_error"],
             }
 
@@ -734,9 +752,14 @@ class GraphNodes:
         logger.info("ambiguous_node room=%s", state.get("room_id"))
         try:
             new_state = await self._answer.clarify(state)
+            # S1 빈 답변 가드: clarify() 내부 폴백이 1차이나, 노드 차원에서도
+            # answer 가 None/빈 문자열이면 _CLARIFY_FALLBACK 으로 대체한다(2차 방어막).
+            answer = new_state.get("answer")
+            if not (answer or "").strip():
+                answer = _CLARIFY_FALLBACK
             return {
                 "output": {
-                    "answer": new_state.get("answer"),
+                    "answer": answer,
                     "service_cards": new_state.get("service_cards"),
                 },
                 "node_path": ["ambiguous_node"],
@@ -787,9 +810,10 @@ class GraphNodes:
         }
 
     async def explain_node(self, state: AgentState) -> dict[str, Any]:
-        """EXPLAIN action — prev_reasoning으로 판단 근거 설명.
+        """EXPLAIN action — prev_reasoning을 LLM으로 사용자 친화 재서술(S2).
 
         prev_reasoning 없으면 direct_answer_node로 폴백.
+        LLM 예외 시 기존 "일시적인 오류" 폴백 유지.
         """
         prev_reasoning = state.get("prev_reasoning")
         if not prev_reasoning:
@@ -801,15 +825,18 @@ class GraphNodes:
             return await self.direct_answer_node(state)
 
         try:
-            # prev_reasoning을 바탕으로 간결한 근거 설명 생성
-            answer = f"이전 답변에서의 판단 근거를 설명해드릴게요.\n\n{prev_reasoning}"
+            # 단순 string 포맷팅 대신 LLM 으로 재서술 — 내부 기술 토큰 노출 차단(S2).
+            new_state = await self._answer.explain(state)
+            answer = new_state.get("answer")
+            if not (answer or "").strip():
+                answer = _FALLBACK_ANSWER
             logger.info("explain_node room=%s", state.get("room_id"))
             return {"output": {"answer": answer}, "node_path": ["explain_node"]}
         except Exception as exc:
             logger.exception("explain_node 실행 오류")
             return {
                 "error": str(exc),
-                "output": {"answer": "죄송합니다, 일시적인 오류가 발생했습니다."},
+                "output": {"answer": _FALLBACK_ANSWER},
                 "node_path": ["explain_error"],
             }
 
@@ -872,10 +899,18 @@ class GraphNodes:
         return {"node_path": ["pre_answer_gate"]}
 
     def route_pre_answer_gate(self, state: AgentState) -> str:
-        """C2 게이트 엣지: hydrated_services=[] 시 retry_prep, 그 외 answer_node."""
+        """C2 게이트 엣지: hydrated_services=[] 시 retry_prep, 그 외 answer_node.
+
+        M1-a: attribute_gap(OUT_OF_SCOPE)은 vector 검색을 실제 실행하므로 RETRIEVE 와
+        동일한 0건 처리 대상이다. 그 외 비-RETRIEVE action 은 게이트 통과(직접 answer).
+        """
         action = state["triage"].get("action")
-        # 비-RETRIEVE action은 게이트 통과 불가 (직접 answer/ambiguous/etc로 이동)
-        if action not in (ActionType.RETRIEVE, None):
+        oos_type = state["triage"].get("out_of_scope_type")
+        # attribute_gap 은 검색 경로라 0건 체크에 포함한다(중첩 경로).
+        is_search_path = action in (ActionType.RETRIEVE, None) or (
+            action == ActionType.OUT_OF_SCOPE and oos_type == "attribute_gap"
+        )
+        if not is_search_path:
             return "answer_node"
 
         hydrated = state["hydration"].get("hydrated_services")
@@ -895,6 +930,9 @@ class GraphNodes:
         retry_count를 1 증가시키고 intent에 따라 전환/완화/반경확장을 수행한다.
 
         분기:
+          - 케이스 M1 (attribute_gap): OUT_OF_SCOPE/attribute_gap vector 0건 →
+            forced_intent=VECTOR_SEARCH + refined_query/vector_sub_intent 보존,
+            0건 유발 필터만 드롭(max_class_name 유지) + relaxed_filters 기록.
           - 케이스 A (전환): _RETRY_FALLBACK_INTENT 키 intent(SQL_SEARCH 등) →
             forced_intent 세팅 + 정형 필터 전부 비움(전환 경로가 자체 정제).
           - 케이스 B (ANALYTICS): 가장 제약 큰 effective 필터 1개만 드롭(status→area).
@@ -911,6 +949,7 @@ class GraphNodes:
         new_retry_count = (state.get("retry_count") or 0) + 1
         intent = state["plan"].get("intent")
         action = state["triage"].get("action")
+        oos_type = state["triage"].get("out_of_scope_type")
         logger.info(
             "retry.triggered room=%s retry_count=%d intent=%s action=%s",
             state.get("room_id"),
@@ -952,6 +991,31 @@ class GraphNodes:
             "service_status": None,
             "payment_type": None,
         }
+
+        # 케이스 M1(attribute_gap): OUT_OF_SCOPE/attribute_gap 의 vector 검색 0건.
+        # 케이스 C(전체 리셋)와 달리 검색 컨텍스트를 보존한다:
+        #   · forced_intent=VECTOR_SEARCH 로 2회차 router_node 가 LLM 재분류를 skip 하게 한다.
+        #   · vector_sub_intent(identification 등)·refined_query 는 보존(plan 리셋 금지) —
+        #     "동일 vector 질의를 필터만 완화해 재검색"이 성립한다.
+        #   · 0건을 유발한 필터만 드롭(max_class_name 유지)하고 relaxed_filters 에 기록한다.
+        # 종료 안전성: 2회차는 answer_node 도달 후 self_correction_edge ⓪
+        # (action==OUT_OF_SCOPE → end_normal) 로 즉시 종료되어 무한루프 없음.
+        if action == ActionType.OUT_OF_SCOPE and oos_type == "attribute_gap":
+            dropped = [
+                f for f in _ATTRIBUTE_GAP_DROP_ORDER if state["filters"].get(f)
+            ]
+            update.update(
+                {
+                    "forced_intent": IntentType.VECTOR_SEARCH,  # 평면(1회성)
+                    # 검색 결과/하이드 슬롯만 리셋 — plan(refined_query/sub_intent)은 보존.
+                    "vector": {},
+                    "hydration": {},
+                    # 드롭 대상 필터만 None 으로(머지) — max_class_name 등 미드롭 항목은 유지.
+                    "filters": {f: None for f in dropped},
+                    "relaxed_filters": dropped,
+                }
+            )
+            return update
 
         # 케이스 A: 강제 전환 대상 intent (SQL_SEARCH → VECTOR_SEARCH 등)
         fallback = _RETRY_FALLBACK_INTENT.get(intent) if intent else None
@@ -1401,7 +1465,7 @@ class GraphNodes:
             "error": state.get("error"),
         }
         # ANALYTICS 관측치는 chat_search_results(service_id/score) 스키마에 맞지 않으므로
-        # trace(JSONB) 확장으로 저장한다 (마이그레이션 없이, §4-4.1).
+        # trace(JSONB) 확장으로 저장한다 (마이그레이션 없이).
         if intent == IntentType.ANALYTICS:
             analytics = state["analytics"]
             filters = state["filters"]
