@@ -6,7 +6,12 @@
  *
  * 기존 types/chat.ts(ChatRoom/ChatMessage, `id` 기반)와 필드 규약이 다르므로
  * (여기는 `roomId`/`seq`/`titleGenerated`) 별도 파일로 분리한다.
+ *
+ * ASSISTANT 메시지는 저장된 시설 카드(`service_cards`)를 함께 반환한다(실시간 SSE final과
+ * 동일한 ServiceCard[] 형태). 카드 타입은 SSE 단일 출처를 재사용한다.
  */
+
+import type { ServiceCard } from "@/types/sse-events";
 
 export type ChatRole = "USER" | "ASSISTANT";
 
@@ -32,6 +37,8 @@ export interface ChatMessageItem {
   role: ChatRole;
   content: string;
   createdAt: string; // ISO 8601 (UTC)
+  /** ASSISTANT 메시지의 저장된 시설 카드. USER/카드 미동반 시 null. SSE final과 동일 형태. */
+  service_cards: ServiceCard[] | null;
 }
 
 /** GET /api/chat/rooms/{roomId}/messages 응답. 메시지는 seq 오름차순 전체 반환. */
