@@ -30,11 +30,11 @@ _on_ai_engine = create_async_engine(
     pool_pre_ping=True,
     pool_recycle=300,  # 5분 이상 유휴 연결 재생성 (네트워크 레벨 타임아웃 방지)
     # 풀 사이즈 명시: 노드 로컬 세션(0b)으로 커넥션 점유 W가 검색 윈도우로
-    # 축소된다. on_ai 사용자: vector_node(4채널, 글로벌 세마포어 cap=20 동시 상한),
-    # search_persist_node, trace_node. 컨테이너당 100 QPS 기준 평균 동시 ~8,
-    # 피크(vector burst 포함) ~24. cap 25(10+15).
-    pool_size=10,
-    max_overflow=15,
+    # 축소된다. on_ai 사용자: vector_node(4채널, 글로벌 세마포어 cap=40 동시 상한),
+    # search_persist_node, trace_node. 단일 인스턴스 200 QPS 기준(Little's Law)
+    # vector 채널 λ=800/s × W=0.02s → 평균 동시 ~16, 피크(p99≈3×) ~48. cap 50(20+30).
+    pool_size=20,
+    max_overflow=30,
 )
 _OnAiSession = async_sessionmaker(_on_ai_engine, expire_on_commit=False)
 
@@ -52,9 +52,10 @@ _on_data_engine = create_async_engine(
     pool_pre_ping=True,
     pool_recycle=300,
     # 풀 사이즈 명시: on_data 사용자: sql_node, hydration_node, map_node,
-    # analytics_node. 평균 동시 ~3, 피크 ~10. cap 15(5+10).
-    pool_size=5,
-    max_overflow=10,
+    # analytics_node. 단일 인스턴스 200 QPS 기준(Little's Law)
+    # λ=200/s × W=0.03s(sql+hydration) → 평균 동시 ~6, 피크(p99≈3×) ~18. cap 30(10+20).
+    pool_size=10,
+    max_overflow=20,
 )
 _OnDataSession = async_sessionmaker(_on_data_engine, expire_on_commit=False)
 

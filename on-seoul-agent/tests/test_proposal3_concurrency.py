@@ -165,11 +165,11 @@ class TestGlobalSemaphore:
         assert hasattr(settings, "vector_global_concurrency")
         assert settings.vector_global_concurrency > 0
 
-    def test_vector_global_concurrency_default_is_20(self):
-        """vector_global_concurrency 기본값은 20이다."""
+    def test_vector_global_concurrency_default_is_40(self):
+        """vector_global_concurrency 기본값은 40이다 (200 QPS 재산정)."""
         from core.config import settings
 
-        assert settings.vector_global_concurrency == 20
+        assert settings.vector_global_concurrency == 40
 
     def test_init_global_sema_sets_semaphore(self):
         """init_global_sema() 호출 후 vector_global_sema가 None이 아니다."""

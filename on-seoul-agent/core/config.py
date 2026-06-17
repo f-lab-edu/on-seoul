@@ -94,10 +94,11 @@ class Settings(BaseSettings):
     embedding_sync_concurrency: int = 4
 
     # 글로벌 VECTOR fan-out 세마포어 — 고QPS 환경에서 풀 고갈 방지.
-    # 100 동시 요청 × 4채널 = 400 동시 on_ai 쿼리 가능성을 막아
-    # on_ai 풀(pool_size=10, max_overflow=15 → cap=25)이 고갈되지 않게 한다.
-    # 20으로 설정하면 동시 채널 쿼리 ≤ 20 → 풀 cap(25) 이내 유지.
-    vector_global_concurrency: int = 20
+    # 단일 인스턴스 200 QPS 기준(Little's Law L=λ×W로 재산정).
+    # 200 QPS × 4채널 fan-out을 풀 cap 50 이내로 제한하고, persist/trace 여유 ~10 확보.
+    # vector 채널 λ=800/s, W=0.02s → 평균~16, 피크(p99≈3×)~48. 동시 채널 쿼리 ≤ 40.
+    # 글로벌 cap(40) < on_ai 풀 cap(50) 불변식 유지(여유분이 persist/trace 흡수).
+    vector_global_concurrency: int = 40
 
     # httpx HTTP 연결 풀 — LLM 클라이언트용 (LangChain SDK 전달).
     # 컨테이너당 answer 스트림 ≈ 100 × 3s = 300, router ≈ 100 × 0.5s = 50

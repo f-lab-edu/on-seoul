@@ -33,7 +33,7 @@ def init_global_sema(concurrency: int | None = None) -> asyncio.Semaphore:
     Parameters
     ----------
     concurrency:
-        None이면 settings.vector_global_concurrency(기본 20)를 사용한다.
+        None이면 settings.vector_global_concurrency(기본 40)를 사용한다.
 
     Returns
     -------

@@ -228,8 +228,9 @@ class VectorAgent:
         # 결과 인덱스: results[0]=a_rows, results[1]=b_rows, results[2]=c_rows, results[3]=d_rows
         #
         # 글로벌 세마포어(core.concurrency.vector_global_sema) — 동시 채널 단일 가드.
-        #   on_ai 풀(cap=25)이 고갈되지 않도록 프로세스 전체 동시 채널 수를 제한한다.
-        #   100 동시 요청 × 4채널 = 400 잠재 쿼리를 vector_global_concurrency(기본 20)로 캡.
+        #   on_ai 풀(cap=50)이 고갈되지 않도록 프로세스 전체 동시 채널 수를 제한한다.
+        #   단일 인스턴스 200 QPS 기준(config.py 산정): 200 QPS × 4채널 fan-out 잠재 쿼리를
+        #   vector_global_concurrency(기본 40)로 캡해 풀(cap 50) 이내로 유지(persist/trace 여유 ~10).
         #   모듈 속성(_concurrency.vector_global_sema)을 런타임에 읽어 lifespan 이후
         #   init_global_sema()로 할당된 값을 정확히 참조한다.
 
