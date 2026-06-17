@@ -12,6 +12,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from agents.graph import AgentGraph
 from core.concurrency import init_global_sema
 from core.config import settings
+from core.langfuse_client import init_langfuse, shutdown_langfuse
 from core.logging import setup_logging
 from core.redis import get_redis
 from core.telemetry import setup_telemetry, shutdown_telemetry
@@ -39,6 +40,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # OTel 인프라 계측 — otel_enabled=False(기본)이거나 endpoint 미설정 시 no-op.
     # 기존 커스텀 트레이싱(chat_agent_traces)과 병행한다.
     setup_telemetry(app)
+
+    # Langfuse LLM 계측 — langfuse_enabled=False(기본)이거나 키 미설정 시 no-op.
+    # OTel(인프라 계측)과 별개 파이프라인으로 공존하며, 그래프 config 의 callbacks 로
+    # LLM I/O·토큰·비용을 관측한다 (core/langfuse_client.py).
+    init_langfuse()
 
     # 글로벌 VECTOR fan-out 세마포어 초기화 — 이벤트 루프 생성 후 실행.
     # core/concurrency.py 모듈 전역 변수에 등록하여 VectorAgent가 직접 참조한다.
@@ -69,6 +75,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.warning("openai_http_client aclose 실패", exc_info=True)
         shutdown_telemetry()
+        shutdown_langfuse()
 
 
 app = FastAPI(
