@@ -90,27 +90,19 @@ class TestSanitizeUserRationale:
     def test_empty_string_returns_none(self):
         assert sanitize_user_rationale("") is None
 
-    def test_whitespace_only_returns_none(self):
-        assert sanitize_user_rationale("   ") is None
+    # 공백-only("   ")는 strip 후 빈 문자열과 동일 분기라 test_empty_string_returns_none 으로 대표.
 
     def test_normal_text_passes_through(self):
         result = sanitize_user_rationale("수영장을 검색합니다.")
         assert result == "수영장을 검색합니다."
 
-    def test_internal_pattern_removed(self):
-        """'__' 포함 줄은 제거된다."""
-        text = "정상 텍스트\n__internal_key: 시스템 값\n두 번째 줄"
-        result = sanitize_user_rationale(text)
-        assert "__" not in (result or "")
-        assert "정상 텍스트" in (result or "")
+    # '__' 포함 줄 제거(정상 줄 보존)는 test_line_starting_with_dunder_removed_but_rest_preserved
+    # 가 더 엄밀하게(앞뒤 정상 줄 보존까지) 커버하는 동일 sanitize 분기라 축소했다.
+    # __ 중간 포함 보존(test_technical_description_with_dunder_preserved)과
+    # 전부 내부 줄→None(test_only_internal_lines_returns_none)은 고유 분기로 유지한다.
 
-    def test_truncate_at_200_chars(self):
-        """200자 초과 시 말줄임표로 truncate된다."""
-        long_text = "가" * 250
-        result = sanitize_user_rationale(long_text)
-        assert result is not None
-        assert len(result) <= 200
-        assert result.endswith("...")
+    # 250자 truncate 는 test_201_chars_truncated_with_ellipsis(경계+1, 길이=200 정확 단언)가
+    # 더 엄밀하게 커버하는 동일 truncate 분기라 축소했다.
 
     def test_exactly_200_chars_not_truncated(self):
         """정확히 200자이면 truncate되지 않는다."""
@@ -379,60 +371,14 @@ class TestStreamDecisionEvent:
         # triage가 user_rationale을 반환했으므로 1회 방출
         assert len(decision_events) == 1
 
-    async def test_decision_not_emitted_on_router_node_path(self):
-        """RouterAgent(하위호환 별칭) 경로는 user_rationale을 반환하지 않으므로 decision 미방출."""
-        router = make_router(IntentType.SQL_SEARCH)
-        sql_agent, data_session = make_sql_agent([])
-        graph = AgentGraph(
-            router=router,
-            sql_agent=sql_agent,
-            answer_agent=make_answer_agent(),
-        )
+    # router-node(별칭) 경로의 decision 미방출은 test_graph.py 의
+    # test_router_only_path_no_decision_but_answering_flows 가 decision==0 +
+    # progress 흐름까지 함께 커버하므로 축소했다(rationale=None 게이트는
+    # test_decision_not_emitted_when_rationale_none 가 유닛 단으로 유지).
 
-        events = await self._collect(
-            graph,
-            make_agent_state(),
-            data_session=data_session,
-            ai_session=make_ai_session(),
-        )
-
-        decision_events = [(t, d) for t, d in events if t == "decision"]
-        assert len(decision_events) == 0, "router_node 경로에서는 decision 미방출"
-
-    async def test_decision_emitted_once_on_retry(self):
-        """self-correction 재시도 시 decision 이벤트는 1회만 방출된다.
-
-        1차 router_node에서 triage 보류 rationale로 decision emit. 재시도 재진입은
-        router_node(forced_intent 경로)지만 _decision_emitted 가드로 재방출되지 않는다.
-        """
-        triage = make_triage(
-            ActionType.RETRIEVE,
-            user_rationale="수영장 검색입니다.",
-        )
-        router = make_router(IntentType.SQL_SEARCH)
-        sql_agent, data_session = make_sql_agent([])
-        graph = AgentGraph(
-            triage=triage,
-            router=router,
-            sql_agent=sql_agent,
-            answer_agent=make_answer_agent("재시도 후 답변"),
-        )
-
-        # hydration 0건 → retry_prep → router_node 재진입(forced_intent)
-        with patch(
-            "agents.hydration_node.hydrate_services",
-            AsyncMock(return_value=[]),
-        ):
-            events = await self._collect(
-                graph,
-                make_agent_state(),
-                data_session=data_session,
-                ai_session=make_ai_session(),
-            )
-
-        decision_events = [(t, d) for t, d in events if t == "decision"]
-        # router_node 1차에서 1회 방출, 재시도 재진입은 가드로 미방출.
-        assert len(decision_events) == 1
+    # 재시도 재진입 시 decision 1회 보장(_decision_emitted 가드)은 전용 클래스
+    # TestDecisionEmitOnceAcrossRetry.test_decision_emitted_once_when_router_reenters_on_retry
+    # 가 router 2회 실행 전제까지 검증하며 더 엄밀하게 커버하므로, SQL intent 변형은 축소했다.
 
 
 # ---------------------------------------------------------------------------

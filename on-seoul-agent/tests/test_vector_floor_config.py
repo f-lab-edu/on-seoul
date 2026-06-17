@@ -13,21 +13,105 @@
    BM25 채널 top_k 로깅은 실제 한도 BM25_LIMIT(50)이다.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from contextlib import ExitStack, asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from agents.vector_agent import VectorAgent, _RefinedQuery
 from core.config import settings
 from schemas.search import SearchChannel
+from schemas.state import AgentState, IntentType
+from tests.helpers import make_agent_state
 from tools.bm25_search import BM25_LIMIT
 from tools.question_search import question_search
 from tools.vector_search import resolve_min_similarity, vector_search
 
-from tests.test_vector_agent_hybrid import (
-    _make_agent,
-    _make_state,
-    _patch_all_searches,
-)
+
+# test_vector_agent_hybrid.py 통삭제(테스트 다이어트)에 따라 이 모듈이 의존하던
+# 헬퍼를 로컬로 이관했다. 동작 변경 없음 — 동일 구현.
+def _make_state(
+    message: str = "아이랑 체험할 수 있는 시설",
+    vector_sub_intent: str | None = None,
+) -> AgentState:
+    state = make_agent_state(message=message, intent=IntentType.VECTOR_SEARCH)
+    state["plan"]["vector_sub_intent"] = vector_sub_intent
+    return state
+
+
+def _make_agent(
+    refined_query: str = "체험 시설",
+    vector: list[float] | None = None,
+) -> VectorAgent:
+    if vector is None:
+        vector = [0.1, 0.2, 0.3]
+    agent = VectorAgent.__new__(VectorAgent)
+    mock_chain = MagicMock()
+    mock_chain.ainvoke = AsyncMock(
+        return_value=_RefinedQuery(refined_query=refined_query)
+    )
+    agent._refine_chain = mock_chain
+    mock_embeddings = MagicMock()
+    mock_embeddings.aembed_query = AsyncMock(return_value=vector)
+    agent._embeddings = mock_embeddings
+    return agent
+
+
+def _mock_ai_session_ctx():
+    """agents.vector_agent.ai_session_ctx 를 mock 세션을 yield 하도록 패치한다."""
+    mock_session = MagicMock()
+
+    @asynccontextmanager
+    async def _ctx():
+        yield mock_session
+
+    return patch("agents.vector_agent.ai_session_ctx", _ctx)
+
+
+def _patch_all_searches(
+    a_rows: list[dict] | None = None,
+    b_rows: list[dict] | None = None,
+    c_rows: list[dict] | None = None,
+    d_rows: list[dict] | None = None,
+):
+    """4채널 검색과 ai_session_ctx 를 동시에 patch하는 컨텍스트 매니저."""
+    _a_rows = a_rows or []
+    _b_rows = b_rows or []
+    _c_rows = c_rows or []
+    _d_rows = d_rows or []
+
+    async def _vs_side_effect(*args, **kwargs):
+        rk = kwargs.get("row_kind", "identity")
+        return _a_rows if rk == "identity" else _b_rows
+
+    class _Ctx:
+        def __enter__(self):
+            self._stack = ExitStack()
+            self.mock_vs = self._stack.enter_context(
+                patch(
+                    "agents.vector_agent.vector_search",
+                    new=AsyncMock(side_effect=_vs_side_effect),
+                )
+            )
+            self.mock_qs = self._stack.enter_context(
+                patch(
+                    "agents.vector_agent.question_search",
+                    new=AsyncMock(return_value=_c_rows),
+                )
+            )
+            self.mock_bm25 = self._stack.enter_context(
+                patch(
+                    "agents.vector_agent.bm25_search",
+                    new=AsyncMock(return_value=_d_rows),
+                )
+            )
+            self._stack.enter_context(_mock_ai_session_ctx())
+            return self
+
+        def __exit__(self, *args):
+            self._stack.__exit__(*args)
+
+    return _Ctx()
 
 _SAMPLE_VECTOR = [0.1, 0.2, 0.3]
 _QUESTION_KEYS = ["service_id", "embedding_text", "intent_label", "similarity"]

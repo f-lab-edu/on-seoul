@@ -56,25 +56,9 @@ def _make_nodes(triage: TriageAgent) -> GraphNodes:
 
 
 class TestTriageActionRouting:
-    async def test_retrieve_sql_reaches_sql_node(self):
-        """RETRIEVE/SQL_SEARCH -> sql_node 경로."""
-        rows = [{"service_id": "S001", "service_name": "수영장"}]
-        sql_agent, data_session = make_sql_agent(rows)
-        triage = make_triage(ActionType.RETRIEVE)
-        router = make_router(IntentType.SQL_SEARCH)
-
-        graph = AgentGraph(
-            triage=triage,
-            router=router,
-            sql_agent=sql_agent,
-            answer_agent=_answer_agent(),
-        )
-        result = await run_graph(
-            graph, _state(), data_session=data_session, ai_session=make_ai_session()
-        )
-        assert result["plan"]["intent"] == IntentType.SQL_SEARCH
-        assert result["triage"]["action"] == ActionType.RETRIEVE
-        assert result["sql"]["results"] is not None
+    # RETRIEVE/SQL → sql_node → results 경로는 test_graph.TestConditionalEdgeRouting
+    # .test_sql_search_route 가, triage action 슬롯 전파는 TestTriageNodeStatePropagation
+    # 이 커버하는 routes-경계 중복이라 축소했다. 비검색 action 분기는 아래 유지.
 
     async def test_direct_answer_skips_db(self):
         """DIRECT_ANSWER action -> DB 미조회, LLM 직접 응답."""
@@ -227,22 +211,9 @@ class TestTriageActionRouting:
         # S2: explain() 으로 재서술된 답변이 채워진다.
         assert len(result["output"]["answer"]) > 10
 
-    async def test_explain_without_prev_reasoning_falls_back(self):
-        """EXPLAIN action + prev_reasoning 없음 -> DIRECT_ANSWER 폴백."""
-        triage = make_triage(ActionType.EXPLAIN)
-
-        graph = AgentGraph(
-            triage=triage,
-            answer_agent=_answer_agent("직접 답변합니다."),
-        )
-        result = await run_graph(
-            graph,
-            _state(message="왜 그렇게 판단했어?", prev_reasoning=None),
-            data_session=MagicMock(),
-            ai_session=make_ai_session(),
-        )
-        assert result["output"]["answer"] is not None
-        # prev_reasoning이 없으면 direct_answer 폴백으로 AnswerAgent가 실행된다
+    # EXPLAIN + prev_reasoning 없음 → DIRECT_ANSWER 폴백은 test_non_retrieve_robustness
+    # .TestExplainRephrase.test_explain_no_prev_reasoning_falls_back_to_direct_answer 가
+    # 더 구체적으로 커버하는 중복이라 축소했다(EXPLAIN+prev 경로는 위에 유지).
 
 
 # ---------------------------------------------------------------------------
@@ -260,17 +231,8 @@ class TestSelfCorrectionExcludesNonRetrieve:
         state = _state(action=ActionType.DIRECT_ANSWER, answer="", retry_count=0)
         assert nodes.self_correction_edge(state) == "end_normal"
 
-    def test_ambiguous_no_retry(self):
-        """AMBIGUOUS action은 retry_prep 미진입."""
-        nodes = self._nodes()
-        state = _state(action=ActionType.AMBIGUOUS, answer="", retry_count=0)
-        assert nodes.self_correction_edge(state) == "end_normal"
-
-    def test_out_of_scope_no_retry(self):
-        """OUT_OF_SCOPE action은 retry_prep 미진입."""
-        nodes = self._nodes()
-        state = _state(action=ActionType.OUT_OF_SCOPE, answer="", retry_count=0)
-        assert nodes.self_correction_edge(state) == "end_normal"
+    # AMBIGUOUS/OUT_OF_SCOPE 의 no-retry 도 동일 predicate(비-RETRIEVE → end_normal)의
+    # 값만 다른 순열이라, 대표 DIRECT_ANSWER + EXPLAIN 만 남기고 축소했다.
 
     def test_explain_no_retry(self):
         """EXPLAIN action은 retry_prep 미진입."""
@@ -828,24 +790,9 @@ class TestStreamEventsWithTriage:
         assert "answering" in steps
         assert "searching" not in steps
 
-    async def test_retrieve_sql_emits_searching(self):
-        """RETRIEVE/SQL_SEARCH action은 searching progress 방출."""
-        triage = make_triage(ActionType.RETRIEVE)
-        router = make_router(IntentType.SQL_SEARCH)
-        sql_agent, data_session = make_sql_agent([])
-        graph = AgentGraph(
-            triage=triage,
-            router=router,
-            sql_agent=sql_agent,
-            answer_agent=_answer_agent(),
-        )
-        events = await self._collect(
-            stream_graph(
-                graph, _state(), data_session=data_session, ai_session=make_ai_session()
-            )
-        )
-        steps = [d["step"] for t, d in events if t == "progress"]
-        assert "searching" in steps
+    # RETRIEVE/SQL searching present 는 test_graph 의 progress 순서 테스트
+    # (fanout/router-only)가 이미 커버하므로 축소했다. DIRECT_ANSWER 의 searching
+    # 미방출(고유 negative 분기)은 위에 유지한다.
 
 
 # ---------------------------------------------------------------------------

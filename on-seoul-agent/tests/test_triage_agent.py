@@ -105,3 +105,18 @@ class TestTriageOutputShape:
         assert out.action == ActionType.RETRIEVE
         assert out.out_of_scope_type is None
         assert out.user_rationale is None
+
+
+# FALLBACK 액션이 ActionType에 존재하지 않음을 명시적으로 확인 (test_triage_gaps.py 에서 이관)
+class TestFallbackActionRemoved:
+    def test_no_fallback_in_action_type(self):
+        """ActionType에 FALLBACK 멤버가 없어야 한다 (DIRECT_ANSWER로 대체됨)."""
+        action_values = {a.value for a in ActionType}
+        assert "FALLBACK" not in action_values
+
+    def test_five_action_types_exist(self):
+        """ActionType은 정확히 5개 멤버를 가진다."""
+        assert len(ActionType) == 5
+        expected = {"RETRIEVE", "DIRECT_ANSWER", "AMBIGUOUS", "OUT_OF_SCOPE", "EXPLAIN"}
+        actual = {a.value for a in ActionType}
+        assert actual == expected
