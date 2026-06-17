@@ -287,6 +287,32 @@ def _build_sources(state: dict[str, Any]) -> list[dict[str, Any]]:
     return sources
 
 
+def _build_run_config(state: AgentState) -> dict[str, Any]:
+    """run()/stream() 공용 config 조립 — Langfuse 핸들러가 있으면 callbacks/metadata 부착.
+
+    핸들러가 None(비활성/실패)이면 {"recursion_limit": 50} 만 반환해 기존 동작과 100%
+    동일하다(회귀 금지). 핸들러 활성 시에만 callbacks=[handler] + Langfuse 메타데이터
+    (langfuse_session_id=대화방, message_id)를 추가한다.
+
+    지연 import: core.langfuse_client 는 core.config 를 import 하므로, 모듈 상단 import
+    시 import 순서/사이클에 묶이는 것을 피한다(telemetry 의 core.database 지연 import 패턴).
+    """
+    config: dict[str, Any] = {"recursion_limit": 50}
+
+    from core.langfuse_client import get_langfuse_handler
+
+    handler = get_langfuse_handler()
+    if handler is not None:
+        config["callbacks"] = [handler]
+        config["metadata"] = {
+            # 대화방 = Langfuse 세션. v4 콜백 핸들러는 langfuse_session_id(str)/
+            # langfuse_user_id(str) 메타데이터 키를 trace 속성으로 승격한다.
+            "langfuse_session_id": str(state.get("room_id")),
+            "message_id": state.get("message_id"),
+        }
+    return config
+
+
 def _prepare_state(state: AgentState) -> AgentState:
     """run()/stream() 진입 시 per-request 런타임 상태를 state 에 초기화한다.
 
@@ -384,9 +410,10 @@ class AgentGraph:
         state = _prepare_state(state)
 
         # recursion_limit: 최악 경로(RETRIEVE + secondary 팬아웃 + retry 1회) ~23 super-step + 여유.
+        # Langfuse 활성 시 callbacks/metadata 추가(없으면 recursion_limit 만 — 기존 동작 불변).
         result: AgentState = await self._compiled_graph.ainvoke(
             state,
-            config={"recursion_limit": 50},
+            config=_build_run_config(state),
         )  # type: ignore[arg-type]
 
         return result
@@ -432,10 +459,12 @@ class AgentGraph:
         # 멀티모드: "values"(reducer 적용 전체 state)로 최종 result 스냅샷,
         # "custom"(노드가 writer 로 보낸 progress/decision 페이로드)으로 SSE 이벤트.
         # "updates" 는 더 이상 progress/decision 산출에 쓰이지 않으므로 받지 않는다.
+        # Langfuse 활성 시 callbacks/metadata 추가(없으면 recursion_limit 만 — 기존 동작 불변).
+        # SSE 블로킹 금지: 동기 flush 를 넣지 않는다(백그라운드 배치 + shutdown flush 로 충분).
         async for mode, chunk in self._compiled_graph.astream(
             state,
             stream_mode=["values", "custom"],
-            config={"recursion_limit": 50},  # 최악 경로 ~23 super-step + 여유
+            config=_build_run_config(state),  # 최악 경로 ~23 super-step + 여유
         ):
             if mode == "values":
                 # reducer가 적용된 전체 state 스냅샷.
