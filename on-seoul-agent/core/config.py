@@ -93,10 +93,6 @@ class Settings(BaseSettings):
     # 임베딩 동기화 API — /embeddings/services/sync 백그라운드 동시 처리 수
     embedding_sync_concurrency: int = 4
 
-    # VECTOR 4채널 동시성 상한 — asyncio.Semaphore 값.
-    # 채널 수(4)와 동일하게 두면 풀 max_overflow(15) 이내에서 버스트 안전.
-    vector_channel_concurrency: int = 4
-
     # 글로벌 VECTOR fan-out 세마포어 — 고QPS 환경에서 풀 고갈 방지.
     # 100 동시 요청 × 4채널 = 400 동시 on_ai 쿼리 가능성을 막아
     # on_ai 풀(pool_size=10, max_overflow=15 → cap=25)이 고갈되지 않게 한다.

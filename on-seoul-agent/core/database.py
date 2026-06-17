@@ -30,7 +30,7 @@ _on_ai_engine = create_async_engine(
     pool_pre_ping=True,
     pool_recycle=300,  # 5분 이상 유휴 연결 재생성 (네트워크 레벨 타임아웃 방지)
     # 풀 사이즈 명시: 노드 로컬 세션(0b)으로 커넥션 점유 W가 검색 윈도우로
-    # 축소된다. on_ai 사용자: vector_node(4채널 × self._channel_sema=4 동시 상한),
+    # 축소된다. on_ai 사용자: vector_node(4채널, 글로벌 세마포어 cap=20 동시 상한),
     # search_persist_node, trace_node. 컨테이너당 100 QPS 기준 평균 동시 ~8,
     # 피크(vector burst 포함) ~24. cap 25(10+15).
     pool_size=10,

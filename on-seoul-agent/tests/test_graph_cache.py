@@ -694,9 +694,6 @@ class TestSingleflightLockLeak:
         embeddings = MagicMock()
         embeddings.aembed_query = AsyncMock(return_value=[0.1] * 3)
         vector_agent._embeddings = embeddings
-        import asyncio
-
-        vector_agent._channel_sema = asyncio.Semaphore(4)
 
         redis = _FakeRedis()
         poll_spy = AsyncMock(return_value=None)

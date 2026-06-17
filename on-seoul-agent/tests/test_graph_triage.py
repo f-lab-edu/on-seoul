@@ -14,7 +14,6 @@
 - C2: 0건 시 answer LLM 미호출 + retry_prep 직행
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -189,7 +188,6 @@ class TestTriageActionRouting:
             embeddings = MagicMock()
             embeddings.aembed_query = AsyncMock(return_value=[0.1] * 3)
             vector_agent._embeddings = embeddings
-            vector_agent._channel_sema = asyncio.Semaphore(4)
 
             graph = AgentGraph(
                 triage=triage,

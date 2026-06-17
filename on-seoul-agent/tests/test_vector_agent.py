@@ -10,7 +10,6 @@ vector_search와 bm25_search를 모두 patch하여 외부 의존성 없이 동�
 테스트는 agents.vector_agent.ai_session_ctx 를 함께 patch 해야 한다.
 """
 
-import asyncio
 from contextlib import asynccontextmanager, ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -39,9 +38,6 @@ def _make_agent(
     mock_embeddings = MagicMock()
     mock_embeddings.aembed_query = AsyncMock(return_value=vector)
     agent._embeddings = mock_embeddings
-
-    # __new__ 가 __init__ 을 건너뛰므로 _channel_sema 를 직접 설정한다.
-    agent._channel_sema = asyncio.Semaphore(4)
 
     return agent
 
@@ -114,7 +110,6 @@ class TestVectorAgentRouterPostFilter:
         mock_embeddings = MagicMock()
         mock_embeddings.aembed_query = AsyncMock(return_value=[0.1])
         agent._embeddings = mock_embeddings
-        agent._channel_sema = asyncio.Semaphore(4)
 
         state = _make_state()
         state["plan"]["refined_query"] = "강남구 체육시설"
@@ -163,7 +158,6 @@ class TestVectorAgentRouterPostFilter:
         mock_embeddings = MagicMock()
         mock_embeddings.aembed_query = AsyncMock(return_value=[0.1])
         agent._embeddings = mock_embeddings
-        agent._channel_sema = asyncio.Semaphore(4)
 
         with (
             patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])),
@@ -199,7 +193,6 @@ class TestVectorAgentPostFilter:
         mock_embeddings = MagicMock()
         mock_embeddings.aembed_query = AsyncMock(return_value=[0.1, 0.2])
         agent._embeddings = mock_embeddings
-        agent._channel_sema = asyncio.Semaphore(4)
 
         with (
             patch(
@@ -245,7 +238,6 @@ class TestVectorAgentPostFilter:
         mock_embeddings = MagicMock()
         mock_embeddings.aembed_query = AsyncMock(return_value=[0.1])
         agent._embeddings = mock_embeddings
-        agent._channel_sema = asyncio.Semaphore(4)
 
         with (
             patch(
@@ -581,7 +573,6 @@ class TestVectorAgentMetaOnlyResults:
         agent._refine_chain.ainvoke = AsyncMock(return_value=refined)
         agent._embeddings = MagicMock()
         agent._embeddings.aembed_query = AsyncMock(return_value=[0.1] * 768)
-        agent._channel_sema = asyncio.Semaphore(4)
 
         with (
             patch("agents.vector_agent.vector_search", AsyncMock(return_value=vector_rows)),

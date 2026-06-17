@@ -9,7 +9,6 @@
 제안 2 이후: VectorAgent.search()는 ai_session 인자를 받지 않는다.
 """
 
-import asyncio
 from contextlib import asynccontextmanager, ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -43,8 +42,6 @@ def _make_agent(
     mock_embeddings = MagicMock()
     mock_embeddings.aembed_query = AsyncMock(return_value=vector)
     agent._embeddings = mock_embeddings
-    # __new__ 가 __init__ 을 건너뛰므로 _channel_sema 를 직접 설정한다.
-    agent._channel_sema = asyncio.Semaphore(4)
     return agent
 
 
@@ -115,7 +112,6 @@ class TestVectorAgentWeightPassthrough:
             mock_settings.rrf_top_k_final = 10
             mock_settings.vector_sub_intent_enabled = False
             mock_settings.vector_default_sub_intent = "semantic"
-            mock_settings.vector_channel_concurrency = 4
             mock_settings.rrf_weight_profiles = {
                 "semantic": {
                     "track_a": 0.15,

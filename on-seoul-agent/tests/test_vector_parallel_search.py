@@ -5,14 +5,16 @@
 - bm25 토큰 없을 때 d_rows=[] 매핑 어긋남 없음
 - 한 채널 예외 → 격리, 나머지·RRF 정상(_safe_* 회귀)
 - 세션 분리 후 메인 ai_session 오염 없음(노드 로컬이라 이미 없으나 명시 확인)
-- asyncio.Semaphore 동작 확인
+- 글로벌 세마포어 동작 확인
 """
 
 import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import core.concurrency as _concurrency
 from agents.vector_agent import VectorAgent, _RefinedQuery
+from core.concurrency import init_global_sema
 from schemas.state import IntentType
 from tests.helpers import make_agent_state
 
@@ -29,7 +31,6 @@ def _make_state(message: str = "체험 시설 알려줘") -> dict:
 def _make_agent(
     refined_query: str = "체험 시설",
     vector: list[float] | None = None,
-    channel_concurrency: int = 4,
 ) -> VectorAgent:
     if vector is None:
         vector = [0.1, 0.2, 0.3]
@@ -40,8 +41,6 @@ def _make_agent(
     emb = MagicMock()
     emb.aembed_query = AsyncMock(return_value=vector)
     agent._embeddings = emb
-    # __new__ 가 __init__ 을 건너뛰므로 _channel_sema 를 직접 설정한다.
-    agent._channel_sema = asyncio.Semaphore(channel_concurrency)
     return agent
 
 
@@ -426,12 +425,19 @@ class TestSessionIsolation:
 
 
 class TestSemaphore:
+    def setup_method(self):
+        _concurrency.vector_global_sema = None
+
+    def teardown_method(self):
+        _concurrency.vector_global_sema = None
+
     async def test_semaphore_limits_concurrent_channel_count(self):
-        """asyncio.Semaphore(vector_channel_concurrency)가 채널 동시성을 cap한다.
+        """글로벌 세마포어(단일 가드)가 채널 동시성을 cap한다.
 
         세마포어 값을 1로 낮추어 채널이 순차 실행되는 것을 확인한다.
         채널 수(N)=4, 세마포어=1 → 동시 실행 수가 1이어야 한다(순차).
         """
+        init_global_sema(concurrency=1)
         concurrent: list[int] = []
         active = {"count": 0}
 
@@ -456,9 +462,8 @@ class TestSemaphore:
             active["count"] -= 1
             return []
 
-        # _channel_sema 를 Semaphore(1) 로 교체하여 동시성을 1로 cap한다.
-        # __init__ 에서 인스턴스 레벨로 생성되므로 직접 교체가 필요하다.
-        agent = _make_agent(channel_concurrency=1)
+        # 글로벌 세마포어를 1로 초기화하여 동시성을 1로 cap한다.
+        agent = _make_agent()
 
         with (
             patch("agents.vector_agent.vector_search", new=AsyncMock(side_effect=_slow_vs)),
@@ -476,10 +481,11 @@ class TestSemaphore:
         assert max(concurrent) <= 1
 
     async def test_semaphore_4_allows_all_channels_at_once(self):
-        """세마포어=4(기본값)이면 4채널이 모두 동시에 실행 가능하다.
+        """글로벌 세마포어=4이면 4채널이 모두 동시에 실행 가능하다.
 
         모든 채널이 barrier 에서 동시 대기하여 서로 block 없이 완료되면 동시 실행 확인.
         """
+        init_global_sema(concurrency=4)
         reached_barrier: list[str] = []
         barrier = asyncio.Barrier(4)
 

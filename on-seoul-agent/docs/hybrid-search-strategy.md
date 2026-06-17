@@ -249,10 +249,9 @@ VectorAgent.search(state, ai_session)
      → search_persist_node가 종단에서 일괄 적재
 ```
 
-4채널은 채널마다 독립 세션(`ai_session_ctx()`)을 열어 `asyncio.gather`로 동시에 실행한다. asyncpg 세션 하나로는 동시 쿼리를 보낼 수 없어, 순차로 묶는 대신 세션을 따로 열어 병렬화했다. 대신 무제한 병렬은 커넥션 풀을 고갈시키므로 두 겹으로 동시성을 캡한다.
+4채널은 채널마다 독립 세션(`ai_session_ctx()`)을 열어 `asyncio.gather`로 동시에 실행한다. asyncpg 세션 하나로는 동시 쿼리를 보낼 수 없어, 순차로 묶는 대신 세션을 따로 열어 병렬화했다. 대신 무제한 병렬은 커넥션 풀을 고갈시키므로 단일 글로벌 세마포어로 동시성을 캡한다.
 
-- **채널 세마포어** (`vector_channel_concurrency=4`, 인스턴스 레벨): 한 요청 안에서 동시에 도는 채널 수를 제한한다.
-- **전역 세마포어** (`vector_global_concurrency=20`, 프로세스 레벨): 전체 동시 채널 쿼리 수를 제한한다. on_ai 풀 상한(pool_size 10 + overflow 15 = 25) 안에 들도록 20으로 잡았다. 100 동시 요청 × 4채널 = 400 잠재 쿼리를 20으로 캡해 풀 버스트를 막는다.
+- **글로벌 세마포어** (`core/concurrency.vector_global_sema`, `vector_global_concurrency=20`, 프로세스 레벨): 각 채널 실행(`_run_channel`)을 감싸 프로세스 전체에서 동시에 도는 채널 쿼리 수를 제한한다. on_ai 풀 상한(pool_size 10 + overflow 15 = 25) 안에 들도록 20으로 잡았다(≤20 < 25). 100 동시 요청 × 4채널 = 400 잠재 쿼리를 20으로 캡해 풀 버스트를 막는다. 적정값은 부하 측정 후 재산정한다.
 
 ### VectorSubIntent 가중치 프로파일
 

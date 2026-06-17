@@ -185,13 +185,6 @@ class VectorAgent:
             ]
         )
         self._refine_chain = prompt | llm.with_structured_output(_RefinedQuery)
-        # 프로세스당 VectorAgent 1개이므로 실질 프로세스 전역 cap.
-        # self._channel_sema 는 VectorAgent 싱글톤에 1개이므로, 요청이 몇 개
-        # 들어와도 동시에 ai_session 을 획득할 수 있는 채널 수의 상한은
-        # vector_channel_concurrency(4) 다. 인스턴스 레벨로 유지해야 이 cap이
-        # 프로세스 전역으로 작동한다(search() 호출마다 새 Semaphore를 생성하면
-        # per-request 4 상한이 되어 전역 cap 역할을 하지 못한다).
-        self._channel_sema = asyncio.Semaphore(settings.vector_channel_concurrency)
 
     async def search(
         self,
@@ -200,7 +193,7 @@ class VectorAgent:
         """질의 정제 → 임베딩 → 4채널 병렬 검색 → 가중 RRF.
 
         채널마다 독립 ai_session_ctx()로 세션을 열어 asyncio.gather로 동시 실행한다.
-        asyncio.Semaphore(vector_channel_concurrency)로 동시 채널 수를 cap한다.
+        프로세스 글로벌 세마포어(core.concurrency.vector_global_sema)로 동시 채널 수를 cap한다.
 
         반환 state 의 vector.results 에는 검색 메타데이터만 채운다:
           [{service_id, rrf_score}, ...]
@@ -231,14 +224,12 @@ class VectorAgent:
 
         # 4채널 병렬 실행.
         # 채널마다 독립 ai_session_ctx()로 세션을 열어 asyncpg 동시 쿼리 제약을 우회한다.
-        # self._channel_sema(인스턴스 레벨)로 동시 채널 수를 cap하여 풀 버스트를 방지한다.
         # bm25_tokens 없으면 채널 D를 태스크에 포함하지 않고 빈 결과로 인덱스를 고정한다.
         # 결과 인덱스: results[0]=a_rows, results[1]=b_rows, results[2]=c_rows, results[3]=d_rows
         #
-        # 글로벌 세마포어(core.concurrency.vector_global_sema) — 외곽 가드.
+        # 글로벌 세마포어(core.concurrency.vector_global_sema) — 동시 채널 단일 가드.
         #   on_ai 풀(cap=25)이 고갈되지 않도록 프로세스 전체 동시 채널 수를 제한한다.
         #   100 동시 요청 × 4채널 = 400 잠재 쿼리를 vector_global_concurrency(기본 20)로 캡.
-        #   채널별 세마포어(self._channel_sema=4)와 중첩: 글로벌이 외곽, 채널이 내곽.
         #   모듈 속성(_concurrency.vector_global_sema)을 런타임에 읽어 lifespan 이후
         #   init_global_sema()로 할당된 값을 정확히 참조한다.
 
@@ -247,9 +238,8 @@ class VectorAgent:
             # contextlib.nullcontext()로 대체하여 분기 중복을 제거한다.
             sema_ctx = _concurrency.vector_global_sema or contextlib.nullcontext()
             async with sema_ctx:
-                async with self._channel_sema:
-                    async with ai_session_ctx() as session:
-                        return await coro_fn(session)
+                async with ai_session_ctx() as session:
+                    return await coro_fn(session)
 
         tasks = [
             _run_channel(

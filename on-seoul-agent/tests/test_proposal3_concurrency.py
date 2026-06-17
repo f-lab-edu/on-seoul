@@ -4,7 +4,7 @@
 1. httpx Limits 설정값 — llm/client.py _make_httpx_limits() 반환값 단언
 2. OpenAI ChatOpenAI 생성 시 async_client에 커스텀 httpx.AsyncClient 주입 확인
 3. 글로벌 fan-out 세마포어 상한 — init_global_sema() 후 vector_global_sema._value 단언
-4. _run_channel 글로벌 세마포어 + 채널 세마포어 중첩 동작
+4. _run_channel 글로벌 세마포어 단일 가드 동작
 5. atokenize_query — asyncio.to_thread를 경유하는 비동기 래퍼 검증
 6. 토크나이저 블로킹 오프로드 — 이벤트 루프 블로킹 없이 실행 완료
 """
@@ -200,11 +200,11 @@ class TestGlobalSemaphore:
 
 
 # ---------------------------------------------------------------------------
-# 4. _run_channel 글로벌 세마포어 + 채널 세마포어 중첩 동작
+# 4. _run_channel 글로벌 세마포어 단일 가드 동작
 # ---------------------------------------------------------------------------
 
 
-def _make_vector_agent(channel_concurrency: int = 4) -> object:
+def _make_vector_agent() -> object:
     """VectorAgent 인스턴스를 LLM/임베딩 없이 생성한다."""
     from agents.vector_agent import VectorAgent, _RefinedQuery
 
@@ -215,7 +215,6 @@ def _make_vector_agent(channel_concurrency: int = 4) -> object:
     emb = MagicMock()
     emb.aembed_query = AsyncMock(return_value=[0.1, 0.2, 0.3])
     agent._embeddings = emb
-    agent._channel_sema = asyncio.Semaphore(channel_concurrency)
     return agent
 
 
@@ -238,7 +237,7 @@ class TestGlobalSemaphoreInRunChannel:
         _concurrency.vector_global_sema = None
 
     async def test_global_sema_none_runs_without_error(self):
-        """글로벌 세마포어가 None이면(lifespan 전) 채널 세마포어만으로 정상 실행된다."""
+        """글로벌 세마포어가 None이면(lifespan 전) nullcontext fallback으로 정상 실행된다."""
         agent = _make_vector_agent()
 
         with (
@@ -286,8 +285,8 @@ class TestGlobalSemaphoreInRunChannel:
             active["count"] -= 1
             return []
 
-        # channel_concurrency=4(기본)지만 global sema=2이므로 동시 실행은 최대 2
-        agent = _make_vector_agent(channel_concurrency=4)
+        # global sema=2이므로 동시 실행은 최대 2
+        agent = _make_vector_agent()
 
         with (
             patch(
@@ -335,7 +334,7 @@ class TestGlobalSemaphoreInRunChannel:
             await barrier.wait()
             return []
 
-        agent = _make_vector_agent(channel_concurrency=4)
+        agent = _make_vector_agent()
 
         with (
             patch("agents.vector_agent.vector_search", new=AsyncMock(side_effect=_vs)),

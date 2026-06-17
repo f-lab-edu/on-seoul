@@ -8,7 +8,6 @@ vector_search(A/B), question_search(C), bm25_search(D) 4채널 병렬 호출 +
 테스트는 agents.vector_agent.ai_session_ctx 를 함께 patch 해야 한다.
 """
 
-import asyncio
 from contextlib import asynccontextmanager, ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -43,8 +42,6 @@ def _make_agent(
     mock_embeddings = MagicMock()
     mock_embeddings.aembed_query = AsyncMock(return_value=vector)
     agent._embeddings = mock_embeddings
-    # __new__ 가 __init__ 을 건너뛰므로 _channel_sema 를 직접 설정한다.
-    agent._channel_sema = asyncio.Semaphore(4)
     return agent
 
 
