@@ -34,6 +34,7 @@ dependencies = [
     # 참고: BM25 쿼리 토크나이저는 kiwipiepy(위 의존성)를 사용한다.
     # 원안인 lindera-py는 PyPI 미등록(설치 불가)이라 kiwipiepy로 교체했다.
     # kiwipiepy 미설치 환경에서는 tools/tokenizer.py가 공백 분리 폴백을 사용한다.
+    "langfuse>=4.7.1",
 ]
 
 [dependency-groups]
