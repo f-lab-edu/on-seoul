@@ -75,6 +75,23 @@ class Settings(BaseSettings):
     otel_exporter_otlp_timeout: int = 10  # gRPC export 타임아웃(초)
     otel_metric_export_interval_ms: int = 60000  # 메트릭 주기 export 간격(ms)
 
+    # ------------------------------------------------------------------
+    # Langfuse (LLM 관측가능성 — Langfuse Cloud, OTel 과 별개 파이프라인)
+    # ------------------------------------------------------------------
+    # 그래프 실행 경로의 LLM I/O·토큰·비용을 LangChain CallbackHandler 로 관측한다.
+    # 인프라 계측(OTel→SigNoz)은 위 섹션이, LLM 계측은 core/langfuse_client.py 가 담당.
+    # infra 핸드오프 — docker-compose에서 주입할 환경변수(키 = 대문자 필드명):
+    #   LANGFUSE_ENABLED=true
+    #   LANGFUSE_PUBLIC_KEY=pk-lf-...        (.env 주입, 커밋 금지)
+    #   LANGFUSE_SECRET_KEY=sk-lf-...        (.env 주입, 커밋 금지)
+    #   LANGFUSE_HOST=https://cloud.langfuse.com  (선택)
+    # 기본 off — 명시적으로 LANGFUSE_ENABLED=true + 키를 줘야 동작한다.
+    # 키가 비어 있으면 enabled여도 no-op(fail-open).
+    langfuse_enabled: bool = False
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
+
     # LLM — Gemini 우선, GPT 폴백
     llm_provider: str = "gemini"  # gemini | openai
 
