@@ -63,6 +63,20 @@ class Settings(BaseSettings):
     # flush 비대상: 데이터 비의존이라 수집 무효화(/admin/cache/flush, answer_cache 한정)와
     # 무관하다. refine_cache:* 는 flush_answer_cache 스캔 패턴(answer_cache:*)에 걸리지 않는다.
 
+    # Refine Cache Singleflight — refine hop(router_node classify) thundering herd 방지.
+    # answer singleflight 와 대칭이되, refine LLM 은 ~0.5s 로 answer(~10s)보다 훨씬
+    # 빠르므로 노브를 별도로 둔다(짧은 TTL·짧은 poll 윈도우).
+    # Redis 장애 또는 poll 윈도우 초과 시 fail-open: 각자 classify 실행.
+    # refine 은 temperature=0 결정론 → 중복 결과 동일 → last-write-wins 정합 안전.
+    refine_cache_singleflight_enabled: bool = True
+    # 불변식: poll_window(2.0s) < lock_ttl(10s) — 락이 살아있는 동안만 폴한다.
+    #   - lock_ttl: refine LLM worst-case + 마진. answer(30)보다 훨씬 짧게.
+    #   - poll_window = poll_retries × poll_interval = 10 × 0.2 = 2.0s.
+    refine_cache_lock_ttl: int = 10  # refine worst-case + 마진. 변경 시 위 불변식 확인.
+    # 보수적 기본값 — **정밀 값은 실 p95 refine 생성시간 측정 후 재조정** 권장.
+    refine_cache_lock_poll_retries: int = 10
+    refine_cache_lock_poll_interval: float = 0.2
+
     # Admin
     admin_internal_token: str = ""  # /admin/* 보호용 공유 토큰
 

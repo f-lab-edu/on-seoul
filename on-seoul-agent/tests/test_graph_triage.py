@@ -632,7 +632,7 @@ class TestRouterNodeRefineCache:
         with (
             patch_node_sessions(),
             patch(
-                "agents.nodes.get_cached_refine",
+                "agents.nodes.get_cached_refine_by_key",
                 AsyncMock(return_value=cached),
             ),
             patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
@@ -659,7 +659,7 @@ class TestRouterNodeRefineCache:
         with (
             patch_node_sessions(),
             patch(
-                "agents.nodes.get_cached_refine",
+                "agents.nodes.get_cached_refine_by_key",
                 AsyncMock(return_value=None),
             ),
             patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
@@ -679,7 +679,7 @@ class TestRouterNodeRefineCache:
         nodes = self._nodes(router)
         with (
             patch_node_sessions(),
-            patch("agents.nodes.get_cached_refine", AsyncMock()) as mock_get,
+            patch("agents.nodes.get_cached_refine_by_key", AsyncMock()) as mock_get,
             patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
         ):
             update = await nodes.router_node(
@@ -698,7 +698,7 @@ class TestRouterNodeRefineCache:
         with (
             patch_node_sessions(),
             patch(
-                "agents.nodes.get_cached_refine",
+                "agents.nodes.get_cached_refine_by_key",
                 AsyncMock(return_value=None),
             ),
             patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
@@ -759,6 +759,147 @@ class TestRouterNodeRefineCache:
         }
         restored = _restore_refine(cached)
         assert restored == {"plan": {"intent": IntentType.SQL_SEARCH}}
+
+
+class TestRouterNodeRefineSingleflight:
+    """router_node refine hop singleflight — answer singleflight 대칭.
+
+    동시 cold-miss 시 첫 호출자만 classify, 나머지는 poll 로 refine_cache hit.
+    락 누수 금지(try/finally), forced_intent 경로 미진입, fail-open 검증.
+    """
+
+    def _nodes(self, router, redis):
+        return GraphNodes(
+            triage=make_triage(ActionType.RETRIEVE),
+            router=router,
+            answer_agent=_answer_agent(),
+            redis=redis,
+        )
+
+    async def test_waiter_polls_and_skips_classify(self):
+        """락 미획득 호출자는 poll 로 refine hit → classify 호출 0."""
+        import json
+
+        router = make_router(IntentType.SQL_SEARCH)
+        structured = router._llm.with_structured_output.return_value
+        redis = AsyncMock()
+        # GET(by_key) miss → acquire 실패(다른 보유자) → poll 에서 hit.
+        cached = {"intent": "VECTOR_SEARCH", "refined_query": "서울 테니스장"}
+        redis.get.side_effect = [None, json.dumps(cached)]
+        redis.set.return_value = None  # SET NX 실패 = 락 미획득
+        nodes = self._nodes(router, redis)
+        with patch_node_sessions(), patch("asyncio.sleep", AsyncMock()):
+            update = await nodes.router_node(_state(message="테니스장"))
+
+        structured.ainvoke.assert_not_called()  # classify 중복 0
+        assert update["plan"]["intent"] == IntentType.VECTOR_SEARCH
+        assert "refine_cache_hit" in update["node_path"]
+
+    async def test_holder_acquires_classifies_and_releases(self):
+        """락 보유자는 classify 실행 후 release_refine_lock(DEL) 호출."""
+        from core.cache import _LOCK_SUFFIX
+
+        router = make_router(IntentType.SQL_SEARCH, refined_query="마포구 풋살장")
+        structured = router._llm.with_structured_output.return_value
+        redis = AsyncMock()
+        redis.get.return_value = None  # GET miss
+        redis.set.return_value = True  # SET NX 성공 = 락 보유
+        nodes = self._nodes(router, redis)
+        with patch_node_sessions():
+            update = await nodes.router_node(_state(message="마포구 풋살장"))
+
+        structured.ainvoke.assert_called_once()
+        assert update["plan"]["intent"] == IntentType.SQL_SEARCH
+        # release 가 락 키(캐시 키 + :lock)로 DEL 됨.
+        delete_keys = [c.args[0] for c in redis.delete.call_args_list]
+        assert any(k.endswith(_LOCK_SUFFIX) for k in delete_keys)
+
+    async def test_lock_released_on_classify_exception(self):
+        """★ 락 누수 가드: classify 예외에도 finally 가 release_refine_lock 호출."""
+        from core.cache import _LOCK_SUFFIX
+
+        router = make_router(IntentType.SQL_SEARCH)
+        structured = router._llm.with_structured_output.return_value
+        structured.ainvoke = AsyncMock(side_effect=RuntimeError("llm down"))
+        redis = AsyncMock()
+        redis.get.return_value = None
+        redis.set.return_value = True  # 락 보유
+        nodes = self._nodes(router, redis)
+        with patch_node_sessions():
+            update = await nodes.router_node(_state())
+
+        assert "router_error" in update["node_path"]
+        # 예외 경로에서도 락 해제됨.
+        delete_keys = [c.args[0] for c in redis.delete.call_args_list]
+        assert any(k.endswith(_LOCK_SUFFIX) for k in delete_keys)
+
+    async def test_forced_intent_skips_lock(self):
+        """forced_intent 경로는 refine 락을 acquire/release/poll 하지 않는다."""
+        router = make_router(IntentType.SQL_SEARCH)
+        redis = AsyncMock()
+        nodes = self._nodes(router, redis)
+        with patch_node_sessions():
+            update = await nodes.router_node(
+                _state(forced_intent=IntentType.VECTOR_SEARCH)
+            )
+        # GET/SET NX/DEL 어느 것도 호출되지 않음(refine 경로 미진입).
+        redis.set.assert_not_called()
+        redis.delete.assert_not_called()
+        redis.get.assert_not_called()
+        assert update["plan"]["intent"] == IntentType.VECTOR_SEARCH
+
+    async def test_fail_open_on_poll_timeout_runs_classify(self):
+        """락 미획득 + poll 타임아웃 → fail-open: classify 실행, 락 미해제."""
+        router = make_router(IntentType.SQL_SEARCH, refined_query="q")
+        structured = router._llm.with_structured_output.return_value
+        redis = AsyncMock()
+        redis.get.return_value = None  # GET miss + poll 매회 None
+        redis.set.return_value = None  # 락 미획득(waiter)
+        nodes = self._nodes(router, redis)
+        with patch_node_sessions(), patch("asyncio.sleep", AsyncMock()):
+            update = await nodes.router_node(_state(message="q"))
+
+        structured.ainvoke.assert_called_once()  # fail-open 으로 직접 classify
+        # 락 미보유라 release(DEL) 하지 않음.
+        redis.delete.assert_not_called()
+        assert update["plan"]["intent"] == IntentType.SQL_SEARCH
+
+    async def test_fail_open_on_acquire_redis_error_runs_classify(self):
+        """Redis acquire 예외 → fail-open True → classify 실행."""
+        router = make_router(IntentType.SQL_SEARCH, refined_query="q")
+        structured = router._llm.with_structured_output.return_value
+        redis = AsyncMock()
+        redis.get.return_value = None
+        redis.set.side_effect = RuntimeError("redis down")  # acquire 예외 → fail-open
+        nodes = self._nodes(router, redis)
+        with patch_node_sessions():
+            update = await nodes.router_node(_state(message="q"))
+
+        structured.ainvoke.assert_called_once()
+        assert update["plan"]["intent"] == IntentType.SQL_SEARCH
+
+    async def test_disabled_toggle_skips_lock(self):
+        """refine singleflight 비활성화 → acquire no-op(True), SET NX·DEL 미호출.
+
+        cache write(set_cached_refine)는 SET EX 로 여전히 호출되므로, 락 전용
+        SET NX(nx=True) 와 release(DEL) 만 미호출인지 구분해 단언한다.
+        """
+        from core.config import settings as cfg
+
+        router = make_router(IntentType.SQL_SEARCH, refined_query="q")
+        redis = AsyncMock()
+        redis.get.return_value = None
+        nodes = self._nodes(router, redis)
+        with (
+            patch_node_sessions(),
+            patch.object(cfg, "refine_cache_singleflight_enabled", False),
+        ):
+            update = await nodes.router_node(_state(message="q"))
+        # 락 게이트 off → SET NX(acquire) 미호출(cache SET EX 는 허용)·DEL(release) 미호출.
+        nx_sets = [c for c in redis.set.call_args_list if c.kwargs.get("nx")]
+        assert nx_sets == []
+        redis.delete.assert_not_called()
+        assert update["plan"]["intent"] == IntentType.SQL_SEARCH
 
 
 # ---------------------------------------------------------------------------

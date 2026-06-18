@@ -483,6 +483,122 @@ class TestSingleflight:
         assert poll_window >= 10
 
 
+class TestRefineSingleflight:
+    """acquire_refine_lock / release_refine_lock / poll_for_refine — answer 대칭."""
+
+    async def test_acquire_returns_true_on_set_nx_success(self, mock_redis):
+        mock_redis.set.return_value = True
+        from core.cache import acquire_refine_lock
+
+        assert await acquire_refine_lock("refine_cache:v1:abc", mock_redis, ttl=10)
+
+    async def test_acquire_returns_false_on_set_nx_fail(self, mock_redis):
+        mock_redis.set.return_value = None
+        from core.cache import acquire_refine_lock
+
+        assert not await acquire_refine_lock("refine_cache:v1:abc", mock_redis, ttl=10)
+
+    async def test_acquire_redis_error_returns_true_fail_open(self, mock_redis):
+        mock_redis.set.side_effect = RuntimeError("redis down")
+        from core.cache import acquire_refine_lock
+
+        assert await acquire_refine_lock("refine_cache:v1:abc", mock_redis, ttl=10)
+
+    async def test_acquire_lock_key_has_lock_suffix_and_nx_ex(self, mock_redis):
+        mock_redis.set.return_value = True
+        from core.cache import _LOCK_SUFFIX, acquire_refine_lock
+
+        cache_key = "refine_cache:v1:abc"
+        await acquire_refine_lock(cache_key, mock_redis, ttl=10)
+        assert mock_redis.set.call_args.args[0] == f"{cache_key}{_LOCK_SUFFIX}"
+        assert mock_redis.set.call_args.kwargs.get("nx") is True
+        assert mock_redis.set.call_args.kwargs.get("ex") == 10
+
+    async def test_release_deletes_lock_key(self, mock_redis):
+        from core.cache import _LOCK_SUFFIX, release_refine_lock
+
+        cache_key = "refine_cache:v1:abc"
+        await release_refine_lock(cache_key, mock_redis)
+        mock_redis.delete.assert_called_once_with(f"{cache_key}{_LOCK_SUFFIX}")
+
+    async def test_release_redis_error_does_not_raise(self, mock_redis):
+        mock_redis.delete.side_effect = RuntimeError("redis down")
+        from core.cache import release_refine_lock
+
+        await release_refine_lock("refine_cache:v1:abc", mock_redis)  # no raise
+
+    async def test_poll_returns_dict_when_cache_populated(self, mock_redis):
+        cached = {"intent": "VECTOR_SEARCH", "refined_query": "서울 테니스장"}
+        mock_redis.get.side_effect = [None, json.dumps(cached)]
+        from core.cache import poll_for_refine
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_refine(
+                "refine_cache:v1:abc", mock_redis, retries=3, interval=0.01
+            )
+        assert result == cached
+
+    async def test_poll_returns_none_on_timeout(self, mock_redis):
+        mock_redis.get.return_value = None
+        from core.cache import poll_for_refine
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_refine(
+                "refine_cache:v1:abc", mock_redis, retries=3, interval=0.01
+            )
+        assert result is None
+        assert mock_redis.get.call_count == 3
+
+    async def test_disabled_acquire_always_true_no_set(self, mock_redis):
+        from core.cache import acquire_refine_lock
+        from core.config import settings
+
+        with patch.object(settings, "refine_cache_singleflight_enabled", False):
+            result = await acquire_refine_lock(
+                "refine_cache:v1:abc", mock_redis, ttl=10
+            )
+        assert result is True
+        mock_redis.set.assert_not_called()
+
+    async def test_disabled_release_skips_delete(self, mock_redis):
+        from core.cache import release_refine_lock
+        from core.config import settings
+
+        with patch.object(settings, "refine_cache_singleflight_enabled", False):
+            await release_refine_lock("refine_cache:v1:abc", mock_redis)
+        mock_redis.delete.assert_not_called()
+
+    async def test_get_by_key_hit(self, mock_redis):
+        cached = {"intent": "SQL_SEARCH", "refined_query": "마포구 풋살장"}
+        mock_redis.get.return_value = json.dumps(cached)
+        from core.cache import get_cached_refine_by_key
+
+        assert await get_cached_refine_by_key("refine_cache:v1:abc", mock_redis) == cached
+
+    async def test_get_by_key_redis_error_returns_none(self, mock_redis):
+        mock_redis.get.side_effect = RuntimeError("redis down")
+        from core.cache import get_cached_refine_by_key
+
+        assert await get_cached_refine_by_key("refine_cache:v1:abc", mock_redis) is None
+
+    def test_build_refine_cache_key_matches_private(self):
+        from core.cache import _refine_cache_key, build_refine_cache_key
+
+        assert build_refine_cache_key("테니스장", None) == _refine_cache_key(
+            "테니스장", None
+        )
+
+    def test_poll_window_below_lock_ttl_invariant(self):
+        """회귀 가드: refine poll_window(retries×interval) < refine lock_ttl."""
+        from core.config import settings
+
+        poll_window = (
+            settings.refine_cache_lock_poll_retries
+            * settings.refine_cache_lock_poll_interval
+        )
+        assert poll_window < settings.refine_cache_lock_ttl
+
+
 class TestFlush:
     async def test_flush_scans_and_deletes(self, mock_redis):
         async def _scan_iter(match):

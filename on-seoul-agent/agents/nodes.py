@@ -42,11 +42,15 @@ from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
 from core.cache import (
     acquire_answer_lock,
+    acquire_refine_lock,
     build_answer_cache_key,
+    build_refine_cache_key,
     get_cached_answer_by_key,
-    get_cached_refine,
+    get_cached_refine_by_key,
     poll_for_answer,
+    poll_for_refine,
     release_answer_lock,
+    release_refine_lock,
     set_cached_answer,
     set_cached_refine,
 )
@@ -642,23 +646,43 @@ class GraphNodes:
 
         # (0-3-3) refine 캐시 — raw query(+history) 기준 LLM(검색 계획) 결과 공유.
         # forced_intent 분기 이후, classify 이전에 GET. 적중 시 LLM skip.
-        # 후속: refine hop singleflight 미구현 — 동시 cold-miss 시 refine LLM 이
-        # 중복 실행된다(answer hop 만 락으로 보호). 완전 herd 방어는 별도 변경.
+        # singleflight(answer 대칭): 동시 cold-miss 시 첫 호출자만 classify 실행,
+        # 나머지는 poll 로 refine_cache hit. 락은 try/finally 로 성공·예외 모두 해제
+        # (락 누수 금지). 키는 한 번만 계산해 GET/lock/poll/SET/release 에 재사용.
         message = state["message"]
         history = state.get("history") or []
         redis = self._redis
-        cached = await get_cached_refine(message, history, redis)
+        key = build_refine_cache_key(message, history)
+        cached = await get_cached_refine_by_key(key, redis)
         if cached is not None:
-            logger.info(
-                "router.refine_cache_hit room=%s intent=%s",
-                state.get("room_id"),
-                cached.get("intent"),
-            )
-            update = _restore_refine(cached)
-            update["node_path"] = ["router", "refine_cache_hit"]
-            update.update(self._emit_router_events(state, update))
-            return update
+            return self._refine_cache_hit_update(state, cached)
 
+        # singleflight: 첫 miss 호출자만 classify, 나머지는 결과 대기.
+        acquired = await acquire_refine_lock(
+            key, redis, ttl=settings.refine_cache_lock_ttl
+        )
+        if not acquired:
+            logger.info(
+                "router.refine_singleflight.wait room=%s", state.get("room_id")
+            )
+            polled = await poll_for_refine(
+                key,
+                redis,
+                retries=settings.refine_cache_lock_poll_retries,
+                interval=settings.refine_cache_lock_poll_interval,
+            )
+            if polled is not None:
+                logger.info(
+                    "router.refine_singleflight.hit room=%s", state.get("room_id")
+                )
+                return self._refine_cache_hit_update(state, polled)
+            # poll 타임아웃 → fail-open: 아래로 진행해 직접 classify(락 미보유).
+            logger.info(
+                "router.refine_singleflight.timeout room=%s", state.get("room_id")
+            )
+
+        # 락 보유(acquired) 또는 fail-open(poll 타임아웃) → 직접 classify.
+        # ★ 락 누수 가드: acquired 인 경우에만 finally 에서 release(획득 플래그 추적).
         try:
             result = await self._router.classify(
                 message,
@@ -693,6 +717,30 @@ class GraphNodes:
             # intent 미확정(plan 없음) → answering emit (기존 stream() else 분기 동일).
             err_update.update(self._emit_router_events(state, err_update))
             return err_update
+        finally:
+            # ★ 락 누수 가드: classify 성공·예외·early-return 어디서도 락을 해제한다.
+            # acquired(획득 플래그)인 경우에만 release — fail-open(poll 타임아웃) 경로는
+            # 락 미보유라 release 하지 않는다(없는 락 DEL 회피).
+            if acquired:
+                await release_refine_lock(key, redis)
+
+    def _refine_cache_hit_update(
+        self, state: AgentState, cached: dict[str, Any]
+    ) -> dict[str, Any]:
+        """refine 캐시 hit(GET 또는 singleflight poll) 공통 복원 경로.
+
+        저장된 평면 dict 를 router_node update(중첩 채널)로 복원하고
+        refine_cache_hit node_path + router 이벤트를 머지한다.
+        """
+        logger.info(
+            "router.refine_cache_hit room=%s intent=%s",
+            state.get("room_id"),
+            cached.get("intent"),
+        )
+        update = _restore_refine(cached)
+        update["node_path"] = ["router", "refine_cache_hit"]
+        update.update(self._emit_router_events(state, update))
+        return update
 
     # ------------------------------------------------------------------
     # action별 노드

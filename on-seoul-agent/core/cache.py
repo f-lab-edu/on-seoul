@@ -39,10 +39,26 @@ Singleflight (0-3-2):
       이어진다. refine 비결정성으로 키가 갈리면 그 waiter 는 폴만 길어지고
       fail-open 한다(영향 작음 — 각자 LLM 실행).
 
-  후속: refine hop(router_node 의 refine_cache)에는 singleflight 가 없어 동시
-        cold-miss 시 refine LLM 이 중복 실행된다. answer 캐시 singleflight 는
-        answer hop 만 보호한다. 완전한 herd 방어엔 refine hop 락이 필요하나
-        별도·더 큰 변경이라 이번 범위 밖.
+Refine Singleflight (answer singleflight 대칭):
+  락 키: refine_cache:{version}:{digest}:lock  (refine 캐시 키 + ":lock" 접미사)
+  획득:  SET NX EX refine_cache_lock_ttl — True면 이 호출자가 refine LLM 을 실행,
+         False면 대기.
+  대기:  miss + 락 미획득 → poll_for_refine()로 refine 캐시 키를 retries×interval 초
+         주기 재조회. envelope 는 get_cached_refine 과 동일한 평면 dict 형태로 복원.
+  해제:  router_node 가 set_cached_refine 완료 후 release_refine_lock 으로 DEL
+         (try/finally — 성공·예외 모두 해제, 락 누수 금지) → 대기자 즉시 hit.
+  fail-open: Redis 장애(acquire 예외) 또는 poll 윈도우 초과 → 각자 refine LLM 호출.
+             refine 은 temperature=0 결정론이라 중복 결과가 동일 → last-write-wins
+             정합 trivially 안전.
+  폴 윈도우: refine LLM 은 ~0.5s 로 answer(~10s)보다 훨씬 빠르므로 answer 와 별도
+             노브(refine_cache_lock_*)를 둔다. 불변식 poll_window(2s) < lock_ttl(10s).
+  공통 헬퍼: answer/refine 의 SET NX / DEL / poll 내부 로직은 _acquire_lock /
+             _release_lock / _poll_for_cache 로 추출했다. answer 경로 동작은
+             불변(토글·TTL·poll 설정만 호출 측에서 주입).
+  forced_intent 경로: retry_prep→router 재진입 시 forced_intent 가 있으면 classify 를
+             skip 하므로 락을 획득하지 않는다(release 도 미수행 — 없는 락 DEL 은 무해하나
+             애초에 acquire 를 건너뜀). retry 2회차엔 refine_cache 가 1회차로 채워져
+             refine_cache_hit 으로 빠지므로 락 경로 미진입이 정상.
 
 Redis 장애 시 fail-open. MAP/FALLBACK 및 error는 호출 측에서 가드한다.
 """
@@ -144,46 +160,35 @@ async def get_cached_answer_by_key(key: str, redis: aioredis.Redis) -> dict | No
         return None
 
 
-async def acquire_answer_lock(
-    key: str, redis: aioredis.Redis, *, ttl: int
-) -> bool:
-    """캐시 키에 대한 분산 singleflight 락 획득 시도.
+async def _acquire_lock(key: str, redis: aioredis.Redis, *, ttl: int) -> bool:
+    """공통 singleflight 락 획득 — SET NX EX. (answer/refine 공유 로직.)
 
-    SET NX EX ttl — 성공(True)이면 이 호출자가 LLM을 실행해야 한다.
-    실패(False)이면 다른 호출자가 이미 진행 중 → poll_for_answer()로 결과 대기.
-    Redis 장애 시 True(fail-open): 락 없이 각자 진행해 중복 LLM이 발생하지만
-    결과의 정합성은 유지된다(last-write-wins).
+    토글 가드는 호출 측 얇은 래퍼가 담당한다(노브가 answer/refine 별개라서).
+    Redis 장애 시 True(fail-open): 락 없이 각자 진행해 중복 LLM 이 발생하나
+    결과 정합성은 유지된다(last-write-wins).
     """
-    if not settings.answer_cache_singleflight_enabled:
-        return True
     try:
         result = await redis.set(f"{key}{_LOCK_SUFFIX}", "1", nx=True, ex=ttl)
         return bool(result)
     except Exception:
-        logger.warning("answer cache lock 획득 오류 — fail-open(True)", exc_info=True)
+        logger.warning("singleflight lock 획득 오류 — fail-open(True)", exc_info=True)
         return True
 
 
-async def release_answer_lock(key: str, redis: aioredis.Redis) -> None:
-    """singleflight 락 조기 해제.
-
-    CacheWriteNode가 캐시 쓰기 직후 호출 → 대기 중인 waiter가 즉시 hit.
-    DEL 실패 시 무시(lock은 TTL에 의해 자동 만료됨).
-    """
-    if not settings.answer_cache_singleflight_enabled:
-        return
+async def _release_lock(key: str, redis: aioredis.Redis) -> None:
+    """공통 singleflight 락 해제 — DEL. 실패 시 무시(TTL 자동 만료)."""
     try:
         await redis.delete(f"{key}{_LOCK_SUFFIX}")
     except Exception:
         pass
 
 
-async def poll_for_answer(
+async def _poll_for_cache(
     key: str, redis: aioredis.Redis, *, retries: int, interval: float
 ) -> dict | None:
-    """락 보유자가 캐시를 채울 때까지 주기적으로 재조회(waiter 전용).
+    """공통 waiter 폴 — 락 보유자가 캐시를 채울 때까지 주기 재조회.
 
-    retries × interval 초 대기 후에도 결과가 없으면 None 반환(fail-open).
+    retries × interval 초 후에도 결과가 없으면 None(fail-open).
     """
     for _ in range(retries):
         await asyncio.sleep(interval)
@@ -194,6 +199,77 @@ async def poll_for_answer(
         except Exception:
             return None
     return None
+
+
+async def acquire_answer_lock(
+    key: str, redis: aioredis.Redis, *, ttl: int
+) -> bool:
+    """answer 캐시 키에 대한 분산 singleflight 락 획득 시도.
+
+    SET NX EX ttl — 성공(True)이면 이 호출자가 LLM을 실행해야 한다.
+    실패(False)이면 다른 호출자가 이미 진행 중 → poll_for_answer()로 결과 대기.
+    Redis 장애 시 True(fail-open).
+    """
+    if not settings.answer_cache_singleflight_enabled:
+        return True
+    return await _acquire_lock(key, redis, ttl=ttl)
+
+
+async def release_answer_lock(key: str, redis: aioredis.Redis) -> None:
+    """answer singleflight 락 조기 해제.
+
+    CacheWriteNode가 캐시 쓰기 직후 호출 → 대기 중인 waiter가 즉시 hit.
+    DEL 실패 시 무시(lock은 TTL에 의해 자동 만료됨).
+    """
+    if not settings.answer_cache_singleflight_enabled:
+        return
+    await _release_lock(key, redis)
+
+
+async def poll_for_answer(
+    key: str, redis: aioredis.Redis, *, retries: int, interval: float
+) -> dict | None:
+    """락 보유자가 answer 캐시를 채울 때까지 주기적으로 재조회(waiter 전용).
+
+    retries × interval 초 대기 후에도 결과가 없으면 None 반환(fail-open).
+    """
+    return await _poll_for_cache(key, redis, retries=retries, interval=interval)
+
+
+async def acquire_refine_lock(
+    key: str, redis: aioredis.Redis, *, ttl: int
+) -> bool:
+    """refine 캐시 키에 대한 분산 singleflight 락 획득 시도(answer 대칭).
+
+    SET NX EX ttl — True면 이 호출자가 refine LLM(classify)을 실행, False면 대기.
+    refine 전용 토글(refine_cache_singleflight_enabled)로 게이트한다.
+    비활성화 또는 Redis 장애 시 True(fail-open).
+    """
+    if not settings.refine_cache_singleflight_enabled:
+        return True
+    return await _acquire_lock(key, redis, ttl=ttl)
+
+
+async def release_refine_lock(key: str, redis: aioredis.Redis) -> None:
+    """refine singleflight 락 조기 해제(answer 대칭).
+
+    router_node 가 set_cached_refine 직후 try/finally 로 호출 → waiter 즉시 hit.
+    DEL 실패 시 무시(TTL 자동 만료).
+    """
+    if not settings.refine_cache_singleflight_enabled:
+        return
+    await _release_lock(key, redis)
+
+
+async def poll_for_refine(
+    key: str, redis: aioredis.Redis, *, retries: int, interval: float
+) -> dict | None:
+    """락 보유자가 refine 캐시를 채울 때까지 주기적으로 재조회(waiter 전용).
+
+    refine 캐시 키를 재조회하고 get_cached_refine 과 동일한 평면 dict 를 반환한다.
+    retries × interval 초 후에도 결과가 없으면 None(fail-open).
+    """
+    return await _poll_for_cache(key, redis, retries=retries, interval=interval)
 
 
 def _normalize_query(query: str) -> str:
@@ -219,6 +295,33 @@ def _refine_cache_key(query: str, history: list[dict[str, str]] | None) -> str:
         composite = norm
     digest = hashlib.sha256(composite.encode("utf-8")).hexdigest()[:_DIGEST_HEX_LEN]
     return f"{_REFINE_KEY_PREFIX}{_REFINE_CACHE_VERSION}:{digest}"
+
+
+def build_refine_cache_key(query: str, history: list[dict[str, str]] | None) -> str:
+    """refine cache 키를 외부에서 미리 계산할 수 있도록 공개 래퍼 제공.
+
+    router_node 가 동일 키로 GET·lock·poll·SET·unlock 을 수행하기 위해 키를 한 번만
+    계산해 재사용한다(build_answer_cache_key 와 대칭).
+    """
+    return _refine_cache_key(query, history)
+
+
+async def get_cached_refine_by_key(key: str, redis: aioredis.Redis) -> dict | None:
+    """미리 계산된 키로 refine cache 조회(answer get_cached_answer_by_key 대칭).
+
+    poll_for_refine 의 hit 복원이 get_cached_refine 과 동일한 평면 dict 를 돌려주는
+    것과 round-trip 정합. miss/장애/비활성화 시 None.
+    """
+    if not settings.refine_cache_enabled:
+        return None
+    try:
+        raw = await redis.get(key)
+        if raw is None:
+            return None
+        return json.loads(raw)
+    except Exception:
+        logger.warning("refine cache GET 오류(by_key) — miss 처리", exc_info=True)
+        return None
 
 
 async def get_cached_refine(
