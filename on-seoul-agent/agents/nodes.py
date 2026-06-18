@@ -642,6 +642,8 @@ class GraphNodes:
 
         # (0-3-3) refine 캐시 — raw query(+history) 기준 LLM(검색 계획) 결과 공유.
         # forced_intent 분기 이후, classify 이전에 GET. 적중 시 LLM skip.
+        # 후속: refine hop singleflight 미구현 — 동시 cold-miss 시 refine LLM 이
+        # 중복 실행된다(answer hop 만 락으로 보호). 완전 herd 방어는 별도 변경.
         message = state["message"]
         history = state.get("history") or []
         redis = self._redis

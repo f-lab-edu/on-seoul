@@ -35,11 +35,21 @@ class Settings(BaseSettings):
     # 동시 cold miss 시 첫 호출자만 LLM을 실행하고 나머지는 결과를 기다린다.
     # Redis 장애 시 fail-open: 각자 LLM 호출(last-write-wins, 정합성 유지).
     answer_cache_singleflight_enabled: bool = True
-    # lock TTL — LLM 응답 여유(일반 ~3s, 최대 ~10s + 마진). 만료되면 waiter가 fail-open.
-    answer_cache_lock_ttl: int = 30
+    # 일관 모델: poll_window(≈p95 답변 생성시간, ~10s) < lock_ttl(worst-case 30s).
+    #   - lock_ttl: 락 보유자의 worst-case 답변 생성 + 캐시 쓰기 + 마진. 락의 자동
+    #     만료 상한일 뿐, waiter 의 대기 상한이 아니다(아래 poll_window 가 그 역할).
+    #   - poll_window = poll_retries × poll_interval: waiter 가 캐시 키를 재조회하는
+    #     총 대기 시간. **poll_window 초과 시(만료가 아니라) waiter 가 fail-open** 하여
+    #     각자 LLM 을 실행한다. 보유자는 답변 *완료* 시점에 캐시를 쓰고 락을 DEL 하므로
+    #     (스트리밍), waiter 는 보유자 답변 생성시간만큼 폴해야 hit 한다.
+    # 불변식: poll_window(10s) < lock_ttl(30s) — 락이 살아있는 동안만 폴한다.
+    answer_cache_lock_ttl: int = 30  # worst-case 답변 + 쓰기 + 마진. 변경 시 위 불변식 확인.
     # waiter 재시도: retries × interval 초 동안 캐시 키를 주기 재조회.
-    # 6 × 0.5 = 3s: 정상 LLM 응답 내 결과를 받아 hit으로 전환.
-    answer_cache_lock_poll_retries: int = 6
+    # 20 × 0.5 = 10s: config 가 명시한 최대 답변 시간(~10s)을 커버해 꼬리 herd 까지 방어.
+    # 폴은 CacheCheckNode(검색 이전 단계)에서 일어나 DB 세션을 점유하지 않으므로
+    # (asyncio.sleep + redis GET 만) 윈도우 연장 비용이 낮다.
+    # 보수적 기본값 — **정밀 값은 실 p95 답변 생성시간 측정 후 재조정** 권장.
+    answer_cache_lock_poll_retries: int = 20
     answer_cache_lock_poll_interval: float = 0.5
 
     # Refine Cache (0-3-3) — router_node LLM(검색 계획 수립) 결과 캐시.

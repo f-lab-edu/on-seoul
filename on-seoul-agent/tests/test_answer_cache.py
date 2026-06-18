@@ -445,6 +445,43 @@ class TestSingleflight:
             await release_answer_lock("answer_cache:abc", mock_redis)
         mock_redis.delete.assert_not_called()
 
+    async def test_poll_hits_within_extended_window(self, mock_redis):
+        """보유자가 늦게(예: 9번째 폴 후) 캐시를 채워도 윈도우 안이면 hit.
+
+        retries 를 p95 답변 시간(~10s)에 맞춰 확대한 효과 — 정상~꼬리 답변까지
+        폴 윈도우가 커버하는지 회귀 가드.
+        """
+        envelope = {"payload": {"answer": "ok"}, "state": {}}
+        # 18번 miss 후 19번째 poll 에서 캐시가 채워짐 (retries=20 안).
+        gets = [None] * 18 + [json.dumps(envelope)]
+        mock_redis.get.side_effect = gets
+        from unittest.mock import patch
+
+        from core.cache import poll_for_answer
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_answer(
+                "answer_cache:abc", mock_redis, retries=20, interval=0.01
+            )
+        assert result == envelope
+        assert mock_redis.get.call_count == 19
+
+    async def test_poll_window_below_lock_ttl_invariant(self):
+        """회귀 가드: poll_window(retries×interval) < lock_ttl(30s).
+
+        락이 살아있는 동안만 폴한다는 불변식. 폴 윈도우가 락 TTL 이상이면
+        보유자 락 만료 후에도 헛폴하므로 settings 로 단언한다.
+        """
+        from core.config import settings
+
+        poll_window = (
+            settings.answer_cache_lock_poll_retries
+            * settings.answer_cache_lock_poll_interval
+        )
+        assert poll_window < settings.answer_cache_lock_ttl
+        # p95 답변 시간(~10s)을 커버하도록 충분히 넓은지 — 하한 가드.
+        assert poll_window >= 10
+
 
 class TestFlush:
     async def test_flush_scans_and_deletes(self, mock_redis):

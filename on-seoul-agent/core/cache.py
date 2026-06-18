@@ -19,7 +19,30 @@ Singleflight (0-3-2):
   획득:  SET NX EX lock_ttl — True면 이 호출자가 락 보유, False면 대기.
   대기:  miss + 락 미획득 → poll_for_answer()로 캐시 키를 retries×interval 초 주기 재조회.
   해제:  CacheWriteNode가 set_cached_answer 완료 후 DEL → 대기자 즉시 hit.
-  fail-open: Redis 장애 또는 poll 타임아웃 → 각자 LLM 호출(중복 허용, 안전한 퇴행).
+  fail-open: Redis 장애 또는 poll 윈도우(retries×interval) 초과 → 각자 LLM 호출
+             (중복 허용, 안전한 퇴행).
+  폴 윈도우: poll_window(≈p95 답변 생성시간, ~10s) < lock_ttl(worst-case 30s).
+             보유자는 답변 *완료* 시점(스트리밍)에 캐시를 쓰고 락을 DEL 하므로,
+             waiter 는 보유자의 답변 생성시간만큼 폴해야 hit 한다. config.py 의
+             answer_cache_lock_* 주석에 불변식·튜닝 근거를 둔다.
+
+  키 ↔ singleflight 관계 (어떤 경우에 실제로 중복을 막는가):
+    - 락 키 = answer 캐시 키 = sha256(refined_query + post-filter + routes).
+      따라서 **동시 요청들이 동일 refined_query+filters+routes 를 산출할 때만**
+      singleflight 가 중복을 막는다.
+    - herd 가 실제 문제되는 case(같은 first-turn 질의, history 없음)는 refine LLM 이
+      temperature=0(get_chat_model 기본)이라 동일 refined_query → 동일 키 →
+      락 충돌 → singleflight 작동.
+    - follow-up(대화별 history 상이)은 키가 갈리는데, 이는 맥락이 다른 답을
+      공유하지 않기 위한 의도된 동작이다(정상, herd 아님).
+    - caveat: 폴 연장은 "보유자가 waiter 와 같은 키로 캐시를 쓴다"는 전제에서만 hit 으로
+      이어진다. refine 비결정성으로 키가 갈리면 그 waiter 는 폴만 길어지고
+      fail-open 한다(영향 작음 — 각자 LLM 실행).
+
+  후속: refine hop(router_node 의 refine_cache)에는 singleflight 가 없어 동시
+        cold-miss 시 refine LLM 이 중복 실행된다. answer 캐시 singleflight 는
+        answer hop 만 보호한다. 완전한 herd 방어엔 refine hop 락이 필요하나
+        별도·더 큰 변경이라 이번 범위 밖.
 
 Redis 장애 시 fail-open. MAP/FALLBACK 및 error는 호출 측에서 가드한다.
 """
