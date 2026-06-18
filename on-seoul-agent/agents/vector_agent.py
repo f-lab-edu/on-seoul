@@ -237,10 +237,24 @@ class VectorAgent:
         async def _run_channel(coro_fn):
             # lifespan 이전(테스트 환경)에는 vector_global_sema가 None이므로
             # contextlib.nullcontext()로 대체하여 분기 중복을 제거한다.
+            #
+            # 세마포어/세션 획득 + 검색 전체를 try로 감싸 어떤 예외든 그 채널만
+            # 빈 리스트로 떨어뜨린다(옵션 b). _safe_* 래퍼는 검색 함수 내부 예외만
+            # 흡수하지만, 풀 고갈 시 ai_session_ctx() 세션 획득에서 발생하는
+            # TimeoutError(QueuePool/asyncpg)는 _safe_* 바깥이므로 여기서 격리해야
+            # gather(return_exceptions=False)로 전파돼 요청 전체 벡터 검색이
+            # 실패하거나 다른 채널이 orphan으로 남는 것을 막는다.
+            # CancelledError는 Exception 비상속(3.8+)이라 정상 취소 전파는 막지 않는다.
             sema_ctx = _concurrency.vector_global_sema or contextlib.nullcontext()
-            async with sema_ctx:
-                async with ai_session_ctx() as session:
-                    return await coro_fn(session)
+            try:
+                async with sema_ctx:
+                    async with ai_session_ctx() as session:
+                        return await coro_fn(session)
+            except Exception:
+                logger.warning(
+                    "채널 세션 획득/실행 실패 — 빈 결과로 대체", exc_info=True
+                )
+                return []
 
         tasks = [
             _run_channel(

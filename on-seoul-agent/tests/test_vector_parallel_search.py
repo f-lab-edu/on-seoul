@@ -337,6 +337,167 @@ class TestChannelIsolation:
 
 
 # ---------------------------------------------------------------------------
+# 세션 획득 단계 예외 격리 — 옵션 b (코드리뷰 피드백)
+#
+# ai_session_ctx() 세션 획득(풀 고갈 시 TimeoutError 등)이 _safe_* 래퍼 바깥에서
+# 발생하더라도 _run_channel try가 흡수하여 그 채널만 빈 결과로 떨어진다.
+# gather(return_exceptions=False)가 예외를 보지 않아 요청 전체 실패/orphan이 없다.
+# ---------------------------------------------------------------------------
+
+
+def _failing_ai_session_ctx(fail_on: set[int]):
+    """N번째(0-base) 호출에서 세션 획득이 예외를 던지는 ai_session_ctx 패치.
+
+    채널 태스크 생성 순서(identity=0, summary=1, question=2, bm25=3)에 맞춰
+    fail_on 인덱스의 세션 획득을 TimeoutError로 실패시킨다.
+    """
+    state = {"n": 0}
+
+    @asynccontextmanager
+    async def _ctx():
+        idx = state["n"]
+        state["n"] += 1
+        if idx in fail_on:
+            raise TimeoutError(f"채널 {idx} 풀 고갈")
+        yield MagicMock()
+
+    return patch("agents.vector_agent.ai_session_ctx", _ctx)
+
+
+class TestSessionAcquisitionIsolation:
+    async def test_session_acquisition_failure_does_not_raise(self):
+        """한 채널의 세션 획득 TimeoutError가 search()로 전파되지 않는다."""
+        b_rows = [{"service_id": "B001", "similarity": 0.8}]
+
+        async def _vs_side(*args, **kwargs):
+            return [] if kwargs.get("row_kind") == "identity" else b_rows
+
+        agent = _make_agent()
+
+        with (
+            patch("agents.vector_agent.vector_search", new=AsyncMock(side_effect=_vs_side)),
+            patch(
+                "agents.vector_agent.question_search", new=AsyncMock(return_value=[])
+            ),
+            patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])),
+            # identity 채널(인덱스 0)의 세션 획득을 실패시킨다.
+            _failing_ai_session_ctx(fail_on={0}),
+        ):
+            # 예외 전파 없이 정상 반환
+            result = await agent.search(_make_state())
+
+        # 실패 채널(identity)은 빈 결과로 RRF에서 제외되고, 나머지는 살아 있다.
+        ids = {r["service_id"] for r in result["vector"]["results"]}
+        assert "B001" in ids
+
+    async def test_session_acquisition_failure_isolated_to_channel(self):
+        """세션 획득 실패 채널만 빈 결과가 되고 나머지 3채널은 정상 병합된다."""
+        a_rows = [{"service_id": "A001", "similarity": 0.9}]
+        c_rows = [{"service_id": "C001", "similarity": 0.7}]
+        d_rows = [{"service_id": "D001", "bm25_score": 2.0}]
+
+        async def _vs_side(*args, **kwargs):
+            # summary 채널(인덱스 1)은 세션 획득이 실패하므로 호출되지 않는다.
+            return a_rows if kwargs.get("row_kind") == "identity" else [
+                {"service_id": "B_SHOULD_NOT_APPEAR", "similarity": 0.5}
+            ]
+
+        agent = _make_agent()
+
+        with (
+            patch("agents.vector_agent.vector_search", new=AsyncMock(side_effect=_vs_side)),
+            patch(
+                "agents.vector_agent.question_search", new=AsyncMock(return_value=c_rows)
+            ),
+            patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=d_rows)),
+            # summary 채널(인덱스 1)의 세션 획득을 실패시킨다.
+            _failing_ai_session_ctx(fail_on={1}),
+        ):
+            result = await agent.search(_make_state())
+
+        ids = {r["service_id"] for r in result["vector"]["results"]}
+        assert ids == {"A001", "C001", "D001"}
+        assert "B_SHOULD_NOT_APPEAR" not in ids
+
+    async def test_all_channels_session_acquisition_failure_graceful(self):
+        """전 채널 세션 획득 실패 → 빈 merged → meta_results=[] (graceful degrade)."""
+        agent = _make_agent()
+
+        with (
+            patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])),
+            patch(
+                "agents.vector_agent.question_search", new=AsyncMock(return_value=[])
+            ),
+            patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])),
+            _failing_ai_session_ctx(fail_on={0, 1, 2, 3}),
+        ):
+            result = await agent.search(_make_state())
+
+        assert result["vector"]["results"] == []
+
+    async def test_session_acquisition_failure_with_no_bm25_tokens(self):
+        """bm25 토큰 없는 3채널 경로에서도 세션 획득 실패가 격리된다.
+
+        bm25 채널이 태스크에서 제외돼 task 수=3일 때, identity 채널(인덱스 0)의
+        세션 획득 TimeoutError가 격리되고 question 채널(인덱스 2)만 살아남는다.
+        d_rows=[] 매핑이 유지돼 인덱스 어긋남이 없다.
+        """
+        c_rows = [{"service_id": "C001", "similarity": 0.7}]
+
+        agent = _make_agent(refined_query="예약 서비스")
+
+        with (
+            patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])),
+            patch(
+                "agents.vector_agent.question_search", new=AsyncMock(return_value=c_rows)
+            ),
+            patch(
+                "agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])
+            ) as mock_bm25,
+            patch(
+                "agents.vector_agent.atokenize_query",
+                new=AsyncMock(return_value=["예약", "서비스"]),
+            ),
+            # identity 채널(인덱스 0) 세션 획득 실패. bm25 채널은 태스크에 없음.
+            _failing_ai_session_ctx(fail_on={0}),
+        ):
+            result = await agent.search(_make_state())
+
+        mock_bm25.assert_not_called()
+        ids = {r["service_id"] for r in result["vector"]["results"]}
+        assert ids == {"C001"}
+
+    async def test_cancelled_error_is_not_swallowed(self):
+        """CancelledError는 broad except에 걸리지 않고 전파돼 정상 취소가 유지된다.
+
+        CancelledError는 BaseException(비-Exception, 3.8+)이므로 _run_channel의
+        except Exception이 흡수하지 않는다. 세션 획득 단계에서 CancelledError가
+        발생하면 search()가 빈 결과로 graceful degrade하지 않고 예외를 전파해야 한다.
+        """
+        import contextlib as _ctxlib
+
+        @_ctxlib.asynccontextmanager
+        async def _cancelling_ctx():
+            raise asyncio.CancelledError("취소 전파 확인")
+            yield  # pragma: no cover
+
+        agent = _make_agent()
+
+        with (
+            patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])),
+            patch(
+                "agents.vector_agent.question_search", new=AsyncMock(return_value=[])
+            ),
+            patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])),
+            patch("agents.vector_agent.ai_session_ctx", _cancelling_ctx),
+        ):
+            import pytest
+
+            with pytest.raises(asyncio.CancelledError):
+                await agent.search(_make_state())
+
+
+# ---------------------------------------------------------------------------
 # 세션 분리 — bm25 실패의 rollback이 다른 채널 세션을 오염시키지 않는다
 # ---------------------------------------------------------------------------
 
