@@ -1,20 +1,23 @@
 # PgBouncer userlist.txt
 #
-# 형식: "username" "md5<md5(password+username)>" 또는 "username" "password"
+# auth_type = scram-sha-256 (pgbouncer.ini) 기준 기본 형식:
+#   "username" "SCRAM-SHA-256$<iter>:<base64-salt>$<base64-StoredKey>:<base64-ServerKey>"
 #
-# 실제 비밀번호 해시는 절대 커밋하지 않는다.
+# 이 verifier 는 PostgreSQL 의 pg_authid.rolpassword 값과 동일하다. 그대로 복사해 넣는다:
+#   SELECT rolname, rolpassword
+#     FROM pg_authid
+#    WHERE rolname IN ('on_ai_app','on_data_app','on_ai_reader','pgbouncer');
+#
+# 실제 verifier(=비밀번호 검증자)는 절대 커밋하지 않는다.
 # 배포 시 CI/CD 파이프라인(Vault, AWS SSM, GitHub Actions Secret 등)에서
 # 이 파일을 생성하거나 환경변수로 대체한다.
 #
-# MD5 해시 생성 예시 (auth_type=md5 사용 시):
-#   echo -n "$(printf '%s%s' <password> <username>)" | md5sum | awk '{print "md5"$1}'
+# 대안(부차):
+#   - 평문 비밀번호("username" "password")도 scram-sha-256 에서 동작하나(PgBouncer 가
+#     PG 의 challenge 에 평문으로 응답), verifier 주입이 안전하므로 권장하지 않는다.
+#   - userlist.txt 대신 pgbouncer.ini 의 auth_query 로 PG 에서 동적 조회하는 방식도 있다.
 #
-# scram-sha-256 사용 시 (pgbouncer.ini auth_type=scram-sha-256 과 함께):
-#   psql 에서: SELECT concat('SCRAM-SHA-256$', ...) 또는 pg_hba.conf 에서 평문 허용 후 교체.
-#   형식: "username" "SCRAM-SHA-256$4096:<base64-salt>$<base64-StoredKey>:<base64-ServerKey>"
-#   auth_type 를 변경하면 이 파일의 해시 형식도 함께 변경해야 한다.
-#
-# 예시 행 (실제 배포 전 반드시 교체):
-# "on_ai_app"    "md5REPLACE_WITH_ACTUAL_HASH"
-# "on_data_app"  "md5REPLACE_WITH_ACTUAL_HASH"
-# "pgbouncer"    "md5REPLACE_WITH_ACTUAL_HASH"
+# 예시 행 (실제 배포 전 반드시 교체 — 아래는 형식 예시일 뿐 유효한 verifier 아님):
+# "on_ai_app"    "SCRAM-SHA-256$4096:REPLACE_SALT$REPLACE_STOREDKEY:REPLACE_SERVERKEY"
+# "on_data_app"  "SCRAM-SHA-256$4096:REPLACE_SALT$REPLACE_STOREDKEY:REPLACE_SERVERKEY"
+# "pgbouncer"    "SCRAM-SHA-256$4096:REPLACE_SALT$REPLACE_STOREDKEY:REPLACE_SERVERKEY"
