@@ -13,6 +13,8 @@
       │                  → hydration_node → rrf_fusion_node → pre_answer_gate_node
       │                       ├─ 0건(C2) → retry_prep_node → router_node 재진입
       │                       └─ 유건    → answer_node
+      │                  ⚠️ enable_secondary_intent 활성화 전 fusion 을 hydration
+      │                     앞으로 이동 필요(아래 _build_graph 엣지부 TODO 참조).
       ├─ DIRECT_ANSWER → direct_answer_node → 종단 체인
       ├─ AMBIGUOUS     → ambiguous_node → 종단 체인
       ├─ OUT_OF_SCOPE  → out_of_scope_node
@@ -98,9 +100,9 @@ def _build_graph(nodes: GraphNodes) -> Any:
            │
            ├─ action=RETRIEVE     → router_node (검색 계획) → cache_check_node
            │                           → [sql/vector/map/analytics]
-           │                           → hydration_node → pre_answer_gate_node
+           │                           → hydration_node → rrf_fusion_node → pre_answer_gate_node
            │                                ├─ 0건(C2) → retry_prep_node → router_node 재진입
-           │                                └─ 유건    → rrf_fusion_node → answer_node
+           │                                └─ 유건    → answer_node
            ├─ action=DIRECT_ANSWER → direct_answer_node → 종단 체인
            ├─ action=AMBIGUOUS     → ambiguous_node → 종단 체인
            ├─ action=OUT_OF_SCOPE  → out_of_scope_node
@@ -109,7 +111,13 @@ def _build_graph(nodes: GraphNodes) -> Any:
            └─ action=EXPLAIN      → explain_node → 종단 체인
 
     secondary_intent 팬아웃(enable_secondary_intent=True):
-      cache_check miss → [sql_node, vector_node] 병렬 → rrf_fusion_node → hydration_node
+      실제 배선(현재): cache_check miss → [sql_node, vector_node] 병렬
+                       → hydration_node → rrf_fusion_node → pre_answer_gate_node
+      목표 토폴로지(미구현, 활성화 전 변경 필요):
+                       → rrf_fusion_node → hydration_node
+        ⚠️ 현재 배선은 fusion 이 hydration 뒤라 rrf_merged_ids 를 hydration 이
+           소비하지 못한다(아래 엣지부 TODO + tests/test_graph_rrf_topology.py 가드 참조).
+           flag off 면 rrf_fusion 은 no-op 이라 동작 안전.
     """
     builder: StateGraph = StateGraph(AgentState)
 
@@ -200,6 +208,12 @@ def _build_graph(nodes: GraphNodes) -> Any:
     )
 
     # ── sql / vector → hydration → rrf_fusion → pre_answer_gate ──
+    # ⚠️ TODO(멀티라우트 활성화 선결): rrf_fusion_node 가 hydration_node 뒤라
+    #   rrf_merged_ids(fusion 출력, nodes.py rrf_fusion_node)를 hydration_node 가
+    #   소비하지 못한다(hydration_node.py 에서 state["rrf_merged_ids"] 를 읽는데, 그 시점엔
+    #   fusion 이 아직 실행되지 않음). enable_secondary_intent=True 로 켜기 전에
+    #   rrf_fusion 을 hydration 앞으로 이동해야 fan-out RRF 결과가 반영된다.
+    #   현재 flag off 라 rrf_fusion 은 no-op(안전). 가드: tests/test_graph_rrf_topology.py.
     builder.add_edge("sql_node", "hydration_node")
     builder.add_edge("vector_node", "hydration_node")
     builder.add_edge("hydration_node", "rrf_fusion_node")
