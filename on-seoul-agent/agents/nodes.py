@@ -968,6 +968,13 @@ class GraphNodes:
 
         # C2: hydrated_services=[] 이면 answer LLM 미호출 + retry_prep 직행
         # retry_count 캡(>=1) 시에는 answer_node로 통과(무한루프 방지)
+        #
+        # []=검색 실행·0건(→retry) vs None=hydration 미실행(→retry 무의미, 통과)을
+        # 구분한다. hydration_node 는 예외/실패 시에도 hydrated_services 를 []로
+        # 귀결시키므로(hydration_node.py 예외 처리 + 본 모듈 wrapper) 'hydration 실패'와
+        # '진짜 0건'은 동일하게 []→retry_prep 로 묶인다(빈 컨텍스트 answer 진입 없음).
+        # 게이트는 항상 hydration_node 뒤라 라이브 경로에서 None 은 도달하지 않으며,
+        # is not None 가드는 부분-state/방어용이다.
         if hydrated is not None and len(hydrated) == 0 and retry_count == 0:
             return "retry_prep_node"
 
