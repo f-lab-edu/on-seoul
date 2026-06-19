@@ -144,23 +144,11 @@ async def _safe_question_search(
 
 
 async def _safe_bm25_search(session: AsyncSession, tokens: list[str]) -> list[dict]:
-    """bm25_search 예외를 격리하여 빈 결과 반환.
-
-    명시 rollback (레거시 방어 코드):
-        제안 2(채널별 독립 세션)로 전환된 이후 이 세션은 이 채널 전용이며,
-        async with _run_channel() 블록 종료 시 __aexit__ 가 자동으로 반납한다.
-        따라서 명시 rollback 은 현재 구조에서 무해하지만 불필요하다.
-        과거 공유 세션 시대(0-1)에 InFailedSQLTransactionError 연쇄 실패를 막기
-        위해 추가된 코드이며, 독립 세션 전환 이후에는 삭제해도 무방하다.
-    """
+    """bm25_search 예외를 격리하여 빈 결과 반환."""
     try:
         return await bm25_search(tokens, session)
     except Exception:
         logger.warning("bm25_search 실패, 빈 결과로 대체", exc_info=True)
-        try:
-            await session.rollback()
-        except Exception:
-            pass
         return []
 
 

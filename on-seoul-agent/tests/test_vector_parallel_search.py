@@ -503,11 +503,13 @@ class TestSessionAcquisitionIsolation:
 
 
 class TestSessionIsolation:
-    async def test_bm25_rollback_does_not_affect_other_sessions(self):
-        """bm25 채널 세션의 rollback 이 다른 채널 세션에 영향을 주지 않는다.
+    async def test_bm25_failure_does_not_affect_other_sessions(self):
+        """bm25 채널 실패가 다른 채널 세션에 영향을 주지 않는다.
 
-        채널마다 독립 세션이므로 bm25 실패 → rollback 이 identity/summary/question
-        채널 세션의 트랜잭션 상태를 변경하지 않는다.
+        채널마다 독립 세션이므로 bm25 실패 → 그 채널만 빈 결과이며,
+        identity/summary/question 채널 세션의 트랜잭션 상태를 변경하지 않는다.
+        트랜잭션 정리(rollback)는 ai_session_ctx 종료 시 close + 풀 reset 이
+        책임지므로 _safe_bm25_search 는 명시 rollback 을 하지 않는다.
         """
         rollback_sessions: list[object] = []
         created_sessions: list[object] = []
@@ -543,13 +545,10 @@ class TestSessionIsolation:
         ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "A99" in ids
 
-        # rollback 된 세션은 bm25 채널 세션 하나뿐.
-        # 다른 채널 세션(identity/summary/question)에는 rollback 미호출.
-        assert len(rollback_sessions) == 1
-        # bm25 세션이 전체 세션 중 하나이고, 나머지는 오염되지 않았다.
-        bm25_session = rollback_sessions[0]
-        other_sessions = [s for s in created_sessions if s is not bm25_session]
-        for s in other_sessions:
+        # 명시 rollback 제거 후: 어떤 채널 세션에도 _safe_* 가 직접 rollback 하지 않는다.
+        # 다른 채널 세션(identity/summary/question)은 bm25 실패와 무관하게 오염되지 않는다.
+        assert rollback_sessions == []
+        for s in created_sessions:
             s.rollback.assert_not_awaited()
 
     async def test_each_channel_gets_independent_session(self):
