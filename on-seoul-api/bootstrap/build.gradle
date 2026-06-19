@@ -12,6 +12,10 @@ dependencies {
 
     implementation 'org.springframework.boot:spring-boot-starter'
 
+    implementation 'io.micrometer:micrometer-registry-otlp'
+    // Tomcat 스레드풀·HikariCP·resilience4j 메트릭 바인더 노출용
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
     // Test dependencies — needed for integration tests in app module
     testImplementation 'org.springframework.boot:spring-boot-starter-web'
     testImplementation 'org.springframework.boot:spring-boot-starter-security'

@@ -8,6 +8,8 @@ import dev.jazzybyte.onseoul.chat.port.out.AiServiceStreamPort;
 import dev.jazzybyte.onseoul.chat.port.out.AiStreamEvent;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
@@ -20,6 +22,7 @@ import reactor.core.publisher.Flux;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Component
@@ -37,8 +40,14 @@ public class ChatAgentClient implements AiServiceStreamPort {
     }
 
     @Override
+    @WithSpan("ai.chat.stream")
     public Flux<AiStreamEvent> stream(String question, long roomId, long messageId, Double lat, Double lng,
                                       List<ChatTurn> history, Carryover carryover) {
+        // 진입 span(@WithSpan으로 생성됨)에 식별 속성 부여. PII 보호: question 평문은 넣지 않는다.
+        Span span = Span.current();
+        span.setAttribute("chat.room_id", roomId);
+        span.setAttribute("chat.message_id", messageId);
+
         List<AiChatRequest.Turn> turns = (history == null ? List.<ChatTurn>of() : history).stream()
                 .map(t -> new AiChatRequest.Turn(t.role(), t.content()))
                 .toList();
@@ -46,11 +55,18 @@ public class ChatAgentClient implements AiServiceStreamPort {
         List<AiChatRequest.PrevEntity> prevEntities = safeCarryover.prevEntities().stream()
                 .map(e -> new AiChatRequest.PrevEntity(e.serviceId(), e.label()))
                 .toList();
+        span.setAttribute("chat.history_size", turns.size());
         AiChatRequest body = new AiChatRequest(roomId, messageId, question, lat, lng, turns,
                 prevEntities, safeCarryover.prevIntent(), safeCarryover.prevReasoning());
         // PII 보호: 질문/대화 content 평문은 로깅하지 않고 식별자와 건수만 INFO로 남긴다.
         log.info("[Chat] 스트림 요청 to AI 서비스 - roomId={}, messageId={}, historySize={}, prevEntities={}, prevIntent={}",
                 roomId, messageId, turns.size(), prevEntities.size(), safeCarryover.prevIntent());
+
+        // 스트림 수신 이벤트를 기록할 span 참조를 클로저로 캡처(구독 스레드 전환 시 컨텍스트 유실 방지).
+        // 주의: 재시도(retry/repeat) 미도입 전제. 재구독이 생기면 seq가 누적되어 span event가 중복되므로
+        // retry 추가 시 seq/streamSpan을 구독별로 재생성(Flux.defer 등)해야 한다.
+        final Span streamSpan = span;
+        final AtomicLong seq = new AtomicLong(0);
 
         return webClient.post()
                 .uri("/chat/stream")
@@ -60,6 +76,11 @@ public class ChatAgentClient implements AiServiceStreamPort {
                 .retrieve()
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
                 .timeout(Duration.ofSeconds(properties.streamTimeoutSeconds()))
+                .doOnNext(sse -> {
+                    long n = seq.incrementAndGet();
+                    SseSpanEventRecorder.record(streamSpan, n, sse);
+                    streamSpan.setAttribute("sse.event_count", n); // 스트림 활성 중 갱신 — 종료 span 기록 회피
+                })
                 .mapNotNull(this::toStreamEvent)
                 .onErrorMap(TimeoutException.class,
                         e -> new OnSeoulApiException(ErrorCode.AI_SERVICE_TIMEOUT,
