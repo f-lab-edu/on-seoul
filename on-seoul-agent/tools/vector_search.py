@@ -20,10 +20,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
 
-TOP_K: int = 10
-MIN_SIMILARITY: float = 0.6
-
 _ALLOWED_ROW_KIND: frozenset[str] = frozenset({"identity", "summary"})
+
+
+def resolve_min_similarity(row_kind: str) -> float:
+    """row_kind별 운영 min_similarity 하한을 config에서 조회한다."""
+    return {
+        "identity": settings.vector_min_similarity_identity,
+        "summary": settings.vector_min_similarity_summary,
+        "question": settings.vector_min_similarity_question,
+    }[row_kind]
 
 
 async def vector_search(
@@ -31,8 +37,8 @@ async def vector_search(
     query_vector: list[float],
     *,
     row_kind: Literal["identity", "summary"] = "identity",
-    top_k: int = TOP_K,
-    min_similarity: float = MIN_SIMILARITY,
+    top_k: int | None = None,
+    min_similarity: float | None = None,
     max_class_name: str | None = None,
     area_name: str | None = None,
     service_status: str | None = None,
@@ -49,9 +55,10 @@ async def vector_search(
         검색 대상 트랙. 'identity' 또는 'summary'. 기본값 'identity'.
         'question' 트랙은 question_search 도구를 사용한다.
     top_k:
-        반환할 최대 결과 수.
+        반환할 최대 결과 수. None이면 settings.vector_track_top_k 사용.
     min_similarity:
         코사인 유사도 하한값 (0~1). 서브쿼리 내부 필터로 적용.
+        None이면 row_kind별 config 값 사용 (vector_min_similarity_*).
     max_class_name, area_name, service_status:
         post-filter 파라미터. identity row에만 적용.
         summary row는 metadata가 NULL이므로 파라미터를 전달해도 무시한다.
@@ -71,6 +78,11 @@ async def vector_search(
         raise ValueError(
             f"invalid row_kind: {row_kind!r}. 허용 값: {sorted(_ALLOWED_ROW_KIND)}"
         )
+
+    if top_k is None:
+        top_k = settings.vector_track_top_k
+    if min_similarity is None:
+        min_similarity = resolve_min_similarity(row_kind)
 
     scan_k = settings.rrf_scan_k_per_track
 

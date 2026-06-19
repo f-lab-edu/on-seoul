@@ -41,10 +41,10 @@ class TestSqlAgent:
 
         result = await agent.search(_make_state(), session)
 
-        assert result["sql_results"] == rows
+        assert result["sql"]["results"] == rows
 
     async def test_search_preserves_state_fields(self):
-        """search는 sql_results만 변경하고 나머지를 보존한다."""
+        """search는 sql 채널만 변경하고 나머지를 보존한다."""
         agent, session = _make_agent(_SqlParams(), [])
         state = _make_state("수영장")
         state["room_id"] = 7
@@ -79,7 +79,7 @@ class TestSqlAgent:
         """Router refined_query가 있으면 LLM에 refined_query가 전달된다."""
         agent, session = _make_agent(_SqlParams(), [])
         state = _make_state("마포구 수영장 알려줘")
-        state["refined_query"] = "마포구 수영장"
+        state["plan"]["refined_query"] = "마포구 수영장"
 
         await agent.search(state, session)
 
@@ -93,10 +93,10 @@ class TestSqlAgent:
             [],
         )
         state = _make_state("마포구 체육시설")
-        state["refined_query"] = "마포구 체육시설"
-        state["max_class_name"] = "체육시설"
-        state["area_name"] = "마포구"
-        state["service_status"] = "접수중"
+        state["plan"]["refined_query"] = "마포구 체육시설"
+        state["filters"]["max_class_name"] = "체육시설"
+        state["filters"]["area_name"] = "마포구"
+        state["filters"]["service_status"] = "접수중"
 
         await agent.search(state, session)
 
@@ -110,8 +110,8 @@ class TestSqlAgent:
         """refined_query가 있으면 state.payment_type를 sql_search로 전달한다."""
         agent, session = _make_agent(_SqlParams(payment_type="유료"), [])
         state = _make_state("강남구 무료 문화행사")
-        state["refined_query"] = "강남구 무료 문화행사"
-        state["payment_type"] = "무료"
+        state["plan"]["refined_query"] = "강남구 무료 문화행사"
+        state["filters"]["payment_type"] = "무료"
 
         await agent.search(state, session)
 
@@ -228,11 +228,11 @@ class TestSqlAgent:
         assert bind["keyword"] == f"%{_escape_like(malicious)}%"
 
     async def test_search_returns_empty_list_when_no_rows(self):
-        """DB 결과가 없으면 sql_results는 빈 리스트다."""
+        """DB 결과가 없으면 sql.results는 빈 리스트다."""
         agent, session = _make_agent(_SqlParams(), [])
         result = await agent.search(_make_state(), session)
 
-        assert result["sql_results"] == []
+        assert result["sql"]["results"] == []
 
 
 class TestSqlAgentCoT:

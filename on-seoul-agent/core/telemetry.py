@@ -2,8 +2,8 @@
 
 설계 원칙
 - 인프라 계측만: FastAPI(서버 span) / httpx(외부 HTTP·Gemini) / SQLAlchemy(asyncpg)
-  / redis. LLM·LangChain 전용 계측(OpenLLMetry/traceloop)은 넣지 않는다 — 추후
-  Langfuse로 별도 도입. 이 모듈을 독립적으로 유지해 향후 LLM span 추가를 쉽게 한다.
+  / redis. LLM·LangChain 전용 계측은 넣지 않는다 — Langfuse가 별개 파이프라인으로
+  LLM I/O·토큰·비용을 담당한다(core/langfuse_client.py). 이 모듈은 인프라 계측 전용.
 - 기존 커스텀 트레이싱(chat_agent_traces, agents/graph.py·nodes.py)과 병행한다.
 - fail-open: exporter 연결/instrument 실패가 앱 기동·요청을 막지 않는다.
 - 토글: settings.otel_enabled=False(기본) 또는 endpoint 미설정 시 완전 no-op.

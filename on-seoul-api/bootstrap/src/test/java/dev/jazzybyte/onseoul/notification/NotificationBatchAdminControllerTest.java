@@ -56,8 +56,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 임시 알림 배치 관리 API — permitAll 동작 및 각 엔드포인트 동작 검증.
+ * 알림 배치 관리 API 컨트롤러 테스트.
  * 두 스케줄러를 MockitoBean으로 대체해 실제 LLM/외부 발송 없이 컨트롤러 → 스케줄러 위임만 확인한다.
+ * 인증은 tokenIssuerPort.generateAccessToken 으로 발급한 Bearer 토큰을 사용한다.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -84,6 +85,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class NotificationBatchAdminControllerTest {
 
     @Autowired private MockMvc mockMvc;
+    @Autowired private dev.jazzybyte.onseoul.user.port.out.TokenIssuerPort tokenIssuerPort;
 
     @MockitoBean private NotificationScheduler notificationScheduler;
     @MockitoBean private ScheduledTriggerScheduler scheduledTriggerScheduler;
@@ -123,12 +125,13 @@ class NotificationBatchAdminControllerTest {
     @MockitoBean LoadUserContactPort loadUserContactPort;
 
     @Test
-    @DisplayName("POST /internal/notifications/batch/change — 인증 없이 200, CHANGE 배치 실행")
-    void runChange_noAuth_returns200() throws Exception {
+    @DisplayName("POST /internal/notifications/batch/change — 인증된 사용자 200, CHANGE 배치 실행")
+    void runChange_authenticated_returns200() throws Exception {
         when(notificationScheduler.runManually())
                 .thenReturn(NotificationScheduler.ManualRunResult.RAN);
 
-        mockMvc.perform(post("/internal/notifications/batch/change"))
+        mockMvc.perform(post("/internal/notifications/batch/change")
+                        .header("Authorization", "Bearer " + tokenIssuerPort.generateAccessToken(1L)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.batch").value("CHANGE"))
                 .andExpect(jsonPath("$.status").value("RAN"));
@@ -137,12 +140,13 @@ class NotificationBatchAdminControllerTest {
     }
 
     @Test
-    @DisplayName("POST /internal/notifications/batch/scheduled — 인증 없이 200, 시점 배치 실행")
-    void runScheduled_noAuth_returns200() throws Exception {
+    @DisplayName("POST /internal/notifications/batch/scheduled — 인증된 사용자 200, 시점 배치 실행")
+    void runScheduled_authenticated_returns200() throws Exception {
         when(scheduledTriggerScheduler.runManually())
                 .thenReturn(ScheduledTriggerScheduler.ManualRunResult.RAN);
 
-        mockMvc.perform(post("/internal/notifications/batch/scheduled"))
+        mockMvc.perform(post("/internal/notifications/batch/scheduled")
+                        .header("Authorization", "Bearer " + tokenIssuerPort.generateAccessToken(1L)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.batch").value("SCHEDULED"))
                 .andExpect(jsonPath("$.status").value("RAN"));
@@ -156,20 +160,22 @@ class NotificationBatchAdminControllerTest {
         when(notificationScheduler.runManually())
                 .thenReturn(NotificationScheduler.ManualRunResult.SKIPPED_ALREADY_RUNNING);
 
-        mockMvc.perform(post("/internal/notifications/batch/change"))
+        mockMvc.perform(post("/internal/notifications/batch/change")
+                        .header("Authorization", "Bearer " + tokenIssuerPort.generateAccessToken(1L)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.status").value("SKIPPED_ALREADY_RUNNING"));
     }
 
     @Test
     @DisplayName("POST /internal/notifications/batch/all — CHANGE→SCHEDULED 순서로 둘 다 실행, 200")
-    void runAll_noAuth_returns200() throws Exception {
+    void runAll_authenticated_returns200() throws Exception {
         when(notificationScheduler.runManually())
                 .thenReturn(NotificationScheduler.ManualRunResult.RAN);
         when(scheduledTriggerScheduler.runManually())
                 .thenReturn(ScheduledTriggerScheduler.ManualRunResult.RAN);
 
-        mockMvc.perform(post("/internal/notifications/batch/all"))
+        mockMvc.perform(post("/internal/notifications/batch/all")
+                        .header("Authorization", "Bearer " + tokenIssuerPort.generateAccessToken(1L)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.change.batch").value("CHANGE"))
                 .andExpect(jsonPath("$.change.status").value("RAN"))
@@ -187,7 +193,8 @@ class NotificationBatchAdminControllerTest {
         when(scheduledTriggerScheduler.runManually())
                 .thenReturn(ScheduledTriggerScheduler.ManualRunResult.SKIPPED_ALREADY_RUNNING);
 
-        mockMvc.perform(post("/internal/notifications/batch/scheduled"))
+        mockMvc.perform(post("/internal/notifications/batch/scheduled")
+                        .header("Authorization", "Bearer " + tokenIssuerPort.generateAccessToken(1L)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.batch").value("SCHEDULED"))
                 .andExpect(jsonPath("$.status").value("SKIPPED_ALREADY_RUNNING"));
@@ -201,7 +208,8 @@ class NotificationBatchAdminControllerTest {
         when(scheduledTriggerScheduler.runManually())
                 .thenReturn(ScheduledTriggerScheduler.ManualRunResult.SKIPPED_ALREADY_RUNNING);
 
-        mockMvc.perform(post("/internal/notifications/batch/all"))
+        mockMvc.perform(post("/internal/notifications/batch/all")
+                        .header("Authorization", "Bearer " + tokenIssuerPort.generateAccessToken(1L)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.change.status").value("RAN"))
                 .andExpect(jsonPath("$.scheduled.status").value("SKIPPED_ALREADY_RUNNING"));
@@ -215,11 +223,11 @@ class NotificationBatchAdminControllerTest {
         when(notificationScheduler.runManually())
                 .thenReturn(NotificationScheduler.ManualRunResult.RAN);
 
-        mockMvc.perform(post("/internal/notifications/batch/change"))
+        mockMvc.perform(post("/internal/notifications/batch/change")
+                        .header("Authorization", "Bearer " + tokenIssuerPort.generateAccessToken(1L)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", aMapWithSize(2)))
                 .andExpect(jsonPath("$", allOf(hasKey("batch"), hasKey("status"))))
-                // 사용자 연락처/식별자/내부 카운트가 새지 않는지 명시적으로 단정
                 .andExpect(jsonPath("$", not(hasKey("contact"))))
                 .andExpect(jsonPath("$", not(hasKey("phone"))))
                 .andExpect(jsonPath("$", not(hasKey("email"))))
@@ -236,7 +244,8 @@ class NotificationBatchAdminControllerTest {
         when(scheduledTriggerScheduler.runManually())
                 .thenReturn(ScheduledTriggerScheduler.ManualRunResult.RAN);
 
-        mockMvc.perform(post("/internal/notifications/batch/all"))
+        mockMvc.perform(post("/internal/notifications/batch/all")
+                        .header("Authorization", "Bearer " + tokenIssuerPort.generateAccessToken(1L)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", aMapWithSize(2)))
                 .andExpect(jsonPath("$", allOf(hasKey("change"), hasKey("scheduled"))))

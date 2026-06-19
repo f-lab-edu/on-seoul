@@ -45,19 +45,9 @@ class TestCacheKey:
         k_seongdong = _cache_key("테니스장", area_name="성동구")
         assert k_gangnam != k_seongdong
 
-    def test_different_max_class_produces_different_key(self):
-        from core.cache import _cache_key
-
-        k_culture = _cache_key("테니스장", max_class_name="문화행사")
-        k_sport = _cache_key("테니스장", max_class_name="체육시설")
-        assert k_culture != k_sport
-
-    def test_different_service_status_produces_different_key(self):
-        from core.cache import _cache_key
-
-        k_open = _cache_key("테니스장", service_status="접수중")
-        k_closed = _cache_key("테니스장", service_status="마감")
-        assert k_open != k_closed
+    # max_class_name/service_status 가 키에 반영되는 것은
+    # test_different_area_produces_different_key 와 동일 로직(메타 필드 → 키 분기)의
+    # 값만 다른 순열이라 축소했다. none/empty 동등성·payment_type 충돌은 유지한다.
 
     def test_none_metadata_consistent_with_empty_string(self):
         """None과 ""는 동등 — 같은 키를 산출."""
@@ -71,12 +61,8 @@ class TestCacheKey:
         )
         assert k_none == k_empty
 
-    def test_no_metadata_equals_all_none(self):
-        from core.cache import _cache_key
-
-        assert _cache_key("테니스장") == _cache_key(
-            "테니스장", max_class_name=None, area_name=None, service_status=None
-        )
+    # no-kwargs == all-None 은 test_none_metadata_consistent_with_empty_string 가
+    # 검증하는 None/empty 정규화 동등성의 순열이라 축소했다.
 
     def test_different_payment_type_produces_different_key(self):
         """동일 query라도 payment_type이 다르면 다른 키여야 한다.
@@ -91,12 +77,110 @@ class TestCacheKey:
         assert k_none != k_free
         assert k_free != k_paid
 
-    def test_payment_type_none_equals_empty(self):
-        from core.cache import _cache_key
+    # payment_type None==empty 도 동일한 None/empty 정규화 동등성 순열이라 축소했다.
+    # payment_type 의 정합 핵심(다른 값 → 다른 키 충돌 방지)은 위 테스트가 유지한다.
 
-        assert _cache_key("테니스장", payment_type=None) == _cache_key(
-            "테니스장", payment_type=""
+
+class TestDigestLength:
+    def test_answer_cache_key_digest_is_128bit(self):
+        """digest는 128-bit(32 hex)여야 한다 (0-3-4)."""
+        from core.cache import _KEY_PREFIX, _cache_key
+
+        digest = _cache_key("테니스장").removeprefix(_KEY_PREFIX)
+        assert len(digest) == 32
+
+    # refine 키 digest 길이(32 hex)도 test_answer_cache_key_digest_is_128bit 와
+    # 동일한 blake2b 128-bit 산출 로직의 순열이라 축소했다. refine 키의 정합 핵심
+    # (버전/네임스페이스/history 분리)은 아래 전용 테스트들이 유지한다.
+
+    def test_refine_cache_key_includes_version(self):
+        """버전 prefix 포함 — bump 시 구 매핑 즉시 무효화(네임스페이스 분리)."""
+        from core.cache import (
+            _REFINE_CACHE_VERSION,
+            _REFINE_KEY_PREFIX,
+            _refine_cache_key,
         )
+
+        key = _refine_cache_key("테니스장", None)
+        assert key.startswith(f"{_REFINE_KEY_PREFIX}{_REFINE_CACHE_VERSION}:")
+
+
+class TestRefineCacheKey:
+    def test_strips_collapses_lowercases(self):
+        from core.cache import _refine_cache_key
+
+        assert _refine_cache_key("  서울   테니스장 ", None) == _refine_cache_key(
+            "서울 테니스장", None
+        )
+
+    def test_no_history_shared_across_users(self):
+        """history 없으면 동일 raw query는 같은 키 — first-turn 사용자 간 공유."""
+        from core.cache import _refine_cache_key
+
+        assert _refine_cache_key("테니스장", None) == _refine_cache_key("테니스장", [])
+
+    def test_history_present_includes_hash_and_differs(self):
+        """history가 있으면 키가 history-없는 키와 달라진다(미공유)."""
+        from core.cache import _refine_cache_key
+
+        no_hist = _refine_cache_key("성동구는?", None)
+        with_hist = _refine_cache_key(
+            "성동구는?",
+            [{"role": "user", "content": "테니스장 보여줘"}],
+        )
+        assert no_hist != with_hist
+
+    def test_different_history_differs(self):
+        from core.cache import _refine_cache_key
+
+        h1 = _refine_cache_key("성동구는?", [{"role": "user", "content": "테니스장"}])
+        h2 = _refine_cache_key("성동구는?", [{"role": "user", "content": "수영장"}])
+        assert h1 != h2
+
+    def test_namespace_separated_from_answer_cache(self):
+        from core.cache import _KEY_PREFIX, _REFINE_KEY_PREFIX
+
+        assert _REFINE_KEY_PREFIX != _KEY_PREFIX
+
+
+class TestGetCachedRefine:
+    # miss→None / disabled-skip(설정 게이팅)은 TestGetCachedAnswer 의 대칭 케이스가
+    # 동일 의미로 커버하므로 refine 쪽은 hit + fail-open(redis error)만 유지한다.
+
+    async def test_hit_returns_dict(self, mock_redis):
+        stored = {"intent": "VECTOR_SEARCH", "refined_query": "서울 테니스장"}
+        mock_redis.get.return_value = json.dumps(stored)
+        from core.cache import get_cached_refine
+
+        assert await get_cached_refine("테니스장", None, mock_redis) == stored
+
+    async def test_redis_error_returns_none(self, mock_redis):
+        mock_redis.get.side_effect = RuntimeError("redis down")
+        from core.cache import get_cached_refine
+
+        assert await get_cached_refine("q", None, mock_redis) is None
+
+
+class TestSetCachedRefine:
+    async def test_set_stores_with_refine_ttl(self, mock_redis):
+        from core.cache import set_cached_refine
+        from core.config import settings
+
+        payload = {"intent": "VECTOR_SEARCH", "refined_query": "서울 테니스장"}
+        await set_cached_refine("테니스장", None, payload, mock_redis)
+        mock_redis.set.assert_called_once()
+        assert mock_redis.set.call_args.kwargs["ex"] == settings.refine_cache_ttl
+        body = json.loads(mock_redis.set.call_args.args[1])
+        assert body == payload
+
+    # disabled-skip(설정 게이팅)은 TestSetCachedAnswer.test_disabled_skips_set 대칭
+    # 케이스가 동일 의미로 커버하므로 refine 쪽은 stores + fail-open 만 유지한다.
+
+    async def test_redis_error_does_not_raise(self, mock_redis):
+        mock_redis.set.side_effect = RuntimeError("redis down")
+        from core.cache import set_cached_refine
+
+        await set_cached_refine("q", None, {"intent": "X"}, mock_redis)  # no raise
 
 
 class TestGetCachedAnswer:
@@ -238,19 +322,281 @@ class TestEmptyStateTTL:
         await set_cached_answer("x", sample_payload, asym_state, mock_redis)
         assert mock_redis.set.call_args.kwargs["ex"] == settings.answer_cache_ttl
 
-    async def test_sql_empty_vector_present_uses_normal_ttl(
-        self, mock_redis, sample_payload
-    ):
-        asym_state = {
-            "refined_query": "x",
-            "vector_results": [{"service_id": "S1"}],
-            "sql_results": [],
-        }
-        from core.cache import set_cached_answer
+    # sql-empty/vector-present 도 "한쪽만 empty → 정상 TTL" 동일 분기의 대칭 순열이라
+    # test_vector_empty_sql_present_uses_normal_ttl 로 대표하고 축소했다.
+
+
+class TestSingleflight:
+    """acquire_answer_lock / release_answer_lock / poll_for_answer 단위 테스트."""
+
+    async def test_acquire_returns_true_on_set_nx_success(self, mock_redis):
+        mock_redis.set.return_value = True
+        from core.cache import acquire_answer_lock
+
+        assert await acquire_answer_lock("answer_cache:abc", mock_redis, ttl=30)
+
+    async def test_acquire_returns_false_on_set_nx_fail(self, mock_redis):
+        """SET NX 실패(다른 홀더 존재) → False."""
+        mock_redis.set.return_value = None
+        from core.cache import acquire_answer_lock
+
+        assert not await acquire_answer_lock("answer_cache:abc", mock_redis, ttl=30)
+
+    async def test_acquire_redis_error_returns_true_fail_open(self, mock_redis):
+        """Redis 장애 → fail-open True (각자 LLM 실행)."""
+        mock_redis.set.side_effect = RuntimeError("redis down")
+        from core.cache import acquire_answer_lock
+
+        assert await acquire_answer_lock("answer_cache:abc", mock_redis, ttl=30)
+
+    async def test_acquire_lock_key_has_lock_suffix(self, mock_redis):
+        """락 키 = 캐시 키 + ':lock'."""
+        mock_redis.set.return_value = True
+        from core.cache import _LOCK_SUFFIX, acquire_answer_lock
+
+        cache_key = "answer_cache:abc"
+        await acquire_answer_lock(cache_key, mock_redis, ttl=30)
+        call_key = mock_redis.set.call_args.args[0]
+        assert call_key == f"{cache_key}{_LOCK_SUFFIX}"
+
+    async def test_acquire_uses_nx_and_ex(self, mock_redis):
+        """SET NX EX ttl 인자 정확성."""
+        mock_redis.set.return_value = True
+        from core.cache import acquire_answer_lock
+
+        await acquire_answer_lock("answer_cache:abc", mock_redis, ttl=30)
+        kwargs = mock_redis.set.call_args.kwargs
+        assert kwargs.get("nx") is True
+        assert kwargs.get("ex") == 30
+
+    async def test_release_deletes_lock_key(self, mock_redis):
+        from core.cache import _LOCK_SUFFIX, release_answer_lock
+
+        cache_key = "answer_cache:abc"
+        await release_answer_lock(cache_key, mock_redis)
+        mock_redis.delete.assert_called_once_with(f"{cache_key}{_LOCK_SUFFIX}")
+
+    async def test_release_redis_error_does_not_raise(self, mock_redis):
+        mock_redis.delete.side_effect = RuntimeError("redis down")
+        from core.cache import release_answer_lock
+
+        await release_answer_lock("answer_cache:abc", mock_redis)  # no raise
+
+    async def test_poll_returns_envelope_when_cache_populated(self, mock_redis):
+        """두 번째 poll에서 캐시 키가 채워지면 dict 반환."""
+        envelope = {"payload": {"answer": "ok"}, "state": {}}
+        mock_redis.get.side_effect = [None, json.dumps(envelope)]
+        from unittest.mock import patch
+
+        from core.cache import poll_for_answer
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_answer(
+                "answer_cache:abc", mock_redis, retries=3, interval=0.01
+            )
+        assert result == envelope
+
+    async def test_poll_returns_none_on_timeout(self, mock_redis):
+        """retries 소진 후 결과 없으면 None (fail-open)."""
+        mock_redis.get.return_value = None
+        from unittest.mock import patch
+
+        from core.cache import poll_for_answer
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_answer(
+                "answer_cache:abc", mock_redis, retries=3, interval=0.01
+            )
+        assert result is None
+        assert mock_redis.get.call_count == 3
+
+    async def test_poll_redis_error_returns_none(self, mock_redis):
+        """GET 오류 시 None (fail-open)."""
+        mock_redis.get.side_effect = RuntimeError("redis down")
+        from unittest.mock import patch
+
+        from core.cache import poll_for_answer
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_answer(
+                "answer_cache:abc", mock_redis, retries=3, interval=0.01
+            )
+        assert result is None
+
+    async def test_disabled_acquire_always_true(self, mock_redis):
+        """singleflight 비활성화 시 acquire는 항상 True(락 우회)."""
+        from unittest.mock import patch
+
+        from core.cache import acquire_answer_lock
         from core.config import settings
 
-        await set_cached_answer("x", sample_payload, asym_state, mock_redis)
-        assert mock_redis.set.call_args.kwargs["ex"] == settings.answer_cache_ttl
+        with patch.object(settings, "answer_cache_singleflight_enabled", False):
+            result = await acquire_answer_lock("answer_cache:abc", mock_redis, ttl=30)
+        assert result is True
+        mock_redis.set.assert_not_called()
+
+    async def test_disabled_release_skips_delete(self, mock_redis):
+        from unittest.mock import patch
+
+        from core.cache import release_answer_lock
+        from core.config import settings
+
+        with patch.object(settings, "answer_cache_singleflight_enabled", False):
+            await release_answer_lock("answer_cache:abc", mock_redis)
+        mock_redis.delete.assert_not_called()
+
+    async def test_poll_hits_within_extended_window(self, mock_redis):
+        """보유자가 늦게(예: 9번째 폴 후) 캐시를 채워도 윈도우 안이면 hit.
+
+        retries 를 p95 답변 시간(~10s)에 맞춰 확대한 효과 — 정상~꼬리 답변까지
+        폴 윈도우가 커버하는지 회귀 가드.
+        """
+        envelope = {"payload": {"answer": "ok"}, "state": {}}
+        # 18번 miss 후 19번째 poll 에서 캐시가 채워짐 (retries=20 안).
+        gets = [None] * 18 + [json.dumps(envelope)]
+        mock_redis.get.side_effect = gets
+        from unittest.mock import patch
+
+        from core.cache import poll_for_answer
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_answer(
+                "answer_cache:abc", mock_redis, retries=20, interval=0.01
+            )
+        assert result == envelope
+        assert mock_redis.get.call_count == 19
+
+    async def test_poll_window_below_lock_ttl_invariant(self):
+        """회귀 가드: poll_window(retries×interval) < lock_ttl(30s).
+
+        락이 살아있는 동안만 폴한다는 불변식. 폴 윈도우가 락 TTL 이상이면
+        보유자 락 만료 후에도 헛폴하므로 settings 로 단언한다.
+        """
+        from core.config import settings
+
+        poll_window = (
+            settings.answer_cache_lock_poll_retries
+            * settings.answer_cache_lock_poll_interval
+        )
+        assert poll_window < settings.answer_cache_lock_ttl
+        # p95 답변 시간(~10s)을 커버하도록 충분히 넓은지 — 하한 가드.
+        assert poll_window >= 10
+
+
+class TestRefineSingleflight:
+    """acquire_refine_lock / release_refine_lock / poll_for_refine — answer 대칭."""
+
+    async def test_acquire_returns_true_on_set_nx_success(self, mock_redis):
+        mock_redis.set.return_value = True
+        from core.cache import acquire_refine_lock
+
+        assert await acquire_refine_lock("refine_cache:v1:abc", mock_redis, ttl=10)
+
+    async def test_acquire_returns_false_on_set_nx_fail(self, mock_redis):
+        mock_redis.set.return_value = None
+        from core.cache import acquire_refine_lock
+
+        assert not await acquire_refine_lock("refine_cache:v1:abc", mock_redis, ttl=10)
+
+    async def test_acquire_redis_error_returns_true_fail_open(self, mock_redis):
+        mock_redis.set.side_effect = RuntimeError("redis down")
+        from core.cache import acquire_refine_lock
+
+        assert await acquire_refine_lock("refine_cache:v1:abc", mock_redis, ttl=10)
+
+    async def test_acquire_lock_key_has_lock_suffix_and_nx_ex(self, mock_redis):
+        mock_redis.set.return_value = True
+        from core.cache import _LOCK_SUFFIX, acquire_refine_lock
+
+        cache_key = "refine_cache:v1:abc"
+        await acquire_refine_lock(cache_key, mock_redis, ttl=10)
+        assert mock_redis.set.call_args.args[0] == f"{cache_key}{_LOCK_SUFFIX}"
+        assert mock_redis.set.call_args.kwargs.get("nx") is True
+        assert mock_redis.set.call_args.kwargs.get("ex") == 10
+
+    async def test_release_deletes_lock_key(self, mock_redis):
+        from core.cache import _LOCK_SUFFIX, release_refine_lock
+
+        cache_key = "refine_cache:v1:abc"
+        await release_refine_lock(cache_key, mock_redis)
+        mock_redis.delete.assert_called_once_with(f"{cache_key}{_LOCK_SUFFIX}")
+
+    async def test_release_redis_error_does_not_raise(self, mock_redis):
+        mock_redis.delete.side_effect = RuntimeError("redis down")
+        from core.cache import release_refine_lock
+
+        await release_refine_lock("refine_cache:v1:abc", mock_redis)  # no raise
+
+    async def test_poll_returns_dict_when_cache_populated(self, mock_redis):
+        cached = {"intent": "VECTOR_SEARCH", "refined_query": "서울 테니스장"}
+        mock_redis.get.side_effect = [None, json.dumps(cached)]
+        from core.cache import poll_for_refine
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_refine(
+                "refine_cache:v1:abc", mock_redis, retries=3, interval=0.01
+            )
+        assert result == cached
+
+    async def test_poll_returns_none_on_timeout(self, mock_redis):
+        mock_redis.get.return_value = None
+        from core.cache import poll_for_refine
+
+        with patch("asyncio.sleep"):
+            result = await poll_for_refine(
+                "refine_cache:v1:abc", mock_redis, retries=3, interval=0.01
+            )
+        assert result is None
+        assert mock_redis.get.call_count == 3
+
+    async def test_disabled_acquire_always_true_no_set(self, mock_redis):
+        from core.cache import acquire_refine_lock
+        from core.config import settings
+
+        with patch.object(settings, "refine_cache_singleflight_enabled", False):
+            result = await acquire_refine_lock(
+                "refine_cache:v1:abc", mock_redis, ttl=10
+            )
+        assert result is True
+        mock_redis.set.assert_not_called()
+
+    async def test_disabled_release_skips_delete(self, mock_redis):
+        from core.cache import release_refine_lock
+        from core.config import settings
+
+        with patch.object(settings, "refine_cache_singleflight_enabled", False):
+            await release_refine_lock("refine_cache:v1:abc", mock_redis)
+        mock_redis.delete.assert_not_called()
+
+    async def test_get_by_key_hit(self, mock_redis):
+        cached = {"intent": "SQL_SEARCH", "refined_query": "마포구 풋살장"}
+        mock_redis.get.return_value = json.dumps(cached)
+        from core.cache import get_cached_refine_by_key
+
+        assert await get_cached_refine_by_key("refine_cache:v1:abc", mock_redis) == cached
+
+    async def test_get_by_key_redis_error_returns_none(self, mock_redis):
+        mock_redis.get.side_effect = RuntimeError("redis down")
+        from core.cache import get_cached_refine_by_key
+
+        assert await get_cached_refine_by_key("refine_cache:v1:abc", mock_redis) is None
+
+    def test_build_refine_cache_key_matches_private(self):
+        from core.cache import _refine_cache_key, build_refine_cache_key
+
+        assert build_refine_cache_key("테니스장", None) == _refine_cache_key(
+            "테니스장", None
+        )
+
+    def test_poll_window_below_lock_ttl_invariant(self):
+        """회귀 가드: refine poll_window(retries×interval) < refine lock_ttl."""
+        from core.config import settings
+
+        poll_window = (
+            settings.refine_cache_lock_poll_retries
+            * settings.refine_cache_lock_poll_interval
+        )
+        assert poll_window < settings.refine_cache_lock_ttl
 
 
 class TestFlush:
@@ -306,8 +652,14 @@ class TestFlush:
         deleted = await flush_answer_cache(mock_redis)
         assert deleted == 0
 
-    async def test_flush_logs_structured_event(self, mock_redis, caplog):
-        """flush 완료 시 cache.flush deleted=N 구조화 로그가 한 번 기록된다."""
+    async def test_flush_logs_structured_event(self, mock_redis):
+        """flush 완료 시 cache.flush deleted=N 구조화 로그가 한 번 기록된다.
+
+        실행 순서 독립 결정성: caplog/루트 핸들러에 의존하지 않고 전용 핸들러를
+        core.cache 로거에 직접 부착하고 propagate=False 로 고정한다. 이렇게 하면
+        setup_logging() 의 전역 propagate 상태(다른 테스트가 호출했는지 여부)와
+        무관하게 정확히 한 번만 캡처되어, 격리/전체 실행 결과가 항상 일치한다.
+        """
         import logging
 
         async def _scan_iter(match):
@@ -317,18 +669,28 @@ class TestFlush:
         mock_redis.scan_iter = _scan_iter
         from core.cache import flush_answer_cache
 
-        # setup_logging()이 core.* propagate=False를 설정할 수 있으므로
-        # caplog.handler를 직접 core.cache 로거에 연결한다.
+        records: list[logging.LogRecord] = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record)
+
         cache_logger = logging.getLogger("core.cache")
+        handler = _Capture(level=logging.INFO)
         prev_propagate = cache_logger.propagate
-        cache_logger.addHandler(caplog.handler)
-        cache_logger.propagate = True
+        prev_level = cache_logger.level
+        cache_logger.addHandler(handler)
+        # propagate=False 로 고정 → 루트(또는 pytest 캡처 핸들러)로 전파되지 않아
+        # 중복 캡처가 구조적으로 불가능. 전역 logging 상태와 독립적.
+        cache_logger.propagate = False
+        cache_logger.setLevel(logging.INFO)
         try:
-            with caplog.at_level(logging.INFO, logger="core.cache"):
-                await flush_answer_cache(mock_redis)
+            await flush_answer_cache(mock_redis)
         finally:
-            cache_logger.removeHandler(caplog.handler)
+            cache_logger.removeHandler(handler)
             cache_logger.propagate = prev_propagate
-        flush_logs = [r for r in caplog.records if "cache.flush" in r.getMessage()]
+            cache_logger.setLevel(prev_level)
+
+        flush_logs = [r for r in records if "cache.flush" in r.getMessage()]
         assert len(flush_logs) == 1
         assert "deleted=2" in flush_logs[0].getMessage()

@@ -53,6 +53,7 @@ sys.path.insert(0, str(_ROOT))
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from core.config import settings
 from core.rrf import reciprocal_rank_fusion
@@ -76,7 +77,8 @@ _DEFAULT_OUTPUT = (
 
 _AT_K = (1, 5, 10)
 _SQL_TOP_K = 20
-_VEC_TOP_K = 20
+# 벡터 트랙 top_k / min_similarity 는 운영 config 를 그대로 사용한다
+# (tools 가 None 기본값을 settings 로 해석). 다른 값 실험은 env 오버라이드로 한다.
 
 
 # ---------------------------------------------------------------------------
@@ -160,18 +162,45 @@ async def _search_vector(
     data_session: AsyncSession,
     embedder,
     weights: dict[str, float] | None,
+    router: RouterAgent | None,
 ) -> list[str]:
-    """4채널 + RRF → service_id 순위 리스트."""
-    vec = await embedder.aembed_query(row.query)
+    """4채널 + RRF → service_id 순위 리스트.
 
-    # Track A — identity
+    router 가 주어지면(post-filter 모드) production VectorAgent 경로를 재현한다:
+    Router.classify 로 refined_query + post-filter(max_class_name/area_name/
+    service_status)를 추출해, refined_query 를 임베딩하고 Track A 에 post-filter 를
+    적용한다. 이는 라벨링(generate_candidates.py)과 동일한 추출 경로다.
+
+    router 가 None 이면(--no-post-filter) 기존 동작 — raw query 임베딩, 필터 미적용.
+    Track B/C/BM25 는 두 모드 모두 동일하게 post-filter 없이 실행한다.
+    """
+    pf_max_class_name: str | None = None
+    pf_area_name: str | None = None
+    pf_service_status: str | None = None
+    embed_query = row.query
+
+    if router is not None:
+        try:
+            intent = await router.classify(row.query)
+            embed_query = intent.refined_query or row.query
+            pf_max_class_name = intent.max_class_name
+            pf_area_name = intent.area_name
+            pf_service_status = intent.service_status
+        except Exception as e:
+            logger.warning("router.classify 실패 [%s]: %s", row.query[:30], e)
+
+    vec = await embedder.aembed_query(embed_query)
+
+    # Track A — identity (top_k/min_similarity는 운영 config 기본값 사용)
+    # post-filter 모드: Router 추출 필터 적용 (production·라벨링 경로와 동일)
     try:
         a_rows = await vector_search(
             ai_session,
             vec,
             row_kind="identity",
-            top_k=_VEC_TOP_K,
-            min_similarity=0.5,
+            max_class_name=pf_max_class_name,
+            area_name=pf_area_name,
+            service_status=pf_service_status,
         )
     except Exception as e:
         await ai_session.rollback()
@@ -180,13 +209,7 @@ async def _search_vector(
 
     # Track B — summary
     try:
-        b_rows = await vector_search(
-            ai_session,
-            vec,
-            row_kind="summary",
-            top_k=_VEC_TOP_K,
-            min_similarity=0.5,
-        )
+        b_rows = await vector_search(ai_session, vec, row_kind="summary")
     except Exception as e:
         await ai_session.rollback()
         logger.warning("track_b 실패 [%s]: %s", row.query[:30], e)
@@ -194,23 +217,17 @@ async def _search_vector(
 
     # Track C — question (PARTITION BY dedup)
     try:
-        c_rows = await question_search(
-            ai_session,
-            vec,
-            top_k=_VEC_TOP_K,
-            min_similarity=0.5,
-        )
+        c_rows = await question_search(ai_session, vec)
     except Exception as e:
         await ai_session.rollback()
         logger.warning("track_c 실패 [%s]: %s", row.query[:30], e)
         c_rows = []
 
-    # BM25
-    tokens = tokenize_query(row.query)
+    # BM25 — 운영(vector_agent)과 동일하게 기본 limit(BM25_LIMIT) 사용.
+    # 운영은 refined_query 를 토크나이즈하므로 embed_query 를 사용한다.
+    tokens = tokenize_query(embed_query)
     try:
-        d_rows = (
-            await bm25_search(ai_session, tokens, limit=_VEC_TOP_K) if tokens else []
-        )
+        d_rows = await bm25_search(tokens, ai_session) if tokens else []
     except Exception as e:
         await ai_session.rollback()
         logger.warning("bm25 실패 [%s]: %s", row.query[:30], e)
@@ -227,7 +244,8 @@ async def _search_vector(
         k_constant=settings.rrf_k_constant,
     )
 
-    service_ids = [sid for sid, _ in merged[:_VEC_TOP_K]]
+    # 운영(vector_agent)과 동일하게 RRF 최종 컷은 rrf_top_k_final 적용
+    service_ids = [sid for sid, _ in merged[: settings.rrf_top_k_final]]
     hydrated = await hydrate_services(data_session, service_ids)
     return [r["service_id"] for r in hydrated]
 
@@ -241,13 +259,16 @@ async def _search_sql(
     """SqlAgent → service_id 순위 리스트."""
     state: dict = {
         "message": row.query,
-        "refined_query": None,
-        "max_class_name": None,
-        "area_name": None,
-        "service_status": None,
+        "plan": {"refined_query": None},
+        "filters": {
+            "max_class_name": None,
+            "area_name": None,
+            "service_status": None,
+            "payment_type": None,
+        },
     }
     result_state = await sql_agent.search(state, data_session, top_k=_SQL_TOP_K)  # type: ignore[arg-type]
-    rows = result_state.get("sql_results") or []
+    rows = result_state["sql"].get("results") or []
     return [r["service_id"] for r in rows]
 
 
@@ -301,6 +322,7 @@ async def run_eval(
     sql_agent: SqlAgent,
     weights: dict[str, float] | None,
     vector_only: bool = False,
+    router: RouterAgent | None = None,
 ) -> list[QueryMetric]:
     results: list[QueryMetric] = []
 
@@ -318,6 +340,7 @@ async def run_eval(
                     data_session=data_session,
                     embedder=embedder,
                     weights=weights,
+                    router=router,
                 )
         except Exception as e:
             logger.error("검색 실패 [%s]: %s", row.query[:40], e)
@@ -418,6 +441,8 @@ async def main(args: argparse.Namespace) -> None:
         sub = settings.vector_default_sub_intent
         weights = settings.rrf_weight_profiles.get(sub)
 
+    post_filter = not args.no_post_filter
+
     # DB 연결
     on_data_engine = create_async_engine(settings.on_data_database_url, echo=False)
     on_ai_engine = create_async_engine(
@@ -430,10 +455,15 @@ async def main(args: argparse.Namespace) -> None:
         OnData = async_sessionmaker(on_data_engine, expire_on_commit=False)
         OnAi = async_sessionmaker(on_ai_engine, expire_on_commit=False)
         embedder = get_embeddings()
-        sql_agent = SqlAgent(model=get_chat_model())
+        chat_model = get_chat_model()
+        sql_agent = SqlAgent(model=chat_model)
+        # post-filter 모드(기본): Router 로 refined_query + 필터 추출 후 Track A 에 적용.
+        # --no-post-filter: router=None → raw query 임베딩·필터 미적용(기존 동작).
+        router = RouterAgent(model=chat_model) if post_filter else None
 
         print(
-            f"측정 시작 (weights={'None (unweighted)' if weights is None else weights})"
+            f"측정 시작 (weights={'None (unweighted)' if weights is None else weights}, "
+            f"post_filter={post_filter})"
         )
         async with OnData() as data_session, OnAi() as ai_session:
             metrics = await run_eval(
@@ -444,6 +474,7 @@ async def main(args: argparse.Namespace) -> None:
                 sql_agent=sql_agent,
                 weights=weights,
                 vector_only=args.vector_only,
+                router=router,
             )
     finally:
         await on_data_engine.dispose()
@@ -492,9 +523,16 @@ async def main(args: argparse.Namespace) -> None:
         "per_query": [_qm_to_dict(m) for m in metrics],
         "settings_snapshot": {
             "rrf_k_constant": settings.rrf_k_constant,
+            "rrf_scan_k_per_track": settings.rrf_scan_k_per_track,
+            "rrf_top_k_final": settings.rrf_top_k_final,
+            "vector_track_top_k": settings.vector_track_top_k,
+            "vector_min_similarity_identity": settings.vector_min_similarity_identity,
+            "vector_min_similarity_summary": settings.vector_min_similarity_summary,
+            "vector_min_similarity_question": settings.vector_min_similarity_question,
             "rrf_unweighted_baseline": settings.rrf_unweighted_baseline,
             "vector_sub_intent_enabled": settings.vector_sub_intent_enabled,
             "vector_default_sub_intent": settings.vector_default_sub_intent,
+            "post_filter": post_filter,
         },
     }
 
@@ -535,6 +573,14 @@ def _parse_args() -> argparse.Namespace:
         "--vector-only",
         action="store_true",
         help="SQL_SEARCH 질의도 벡터 검색으로 실행 (SQL 스킵)",
+    )
+    parser.add_argument(
+        "--no-post-filter",
+        action="store_true",
+        help=(
+            "Track A post-filter 미적용 + raw query 임베딩 (기존 동작). "
+            "기본은 Router 로 refined_query·필터를 추출해 production 경로를 재현한다."
+        ),
     )
     parser.add_argument(
         "--weights",

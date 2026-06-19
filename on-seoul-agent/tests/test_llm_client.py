@@ -482,6 +482,7 @@ class TestGetChatModel:
             mock_settings.llm_provider = "openai"
             mock_settings.openai_api_key = "fake-openai-key"
             mock_settings.gpt_model = "gpt-4o-mini"
+            mock_settings.llm_http_max_connections = 400
 
             result = get_chat_model(provider="openai")
 
@@ -497,6 +498,7 @@ class TestGetChatModel:
             mock_settings.llm_provider = "openai"
             mock_settings.openai_api_key = "fake-openai-key"
             mock_settings.gpt_model = "gpt-4o-mini"
+            mock_settings.llm_http_max_connections = 400
 
             # provider 인자 없이 호출 — settings.llm_provider="openai"가 적용되어야 한다
             get_chat_model()  # ConfigurationException 없이 통과하면 OK
@@ -528,6 +530,7 @@ class TestGetChatModel:
             mock_settings.llm_provider = "openai"
             mock_settings.openai_api_key = "fake-openai-key"
             mock_settings.gpt_model = "gpt-4o-mini"
+            mock_settings.llm_http_max_connections = 400
 
             get_chat_model(provider="openai")
 
@@ -560,6 +563,7 @@ class TestGetChatModel:
             mock_settings.llm_provider = "openai"
             mock_settings.openai_api_key = "fake-openai-key"
             mock_settings.gpt_model = "gpt-4o-mini"
+            mock_settings.llm_http_max_connections = 400
 
             get_chat_model(provider="openai", timeout=8, max_retries=1)
 

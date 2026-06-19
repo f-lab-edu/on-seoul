@@ -6,6 +6,8 @@ import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.OffsetDateTime;
 
@@ -31,6 +33,11 @@ public class ChatMessageJpaEntity {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
 
+    // raw JSON text passthrough. ASSISTANT 메시지의 service_cards 배열, USER는 null.
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "service_cards")
+    private String serviceCards;
+
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
@@ -40,7 +47,7 @@ public class ChatMessageJpaEntity {
     }
 
     public ChatMessage toDomain() {
-        return new ChatMessage(id, roomId, seq, ChatMessageRole.valueOf(role), content, createdAt);
+        return new ChatMessage(id, roomId, seq, ChatMessageRole.valueOf(role), content, serviceCards, createdAt);
     }
 
     public static ChatMessageJpaEntity fromDomain(ChatMessage message) {
@@ -50,6 +57,7 @@ public class ChatMessageJpaEntity {
         entity.seq = message.getSeq();
         entity.role = message.getRole().name();
         entity.content = message.getContent();
+        entity.serviceCards = message.getServiceCards();
         entity.createdAt = message.getCreatedAt();
         return entity;
     }

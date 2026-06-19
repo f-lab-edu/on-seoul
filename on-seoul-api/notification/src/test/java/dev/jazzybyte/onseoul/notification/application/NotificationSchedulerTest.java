@@ -831,6 +831,70 @@ class NotificationSchedulerTest {
     }
 
     @Test
+    @DisplayName("매칭 서비스가 20개 이하면 serviceCards를 전부 포함하고 summary 그대로 사용한다")
+    void dispatch_underCap_allCardsIncluded_summaryUnchanged() {
+        NotificationSubscription s = sub(1L);
+        List<ServiceChange> changes = new java.util.ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            changes.add(change((long) (100 + i), "OA-" + i));
+        }
+        NotificationDispatch d = dispatch(1L);
+        TemplateResult template = new TemplateResult("제목", "AI 요약", TemplateSource.AI);
+
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of(s));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(changes, d));
+        when(templateGenerationPort.generate(any())).thenReturn(template);
+
+        scheduler.processAllSubscriptions();
+
+        ArgumentCaptor<NotificationContent> contentCaptor = ArgumentCaptor.forClass(NotificationContent.class);
+        verify(pushNotificationPort).send(any(UserContact.class), contentCaptor.capture(), any(), any());
+
+        NotificationContent sent = contentCaptor.getValue();
+        assertThat(sent.services()).hasSize(20);
+        assertThat(sent.summary()).isEqualTo("AI 요약");
+    }
+
+    @Test
+    @DisplayName("매칭 서비스가 20개 초과면 serviceCards를 20개로 자르고 summary에 안내 문구를 append한다")
+    void dispatch_overCap_cardsLimitedTo20_summaryAppended() {
+        NotificationSubscription s = sub(1L);
+        List<ServiceChange> changes = new java.util.ArrayList<>();
+        for (int i = 0; i < 25; i++) {
+            changes.add(change((long) (100 + i), "OA-" + i));
+        }
+        NotificationDispatch d = dispatch(1L);
+        TemplateResult template = new TemplateResult(
+                "[서울공공서비스] 구독하신 25개 서비스 변경 알림",
+                "구독하신 25개 서비스의 변경 소식이 있습니다.",
+                TemplateSource.AI);
+
+        when(loadSubscriptionPort.loadChunk(eq(0L), eq(SUBSCRIPTION_CHUNK_SIZE))).thenReturn(List.of(s));
+        when(txHelper.txA(any(NotificationBatch.class), eq(s))).thenReturn(txAResult(changes, d));
+        when(templateGenerationPort.generate(any())).thenReturn(template);
+
+        scheduler.processAllSubscriptions();
+
+        ArgumentCaptor<NotificationContent> contentCaptor = ArgumentCaptor.forClass(NotificationContent.class);
+        verify(pushNotificationPort).send(any(UserContact.class), contentCaptor.capture(), any(), any());
+
+        NotificationContent sent = contentCaptor.getValue();
+        // serviceCards는 20개로 제한
+        assertThat(sent.services()).hasSize(20);
+        // title은 실제 건수(25) 유지
+        assertThat(sent.title()).isEqualTo("[서울공공서비스] 구독하신 25개 서비스 변경 알림");
+        // summary는 실제 건수 유지 + 안내 문구 append
+        assertThat(sent.summary())
+                .startsWith("구독하신 25개 서비스의 변경 소식이 있습니다.")
+                .endsWith("메일은 최대 20개까지만 보여줄 수 있습니다.");
+        // AI 요청은 전체 25개 그룹으로 전달 (title/summary 기준이 되는 건수)
+        ArgumentCaptor<NotificationTemplateRequest> reqCaptor =
+                ArgumentCaptor.forClass(NotificationTemplateRequest.class);
+        verify(templateGenerationPort).generate(reqCaptor.capture());
+        assertThat(reqCaptor.getValue().services()).hasSize(25);
+    }
+
+    @Test
     @DisplayName("AI 실패 폴백(source=FALLBACK)이어도 결정적 카드를 포함한 콘텐츠가 조립되어 발송된다")
     void dispatch_aiFallbackSource_stillAssemblesStructuredContent() {
         NotificationSubscription s = sub(1L);

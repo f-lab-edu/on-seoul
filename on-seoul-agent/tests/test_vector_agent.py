@@ -4,12 +4,17 @@
 Mock으로 검증한다.
 
 vector_search와 bm25_search를 모두 patch하여 외부 의존성 없이 동작한다.
+
+제안 2 이후: VectorAgent.search()는 ai_session 인자를 받지 않는다.
+내부에서 ai_session_ctx()로 채널별 독립 세션을 열기 때문에
+테스트는 agents.vector_agent.ai_session_ctx 를 함께 patch 해야 한다.
 """
 
+from contextlib import asynccontextmanager, ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.helpers import make_agent_state
-from agents.vector_agent import VectorAgent, _RefinedQuery, _rrf_merge
+from agents.vector_agent import VectorAgent, _RefinedQuery
 from schemas.state import AgentState, IntentType
 
 
@@ -37,13 +42,29 @@ def _make_agent(
     return agent
 
 
+def _mock_ai_session_ctx():
+    """agents.vector_agent.ai_session_ctx 를 mock 세션을 yield 하도록 패치한다.
+
+    제안 2 이후 VectorAgent.search() 내부에서 채널별 ai_session_ctx() 를 사용하므로
+    단위 테스트는 이 패치를 통해 세션 연결 없이 동작한다.
+    """
+    mock_session = MagicMock()
+
+    @asynccontextmanager
+    async def _ctx():
+        yield mock_session
+
+    return patch("agents.vector_agent.ai_session_ctx", _ctx)
+
+
 def _patch_search(vector_rows: list[dict], bm25_rows: list[dict]):
-    """vector_search, question_search, bm25_search 를 동시에 patch하는 컨텍스트 매니저.
+    """vector_search, question_search, bm25_search, ai_session_ctx 를 동시에 patch.
 
     Phase 2: hydrate_services 는 HydrationNode 책임이므로 여기서 patch 하지 않는다.
     vector_results 는 메타데이터 only ({service_id, rrf_score}) 로 반환된다.
+
+    제안 2 이후: ai_session_ctx 도 함께 patch 한다.
     """
-    from contextlib import ExitStack
 
     class _Ctx:
         def __enter__(self):
@@ -66,6 +87,7 @@ def _patch_search(vector_rows: list[dict], bm25_rows: list[dict]):
                     new=AsyncMock(return_value=bm25_rows),
                 )
             )
+            self._stack.enter_context(_mock_ai_session_ctx())
             return self
 
         def __exit__(self, *args):
@@ -90,10 +112,10 @@ class TestVectorAgentRouterPostFilter:
         agent._embeddings = mock_embeddings
 
         state = _make_state()
-        state["refined_query"] = "강남구 체육시설"
-        state["max_class_name"] = "체육시설"
-        state["area_name"] = "강남구"
-        state["service_status"] = "접수중"
+        state["plan"]["refined_query"] = "강남구 체육시설"
+        state["filters"]["max_class_name"] = "체육시설"
+        state["filters"]["area_name"] = "강남구"
+        state["filters"]["service_status"] = "접수중"
 
         with (
             patch(
@@ -103,8 +125,9 @@ class TestVectorAgentRouterPostFilter:
             patch(
                 "agents.vector_agent.question_search", new=AsyncMock(return_value=[])
             ),
+            _mock_ai_session_ctx(),
         ):
-            await agent.search(state, MagicMock())
+            await agent.search(state)
             # vector_search는 identity(Track A)와 summary(Track B) 두 번 호출된다.
             # identity 호출(row_kind='identity')에서 post-filter가 전달되어야 한다.
             identity_call = next(
@@ -142,8 +165,9 @@ class TestVectorAgentRouterPostFilter:
             patch(
                 "agents.vector_agent.question_search", new=AsyncMock(return_value=[])
             ),
+            _mock_ai_session_ctx(),
         ):
-            await agent.search(_make_state(), MagicMock())
+            await agent.search(_make_state())
 
         mock_chain.ainvoke.assert_called_once()
 
@@ -170,7 +194,6 @@ class TestVectorAgentPostFilter:
         mock_embeddings.aembed_query = AsyncMock(return_value=[0.1, 0.2])
         agent._embeddings = mock_embeddings
 
-        mock_session = MagicMock()
         with (
             patch(
                 "agents.vector_agent.vector_search", new=AsyncMock(return_value=[])
@@ -179,8 +202,9 @@ class TestVectorAgentPostFilter:
             patch(
                 "agents.vector_agent.question_search", new=AsyncMock(return_value=[])
             ),
+            _mock_ai_session_ctx(),
         ):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state())
             # identity 호출의 kwargs에서 post-filter 확인
             identity_call = next(
                 (
@@ -215,7 +239,6 @@ class TestVectorAgentPostFilter:
         mock_embeddings.aembed_query = AsyncMock(return_value=[0.1])
         agent._embeddings = mock_embeddings
 
-        mock_session = MagicMock()
         with (
             patch(
                 "agents.vector_agent.vector_search", new=AsyncMock(return_value=[])
@@ -224,8 +247,9 @@ class TestVectorAgentPostFilter:
             patch(
                 "agents.vector_agent.question_search", new=AsyncMock(return_value=[])
             ),
+            _mock_ai_session_ctx(),
         ):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state())
             # identity 호출의 kwargs에서 post-filter None 확인
             identity_call = next(
                 (
@@ -249,30 +273,27 @@ class TestVectorAgent:
             {"service_id": "S001", "service_name": "어린이 체험관", "similarity": 0.85}
         ]
         agent = _make_agent("어린이 체험 시설", [0.1, 0.2])
-        mock_session = MagicMock()
 
         with _patch_search(vector_rows, []):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
-        assert result["vector_results"] is not None
-        assert len(result["vector_results"]) >= 1
-        assert result["vector_results"][0]["service_id"] == "S001"
+        assert result["vector"]["results"] is not None
+        assert len(result["vector"]["results"]) >= 1
+        assert result["vector"]["results"][0]["service_id"] == "S001"
 
     async def test_search_populates_refined_query(self):
         """search는 정제된 질의를 refined_query에 채운다."""
         agent = _make_agent("어린이 체험 시설", [0.1])
-        mock_session = MagicMock()
 
         with _patch_search([], []):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
-        assert result["refined_query"] == "어린이 체험 시설"
+        assert result["plan"]["refined_query"] == "어린이 체험 시설"
 
     async def test_similarity_search_passes_query_vector(self):
         """vector_search에 query_vector가 전달된다."""
         vector = [0.1, 0.2, 0.3]
         agent = _make_agent("정제된 쿼리", vector)
-        mock_session = MagicMock()
 
         with (
             patch(
@@ -282,8 +303,9 @@ class TestVectorAgent:
             patch(
                 "agents.vector_agent.question_search", new=AsyncMock(return_value=[])
             ),
+            _mock_ai_session_ctx(),
         ):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state())
             # 첫 번째 호출(identity)의 positional arg에서 query_vector 확인
             _, call_vector = mock_vs.call_args_list[0][0]
             assert call_vector == vector
@@ -291,18 +313,16 @@ class TestVectorAgent:
     async def test_search_returns_empty_vector_results_when_no_rows(self):
         """vector_search와 bm25_search 모두 빈 리스트를 반환하면 vector_results는 빈 리스트다."""
         agent = _make_agent("정제된 쿼리", [0.1])
-        mock_session = MagicMock()
 
         with _patch_search([], []):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
-        assert result["vector_results"] == []
-        assert result["vector_results"] is not None
+        assert result["vector"]["results"] == []
+        assert result["vector"]["results"] is not None
 
     async def test_bm25_skipped_when_all_tokens_are_stopwords(self):
         """모든 토큰이 stopword이면 bm25_search를 호출하지 않는다."""
         agent = _make_agent("예약 서비스", [0.1])
-        mock_session = MagicMock()
 
         with (
             patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])),
@@ -313,10 +333,12 @@ class TestVectorAgent:
                 "agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])
             ) as mock_bm25,
             patch(
-                "agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]
+                "agents.vector_agent.atokenize_query",
+                new=AsyncMock(return_value=["예약", "서비스"]),
             ),
+            _mock_ai_session_ctx(),
         ):
-            await agent.search(_make_state(), mock_session)
+            await agent.search(_make_state())
             mock_bm25.assert_not_called()
 
     async def test_bm25_channel_query_text_is_none_when_tokens_empty(self):
@@ -324,7 +346,6 @@ class TestVectorAgent:
         from schemas.search import SearchChannel
 
         agent = _make_agent("예약 서비스", [0.1])
-        mock_session = MagicMock()
 
         with (
             patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])),
@@ -333,10 +354,12 @@ class TestVectorAgent:
             ),
             patch("agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])),
             patch(
-                "agents.vector_agent.tokenize_query", return_value=["예약", "서비스"]
+                "agents.vector_agent.atokenize_query",
+                new=AsyncMock(return_value=["예약", "서비스"]),
             ),
+            _mock_ai_session_ctx(),
         ):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
         bm25_channel = result["search_channels"][SearchChannel.BM25]
         assert bm25_channel["query"]["query_text"] is None
@@ -350,12 +373,11 @@ class TestHybridSearchRrf:
         ]
         bm25_rows = [{"service_id": "S001", "bm25_score": 2.5}]
         agent = _make_agent("체험 시설", [0.1])
-        mock_session = MagicMock()
 
         with _patch_search(vector_rows, bm25_rows):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
-        assert "rrf_score" in result["vector_results"][0]
+        assert "rrf_score" in result["vector"]["results"][0]
 
     async def test_rrf_merges_both_results(self):
         """vector_search와 bm25_search에 각각 다른 service_id가 있으면 모두 결합된다."""
@@ -364,12 +386,11 @@ class TestHybridSearchRrf:
         ]
         bm25_rows = [{"service_id": "S002", "bm25_score": 2.5}]
         agent = _make_agent("체험 시설", [0.1])
-        mock_session = MagicMock()
 
         with _patch_search(vector_rows, bm25_rows):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
-        service_ids = {r["service_id"] for r in result["vector_results"]}
+        service_ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "S001" in service_ids
         assert "S002" in service_ids
 
@@ -386,15 +407,14 @@ class TestHybridSearchRrf:
             {"service_id": "S002", "service_name": "한강수영장", "bm25_score": 3.0}
         ]
         agent = _make_agent("한강 수영", [0.1])
-        mock_session = MagicMock()
 
         with _patch_search(vector_rows, bm25_rows):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
-        service_ids = {r["service_id"] for r in result["vector_results"]}
+        service_ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "S002" in service_ids
         bm25_only = next(
-            r for r in result["vector_results"] if r["service_id"] == "S002"
+            r for r in result["vector"]["results"] if r["service_id"] == "S002"
         )
         assert "rrf_score" in bm25_only
 
@@ -409,12 +429,11 @@ class TestHybridSearchRrf:
             {"service_id": "S003", "bm25_score": 1.5},
         ]
         agent = _make_agent("체험 시설", [0.1])
-        mock_session = MagicMock()
 
         with _patch_search(vector_rows, bm25_rows):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
-        scores = {r["service_id"]: r["rrf_score"] for r in result["vector_results"]}
+        scores = {r["service_id"]: r["rrf_score"] for r in result["vector"]["results"]}
         # S001은 두 결과에 모두 등장 → 가장 높은 점수
         assert scores["S001"] > scores["S002"]
         assert scores["S001"] > scores["S003"]
@@ -427,7 +446,6 @@ class TestVectorAgentSearchFailure:
         """vector_search가 예외를 발생시키면 bm25 결과만으로 RRF가 수행된다."""
         bm25_rows = [{"service_id": "S010", "bm25_score": 3.0}]
         agent = _make_agent("정제된 쿼리", [0.1])
-        mock_session = MagicMock()
 
         with (
             patch(
@@ -440,11 +458,12 @@ class TestVectorAgentSearchFailure:
             patch(
                 "agents.vector_agent.bm25_search", new=AsyncMock(return_value=bm25_rows)
             ),
+            _mock_ai_session_ctx(),
         ):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
-        assert result["vector_results"] is not None
-        service_ids = {r["service_id"] for r in result["vector_results"]}
+        assert result["vector"]["results"] is not None
+        service_ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "S010" in service_ids
 
     async def test_bm25_search_failure_falls_back_to_vector_only(self):
@@ -453,7 +472,6 @@ class TestVectorAgentSearchFailure:
             {"service_id": "S020", "service_name": "수영장", "similarity": 0.9}
         ]
         agent = _make_agent("정제된 쿼리", [0.1])
-        mock_session = MagicMock()
 
         with (
             patch(
@@ -467,17 +485,17 @@ class TestVectorAgentSearchFailure:
                 "agents.vector_agent.bm25_search",
                 new=AsyncMock(side_effect=RuntimeError("ParadeDB 오류")),
             ),
+            _mock_ai_session_ctx(),
         ):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
-        assert result["vector_results"] is not None
-        service_ids = {r["service_id"] for r in result["vector_results"]}
+        assert result["vector"]["results"] is not None
+        service_ids = {r["service_id"] for r in result["vector"]["results"]}
         assert "S020" in service_ids
 
     async def test_both_search_failure_returns_empty_vector_results(self):
         """vector_search와 bm25_search 모두 실패하면 vector_results는 빈 리스트다."""
         agent = _make_agent("정제된 쿼리", [0.1])
-        mock_session = MagicMock()
 
         with (
             patch(
@@ -491,10 +509,11 @@ class TestVectorAgentSearchFailure:
                 "agents.vector_agent.bm25_search",
                 new=AsyncMock(side_effect=RuntimeError("BM25 오류")),
             ),
+            _mock_ai_session_ctx(),
         ):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
-        assert result["vector_results"] == []
+        assert result["vector"]["results"] == []
 
 
 class TestServiceStatusValidation:
@@ -511,94 +530,24 @@ class TestServiceStatusValidation:
         assert rq.service_status is None
 
 
-class TestRrfMergeTopKConstant:
-    """_rrf_merge 호출 시 _TOP_K 상수가 명시적으로 전달된다."""
+class TestVectorAgentRrfFinalCut:
+    """search() 최종 결과는 settings.rrf_top_k_final 로 절단된다."""
 
-    async def test_rrf_merge_uses_top_k_constant(self):
-        """search 결과가 _TOP_K 이하로 제한된다."""
-        from agents.vector_agent import _TOP_K
+    async def test_results_capped_at_rrf_top_k_final(self):
+        """search 결과 수가 settings.rrf_top_k_final 이하로 제한된다."""
+        from core.config import settings
 
-        # _TOP_K + 5개의 vector 결과를 생성하여 제한이 적용되는지 확인
+        # rrf_top_k_final + 5개의 vector 결과를 생성하여 절단이 적용되는지 확인
         vector_rows = [
             {"service_id": f"S{i:03d}", "service_name": f"X{i}", "similarity": 0.9}
-            for i in range(_TOP_K + 5)
+            for i in range(settings.rrf_top_k_final + 5)
         ]
         agent = _make_agent("정제됨", [0.1])
-        mock_session = MagicMock()
 
         with _patch_search(vector_rows, []):
-            result = await agent.search(_make_state(), mock_session)
+            result = await agent.search(_make_state())
 
-        assert len(result["vector_results"]) <= _TOP_K
-
-
-class TestRrfMerge:
-    def test_empty_both_returns_empty(self):
-        """두 결과가 모두 빈 리스트이면 빈 리스트를 반환한다."""
-        assert _rrf_merge([], []) == []
-
-    def test_vector_only(self):
-        """vector_rows만 있을 때 RRF 점수가 정상 계산된다."""
-        vector_rows = [
-            {"service_id": "S001", "service_name": "A", "similarity": 0.9},
-            {"service_id": "S002", "service_name": "B", "similarity": 0.8},
-        ]
-        result = _rrf_merge(vector_rows, [])
-        assert len(result) == 2
-        assert result[0]["service_id"] == "S001"
-        assert result[0]["rrf_score"] > result[1]["rrf_score"]
-
-    def test_bm25_only(self):
-        """bm25_rows만 있을 때 RRF 점수가 정상 계산된다."""
-        bm25_rows = [
-            {"service_id": "S001", "bm25_score": 3.0},
-            {"service_id": "S002", "bm25_score": 1.5},
-        ]
-        result = _rrf_merge([], bm25_rows)
-        assert len(result) == 2
-        assert result[0]["service_id"] == "S001"
-
-    def test_overlap_gets_higher_score(self):
-        """두 결과에 모두 등장한 service_id가 단독 등장보다 높은 점수를 갖는다."""
-        vector_rows = [{"service_id": "S001", "service_name": "A", "similarity": 0.9}]
-        bm25_rows = [
-            {"service_id": "S001", "bm25_score": 3.0},
-            {"service_id": "S002", "bm25_score": 2.5},
-        ]
-        result = _rrf_merge(vector_rows, bm25_rows)
-        scores = {r["service_id"]: r["rrf_score"] for r in result}
-        assert scores["S001"] > scores["S002"]
-
-    def test_top_k_limits_result(self):
-        """top_k 파라미터가 반환 결과 수를 제한한다."""
-        vector_rows = [
-            {"service_id": f"S{i:03d}", "service_name": f"X{i}", "similarity": 0.9}
-            for i in range(20)
-        ]
-        result = _rrf_merge(vector_rows, [], top_k=5)
-        assert len(result) == 5
-
-    def test_rrf_score_formula(self):
-        """RRF 점수가 1/(k+rank) 공식을 따른다."""
-        k = 60
-        vector_rows = [{"service_id": "S001", "service_name": "A", "similarity": 0.9}]
-        result = _rrf_merge(vector_rows, [], k=k)
-        expected_score = 1.0 / (k + 1)
-        assert abs(result[0]["rrf_score"] - expected_score) < 1e-9
-
-    def test_result_preserves_vector_metadata(self):
-        """RRF 결과에 vector_search의 service_name, metadata 등이 보존된다."""
-        vector_rows = [
-            {
-                "service_id": "S001",
-                "service_name": "체험관",
-                "metadata": {"area_name": "강남구"},
-                "similarity": 0.85,
-            }
-        ]
-        result = _rrf_merge(vector_rows, [])
-        assert result[0]["service_name"] == "체험관"
-        assert result[0]["metadata"] == {"area_name": "강남구"}
+        assert len(result["vector"]["results"]) <= settings.rrf_top_k_final
 
 
 class TestVectorAgentMetaOnlyResults:
@@ -629,11 +578,12 @@ class TestVectorAgentMetaOnlyResults:
             patch("agents.vector_agent.vector_search", AsyncMock(return_value=vector_rows)),
             patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
+            _mock_ai_session_ctx(),
         ):
-            result = await agent.search(make_agent_state(message="수영장"), MagicMock())
+            result = await agent.search(make_agent_state(message="수영장"))
 
-        assert len(result["vector_results"]) == 1
-        row = result["vector_results"][0]
+        assert len(result["vector"]["results"]) == 1
+        row = result["vector"]["results"][0]
         assert row["service_id"] == "S001"
         assert "rrf_score" in row
         # 원본 필드는 포함되지 않는다 — HydrationNode 책임
@@ -652,8 +602,9 @@ class TestVectorAgentMetaOnlyResults:
             patch("agents.vector_agent.vector_search", AsyncMock(return_value=vector_rows)),
             patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
+            _mock_ai_session_ctx(),
         ):
-            result = await agent.search(_make_state(), MagicMock())
+            result = await agent.search(_make_state())
 
-        ids = {r["service_id"] for r in result["vector_results"]}
+        ids = {r["service_id"] for r in result["vector"]["results"]}
         assert ids == {"S001", "S002"}

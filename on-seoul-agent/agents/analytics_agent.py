@@ -106,14 +106,16 @@ class AnalyticsAgent:
             group_by 가 min_class_name 인데 max_class_name 필터가 없으면 소분류 단독
             그룹핑은 카디널리티가 과도하므로 group_by 를 max_class_name 으로 폴백한다.
         """
-        input_message = state.get("refined_query") or state["message"]
+        plan = state.get("plan") or {}
+        filters = state.get("filters") or {}
+        input_message = plan.get("refined_query") or state["message"]
         params: _AnalyticsParams = await self._chain.ainvoke(
             {"message": input_message}
         )
 
-        max_class_name = state.get("max_class_name")
-        area_name = state.get("area_name")
-        service_status = state.get("service_status")
+        max_class_name = filters.get("max_class_name")
+        area_name = filters.get("area_name")
+        service_status = filters.get("service_status")
 
         # 정합성 가드: 소분류 그룹핑은 대분류 필터가 있을 때만 허용.
         group_by = params.group_by
@@ -134,8 +136,10 @@ class AnalyticsAgent:
         )
         return {
             **state,
-            "analytics_results": rows,
-            "analytics_group_by": group_by,
-            "analytics_metric": params.metric,
-            "analytics_keyword": params.keyword,
+            "analytics": {
+                "results": rows,
+                "group_by": group_by,
+                "metric": params.metric,
+                "keyword": params.keyword,
+            },
         }

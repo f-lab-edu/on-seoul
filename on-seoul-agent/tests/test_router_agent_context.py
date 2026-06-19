@@ -48,6 +48,34 @@ class TestRouterContextInjection:
         assert "[사용자] 테니스장 보여줘" in prompt_text
         assert "[어시스턴트] 강남구 테니스장 5건입니다." in prompt_text
 
+    async def test_static_prefix_precedes_history(self):
+        """OpenAI 자동 프롬프트 캐싱: 정적 ROUTER_SYSTEM+FEW_SHOT가 동적 history보다 앞에 온다.
+
+        history가 정적 블록(SystemMessage·few-shot 메시지) 중간에 끼면 자동 프리픽스
+        캐시가 깨진다. 동적 history를 담은 메시지는 few-shot 메시지들 *뒤*에 위치해야
+        프리픽스가 안정된다. 메시지 경계 기준으로 검증한다(텍스트 join 아님).
+        """
+        from llm.prompts.router import ROUTER_FEW_SHOT
+
+        agent = _make_agent(IntentType.VECTOR_SEARCH)
+        await agent.classify(
+            message="성동구는?",
+            history=[{"role": "user", "content": "테니스장 보여줘"}],
+        )
+        structured = agent._llm.with_structured_output.return_value
+        messages = structured.ainvoke.call_args.args[0]
+        n_fewshot = len(ROUTER_FEW_SHOT.format_messages())
+
+        history_idx = next(
+            i
+            for i, m in enumerate(messages)
+            if "이전 대화 이력" in getattr(m, "content", "")
+        )
+        # 정적 프리픽스 = SystemMessage(1) + few-shot 메시지들. history는 그 뒤.
+        assert history_idx >= 1 + n_fewshot
+        # SystemMessage(index 0)는 ROUTER_SYSTEM 정적 텍스트만, history 미포함.
+        assert "이전 대화 이력" not in getattr(messages[0], "content", "")
+
     async def test_empty_history_omits_section(self):
         """history가 비어있으면 컨텍스트 섹션이 출력되지 않는다."""
         agent = _make_agent(IntentType.FALLBACK)
