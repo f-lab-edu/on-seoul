@@ -8,7 +8,14 @@ spring:
     password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
     hikari:
-      connection-init-sql: "SET TIME ZONE 'UTC'"
+      # 타임존(UTC)은 DB 롤 기본값(ALTER ROLE ... SET timezone='UTC')에서 관리한다.
+      # PgBouncer transaction 모드에서는 connection-init-sql의 세션 SET이 DISCARD ALL로
+      # 리셋되어 신뢰할 수 없으므로, 세션 SET 대신 롤 기본값으로 고정한다.
+      data-source-properties:
+        # PgBouncer transaction 모드: 서버측 named prepared statement가 백엔드 간 불일치로
+        # "prepared statement does not exist" → 트랜잭션 abort를 유발한다. 0으로 두어 unnamed
+        # 확장 프로토콜만 사용(파라미터 바인딩은 유지). asyncpg statement_cache_size=0 과 동일 사상.
+        prepareThreshold: 0
   jpa:
     hibernate:
       ddl-auto: validate
