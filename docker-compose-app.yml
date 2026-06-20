@@ -24,10 +24,46 @@ services:
     restart: always
     networks:
       - on-seoul-net
+    # ulimits: 컨테이너당 최대 SSE 스트림 ~400 × fd 2~3개 + 여유 = 1200+
+    # 기본 nofile 1024 로는 부족하므로 10000 으로 상향한다.
+    ulimits:
+      nofile:
+        soft: 10000
+        hard: 10000
+    # ── 10 레플리카 수평 확장 가이드 (주석) ──────────────────────
+    # Docker Swarm 배포:
+    #   docker stack deploy 에서 replicas: 10 설정.
+    #   또는 compose 파일에 아래 deploy 블록 추가 후 swarm 모드에서 사용:
+    #
+    #   deploy:
+    #     replicas: 10
+    #     update_config:
+    #       parallelism: 2
+    #       delay: 10s
+    #     restart_policy:
+    #       condition: on-failure
+    #
+    # Kubernetes 배포:
+    #   HPA minReplicas=2, maxReplicas=10, targetCPUUtilizationPercentage=60.
+    #   SSE sticky session 불필요(스트림=단일 TCP 수명, 이력=PG 공유).
+    #
+    # L4 LB:
+    #   AWS ALB 에서 on-seoul-agent 타겟그룹으로 round-robin.
+    #   Nginx upstream 에 레플리카 추가 또는 Swarm DNS 단일 서비스명 사용.
+    #
+    # 개발 환경은 단일 인스턴스(replicas 미설정 = 1).
 
 # on-seoul-net 은 Redis compose(docker-compose-redis.yml 등)에서 먼저 생성된다.
 # 이 파일은 해당 네트워크에 참여만 한다(external).
-# 배포 순서: Redis compose up → 이 파일 up
+#
+# 전체 배포 순서:
+#   1. docker network create on-seoul-net  (최초 1회)
+#   2. docker compose -f docker-compose-pgbouncer.yml up -d   (PgBouncer 기동)
+#   3. docker compose -f docker-compose-app.yml up -d         (api / agent 기동)
+#
+# PgBouncer 연결 설정:
+#   .env.api  : DB_URL=jdbc:postgresql://pgbouncer:5432/on_data
+#   .env.agent: DATABASE_URL=postgresql+asyncpg://on_ai_app:...@pgbouncer:5432/on_ai
 networks:
   on-seoul-net:
     external: true

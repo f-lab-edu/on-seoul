@@ -90,6 +90,22 @@ class _IntentOutput(BaseModel):
     # VECTOR_SEARCH 전용 서브 의도 — RRF 가중치 프로파일 선택에 사용.
     # intent가 VECTOR_SEARCH가 아니면 None. 허용 값 외 → None으로 정규화.
     vector_sub_intent: Literal["identification", "detail", "semantic"] | None = None
+    # SQL↔VECTOR 경계가 모호할 때 팬아웃용 보조 의도. SQL_SEARCH/VECTOR_SEARCH만 허용.
+    # 그 외(MAP/ANALYTICS/FALLBACK)는 None으로 정규화. None이면 단일 라우트(기존 동작).
+    secondary_intent: IntentType | None = None
+
+    @field_validator("secondary_intent", mode="before")
+    @classmethod
+    def _validate_secondary_intent(cls, v: object) -> IntentType | None:
+        """secondary_intent는 SQL_SEARCH 또는 VECTOR_SEARCH만 허용한다."""
+        if v is None:
+            return None
+        allowed = {IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH}
+        if isinstance(v, IntentType):
+            return v if v in allowed else None
+        if isinstance(v, str) and v in {i.value for i in allowed}:
+            return IntentType(v)
+        return None
 
     @field_validator("max_class_name", mode="before")
     @classmethod
@@ -150,6 +166,33 @@ class _IntentOutput(BaseModel):
         return None
 
 
+def build_context_block(history: list[dict[str, str]] | None) -> str:
+    """history(직전 N턴)를 system prompt에 append할 블록으로 변환.
+
+    비어 있으면 빈 문자열을 반환하여 섹션 자체를 생략한다(토큰 절약).
+
+    프롬프트 인젝션 표면: history.content(사용자·어시스턴트 발화)는 외부 입력이며
+    escape 없이 system prompt에 삽입된다. 다만 이 블록은 Router/Triage 분류에만 쓰이고
+    with_structured_output으로 고정 스키마만 추출하므로, content가 임의 지시를 담아도
+    자유 실행으로 이어지지 않는다.
+    (content는 HistoryTurn max_length=1000 + API 서비스 10메시지 윈도우로 제한.)
+    향후 출력에 자유 텍스트 필드를 넓힐 경우 이 가정을 재검토할 것.
+    """
+    if not history:
+        return ""
+    lines = []
+    for turn in history:
+        role_label = "사용자" if turn["role"] == "user" else "어시스턴트"
+        lines.append(f"- [{role_label}] {turn['content']}")
+    turns_text = "\n".join(lines)
+    return (
+        "이전 대화 이력 (과거 → 최신). 후속 질의는 직전 발화의 "
+        "카테고리·지역을 이어받을 가능성이 높다.\n"
+        "이전 맥락이 명확하면 refined_query에 카테고리·지역 키워드를 병합한다.\n"
+        f"{turns_text}"
+    )
+
+
 class RouterAgent:
     """LCEL 기반 의도 분류 에이전트.
 
@@ -161,30 +204,8 @@ class RouterAgent:
         self._llm = model or get_chat_model()
 
     def _build_context_block(self, history: list[dict[str, str]] | None) -> str:
-        """history(직전 N턴)를 system prompt에 append할 블록으로 변환.
-
-        비어 있으면 빈 문자열을 반환하여 섹션 자체를 생략한다(토큰 절약).
-
-        프롬프트 인젝션 표면: history.content(사용자·어시스턴트 발화)는 외부 입력이며
-        escape 없이 system prompt에 삽입된다. 다만 이 블록은 Router 분류에만 쓰이고
-        Router는 with_structured_output으로 IntentType(5값 enum) 등 고정 스키마만
-        추출하므로, content가 임의 지시를 담아도 자유 실행으로 이어지지 않는다.
-        (content는 HistoryTurn max_length=1000 + API 서비스 10메시지 윈도우로 제한.)
-        향후 Router 출력에 자유 텍스트 필드를 넓힐 경우 이 가정을 재검토할 것.
-        """
-        if not history:
-            return ""
-        lines = []
-        for turn in history:
-            role_label = "사용자" if turn["role"] == "user" else "어시스턴트"
-            lines.append(f"- [{role_label}] {turn['content']}")
-        turns_text = "\n".join(lines)
-        return (
-            "이전 대화 이력 (과거 → 최신). 후속 질의는 직전 발화의 "
-            "카테고리·지역을 이어받을 가능성이 높다.\n"
-            "이전 맥락이 명확하면 refined_query에 카테고리·지역 키워드를 병합한다.\n"
-            f"{turns_text}"
-        )
+        """모듈 수준 build_context_block 위임 (하위호환)."""
+        return build_context_block(history)
 
     async def classify(
         self,
@@ -198,13 +219,19 @@ class RouterAgent:
             history: 직전 N턴 대화 이력(과거→최신). 기본값 None.
                 비어 있으면 system prompt에 컨텍스트 섹션을 추가하지 않는다.
         """
+        # OpenAI 자동 프롬프트 캐싱(1024토큰↑ 프리픽스): 정적 ROUTER_SYSTEM +
+        # ROUTER_FEW_SHOT 를 프롬프트 맨 앞 고정 프리픽스로 두고, 동적 history/message 는
+        # 그 *뒤*에 붙인다. history 를 SystemMessage 에 합성하면 정적 few-shot 블록 앞에
+        # 동적 텍스트가 끼어 프리픽스가 깨지므로, history 는 별도 SystemMessage 로 분리해
+        # few-shot 이후·user 메시지 이전에 위치시킨다.
         context_block = self._build_context_block(history)
-        system_text = ROUTER_SYSTEM + (f"\n\n{context_block}" if context_block else "")
-        messages = [
-            SystemMessage(content=system_text),
+        messages: list = [
+            SystemMessage(content=ROUTER_SYSTEM),
             *ROUTER_FEW_SHOT.format_messages(),
-            HumanMessage(content=f"사용자 메시지: {message}"),
         ]
+        if context_block:
+            messages.append(SystemMessage(content=context_block))
+        messages.append(HumanMessage(content=f"사용자 메시지: {message}"))
         structured = self._llm.with_structured_output(_IntentOutput)
         result: _IntentOutput = await structured.ainvoke(messages)
         return result

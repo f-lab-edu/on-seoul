@@ -5,8 +5,17 @@ ImportError를 포착해 폴백 토크나이저(공백 분리)로 대체한다.
 
 BM25 검색 품질을 위해 의미 있는 품사(체언·용언 어간)만 추출한다.
 입자·어미·특수문자 등은 제거하여 불필요한 BM25 노이즈를 줄인다.
+
+블로킹 분석:
+    kiwipiepy._Kiwi.tokenize()는 C 확장 기반 동기 함수다.
+    일반 쿼리(≤50자)에서 ≈1ms 미만이지만, asyncio 이벤트 루프에서
+    직접 호출하면 루프를 블로킹한다.
+    고QPS(100 req/s) 환경에서는 asyncio.to_thread()로 스레드 풀에
+    오프로드하여 이벤트 루프 블로킹을 방지해야 한다.
+    → atokenize_query() 사용 권장.
 """
 
+import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
@@ -74,8 +83,8 @@ _lindera_tokenize = _kiwi_tokenize
 def tokenize_query(text: str) -> list[str]:
     """사용자 쿼리를 형태소 단위로 분리한다.
 
-    1. Lindera KoDic으로 형태소 분석을 수행한다.
-    2. 입력 텍스트 전체가 DOMAIN_TOKENS에 등록된 경우, lindera가 해당 용어를
+    1. Kiwi(kiwipiepy)로 형태소 분석을 수행하고 의미 품사만 추출한다.
+    2. 입력 텍스트 전체가 DOMAIN_TOKENS에 등록된 경우, 분석기가 해당 용어를
        분리했더라도 원문을 결과 앞에 추가한다.
     3. 입력 텍스트 내에 DOMAIN_TOKENS 항목이 부분 포함된 경우, 해당 도메인
        토큰이 분석 결과에 포함되어 있지 않으면 앞에 추가한다. 이미 포함되어
@@ -114,3 +123,16 @@ def tokenize_query(text: str) -> list[str]:
         return preserved + tokens
 
     return tokens
+
+
+async def atokenize_query(text: str) -> list[str]:
+    """tokenize_query의 비동기 래퍼 — asyncio.to_thread()로 블로킹 오프로드.
+
+    kiwipiepy._Kiwi.tokenize()는 동기 C 확장이므로 asyncio 이벤트 루프에서
+    직접 호출하면 루프를 블로킹한다. asyncio.to_thread()로 스레드 풀에 오프로드하여
+    이벤트 루프 블로킹을 방지한다.
+
+    폴백(kiwipiepy 미설치) 환경에서는 공백 분리가 CPU를 거의 사용하지 않아
+    to_thread 오버헤드가 의미 없지만, API를 동일하게 유지한다.
+    """
+    return await asyncio.to_thread(tokenize_query, text)

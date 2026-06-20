@@ -5,6 +5,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
+import httpx
 from aiolimiter import AsyncLimiter
 from google.api_core.exceptions import ResourceExhausted
 from langchain_core.embeddings import Embeddings
@@ -15,7 +16,51 @@ from langchain_openai import ChatOpenAI
 from core.config import settings
 from core.exceptions import ConfigurationException, RateLimitException
 
+# ---------------------------------------------------------------------------
+# 프로세스 전역 httpx.AsyncClient (OpenAI provider 전용)
+# ---------------------------------------------------------------------------
+# get_chat_model(provider="openai")가 호출될 때마다 새 AsyncClient를 생성하면
+# FD 누수가 발생한다. 특히 routers/notification.py·routers/embeddings.py는
+# 요청마다 get_chat_model()을 호출하므로 반드시 싱글톤으로 공유해야 한다.
+#
+# 초기화: main.py lifespan에서 init_openai_http_client()를 호출한다.
+# 종료:   main.py lifespan 종료 시 close_openai_http_client()를 호출한다.
+# None:   lifespan 이전(테스트·임포트 시점). 이 경우 get_chat_model()이
+#         임시 AsyncClient를 생성한다(테스트 환경에서 ChatOpenAI를 mock하므로 무해).
+_openai_http_client: httpx.AsyncClient | None = None
+
+
+def init_openai_http_client() -> httpx.AsyncClient:
+    """lifespan 시작 시 호출하여 OpenAI용 httpx.AsyncClient 싱글톤을 초기화한다."""
+    global _openai_http_client  # noqa: PLW0603
+    _openai_http_client = httpx.AsyncClient(
+        limits=_make_httpx_limits(settings.llm_http_max_connections),
+    )
+    return _openai_http_client
+
+
+async def close_openai_http_client() -> None:
+    """lifespan 종료 시 호출하여 OpenAI용 httpx.AsyncClient를 닫는다."""
+    global _openai_http_client  # noqa: PLW0603
+    if _openai_http_client is not None:
+        await _openai_http_client.aclose()
+        _openai_http_client = None
+
 logger = logging.getLogger(__name__)
+
+
+def _make_httpx_limits(max_connections: int) -> httpx.Limits:
+    """httpx.Limits 인스턴스를 반환한다.
+
+    keepalive_expiry=30: 유휴 keep-alive 연결이 30초 후 회수되어 FD 누수를 방지한다.
+    max_keepalive_connections=100: 풀에 유지할 최대 keep-alive 소켓 수.
+    """
+    return httpx.Limits(
+        max_connections=max_connections,
+        max_keepalive_connections=100,
+        keepalive_expiry=30,
+    )
+
 
 # Gemini Embedding API: RPM 100 / TPM 30K (무료 티어)
 #
@@ -155,6 +200,9 @@ def get_chat_model(
             raise ConfigurationException(
                 "GOOGLE_API_KEY is required for Gemini provider"
             )
+        # ChatGoogleGenerativeAI는 google-generativeai SDK를 사용하며
+        # httpx.AsyncClient를 직접 주입하는 공식 파라미터가 없다.
+        # google-auth 내부 transport는 requests(동기)이므로 httpx 풀 설정 대상 외.
         return ChatGoogleGenerativeAI(
             google_api_key=settings.google_api_key,
             model=model or settings.gemini_model,
@@ -167,6 +215,13 @@ def get_chat_model(
             raise ConfigurationException(
                 "OPENAI_API_KEY is required for OpenAI provider"
             )
+        # ChatOpenAI → openai.AsyncOpenAI → httpx.AsyncClient.
+        # 모듈 전역 _openai_http_client(lifespan 싱글톤)을 재사용하여 FD 누수를 방지한다.
+        # lifespan 이전(테스트 환경)에는 None이므로 임시 클라이언트를 생성한다.
+        # 테스트는 ChatOpenAI를 mock하므로 임시 클라이언트가 실제로 사용되지 않아 무해하다.
+        http_client = _openai_http_client or httpx.AsyncClient(
+            limits=_make_httpx_limits(settings.llm_http_max_connections),
+        )
         return ChatOpenAI(
             api_key=settings.openai_api_key,
             model=model or settings.gpt_model,
@@ -174,6 +229,7 @@ def get_chat_model(
             streaming=streaming,
             max_retries=max_retries,
             request_timeout=timeout,
+            async_client=http_client,
         )
     else:
         raise ConfigurationException(
@@ -185,6 +241,12 @@ def get_embeddings(model: str | None = None) -> Embeddings:
     """Return a configured embeddings instance.
 
     Gemini gemini-embedding-2-preview, output_dimensionality=768 (DDL vector(768) 기준).
+
+    GoogleGenerativeAIEmbeddings는 내부적으로 google-generativeai SDK를 사용한다.
+    langchain-google-genai 0.x에서는 transport로 requests(동기) 또는 aiohttp(비동기)를
+    사용한다. httpx.AsyncClient 직접 주입 파라미터가 없으므로 httpx 풀 설정은
+    LLM(OpenAI provider) 경로에만 적용된다. Gemini 임베딩의 동시성은
+    _gemini_embed_limiter(RPM) + asyncio.Semaphore(vector_global_concurrency)로 제어한다.
     """
     if not settings.google_api_key:
         raise ConfigurationException("GOOGLE_API_KEY is required for Gemini embeddings")

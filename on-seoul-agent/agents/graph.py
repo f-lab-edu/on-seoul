@@ -1,31 +1,37 @@
-"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 (Phase 17 + Answer Cache + SearchPersist).
+"""LangGraph StateGraph 기반 멀티에이전트 워크플로우 (Answer Cache + SearchPersist).
 
 그래프 구조:
     START
       ↓
-    router_node          — RouterAgent.classify(), state.intent · refined_query 설정
+    reference_resolution_node   — 지시 참조 선판정 (규칙 기반, LLM 미사용)
+      ├─ referential → rehydrate_node → describe_node → search_persist_node → trace_node
+      └─ non-referential → triage_node
+           ↓
+    triage_node                 — TriageAgent.classify(), action 결정만(action·out_of_scope_type·user_rationale)
+      ├─ RETRIEVE     → router_node (RouterAgent.classify(), intent·refined_query·post-filter·secondary_intent)
+      │                  → cache_check_node → [sql/vector/map/analytics]
+      │                  → hydration_node → rrf_fusion_node → pre_answer_gate_node
+      │                       ├─ 0건(C2) → retry_prep_node → router_node 재진입
+      │                       └─ 유건    → answer_node
+      │                  ⚠️ enable_secondary_intent 활성화 전 fusion 을 hydration
+      │                     앞으로 이동 필요(아래 _build_graph 엣지부 TODO 참조).
+      ├─ DIRECT_ANSWER → direct_answer_node → 종단 체인
+      ├─ AMBIGUOUS     → ambiguous_node → 종단 체인
+      ├─ OUT_OF_SCOPE  → out_of_scope_node
+      │    ├─ domain_outside → 종단 체인
+      │    └─ attribute_gap → vector_node → hydration_node → ...
+      └─ EXPLAIN       → explain_node → 종단 체인
       ↓
-    cache_check_node     — refined_query 기반 전역 Answer Cache lookup
-      ├─ hit  → search_persist_node(skip) → trace_node (sql/vector/map/answer 전체 우회)
-      └─ miss → intent에 따라 분기
-            ├─ SQL_SEARCH    → sql_node
-            ├─ VECTOR_SEARCH → vector_node
-            ├─ MAP           → map_node
-            └─ FALLBACK      → answer_node (검색 없이 바로 답변)
+    answer_node                 — AnswerAgent.answer()
       ↓
-    sql_node / vector_node → hydration_node → answer_node
-    map_node               → answer_node (GeoJSON 구조라 hydration 건너뜀)
-      ↓
-    answer_node          — AnswerAgent.answer()
-      ↓
-    (self_correction)    — 빈 답변일 때만 재시도 + retry_count==0 → retry_prep_node 경유
+    (self_correction)           — 비-RETRIEVE는 제외. 빈 답변/0건 시 retry_prep 경유
       ↓ (정상) 또는 사이클
-    [retry_prep_node]    — retry_count 증가 + 이전 검색 결과 초기화 → router_node 재진입
-    cache_write_node     — 정상 결과만(SQL_SEARCH / VECTOR_SEARCH) 캐시 저장
+    [retry_prep_node]           — retry_count 증가 + 이전 검색 결과 초기화 → router_node 재진입
+    cache_write_node            — 정상 결과만(SQL_SEARCH / VECTOR_SEARCH) 캐시 저장
       ↓
-    search_persist_node  — chat_search_queries + chat_search_results 적재 (best-effort)
+    search_persist_node         — chat_search_queries + chat_search_results 적재 (best-effort)
       ↓
-    trace_node           — chat_agent_traces 저장 (best-effort, 최종 종단 노드)
+    trace_node                  — chat_agent_traces 저장 (best-effort, 최종 종단 노드)
       ↓
     END
 
@@ -33,149 +39,152 @@
     노드·엣지 구현  → agents/nodes.py (GraphNodes)
     그래프 조립·실행 → 이 파일 (AgentGraph)
 
-메모리 설계:
-    CompiledGraph는 AgentGraph._compiled_graph에 클래스 수준으로 캐시된다.
-    노드 함수는 contextvars.ContextVar(_ACTIVE_NODES)로 현재 GraphNodes 인스턴스를
-    조회하는 모듈 수준 함수이므로, CompiledGraph → AgentGraph 역참조(순환 참조)가
-    발생하지 않는다.
+그래프 등록:
+    GraphNodes 의 바운드 메서드(노드 함수·라우팅 함수)를 StateGraph 에 직접 등록한다.
+    GraphNodes 는 무상태 싱글톤이고 AgentGraph 를 역참조하지 않으므로, 바운드 메서드
+    등록으로 인한 순환 참조는 없다(Python GC 가 정상 처리). CompiledGraph 는 인스턴스
+    단위로 컴파일한다(컴파일 비용이 저렴해 클래스 수준 캐시는 불필요).
 
-세션 주입:
-    data_session : on_data DB (SQL 검색 — SqlAgent)
-    ai_session   : on_ai DB  (Vector 검색 + trace 저장 — VectorAgent, trace_node)
+세션 (제안 0-6 — 노드 로컬 세션):
+    GraphNodes 는 컨테이너당 싱글톤(무상태)이다. DB 를 쓰는 노드는 노드 내부에서
+    `data_session_ctx()`/`ai_session_ctx()` 로 풀에서 세션을 잡고 즉시 반납한다
+    (acquire-use-release). 따라서 run()/stream() 은 세션을 주입받지 않으며, 커넥션
+    점유가 노드 쿼리 윈도우로 축소되어 answer LLM 스트리밍 동안 커넥션을 잡지 않는다.
+
+    0-1 의 config(`configurable`) 세션 주입은 노드 로컬 세션으로 대체되어 제거됐다.
+    세션이 노드 지역 변수로만 존재하므로 요청 간 교차가 원천 차단된다. 요청 격리는
+    노드 로컬 세션 + state(node_path/started_at)가 담당한다.
 """
 
-import contextvars
 import logging
+import time
 from collections.abc import AsyncGenerator
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.analytics_agent import AnalyticsAgent
 from agents.answer_agent import AnswerAgent
 from agents.nodes import GraphNodes
 from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
+from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
-from schemas.state import AgentState, IntentType
+from schemas.events import DecisionEvent, SourcesUpdateEvent
+from schemas.state import AgentState
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Context variable — run()/stream() 실행 중 현재 GraphNodes 인스턴스를 보유한다.
-# 모듈 수준 dispatch 함수들이 이것을 통해 노드 메서드를 호출한다.
-# CompiledGraph → AgentGraph 역참조를 만들지 않기 위한 핵심 설계.
-# ---------------------------------------------------------------------------
+def _out_of_scope_route(state: AgentState) -> str:
+    """out_of_scope_node 직후 — attribute_gap이면 vector_node, domain_outside면 종단 체인.
 
-_ACTIVE_NODES: contextvars.ContextVar[GraphNodes] = contextvars.ContextVar(
-    "_active_nodes"
-)
-
-# ---------------------------------------------------------------------------
-# 모듈 수준 dispatch 함수 — CompiledGraph에 등록된다.
-# self를 직접 클로저로 캡처하지 않으므로 AgentGraph와의 순환 참조가 없다.
-# ---------------------------------------------------------------------------
-
-
-async def _dispatch_router_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().router_node(state)
-
-
-async def _dispatch_cache_check_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().cache_check_node(state)
-
-
-async def _dispatch_cache_write_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().cache_write_node(state)
-
-
-async def _dispatch_retry_prep_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().retry_prep_node(state)
-
-
-async def _dispatch_sql_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().sql_node(state)
-
-
-async def _dispatch_vector_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().vector_node(state)
-
-
-async def _dispatch_map_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().map_node(state)
-
-
-async def _dispatch_analytics_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().analytics_node(state)
-
-
-async def _dispatch_hydration_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().hydration_node(state)
-
-
-async def _dispatch_answer_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().answer_node(state)
-
-
-async def _dispatch_search_persist_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().search_persist_node(state)
-
-
-async def _dispatch_trace_node(state: AgentState) -> dict[str, Any]:
-    return await _ACTIVE_NODES.get().trace_node(state)
-
-
-def _dispatch_route_by_intent(state: AgentState) -> str:
-    return _ACTIVE_NODES.get().route_by_intent(state)
-
-
-def _dispatch_post_cache_check(state: AgentState) -> str:
-    return _ACTIVE_NODES.get().post_cache_check(state)
-
-
-def _dispatch_self_correction_edge(state: AgentState) -> str:
-    return _ACTIVE_NODES.get().self_correction_edge(state)
+    GraphNodes 메서드가 아닌 graph.py 모듈 수준 라우팅 함수다(상태만 읽는 순수 함수).
+    """
+    if state["triage"].get("out_of_scope_type") == "attribute_gap":
+        return "vector_node"
+    return "search_persist_node"
 
 
 # ---------------------------------------------------------------------------
-# 공유 그래프 빌드 (프로세스당 1회)
+# 그래프 빌드 (인스턴스당 1회)
 # ---------------------------------------------------------------------------
 
 
-def _build_shared_graph() -> Any:
-    """StateGraph를 구성하고 컴파일한다. dispatch 함수만 사용하므로 재사용 가능."""
+def _build_graph(nodes: GraphNodes) -> Any:
+    """StateGraph를 구성하고 컴파일한다. GraphNodes 바운드 메서드를 직접 등록한다.
+
+    그래프 구조:
+    START → reference_resolution_node
+      ├─ referential → rehydrate_node → describe_node → search_persist_node → trace_node
+      └─ non-referential → triage_node (action 결정)
+           │
+           ├─ action=RETRIEVE     → router_node (검색 계획) → cache_check_node
+           │                           → [sql/vector/map/analytics]
+           │                           → hydration_node → rrf_fusion_node → pre_answer_gate_node
+           │                                ├─ 0건(C2) → retry_prep_node → router_node 재진입
+           │                                └─ 유건    → answer_node
+           ├─ action=DIRECT_ANSWER → direct_answer_node → 종단 체인
+           ├─ action=AMBIGUOUS     → ambiguous_node → 종단 체인
+           ├─ action=OUT_OF_SCOPE  → out_of_scope_node
+           │    ├─ domain_outside → 종단 체인
+           │    └─ attribute_gap → vector_node → hydration_node → ...
+           └─ action=EXPLAIN      → explain_node → 종단 체인
+
+    secondary_intent 팬아웃(enable_secondary_intent=True):
+      실제 배선(현재): cache_check miss → [sql_node, vector_node] 병렬
+                       → hydration_node → rrf_fusion_node → pre_answer_gate_node
+      목표 토폴로지(미구현, 활성화 전 변경 필요):
+                       → rrf_fusion_node → hydration_node
+        ⚠️ 현재 배선은 fusion 이 hydration 뒤라 rrf_merged_ids 를 hydration 이
+           소비하지 못한다(아래 엣지부 TODO + tests/test_graph_rrf_topology.py 가드 참조).
+           flag off 면 rrf_fusion 은 no-op 이라 동작 안전.
+    """
     builder: StateGraph = StateGraph(AgentState)
 
-    builder.add_node("router_node", _dispatch_router_node)
-    builder.add_node("cache_check_node", _dispatch_cache_check_node)
-    builder.add_node("cache_write_node", _dispatch_cache_write_node)
-    builder.add_node("retry_prep_node", _dispatch_retry_prep_node)
-    builder.add_node("sql_node", _dispatch_sql_node)
-    builder.add_node("vector_node", _dispatch_vector_node)
-    builder.add_node("map_node", _dispatch_map_node)
-    builder.add_node("analytics_node", _dispatch_analytics_node)
-    builder.add_node("hydration_node", _dispatch_hydration_node)
-    builder.add_node("answer_node", _dispatch_answer_node)
-    builder.add_node("search_persist_node", _dispatch_search_persist_node)
-    builder.add_node("trace_node", _dispatch_trace_node)
+    # ── 노드 등록 (GraphNodes 바운드 메서드 직접 등록) ──
+    builder.add_node("reference_resolution_node", nodes.reference_resolution_node)
+    builder.add_node("rehydrate_node", nodes.rehydrate_node)
+    builder.add_node("describe_node", nodes.describe_node)
+    # 책임 분리: triage_node(action 결정) → router_node(검색 계획) → cache_check.
+    builder.add_node("triage_node", nodes.triage_node)
+    builder.add_node("router_node", nodes.router_node)
+    builder.add_node("cache_check_node", nodes.cache_check_node)
+    builder.add_node("cache_write_node", nodes.cache_write_node)
+    builder.add_node("retry_prep_node", nodes.retry_prep_node)
+    builder.add_node("sql_node", nodes.sql_node)
+    builder.add_node("vector_node", nodes.vector_node)
+    builder.add_node("map_node", nodes.map_node)
+    builder.add_node("analytics_node", nodes.analytics_node)
+    builder.add_node("hydration_node", nodes.hydration_node)
+    builder.add_node("rrf_fusion_node", nodes.rrf_fusion_node)
+    builder.add_node("pre_answer_gate_node", nodes.pre_answer_gate_node)
+    builder.add_node("answer_node", nodes.answer_node)
+    builder.add_node("search_persist_node", nodes.search_persist_node)
+    builder.add_node("trace_node", nodes.trace_node)
+    # action 노드
+    builder.add_node("direct_answer_node", nodes.direct_answer_node)
+    builder.add_node("ambiguous_node", nodes.ambiguous_node)
+    builder.add_node("out_of_scope_node", nodes.out_of_scope_node)
+    builder.add_node("explain_node", nodes.explain_node)
 
-    builder.add_edge(START, "router_node")
+    # ── START → reference_resolution ──
+    builder.add_edge(START, "reference_resolution_node")
+    builder.add_conditional_edges(
+        "reference_resolution_node",
+        nodes.route_after_reference,
+        {
+            "rehydrate_node": "rehydrate_node",
+            "triage_node": "triage_node",
+        },
+    )
 
-    # router → cache_check.
-    # refined_query와 post-filter(max_class_name/area_name/service_status)는
-    # 1차적으로 router_node가 산출하여 state에 채운다 (단일 LLM 호출).
-    # vector_node의 _refine_chain은 router 미산출 시(단독 단위 테스트 등)에만
-    # 동작하는 fallback이다.
-    # cache_check는 intent + refined_query가 둘 다 있을 때만 lookup하므로
-    # router가 refined_query=None을 반환한 경우에는 pass-through 효과를 가진다.
+    # ── 참조 해소 경로 ──
+    builder.add_edge("rehydrate_node", "describe_node")
+    builder.add_edge("describe_node", "search_persist_node")
+
+    # ── triage_node → route_by_action ──
+    # RETRIEVE 는 router_node(검색 계획)로, 나머지 4종 action 은 각 종단 노드로.
+    builder.add_conditional_edges(
+        "triage_node",
+        nodes.route_by_action,
+        {
+            "router_node": "router_node",
+            "direct_answer_node": "direct_answer_node",
+            "ambiguous_node": "ambiguous_node",
+            "out_of_scope_node": "out_of_scope_node",
+            "explain_node": "explain_node",
+            "answer_node": "answer_node",
+        },
+    )
+
+    # ── router_node(검색 계획) → cache_check ──
     builder.add_edge("router_node", "cache_check_node")
 
+    # ── cache_check → fanout or intent 분기 ──
     builder.add_conditional_edges(
         "cache_check_node",
-        _dispatch_post_cache_check,
+        nodes.post_cache_check,
         {
-            # cache hit: 검색 없이 search_persist_node(skip) → trace 로 종단 체인 유지
             "search_persist_node": "search_persist_node",
             "sql_node": "sql_node",
             "vector_node": "vector_node",
@@ -185,30 +194,67 @@ def _build_shared_graph() -> Any:
         },
     )
 
-    # sql_node / vector_node → hydration_node → answer_node
-    # 검색 노드는 service_id 산출에 집중하고, hydration_node 가 단일 책임으로
-    # public_service_reservations 원본을 hydrated_services 슬롯에 통합한다.
-    # map_node 는 GeoJSON 구조이므로 hydration 을 건너뛰고 직접 answer_node 로 간다.
+    # ── out_of_scope_node: attribute_gap → vector_node, domain_outside → END 체인 ──
+    # attribute_gap은 out_of_scope_node 내부에서 intent=VECTOR_SEARCH +
+    # vector_sub_intent=identification 세팅 후 일반 검색 경로로 연결된다.
+    # domain_outside는 answer가 이미 세팅되므로 search_persist → trace 종단 체인.
+    builder.add_conditional_edges(
+        "out_of_scope_node",
+        _out_of_scope_route,
+        {
+            "vector_node": "vector_node",
+            "search_persist_node": "search_persist_node",
+        },
+    )
+
+    # ── sql / vector → hydration → rrf_fusion → pre_answer_gate ──
+    # ⚠️ TODO(멀티라우트 활성화 선결): rrf_fusion_node 가 hydration_node 뒤라
+    #   rrf_merged_ids(fusion 출력, nodes.py rrf_fusion_node)를 hydration_node 가
+    #   소비하지 못한다(hydration_node.py 에서 state["rrf_merged_ids"] 를 읽는데, 그 시점엔
+    #   fusion 이 아직 실행되지 않음). enable_secondary_intent=True 로 켜기 전에
+    #   rrf_fusion 을 hydration 앞으로 이동해야 fan-out RRF 결과가 반영된다.
+    #   현재 flag off 라 rrf_fusion 은 no-op(안전). 가드: tests/test_graph_rrf_topology.py.
     builder.add_edge("sql_node", "hydration_node")
     builder.add_edge("vector_node", "hydration_node")
-    builder.add_edge("hydration_node", "answer_node")
+    builder.add_edge("hydration_node", "rrf_fusion_node")
+    builder.add_edge("rrf_fusion_node", "pre_answer_gate_node")
+
+    # C2 게이트: 0건 → retry_prep_node, 유건 → answer_node
+    builder.add_conditional_edges(
+        "pre_answer_gate_node",
+        nodes.route_pre_answer_gate,
+        {
+            "answer_node": "answer_node",
+            "retry_prep_node": "retry_prep_node",
+        },
+    )
+
+    # map_node / analytics_node는 hydration 없이 answer_node 직행
     builder.add_edge("map_node", "answer_node")
-    # analytics_node 는 집계행을 최종 산출하므로 hydration 없이 answer_node 로 직행한다.
     builder.add_edge("analytics_node", "answer_node")
 
+    # ── answer_node → self_correction or 종단 체인 ──
     builder.add_conditional_edges(
         "answer_node",
-        _dispatch_self_correction_edge,
+        nodes.self_correction_edge,
         {
-            # "end_normal": self_correction_edge의 반환값.
-            # 정상 완료 시 cache_write_node → trace_node 순으로 이어진다.
             "end_normal": "cache_write_node",
             "retry_prep_node": "retry_prep_node",
         },
     )
 
-    # 재시도 준비 완료 후 router_node로 재진입
+    # ── 재시도 준비 → router_node 재진입 ──
+    # self-correction 은 RETRIEVE 경로 전용이고(비-RETRIEVE 제외), 방향성 재시도
+    # (SQL→VECTOR 전환·MAP 반경 확장)는 검색 *계획* 재수립이므로 Router 의 책임이다.
+    # action 은 이미 RETRIEVE 로 확정됐으므로 triage 를 다시 거치지 않는다.
     builder.add_edge("retry_prep_node", "router_node")
+
+    # ── 비-RETRIEVE action 종단 체인 ──
+    # direct_answer / ambiguous / explain → 검색 없이 종단 체인
+    for _non_retrieve_node in ("direct_answer_node", "ambiguous_node", "explain_node"):
+        builder.add_edge(_non_retrieve_node, "cache_write_node")
+
+    # ── 종단 체인 ──
     builder.add_edge("cache_write_node", "search_persist_node")
     builder.add_edge("search_persist_node", "trace_node")
     builder.add_edge("trace_node", END)
@@ -217,8 +263,102 @@ def _build_shared_graph() -> Any:
 
 
 _StreamEvent = (
-    tuple[Literal["progress"], dict[str, str]] | tuple[Literal["result"], AgentState]
+    tuple[Literal["progress"], dict[str, str]]
+    | tuple[Literal["decision"], dict[str, Any]]
+    | tuple[Literal["sources_update"], dict[str, Any]]
+    | tuple[Literal["result"], AgentState]
 )
+
+
+def _build_sources(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """AgentState(또는 last_values dict)에서 검색 채널별 hits를 추출한다.
+
+    빈 채널(None 또는 빈 리스트, hits==0)은 제외한다.
+    map_results는 GeoJSON dict이므로 features 배열의 길이를 hits로 산출하고,
+    features 키가 없는 경우 dict 자체 존재를 hits=1로 간주한다.
+    """
+    sources: list[dict[str, Any]] = []
+
+    sql = (state.get("sql") or {}).get("results")
+    if sql:
+        sources.append({"channel": "sql", "hits": len(sql)})
+
+    vector = (state.get("vector") or {}).get("results")
+    if vector:
+        sources.append({"channel": "vector", "hits": len(vector)})
+
+    map_res = (state.get("map") or {}).get("results")
+    if map_res:
+        features = map_res.get("features") if isinstance(map_res, dict) else None
+        hits = len(features) if features is not None else 1
+        if hits > 0:
+            sources.append({"channel": "map", "hits": hits})
+
+    analytics = (state.get("analytics") or {}).get("results")
+    if analytics:
+        sources.append({"channel": "analytics", "hits": len(analytics)})
+
+    return sources
+
+
+def _build_run_config(state: AgentState) -> dict[str, Any]:
+    """run()/stream() 공용 config 조립 — Langfuse 핸들러가 있으면 callbacks/metadata 부착.
+
+    핸들러가 None(비활성/실패)이면 {"recursion_limit": 50} 만 반환해 기존 동작과 100%
+    동일하다(회귀 금지). 핸들러 활성 시에만 callbacks=[handler] + Langfuse 메타데이터
+    (langfuse_session_id=대화방, message_id)를 추가한다.
+
+    지연 import: core.langfuse_client 는 core.config 를 import 하므로, 모듈 상단 import
+    시 import 순서/사이클에 묶이는 것을 피한다(telemetry 의 core.database 지연 import 패턴).
+    """
+    config: dict[str, Any] = {"recursion_limit": 50}
+
+    from core.langfuse_client import get_langfuse_handler
+
+    handler = get_langfuse_handler()
+    if handler is not None:
+        config["callbacks"] = [handler]
+        config["metadata"] = {
+            # 대화방 = Langfuse 세션. v4 콜백 핸들러는 langfuse_session_id(str)/
+            # langfuse_user_id(str) 메타데이터 키를 trace 속성으로 승격한다.
+            "langfuse_session_id": str(state.get("room_id")),
+            "message_id": state.get("message_id"),
+        }
+    return config
+
+
+def _prepare_state(state: AgentState) -> AgentState:
+    """run()/stream() 진입 시 per-request 런타임 상태를 state 에 초기화한다.
+
+    제안 0: GraphNodes.prepare()(인스턴스 속성에 세션/경로/시작시각 주입)를 대체한다.
+    node_path 는 reducer 가 누적하므로 빈 리스트로, started_at 은 elapsed_ms 산출용
+    시작 시각으로 세팅한다. retry_count 는 기존과 동일하게 미존재 시 0으로 채운다.
+    """
+    overrides: dict[str, Any] = {}
+    # routers/chat.py 가 항상 retry_count=0 으로 채워 넘기므로 이 분기는
+    # 정상 요청 경로에서는 실행되지 않는다. 테스트에서 부분 dict(retry_count 미포함)를
+    # 직접 넘길 때를 위한 방어 코드다.
+    if "retry_count" not in state:
+        overrides["retry_count"] = 0
+    overrides["started_at"] = time.monotonic()
+    overrides["node_path"] = []
+    # 중첩 채널 방어 초기화: 부분 dict 주입 테스트에서 leaf .get() 접근이
+    # KeyError 로 새지 않도록 미존재 채널을 {} 로 채운다(정상 경로는 chat.py 가 채움).
+    for _ch in (
+        "triage",
+        "plan",
+        "filters",
+        "sql",
+        "vector",
+        "map",
+        "analytics",
+        "hydration",
+        "output",
+        "emit",
+    ):
+        if _ch not in state:
+            overrides[_ch] = {}
+    return {**state, **overrides}  # type: ignore[return-value]
 
 
 class AgentGraph:
@@ -226,175 +366,141 @@ class AgentGraph:
 
     그래프 조립과 실행 인터페이스만 담당한다. 노드·엣지 구현은 GraphNodes에 위임한다.
 
-        run(state, *, data_session, ai_session) → AgentState
-        stream(state, *, data_session, ai_session) → AsyncGenerator[_StreamEvent]
+        run(state) → AgentState
+        stream(state) → AsyncGenerator[_StreamEvent]
 
-    CompiledGraph는 클래스 수준 캐시(_compiled_graph)에 저장되어 프로세스 내에서
-    단 1회만 컴파일된다. 각 인스턴스는 캐시를 재사용하므로 메모리 오버헤드가 없다.
+    제안 0-6: DB 노드가 세션을 노드 내부에서 acquire-use-release 하므로 run()/stream()
+    은 더 이상 세션을 주입받지 않는다.
+
+    CompiledGraph는 인스턴스 단위로 컴파일된다(__init__에서 1회). 컴파일 비용이
+    저렴하므로 클래스 수준 캐시 없이도 오버헤드가 무시할 수준이다.
     """
-
-    _compiled_graph: ClassVar[Any] = None
 
     def __init__(
         self,
-        router: RouterAgent | None = None,
+        router: RouterAgent | TriageAgent | None = None,
         sql_agent: SqlAgent | None = None,
         vector_agent: VectorAgent | None = None,
         answer_agent: AnswerAgent | None = None,
         analytics_agent: AnalyticsAgent | None = None,
         redis: Any = None,
+        triage: TriageAgent | None = None,
     ) -> None:
+        # 책임 분리: TriageAgent(action 결정) + RouterAgent(검색 계획) 둘 다 노드에서 쓰인다.
+        #   - triage: action 결정 노드(triage_node)
+        #   - router: 검색 계획 노드(router_node, RETRIEVE 경로에서만 실행)
+        # `router` 인자가 TriageAgent 인스턴스이면 하위호환으로 triage 로 받아들인다.
+        _triage = triage or (router if isinstance(router, TriageAgent) else None)
+        _router = router if isinstance(router, RouterAgent) else None
+        # 하위호환: RouterAgent 만 명시 주입(triage 미주입)된 경우 triage 를 기본 생성하지
+        # 않는다 — triage_node 가 RouterAgent fallback 분기로 action 을 결정한다.
+        if _triage is None and _router is None:
+            _triage = TriageAgent()
+        if _triage is not None and _router is None:
+            _router = RouterAgent()
         self._nodes = GraphNodes(
-            router=router or RouterAgent(),
+            router=_router,
             sql_agent=sql_agent or SqlAgent(),
             vector_agent=vector_agent or VectorAgent(),
             answer_agent=answer_agent or AnswerAgent(),
             analytics_agent=analytics_agent or AnalyticsAgent(),
             redis=redis,
+            triage=_triage,
         )
 
-        # 그래프는 클래스 수준에서 한 번만 컴파일한다.
-        if AgentGraph._compiled_graph is None:
-            AgentGraph._compiled_graph = _build_shared_graph()
+        # 그래프는 인스턴스 단위로 1회 컴파일한다(바운드 메서드 직접 등록).
+        self._compiled_graph = _build_graph(self._nodes)
 
     # ---------------------------------------------------------------------------
     # 공개 인터페이스
     # ---------------------------------------------------------------------------
 
-    async def run(
-        self,
-        state: AgentState,
-        *,
-        data_session: AsyncSession,
-        ai_session: AsyncSession,
-    ) -> AgentState:
+    async def run(self, state: AgentState) -> AgentState:
         """그래프 전체 실행.
 
         Returns:
             answer, intent, trace, retry_count가 채워진 AgentState
         """
-        self._nodes.prepare(data_session, ai_session)
+        state = _prepare_state(state)
 
-        if "retry_count" not in state:
-            state = {**state, "retry_count": 0}
-
-        token = _ACTIVE_NODES.set(self._nodes)
-        try:
-            # recursion_limit=16:
-            # 1회 정상 흐름:
-            #   router(1) → cache_check(2) → search(3) → hydration(4) →
-            #   answer(5) → cache_write(6) → search_persist(7) → trace(8) = 8 super-step.
-            # retry 1회 포함 시 retry_prep + router/cache_check/search/hydration/answer 재실행으로
-            #   +6 노드, 합계 14 super-step.
-            # 여유 2를 더해 16으로 설정한다.
-            result: AgentState = await AgentGraph._compiled_graph.ainvoke(
-                state,
-                config={"recursion_limit": 16},
-            )  # type: ignore[arg-type]
-        finally:
-            _ACTIVE_NODES.reset(token)
+        # recursion_limit: 최악 경로(RETRIEVE + secondary 팬아웃 + retry 1회) ~23 super-step + 여유.
+        # Langfuse 활성 시 callbacks/metadata 추가(없으면 recursion_limit 만 — 기존 동작 불변).
+        result: AgentState = await self._compiled_graph.ainvoke(
+            state,
+            config=_build_run_config(state),
+        )  # type: ignore[arg-type]
 
         return result
 
     async def stream(
         self,
         state: AgentState,
-        *,
-        data_session: AsyncSession,
-        ai_session: AsyncSession,
     ) -> AsyncGenerator[_StreamEvent, None]:
         """그래프를 실행하며 진행 이벤트와 최종 결과를 yield한다.
 
-        LangGraph astream()으로 노드 완료 시점마다 진행 이벤트를 emit한다.
-        각 progress 이벤트는 "방금 완료된 노드" 기준으로 "다음 단계"를 안내한다.
+        작업 3: 노드가 get_stream_writer 로 자기 progress/decision 이벤트를 직접
+        emit 한다(agents/_helpers.py). stream() 은 더 이상 "어느 단계인지" 를
+        node_name 으로 역추론하지 않는다 — "custom" 청크의 `_evt` 타입으로만 분기해
+        그대로 SSE 튜플로 변환한다(가드 플래그·보류 변수 일체 제거).
 
         Yields:
             ("progress", {"step": str, "message": str}) — 각 단계 전환 시점
+            ("decision", DecisionEvent dict)            — 판단 근거 (조건부)
             ("result", AgentState)                      — 최종 완료 상태
 
-        진행 이벤트 타이밍:
-            graph 시작 전        → routing  "질문을 분석하고 있습니다..."
-            router_node 완료 후  → searching "관련 정보를 검색하고 있습니다..."
-                                   (FALLBACK/error 시 → answering 즉시)
-            search node 완료 후  → answering "답변을 생성하고 있습니다..."
+        emit 위치(노드 측, agents/nodes.py)와 타이밍:
+            graph 시작 전(여기)  → routing  (노드 진입 전이라 writer 못 씀)
+            triage_node          → 비-RETRIEVE면 decision(routes=[]) + answering
+            router_node          → RETRIEVE면 decision(routes) + searching/answering
+            rehydrate_node       → answering (참조 해소 경로)
+            retry_prep_node      → re_searching (+ progress 가드 리셋)
+            search node          → answering
+
+        decision 은 전체 실행 1회(노드의 decision_emitted 슬롯 가드), progress 의
+        searching/answering 은 단계별 1회(searching/answering_emitted 슬롯,
+        retry_prep_node 가 리셋해 재검색 시 다시 흐름).
         """
-        self._nodes.prepare(data_session, ai_session)
+        state = _prepare_state(state)
 
-        if "retry_count" not in state:
-            state = {**state, "retry_count": 0}
-
-        # 그래프 시작 전: routing 단계 진입 알림
+        # 그래프 시작 전: routing 단계 진입 알림 (노드 진입 전이라 writer 사용 불가).
         yield "progress", {"step": "routing", "message": "질문을 분석하고 있습니다..."}
 
-        # state 누적 — astream()은 노드별 업데이트만 반환하므로 직접 합산
-        accumulated: dict[str, Any] = dict(state)
-        # 중복 emit 방지 (self-correction 루프에서 노드가 재실행될 수 있음)
-        _search_progress_emitted = False
-        _answer_progress_emitted = False
+        # 최종 결과는 LangGraph가 reducer를 적용한 "values" 스냅샷을 사용한다.
+        # (수동 합산은 node_path/search_channels reducer를 우회해 정합성이 깨짐.)
+        # 가장 최근 "values" 청크를 보관했다가 루프 종료 후 yield.
+        last_values: dict[str, Any] = dict(state)
 
-        # hydration_node 완료 후 answering 이벤트로 이동 고려 (별도 이슈)
-        _SEARCH_NODES = frozenset(
-            {"sql_node", "vector_node", "map_node", "analytics_node"}
-        )
+        # 멀티모드: "values"(reducer 적용 전체 state)로 최종 result 스냅샷,
+        # "custom"(노드가 writer 로 보낸 progress/decision 페이로드)으로 SSE 이벤트.
+        # "updates" 는 더 이상 progress/decision 산출에 쓰이지 않으므로 받지 않는다.
+        # Langfuse 활성 시 callbacks/metadata 추가(없으면 recursion_limit 만 — 기존 동작 불변).
+        # SSE 블로킹 금지: 동기 flush 를 넣지 않는다(백그라운드 배치 + shutdown flush 로 충분).
+        async for mode, chunk in self._compiled_graph.astream(
+            state,
+            stream_mode=["values", "custom"],
+            config=_build_run_config(state),  # 최악 경로 ~23 super-step + 여유
+        ):
+            if mode == "values":
+                # reducer가 적용된 전체 state 스냅샷.
+                last_values = chunk
+                continue
 
-        token = _ACTIVE_NODES.set(self._nodes)
-        try:
-            async for chunk in AgentGraph._compiled_graph.astream(
-                state,
-                config={"recursion_limit": 16},  # 정상 8 + retry 최대 6 + 여유 2 = 16
-            ):
-                node_name: str = next(iter(chunk))
-                node_updates: dict[str, Any] | None = chunk[node_name]
-                if node_updates:
-                    accumulated.update(node_updates)
+            # mode == "custom": 노드가 get_stream_writer 로 보낸 페이로드.
+            evt = chunk.get("_evt")
+            if evt == "progress":
+                yield "progress", {"step": chunk["step"], "message": chunk["message"]}
+            elif evt == "decision":
+                yield (
+                    "decision",
+                    DecisionEvent(
+                        action=chunk["action"],
+                        routes=chunk["routes"],
+                        user_rationale=chunk["user_rationale"],
+                    ).model_dump(),
+                )
 
-                if node_name == "router_node" and not _search_progress_emitted:
-                    _search_progress_emitted = True
-                    intent = accumulated.get("intent")
-                    # FALLBACK이거나 router_node 에러 시 검색 없이 바로 답변 단계로 간다.
-                    if intent in (
-                        IntentType.SQL_SEARCH,
-                        IntentType.VECTOR_SEARCH,
-                        IntentType.MAP,
-                        IntentType.ANALYTICS,
-                    ):
-                        yield (
-                            "progress",
-                            {
-                                "step": "searching",
-                                "message": "관련 정보를 검색하고 있습니다...",
-                            },
-                        )
-                    else:
-                        _answer_progress_emitted = True
-                        yield (
-                            "progress",
-                            {
-                                "step": "answering",
-                                "message": "답변을 생성하고 있습니다...",
-                            },
-                        )
+        sources = _build_sources(last_values)
+        if sources:
+            yield "sources_update", SourcesUpdateEvent(sources=sources).model_dump()
 
-                elif node_name == "retry_prep_node":
-                    # 재시도 경계: 검색/답변 진행 플래그를 리셋해 다음 순회의
-                    # searching/answering 이벤트가 다시 흐르게 한다.
-                    _search_progress_emitted = False
-                    _answer_progress_emitted = False
-                    yield (
-                        "progress",
-                        {
-                            "step": "re_searching",
-                            "message": "다른 방식으로 다시 검색하고 있습니다...",
-                        },
-                    )
-
-                elif node_name in _SEARCH_NODES and not _answer_progress_emitted:
-                    _answer_progress_emitted = True
-                    yield (
-                        "progress",
-                        {"step": "answering", "message": "답변을 생성하고 있습니다..."},
-                    )
-        finally:
-            _ACTIVE_NODES.reset(token)
-
-        yield "result", accumulated  # type: ignore[misc]
+        yield "result", last_values  # type: ignore[misc]

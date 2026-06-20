@@ -1,0 +1,61 @@
+# PgBouncer connection pooler for on-seoul
+#
+# 배포 순서:
+#   1. docker network create on-seoul-net  (최초 1회)
+#   2. .env.pgbouncer 파일 준비 (.env.pgbouncer.example 참조)
+#   3. docker compose -f docker-compose-pgbouncer.yml up -d
+#   4. docker compose -f docker-compose-app.yml up -d
+#
+# PG max_connections 가이드
+# -----------------------------------------------------------
+# 집계 기준: 최대 5 인스턴스 × 200 QPS = 1000 QPS 집계,
+#            클라이언트 커넥션 합 5×(on_ai cap 50 + on_data cap 30) = 400.
+#
+# 관리형 PG(RDS, AlloyDB 등)에서는 파라미터 그룹에서 설정한다.
+# 자체 호스팅 PG라면 psql 슈퍼유저로 아래 두 명령을 실행한 뒤 PG를 재시작한다:
+#
+#   ALTER SYSTEM SET max_connections = 200;
+#   SELECT pg_reload_conf();
+#
+# max_connections = 200 근거:
+#   PgBouncer on_ai  pool  : server_pool_size 80
+#   PgBouncer on_data pool : server_pool_size 40
+#   PgBouncer 유지 커넥션  : 소계 ~120
+#   DBA / 모니터링 슬롯     : +20
+#   안전 마진              : +60
+#   합계                   : ≤ 200
+# -----------------------------------------------------------
+
+services:
+  pgbouncer:
+    image: edoburu/pgbouncer:1.23.1
+    container_name: on-seoul-pgbouncer
+    restart: always
+    env_file:
+      - .env.pgbouncer
+    # edoburu/pgbouncer 이미지는 entrypoint 에서 envsubst 를 수행한 뒤
+    # /etc/pgbouncer/pgbouncer.ini 를 그대로 실행한다.
+    # pgbouncer.ini 를 직접 마운트하면 환경변수 주입 후 두 DB 풀이 모두 활성화된다.
+    volumes:
+      - ./infra/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./infra/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    ports:
+      # 로컬 개발 디버깅 전용: 호스트 루프백에서만 pgbouncer 에 직접 접속 가능하게 한다.
+      # 앱 컨테이너는 on-seoul-net 내부에서 pgbouncer:5432 로 접근하므로
+      # 운영 환경에서는 이 ports 항목 전체를 제거(또는 주석 처리)하여
+      # 호스트 외부에 포트가 노출되지 않도록 한다.
+      - "127.0.0.1:5433:5432"
+    networks:
+      - on-seoul-net
+    healthcheck:
+      # on_ai_app 유저로 실제 앱 경로를 확인한다.
+      # on_data_app 을 사용하는 경우 -U on_data_app 으로 교체 가능.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U on_ai_app || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+networks:
+  on-seoul-net:
+    external: true

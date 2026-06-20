@@ -113,12 +113,12 @@ class SqlAgent:
         *,
         top_k: int | None = None,
     ) -> AgentState:
-        """메시지에서 파라미터 추출 후 DB 조회. sql_results를 채운 AgentState 반환.
+        """메시지에서 파라미터 추출 후 DB 조회. sql.results를 채운 AgentState 반환.
 
         Router가 이미 post-filter 메타데이터를 산출한 경우
-        (state["refined_query"] 존재) max_class_name/area_name/service_status는
-        state 값을 우선 사용한다. LLM에는 refined_query(더 짧고 정제된 텍스트)를
-        전달해 keyword와 날짜 파라미터만 추출한다.
+        (state["plan"]["refined_query"] 존재) max_class_name/area_name/service_status는
+        state["filters"] 값을 우선 사용한다. LLM에는 refined_query(더 짧고 정제된
+        텍스트)를 전달해 keyword와 날짜 파라미터만 추출한다.
 
         Parameters
         ----------
@@ -127,7 +127,9 @@ class SqlAgent:
             평가 스크립트처럼 더 많은 후보가 필요한 경우에만 지정한다.
         """
         today_str = datetime.now(tz=timezone.utc).date().isoformat()
-        router_refined = state.get("refined_query")
+        plan = state.get("plan") or {}
+        filters = state.get("filters") or {}
+        router_refined = plan.get("refined_query")
 
         # Router refined_query가 있으면 더 짧고 정제된 텍스트를 LLM에 전달
         input_message = router_refined or state["message"]
@@ -139,10 +141,10 @@ class SqlAgent:
         )
 
         if router_refined:
-            max_class_name = state.get("max_class_name")
-            area_name = state.get("area_name")
-            service_status = state.get("service_status")
-            payment_type = state.get("payment_type")
+            max_class_name = filters.get("max_class_name")
+            area_name = filters.get("area_name")
+            service_status = filters.get("service_status")
+            payment_type = filters.get("payment_type")
         else:
             max_class_name = params.max_class_name
             area_name = params.area_name
@@ -160,4 +162,4 @@ class SqlAgent:
             receipt_date_to=params.receipt_date_to,
             top_k=top_k if top_k is not None else _TOP_K,
         )
-        return {**state, "sql_results": rows, "sql_keyword": params.keyword}
+        return {**state, "sql": {"results": rows, "keyword": params.keyword}}

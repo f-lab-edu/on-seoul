@@ -18,6 +18,7 @@ from agents.hydration_node import (
     _merge_search_meta,
 )
 from schemas.state import IntentType
+from tests.helpers import make_agent_state as _st
 
 
 # ---------------------------------------------------------------------------
@@ -27,58 +28,58 @@ from schemas.state import IntentType
 
 class TestExtractServiceIds:
     def test_vector_search_extracts_from_vector_results(self):
-        state = {
-            "intent": IntentType.VECTOR_SEARCH,
-            "vector_results": [
+        state = _st(
+            intent=IntentType.VECTOR_SEARCH,
+            vector_results=[
                 {"service_id": "S001", "rrf_score": 0.5},
                 {"service_id": "S002", "rrf_score": 0.3},
             ],
-            "sql_results": [{"service_id": "SQL001"}],  # 무시되어야 함
-        }
+            sql_results=[{"service_id": "SQL001"}],  # 무시되어야 함
+        )
         assert _extract_service_ids(state) == ["S001", "S002"]
 
     def test_sql_search_extracts_from_sql_results(self):
-        state = {
-            "intent": IntentType.SQL_SEARCH,
-            "sql_results": [{"service_id": "S100"}, {"service_id": "S200"}],
-            "vector_results": [{"service_id": "VEC001"}],  # 무시되어야 함
-        }
+        state = _st(
+            intent=IntentType.SQL_SEARCH,
+            sql_results=[{"service_id": "S100"}, {"service_id": "S200"}],
+            vector_results=[{"service_id": "VEC001"}],  # 무시되어야 함
+        )
         assert _extract_service_ids(state) == ["S100", "S200"]
 
     def test_other_intent_returns_empty(self):
         for intent in (IntentType.MAP, IntentType.FALLBACK, None):
-            state = {
-                "intent": intent,
-                "vector_results": [{"service_id": "X"}],
-                "sql_results": [{"service_id": "Y"}],
-            }
+            state = _st(
+                intent=intent,
+                vector_results=[{"service_id": "X"}],
+                sql_results=[{"service_id": "Y"}],
+            )
             assert _extract_service_ids(state) == []
 
     def test_skip_rows_without_service_id(self):
-        state = {
-            "intent": IntentType.VECTOR_SEARCH,
-            "vector_results": [
+        state = _st(
+            intent=IntentType.VECTOR_SEARCH,
+            vector_results=[
                 {"service_id": "S001"},
                 {"rrf_score": 0.5},  # service_id 없음 → 스킵
                 {"service_id": "S002"},
             ],
-        }
+        )
         assert _extract_service_ids(state) == ["S001", "S002"]
 
     def test_empty_results_returns_empty(self):
-        state = {"intent": IntentType.VECTOR_SEARCH, "vector_results": []}
+        state = _st(intent=IntentType.VECTOR_SEARCH, vector_results=[])
         assert _extract_service_ids(state) == []
 
     def test_preserves_search_rank_order(self):
         """검색 랭킹 순서가 그대로 유지된다 (RRF score 내림차순)."""
-        state = {
-            "intent": IntentType.VECTOR_SEARCH,
-            "vector_results": [
+        state = _st(
+            intent=IntentType.VECTOR_SEARCH,
+            vector_results=[
                 {"service_id": "rank1", "rrf_score": 0.9},
                 {"service_id": "rank2", "rrf_score": 0.5},
                 {"service_id": "rank3", "rrf_score": 0.1},
             ],
-        }
+        )
         assert _extract_service_ids(state) == ["rank1", "rank2", "rank3"]
 
 
@@ -156,18 +157,18 @@ class TestHydrationVectorPaymentFilter:
             {"service_id": "F1", "payment_type": "무료"},
             {"service_id": "P1", "payment_type": "유료"},
         ]
-        state = {
-            "intent": IntentType.VECTOR_SEARCH,
-            "vector_results": vector_results,
-            "payment_type": "무료",
-        }
+        state = _st(
+            intent=IntentType.VECTOR_SEARCH,
+            vector_results=vector_results,
+            payment_type="무료",
+        )
         node = HydrationNode()
         with patch(
             "agents.hydration_node.hydrate_services",
             new=AsyncMock(return_value=hydrated_rows),
         ):
             update = await node(state, MagicMock())
-        ids = [r["service_id"] for r in update["hydrated_services"]]
+        ids = [r["service_id"] for r in update["hydration"]["hydrated_services"]]
         assert ids == ["F1"]
 
 
@@ -182,13 +183,13 @@ class TestHydrationNodeCall:
             {"service_id": "S1", "service_name": "시설1", "service_url": "u1"},
             {"service_id": "S2", "service_name": "시설2", "service_url": "u2"},
         ]
-        state = {"intent": IntentType.SQL_SEARCH, "sql_results": sql_results}
+        state = _st(intent=IntentType.SQL_SEARCH, sql_results=sql_results)
         node = HydrationNode()
         update = await node(state, data_session)
 
-        assert update["hydrated_services"] == sql_results
+        assert update["hydration"]["hydrated_services"] == sql_results
         # 원본 list 와 다른 새 list (얕은 복사) — 후속 수정이 sql_results 에 영향 X
-        assert update["hydrated_services"] is not sql_results
+        assert update["hydration"]["hydrated_services"] is not sql_results
 
     async def test_vector_path_calls_hydrate_services(self, data_session):
         """VECTOR_SEARCH 경로 — service_id 추출 + hydrate_services 호출 + 메타 머지."""
@@ -200,7 +201,7 @@ class TestHydrationNodeCall:
             {"service_id": "S1", "service_name": "시설1"},
             {"service_id": "S2", "service_name": "시설2"},
         ]
-        state = {"intent": IntentType.VECTOR_SEARCH, "vector_results": vector_results}
+        state = _st(intent=IntentType.VECTOR_SEARCH, vector_results=vector_results)
         node = HydrationNode()
         with patch(
             "agents.hydration_node.hydrate_services",
@@ -210,7 +211,7 @@ class TestHydrationNodeCall:
 
         mock_hydrate.assert_awaited_once_with(data_session, ["S1", "S2"])
         # 원본 필드 + 검색 메타 머지 확인
-        result = update["hydrated_services"]
+        result = update["hydration"]["hydrated_services"]
         assert len(result) == 2
         assert result[0]["service_name"] == "시설1"
         assert result[0]["rrf_score"] == 0.9  # 메타 머지됨
@@ -220,20 +221,20 @@ class TestHydrationNodeCall:
     async def test_other_intent_returns_empty(self, data_session):
         """MAP / FALLBACK 등 — hydration 대상 아님."""
         for intent in (IntentType.MAP, IntentType.FALLBACK):
-            state = {"intent": intent}
+            state = _st(intent=intent)
             node = HydrationNode()
             update = await node(state, data_session)
-            assert update == {"hydrated_services": []}
+            assert update == {"hydration": {"hydrated_services": []}}
 
     async def test_idempotent_when_already_hydrated(self, data_session):
         """이미 hydrated_services 가 채워져 있으면(cache hit 등) 재호출하지 않는다."""
-        state = {
-            "intent": IntentType.VECTOR_SEARCH,
-            "vector_results": [{"service_id": "S1", "rrf_score": 0.5}],
-            "hydrated_services": [
+        state = _st(
+            intent=IntentType.VECTOR_SEARCH,
+            vector_results=[{"service_id": "S1", "rrf_score": 0.5}],
+            hydrated_services=[
                 {"service_id": "S_CACHED", "service_name": "캐시된시설"}
             ],
-        }
+        )
         node = HydrationNode()
         update = await node(state, data_session)
         # 빈 dict 반환 → 기존 hydrated_services 그대로 유지
@@ -246,11 +247,11 @@ class TestHydrationNodeCall:
         truthy 검사(`if state.get(...)`)는 [] 를 falsy 로 보아 재실행하는 버그가 있었다.
         is not None 검사로 [] 포함 비-None 상태를 일관되게 skip 한다.
         """
-        state = {
-            "intent": IntentType.VECTOR_SEARCH,
-            "vector_results": [{"service_id": "S1", "rrf_score": 0.5}],
-            "hydrated_services": [],  # MAP/FALLBACK 경로나 이전 hydration 실패 결과
-        }
+        state = _st(
+            intent=IntentType.VECTOR_SEARCH,
+            vector_results=[{"service_id": "S1", "rrf_score": 0.5}],
+            hydrated_services=[],  # MAP/FALLBACK 경로나 이전 hydration 실패 결과
+        )
         node = HydrationNode()
         with patch(
             "agents.hydration_node.hydrate_services", new=AsyncMock()
@@ -262,28 +263,28 @@ class TestHydrationNodeCall:
 
     async def test_empty_results_returns_empty_list(self, data_session):
         """검색 결과가 비어 있으면 hydrated_services = [] (hydrate_services 호출 없음)."""
-        state = {"intent": IntentType.VECTOR_SEARCH, "vector_results": []}
+        state = _st(intent=IntentType.VECTOR_SEARCH, vector_results=[])
         node = HydrationNode()
         with patch(
             "agents.hydration_node.hydrate_services", new=AsyncMock()
         ) as mock_hydrate:
             update = await node(state, data_session)
         mock_hydrate.assert_not_awaited()
-        assert update["hydrated_services"] == []
+        assert update["hydration"]["hydrated_services"] == []
 
     async def test_vector_hydrate_failure_returns_empty(self, data_session):
         """hydrate_services 예외 시 hydrated_services = [] (오류 전파 X)."""
-        state = {
-            "intent": IntentType.VECTOR_SEARCH,
-            "vector_results": [{"service_id": "S1", "rrf_score": 0.9}],
-        }
+        state = _st(
+            intent=IntentType.VECTOR_SEARCH,
+            vector_results=[{"service_id": "S1", "rrf_score": 0.9}],
+        )
         node = HydrationNode()
         with patch(
             "agents.hydration_node.hydrate_services",
             new=AsyncMock(side_effect=RuntimeError("DB 오류")),
         ):
             update = await node(state, data_session)
-        assert update["hydrated_services"] == []
+        assert update["hydration"]["hydrated_services"] == []
 
 
 # ---------------------------------------------------------------------------

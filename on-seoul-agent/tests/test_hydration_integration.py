@@ -21,6 +21,7 @@ from tests.helpers import (
     make_answer_agent,
     make_router,
     make_sql_agent,
+    patch_node_sessions,
 )
 
 
@@ -46,16 +47,15 @@ class TestHydrationNodeExceptionHandler:
         # GraphNodes 의 _hydration 을 예외 던지는 callable 로 교체
         graph._nodes._hydration = bad_hydration
 
-        result = await graph.run(
-            make_agent_state(intent=IntentType.SQL_SEARCH),
-            data_session=data_session,
-            ai_session=make_ai_session(),
-        )
+        with patch_node_sessions(
+            data_session=data_session, ai_session=make_ai_session()
+        ):
+            result = await graph.run(make_agent_state(intent=IntentType.SQL_SEARCH))
 
         # hydration 예외에도 불구하고 그래프가 정상 종료되어야 한다
-        assert result["answer"] == "답변"
+        assert result["output"]["answer"] == "답변"
         # hydration_error node_path 기록 확인
-        assert "hydration_error" in graph._nodes.node_path
+        assert "hydration_error" in result["node_path"]
 
     async def test_hydration_node_error_path_sets_empty_hydrated_services(self):
         """GraphNodes.hydration_node 예외 핸들러가 hydrated_services=[] 를 반환한다."""
@@ -63,7 +63,6 @@ class TestHydrationNodeExceptionHandler:
 
         _, data_session = make_sql_agent([])
         graph = AgentGraph(answer_agent=make_answer_agent())
-        graph._nodes.prepare(data_session, make_ai_session())
         graph._nodes._hydration = bad_hydration
 
         state = make_agent_state(
@@ -71,10 +70,12 @@ class TestHydrationNodeExceptionHandler:
             sql_results=[{"service_id": "S1"}],
         )
 
-        result = await graph._nodes.hydration_node(state)
+        # 노드 로컬 세션(0-6): hydration_node 는 data_session_ctx 로 세션을 잡는다.
+        with patch_node_sessions(data_session=data_session):
+            result = await graph._nodes.hydration_node(state)
 
-        assert result == {"hydrated_services": []}
-        assert "hydration_error" in graph._nodes.node_path
+        assert result["hydration"]["hydrated_services"] == []
+        assert "hydration_error" in result["node_path"]
 
 
 # ---------------------------------------------------------------------------
@@ -86,9 +87,7 @@ class TestRetryPrepNodeResetsHydratedServices:
     """retry_prep_node 가 hydrated_services 를 None 으로 리셋하는지 검증."""
 
     async def test_hydrated_services_reset_to_none(self):
-        _, data_session = make_sql_agent([])
         graph = AgentGraph(answer_agent=make_answer_agent())
-        graph._nodes.prepare(data_session, make_ai_session())
 
         stale_state = make_agent_state(
             retry_count=0,
@@ -98,10 +97,10 @@ class TestRetryPrepNodeResetsHydratedServices:
 
         result = await graph._nodes.retry_prep_node(stale_state)
 
-        assert result["hydrated_services"] is None
-        # 다른 리셋 필드도 함께 확인
-        assert result["sql_results"] is None
-        assert result["vector_results"] is None
+        # 그룹 통째 리셋({}) — 다음 순회 재실행 시 재-hydrate / 재검색.
+        assert result["hydration"] == {}
+        assert result["sql"] == {}
+        assert result["vector"] == {}
         assert result["retry_count"] == 1
 
 
@@ -135,14 +134,14 @@ class TestCacheCheckNodeHydratedServicesRestore:
             },
         }
         with patch(
-            "agents.nodes.get_cached_answer",
+            "agents.nodes.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())
             result = await node(self._base_state())
 
         assert result["cache_hit"] is True
-        assert result["hydrated_services"] == hydrated
+        assert result["hydration"]["hydrated_services"] == hydrated
 
     async def test_hit_envelope_without_hydrated_services_returns_none(self):
         """구버전 cache envelope(hydrated_services 미포함) — None 으로 복원된다."""
@@ -156,14 +155,16 @@ class TestCacheCheckNodeHydratedServicesRestore:
             },
         }
         with patch(
-            "agents.nodes.get_cached_answer",
+            "agents.nodes.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())
             result = await node(self._base_state())
 
         assert result["cache_hit"] is True
-        assert result["hydrated_services"] is None  # snap.get("hydrated_services") → None
+        assert (
+            result["hydration"]["hydrated_services"] is None
+        )  # snap.get("hydrated_services") → None
 
 
 # ---------------------------------------------------------------------------
@@ -338,4 +339,4 @@ class TestMakeAgentStateHelperHydratedServices:
         schema_keys = set(AgentState.__annotations__.keys())
         missing = schema_keys - set(state.keys())
         assert missing == set(), f"make_agent_state 에서 누락된 키: {missing}"
-        assert state.get("hydrated_services") is None
+        assert state["hydration"].get("hydrated_services") is None

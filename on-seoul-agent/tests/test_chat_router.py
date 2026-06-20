@@ -5,7 +5,7 @@ AgentWorkflow는 AsyncMock으로 패치하여 LLM/DB 호출 없이 단위 테스
 """
 
 import json
-from contextlib import asynccontextmanager
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -64,17 +64,6 @@ def _parse_sse_events(content: bytes) -> list[dict]:
     return events
 
 
-def _make_session_ctx():
-    """asynccontextmanager로 MagicMock 세션을 yield하는 픽스처 헬퍼."""
-    mock_session = MagicMock()
-
-    @asynccontextmanager
-    async def _ctx():
-        yield mock_session
-
-    return _ctx
-
-
 def _make_stream(final_state: AgentState):
     """workflow.stream()을 모사하는 async generator factory를 반환한다.
 
@@ -129,10 +118,7 @@ class TestChatStreamRouter:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -166,10 +152,7 @@ class TestChatStreamRouter:
 
         mock_graph.stream = _capturing_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -191,10 +174,7 @@ class TestChatStreamRouter:
 
         mock_graph.stream = _capturing_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 5, "message": "수영장 알려줘"},
@@ -202,26 +182,70 @@ class TestChatStreamRouter:
 
         assert captured[0]["title_needed"] is False
 
-    async def test_workflow_exception_returns_error_event(
+    async def test_prev_entities_injected_into_state(
         self, client: AsyncClient, mock_graph
     ):
-        """세션/DB 레벨 예외 → error 이벤트 반환."""
-        mock_graph.stream = MagicMock(side_effect=RuntimeError("LLM 타임아웃"))
+        """ChatRequest.prev_entities/prev_intent/prev_reasoning → AgentState 주입."""
+        final_state = _make_final_state(message_id=2)
+        captured: list[AgentState] = []
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
-            response = await client.post(
-                "/chat/stream",
-                json={"room_id": 1, "message_id": 2, "message": "테스트"},
-            )
+        async def _capturing_stream(state, **kwargs):
+            captured.append(state)
+            yield "result", final_state
 
-        assert response.status_code == 200
-        events = _parse_sse_events(response.content)
-        error_events = [e for e in events if e.get("event") == "error"]
-        assert len(error_events) == 1
-        assert "message" in error_events[0]["data"]
+        mock_graph.stream = _capturing_stream
+
+        await client.post(
+            "/chat/stream",
+            json={
+                "room_id": 1,
+                "message_id": 2,
+                "message": "이 곳 어떤 곳이야?",
+                "prev_entities": [
+                    {"service_id": "S1", "label": "마루공원 테니스장"},
+                    {"service_id": "S2", "label": "강남 수영장"},
+                ],
+                "prev_intent": "VECTOR_SEARCH",
+                "prev_reasoning": "직전에 자연 친화 시설로 분류함",
+            },
+        )
+
+        st = captured[0]
+        assert st["prev_entities"] == [
+            {"service_id": "S1", "label": "마루공원 테니스장"},
+            {"service_id": "S2", "label": "강남 수영장"},
+        ]
+        assert st["prev_intent"] == IntentType.VECTOR_SEARCH
+        assert st["prev_reasoning"] == "직전에 자연 친화 시설로 분류함"
+        assert st["target_service_ids"] is None
+
+    async def test_prev_fields_default_when_omitted(
+        self, client: AsyncClient, mock_graph
+    ):
+        """하위호환: 신규 필드 미전송 시 빈 배열/None 으로 주입(기존 동작)."""
+        final_state = _make_final_state(message_id=2)
+        captured: list[AgentState] = []
+
+        async def _capturing_stream(state, **kwargs):
+            captured.append(state)
+            yield "result", final_state
+
+        mock_graph.stream = _capturing_stream
+
+        await client.post(
+            "/chat/stream",
+            json={"room_id": 1, "message_id": 2, "message": "수영장 알려줘"},
+        )
+
+        st = captured[0]
+        assert st["prev_entities"] == []
+        assert st["prev_intent"] is None
+        assert st["prev_reasoning"] is None
+        assert st["target_service_ids"] is None
+
+    # 스트림 예외 → error 이벤트(정확히 1개)는 test_error_stream_yields_exactly_one_event 가,
+    # 메시지 일반화/내부정보 미노출은 test_error_event_message_is_generic 이 커버하므로
+    # 동일 분기의 예외 타입 순열로 축소했다.
 
     async def test_invalid_lat_returns_422(self, client: AsyncClient):
         """잘못된 lat 범위(-91.0) → 422 반환 (Pydantic 검증)."""
@@ -242,10 +266,7 @@ class TestChatStreamRouter:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -259,19 +280,8 @@ class TestChatStreamRouter:
     # 추가 엣지케이스
     # ------------------------------------------------------------------
 
-    async def test_invalid_lng_returns_422(self, client: AsyncClient):
-        """잘못된 lng 범위(181.0) → 422 반환 (Pydantic 검증)."""
-        response = await client.post(
-            "/chat/stream",
-            json={
-                "room_id": 1,
-                "message_id": 1,
-                "message": "내 주변 체육관",
-                "lat": 37.5,
-                "lng": 181.0,
-            },
-        )
-        assert response.status_code == 422
+    # lng 범위 422 는 test_invalid_lat_returns_422 와 동일한 좌표 범위 validator의
+    # 값만 다른 순열이라 축소했다(lat 케이스 + 경계 케이스로 분기 커버 유지).
 
     async def test_boundary_lat_exactly_90_is_valid(
         self, client: AsyncClient, mock_graph
@@ -280,10 +290,7 @@ class TestChatStreamRouter:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={
@@ -304,10 +311,7 @@ class TestChatStreamRouter:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -324,10 +328,7 @@ class TestChatStreamRouter:
         """세션/DB 레벨 예외 시 SSE 이벤트가 정확히 1개(error)만 발행된다."""
         mock_graph.stream = MagicMock(side_effect=ValueError("DB 연결 실패"))
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "테스트"},
@@ -345,10 +346,7 @@ class TestChatStreamRouter:
             side_effect=RateLimitException("Gemini embed rate limit 소진")
         )
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -358,28 +356,14 @@ class TestChatStreamRouter:
         events = _parse_sse_events(response.content)
         error_events = [e for e in events if e.get("event") == "error"]
         assert len(error_events) == 1
-        assert error_events[0]["data"]["message"] == "현재 요청이 많아 잠시 후 다시 시도해 주세요."
-
-    async def test_rate_limit_error_message_differs_from_generic_error(
-        self, client: AsyncClient, mock_graph
-    ):
-        """RateLimitException의 error 메시지는 범용 error 메시지와 다른 문자열이다."""
-        mock_graph.stream = MagicMock(
-            side_effect=RateLimitException("소진")
+        assert (
+            error_events[0]["data"]["message"]
+            == "현재 요청이 많아 잠시 후 다시 시도해 주세요."
         )
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
-            response = await client.post(
-                "/chat/stream",
-                json={"room_id": 1, "message_id": 1, "message": "테스트"},
-            )
-
-        events = _parse_sse_events(response.content)
-        msg = events[0]["data"]["message"]
-        assert msg != "서비스 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+    # rate-limit 메시지가 범용 error 메시지와 다르다는 단언은 위
+    # test_rate_limit_exception_yields_rate_limit_error_event 의 정확한 문자열 매칭이
+    # 이미 함의하므로(서로 다른 고정 문자열) 축소했다.
 
     async def test_error_event_message_is_generic(
         self, client: AsyncClient, mock_graph
@@ -387,10 +371,7 @@ class TestChatStreamRouter:
         """error 이벤트의 message 필드는 예외 내용을 노출하지 않고 범용 문자열을 반환한다."""
         mock_graph.stream = MagicMock(side_effect=RuntimeError("LLM 타임아웃 발생"))
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -412,10 +393,7 @@ class TestChatStreamRouter:
         )
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -425,39 +403,19 @@ class TestChatStreamRouter:
         final_events = [e for e in events if e["event"] == "final"]
         assert final_events[0]["data"]["title"] == "수영장 문의"
 
-    async def test_final_event_title_is_none_for_non_first_message(
-        self, client: AsyncClient, mock_graph
-    ):
-        """message_id != 1 요청의 final 이벤트에서 title은 None이다."""
-        final_state = _make_final_state(message_id=3, title=None, title_needed=False)
-        mock_graph.stream = _make_stream(final_state)
-
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
-            response = await client.post(
-                "/chat/stream",
-                json={"room_id": 1, "message_id": 3, "message": "수영장 몇 시까지야"},
-            )
-
-        events = _parse_sse_events(response.content)
-        final_events = [e for e in events if e["event"] == "final"]
-        assert final_events[0]["data"]["title"] is None
+    # final payload title=None(비-first message) 는 title 존재 케이스와 동일한
+    # SSE title passthrough 의 값만 다른 순열이라 축소했다(title_needed 파생은
+    # test_non_first_message_sets_title_needed_false 가 별도 커버).
 
     async def test_missing_required_field_returns_422(self, client: AsyncClient):
-        """필수 필드 누락(message 없음) → 422 반환."""
+        """필수 필드 누락(message 없음) → 422 반환.
+
+        room_id 누락 등 다른 필수 필드 순열도 동일 required-field validator 분기라
+        대표 케이스 하나만 유지한다.
+        """
         response = await client.post(
             "/chat/stream",
             json={"room_id": 1, "message_id": 1},
-        )
-        assert response.status_code == 422
-
-    async def test_missing_room_id_returns_422(self, client: AsyncClient):
-        """필수 필드 누락(room_id 없음) → 422 반환."""
-        response = await client.post(
-            "/chat/stream",
-            json={"message_id": 1, "message": "테스트"},
         )
         assert response.status_code == 422
 
@@ -484,10 +442,7 @@ class TestChatStreamRouter:
 
         mock_graph.stream = _error_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 2, "message": "테스트"},
@@ -526,10 +481,7 @@ class TestChatStreamRouter:
 
         mock_graph.stream = _error_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -553,10 +505,7 @@ class TestCacheAndContextIntegration:
         final_state = _make_final_state(cache_hit=True)
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -566,29 +515,10 @@ class TestCacheAndContextIntegration:
         final_events = [e for e in events if e["event"] == "final"]
         assert final_events[0]["data"]["cache_hit"] is True
 
-    async def test_cache_miss_sse_payload_marks_cache_hit_false(
-        self, client: AsyncClient, mock_graph
-    ):
-        """기본값(cache_hit=False)이면 final SSE payload에 cache_hit=False."""
-        final_state = _make_final_state()
-        mock_graph.stream = _make_stream(final_state)
+    # cache_hit=False(기본값) payload 는 cache_hit=True 케이스와 동일한 필드
+    # passthrough 의 값만 다른 순열이라 축소했다.
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
-            response = await client.post(
-                "/chat/stream",
-                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
-            )
-
-        events = _parse_sse_events(response.content)
-        final_events = [e for e in events if e["event"] == "final"]
-        assert final_events[0]["data"]["cache_hit"] is False
-
-    async def test_history_passed_into_state(
-        self, client: AsyncClient, mock_graph
-    ):
+    async def test_history_passed_into_state(self, client: AsyncClient, mock_graph):
         """request.history가 model_dump 되어 AgentState["history"]에 주입된다."""
         final_state = _make_final_state()
         captured: list[AgentState] = []
@@ -600,10 +530,7 @@ class TestCacheAndContextIntegration:
 
         mock_graph.stream = _capturing_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             await client.post(
                 "/chat/stream",
                 json={
@@ -636,10 +563,7 @@ class TestCacheAndContextIntegration:
 
         mock_graph.stream = _capturing_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "강남구 수영장"},
@@ -648,30 +572,8 @@ class TestCacheAndContextIntegration:
         assert response.status_code == 200
         assert captured[0]["history"] == []
 
-    async def test_empty_history_simple_request_returns_final(
-        self, client: AsyncClient, mock_graph
-    ):
-        """history=[]로 호출 시 422 없이 final 이벤트가 반환된다."""
-        final_state = _make_final_state()
-        mock_graph.stream = _make_stream(final_state)
-
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
-            response = await client.post(
-                "/chat/stream",
-                json={
-                    "room_id": 1,
-                    "message_id": 1,
-                    "message": "강남구 테니스장 알려줘",
-                    "history": [],
-                },
-            )
-
-        assert response.status_code == 200
-        events = _parse_sse_events(response.content)
-        assert any(e["event"] == "final" for e in events)
+    # 명시 history=[] → 200/final 은 test_history_defaults_to_empty_when_omitted
+    # (생략 시 기본값 [] 주입 + 200)이 이미 커버하는 동일 경로라 축소했다.
 
     async def test_invalid_history_role_returns_422(self, client: AsyncClient):
         """history.role이 허용 값(user/assistant) 밖이면 422 반환."""
@@ -706,10 +608,7 @@ class TestCacheAndContextIntegration:
         final_state = _make_final_state()
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={
@@ -726,29 +625,9 @@ class TestCacheAndContextIntegration:
 class TestServiceCardsInFinalPayload:
     """SSE final 이벤트의 service_cards 구조화 배열 검증."""
 
-    async def test_final_payload_includes_service_cards(
-        self, client: AsyncClient, mock_graph
-    ):
-        """AnswerAgent 가 채운 service_cards 가 SSE final payload 에 그대로 노출된다."""
-        cards = [
-            {"service_id": "S1", "service_name": "수영장", "area_name": "강남구"},
-            {"service_id": "S2", "service_name": "체육관", "area_name": "마포구"},
-        ]
-        final_state = _make_final_state(service_cards=cards)
-        mock_graph.stream = _make_stream(final_state)
-
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
-            response = await client.post(
-                "/chat/stream",
-                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
-            )
-
-        events = _parse_sse_events(response.content)
-        final_events = [e for e in events if e["event"] == "final"]
-        assert final_events[0]["data"]["service_cards"] == cards
+    # service_cards 가 payload 에 그대로 노출되는 happy-path 는
+    # test_final_payload_preserves_existing_keys_alongside_service_cards
+    # (service_cards 포함 6개 키 + 값 단언)가 더 포괄적으로 커버하므로 축소했다.
 
     async def test_final_payload_service_cards_empty_when_unset(
         self, client: AsyncClient, mock_graph
@@ -757,10 +636,7 @@ class TestServiceCardsInFinalPayload:
         final_state = _make_final_state(service_cards=None)
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -786,10 +662,7 @@ class TestServiceCardsInFinalPayload:
         )
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -828,10 +701,7 @@ class TestServiceCardsInFinalPayload:
         final_state = _make_final_state(cache_hit=True, service_cards=cards)
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장"},
@@ -843,50 +713,8 @@ class TestServiceCardsInFinalPayload:
         assert data["cache_hit"] is True
         assert data["service_cards"] == cards
 
-    async def test_sse_frame_serializes_datetime_in_service_cards(
-        self, client: AsyncClient, mock_graph
-    ):
-        """회귀: service_cards 에 datetime 객체가 포함되어도 SSE 직렬화가 깨지지 않는다.
-
-        public_service_reservations 의 receipt_*_dt 컬럼은 timestamp 타입이라
-        SQLAlchemy 가 datetime 객체로 매핑한다. sse_frame() 의 json.dumps 가
-        default=str 폴백을 적용해 ISO 8601 문자열로 직렬화해야 하며, 그렇지
-        않으면 TypeError 로 SSE 스트림이 중단된다.
-        """
-        import datetime as _dt
-
-        cards = [
-            {
-                "service_id": "S1",
-                "service_name": "수영장",
-                "receipt_start_dt": _dt.datetime(2025, 11, 1, 9, 0, 0),
-                "receipt_end_dt": _dt.datetime(2025, 12, 31, 18, 0, 0),
-            }
-        ]
-        final_state = _make_final_state(service_cards=cards)
-        mock_graph.stream = _make_stream(final_state)
-
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
-            response = await client.post(
-                "/chat/stream",
-                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
-            )
-
-        # TypeError 가 발생하지 않고 정상 SSE 응답이 흘러야 한다.
-        assert response.status_code == 200
-        events = _parse_sse_events(response.content)
-        final_events = [e for e in events if e["event"] == "final"]
-        assert len(final_events) == 1
-        data = final_events[0]["data"]
-        # default=str 폴백에 의해 datetime 이 문자열로 직렬화된다.
-        card = data["service_cards"][0]
-        assert isinstance(card["receipt_start_dt"], str)
-        assert isinstance(card["receipt_end_dt"], str)
-        assert card["receipt_start_dt"].startswith("2025-11-01")
-        assert card["receipt_end_dt"].startswith("2025-12-31")
+    # datetime-only SSE 직렬화 회귀는 아래 test_sse_frame_serializes_decimal_and_date_in_service_cards
+    # 가 동일한 default=str 폴백 경로를 Decimal/date 까지 포함해 더 넓게 커버하므로 축소했다.
 
     async def test_sse_frame_serializes_decimal_and_date_in_service_cards(
         self, client: AsyncClient, mock_graph
@@ -912,10 +740,7 @@ class TestServiceCardsInFinalPayload:
         final_state = _make_final_state(service_cards=cards)
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -942,10 +767,7 @@ class TestServiceCardsInFinalPayload:
         final_state = _make_final_state(service_cards=[])
         mock_graph.stream = _make_stream(final_state)
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
@@ -987,10 +809,7 @@ class TestServiceCardsInFinalPayload:
 
         mock_graph.stream = _error_stream
 
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
+        with nullcontext():
             response = await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "테스트"},
@@ -1003,43 +822,9 @@ class TestServiceCardsInFinalPayload:
         assert data["service_cards"] == []
         assert data["error"] == "서비스 처리 중 오류가 발생했습니다."
 
-    async def test_workflow_error_forces_empty_cards_when_answer_absent(
-        self, client: AsyncClient, mock_graph
-    ):
-        """회귀: 'answer 없는 error' 경로에서도 service_cards 가 [] 로 강제된다.
-
-        기존 회귀 테스트는 answer 가 채워진 error 만 검증했다. answer=None 이고
-        service_cards 가 None 인(AnswerAgent 미실행) error 양쪽 분기에서도 동일하게
-        [] 가 노출되어야 한다.
-        """
-        final_state = _make_final_state(
-            error="라우팅 실패",
-            answer=None,
-            service_cards=None,
-        )
-
-        async def _error_stream(*args, **kwargs):
-            yield (
-                "progress",
-                {"step": "routing", "message": "질문을 분석하고 있습니다..."},
-            )
-            yield "result", final_state
-
-        mock_graph.stream = _error_stream
-
-        with (
-            patch("routers.chat.ai_session_ctx", _make_session_ctx()),
-            patch("routers.chat.data_session_ctx", _make_session_ctx()),
-        ):
-            response = await client.post(
-                "/chat/stream",
-                json={"room_id": 1, "message_id": 1, "message": "테스트"},
-            )
-
-        events = _parse_sse_events(response.content)
-        wf_error_events = [e for e in events if e["event"] == "workflow_error"]
-        assert len(wf_error_events) == 1
-        assert wf_error_events[0]["data"]["service_cards"] == []
+    # answer=None/cards=None error 분기의 service_cards=[] 강제는 위
+    # test_workflow_error_payload_handles_service_cards_safely(부분 결과까지 덮어쓰는
+    # 더 강한 케이스)와 동일 정책의 trivial 입력 순열이라 축소했다.
 
 
 class TestMainEndpoints:

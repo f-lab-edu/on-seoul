@@ -29,6 +29,12 @@ _on_ai_engine = create_async_engine(
     # 요청에서 해당 연결을 재사용하기 전에 살아있는지 확인해 stale 연결을 방지한다.
     pool_pre_ping=True,
     pool_recycle=300,  # 5분 이상 유휴 연결 재생성 (네트워크 레벨 타임아웃 방지)
+    # 풀 사이즈 명시: 노드 로컬 세션(0b)으로 커넥션 점유 W가 검색 윈도우로
+    # 축소된다. on_ai 사용자: vector_node(4채널, 글로벌 세마포어 cap=40 동시 상한),
+    # search_persist_node, trace_node. 단일 인스턴스 200 QPS 기준(Little's Law)
+    # vector 채널 λ=800/s × W=0.02s → 평균 동시 ~16, 피크(p99≈3×) ~48. cap 50(20+30).
+    pool_size=20,
+    max_overflow=30,
 )
 _OnAiSession = async_sessionmaker(_on_ai_engine, expire_on_commit=False)
 
@@ -40,8 +46,16 @@ _OnAiSession = async_sessionmaker(_on_ai_engine, expire_on_commit=False)
 _on_data_engine = create_async_engine(
     settings.on_data_database_url,
     echo=settings.debug,
+    # statement_cache_size=0: PgBouncer transaction mode(제안 3)와 asyncpg prepared
+    # statement 충돌 방지. PgBouncer 도입 전이라도 선반영.
+    connect_args={"statement_cache_size": 0},
     pool_pre_ping=True,
     pool_recycle=300,
+    # 풀 사이즈 명시: on_data 사용자: sql_node, hydration_node, map_node,
+    # analytics_node. 단일 인스턴스 200 QPS 기준(Little's Law)
+    # λ=200/s × W=0.03s(sql+hydration) → 평균 동시 ~6, 피크(p99≈3×) ~18. cap 30(10+20).
+    pool_size=10,
+    max_overflow=20,
 )
 _OnDataSession = async_sessionmaker(_on_data_engine, expire_on_commit=False)
 

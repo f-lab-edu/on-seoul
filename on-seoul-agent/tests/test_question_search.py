@@ -15,7 +15,7 @@ Mock DB 세션으로 SQL 실행 경로와 bind 파라미터를 검증한다.
 from unittest.mock import AsyncMock, MagicMock
 
 from tools.question_search import question_search
-from tools.vector_search import MIN_SIMILARITY
+from core.config import settings
 
 
 _QUESTION_KEYS = ["service_id", "embedding_text", "intent_label", "similarity"]
@@ -86,11 +86,11 @@ class TestQuestionSearch:
         assert "question" in texts[0]
 
     async def test_min_similarity_filter(self):
-        """min_similarity가 bind에 전달된다."""
+        """min_similarity 기본값이 question 트랙 config 값으로 bind에 전달된다."""
         session, _, binds = _capture_session()
         await question_search(session, _SAMPLE_VECTOR)
         assert "min_similarity" in binds[0]
-        assert binds[0]["min_similarity"] == MIN_SIMILARITY
+        assert binds[0]["min_similarity"] == settings.vector_min_similarity_question
 
     async def test_returns_intent_label(self):
         """반환 결과에 intent_label 필드가 포함된다."""

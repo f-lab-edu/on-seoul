@@ -20,18 +20,16 @@ DISTINCT ON (service_id) 패턴으로 중복을 제거한다.
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tools.vector_search import MIN_SIMILARITY, TOP_K
+from core.config import settings
 
 
 async def question_search(
     session: AsyncSession,
     query_vector: list[float],
     *,
-    top_k: int = TOP_K,
-    min_similarity: float = MIN_SIMILARITY,
+    top_k: int | None = None,
+    min_similarity: float | None = None,
 ) -> list[dict]:
-    if not query_vector or not all(isinstance(v, (int, float)) for v in query_vector):
-        raise ValueError("query_vector must be a non-empty list of floats")
     """service_embeddings WHERE row_kind='question' → service_id별 최고 유사도 1건 반환.
 
     Parameters
@@ -41,9 +39,10 @@ async def question_search(
     query_vector:
         쿼리 임베딩 벡터.
     top_k:
-        반환할 최대 결과 수.
+        반환할 최대 결과 수. None이면 settings.vector_track_top_k 사용.
     min_similarity:
         코사인 유사도 하한값 (0~1).
+        None이면 settings.vector_min_similarity_question 사용.
 
     Returns
     -------
@@ -51,6 +50,13 @@ async def question_search(
         service_id, embedding_text, intent_label, similarity 키를 가진 dict 리스트.
         service_id당 최고 유사도 row 1건. 결과 없으면 빈 리스트.
     """
+    if not query_vector or not all(isinstance(v, (int, float)) for v in query_vector):
+        raise ValueError("query_vector must be a non-empty list of floats")
+    if top_k is None:
+        top_k = settings.vector_track_top_k
+    if min_similarity is None:
+        min_similarity = settings.vector_min_similarity_question
+
     bind = {
         "query_vector": str(query_vector),
         "min_similarity": min_similarity,

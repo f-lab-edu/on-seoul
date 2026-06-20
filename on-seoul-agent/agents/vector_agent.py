@@ -2,16 +2,18 @@
 
 1. LLM으로 사용자 질의를 검색에 최적화된 문장으로 정제한다.
 2. 정제된 질의를 임베딩한다.
-3. 4채널을 순차 실행한다 (asyncpg 단일 세션 제약):
+3. 4채널을 채널별 독립 세션으로 asyncio.gather 병렬 실행한다:
    - Track A: vector_search(row_kind='identity')  + post-filter
    - Track B: vector_search(row_kind='summary')
    - Track C: question_search(row_kind='question') — PARTITION BY dedup
    - Track D: bm25_search — ParadeDB 전문 검색
 4. 4채널 결과를 가중 RRF(Reciprocal Rank Fusion)로 결합한다.
-5. vector_results 에는 검색 메타데이터만 채운다 ({service_id, rrf_score}).
+5. vector.results 에는 검색 메타데이터만 채운다 ({service_id, rrf_score}).
    hydration(원본 조회)은 HydrationNode 가 단독으로 담당한다.
 """
 
+import asyncio
+import contextlib
 import logging
 
 from langchain_core.embeddings import Embeddings
@@ -20,17 +22,19 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import core.concurrency as _concurrency
 from agents._search_channel_utils import _to_hits
 from core.config import settings
+from core.database import ai_session_ctx
 from core.rrf import reciprocal_rank_fusion
 from llm.client import get_chat_model, get_embeddings
 from schemas.search import ChannelData, ChannelQuery, SearchChannel, SearchKind
 from schemas.state import AgentState
+from tools.bm25_search import BM25_LIMIT as _BM25_LIMIT
 from tools.bm25_search import bm25_search
 from tools.question_search import question_search
-from tools.tokenizer import tokenize_query
-from tools.vector_search import MIN_SIMILARITY, TOP_K as _VECTOR_TOP_K
-from tools.vector_search import vector_search
+from tools.tokenizer import atokenize_query
+from tools.vector_search import resolve_min_similarity, vector_search
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +51,6 @@ _REFINE_SYSTEM = """\
 """
 
 _REFINE_HUMAN = "사용자 질의: {message}"
-
-_RRF_K: int = 60  # RRF 공식 상수 (표준값 60)
-_TOP_K: int = 10  # RRF 결합 결과 최대 반환 수
 
 _ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(
     ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
@@ -92,61 +93,6 @@ class _RefinedQuery(BaseModel):
         if v in _ALLOWED_SERVICE_STATUSES:
             return v  # type: ignore[return-value]
         return None
-
-
-def _rrf_merge(
-    vector_rows: list[dict],
-    bm25_rows: list[dict],
-    *,
-    k: int = _RRF_K,
-    top_k: int = 10,
-) -> list[dict]:
-    """Reciprocal Rank Fusion으로 두 검색 결과를 결합한다.
-
-    Phase 1 호환 함수. 기존 test_vector_agent.py에서 직접 사용.
-    Phase RRF에서는 core.rrf.reciprocal_rank_fusion을 사용하되,
-    이 함수는 하위 호환성을 위해 유지한다.
-
-    Parameters
-    ----------
-    vector_rows:
-        vector_search 반환값. service_id, service_name, metadata, similarity 포함.
-    bm25_rows:
-        bm25_search 반환값. service_id, bm25_score 포함.
-    k:
-        RRF 공식 상수. 기본값 60.
-    top_k:
-        최종 반환 결과 수.
-
-    Returns
-    -------
-    list[dict]
-        rrf_score 내림차순 정렬된 딕셔너리 리스트.
-        각 dict는 service_id, rrf_score 외에 vector_search 메타데이터를 포함한다.
-    """
-    scores: dict[str, float] = {}
-
-    for rank, row in enumerate(vector_rows, start=1):
-        sid = row["service_id"]
-        scores[sid] = scores.get(sid, 0.0) + 1.0 / (k + rank)
-
-    for rank, row in enumerate(bm25_rows, start=1):
-        sid = row["service_id"]
-        scores[sid] = scores.get(sid, 0.0) + 1.0 / (k + rank)
-
-    # 메타데이터 인덱싱 — 벡터 결과 우선, 없으면 BM25 결과에서 보완
-    vector_meta: dict[str, dict] = {r["service_id"]: r for r in vector_rows}
-    bm25_meta: dict[str, dict] = {r["service_id"]: r for r in bm25_rows}
-
-    merged = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
-
-    result = []
-    for sid, rrf_score in merged:
-        base = dict(vector_meta.get(sid, bm25_meta.get(sid, {"service_id": sid})))
-        base["rrf_score"] = rrf_score
-        result.append(base)
-
-    return result
 
 
 def _resolve_weights(sub_intent: str | None) -> dict[str, float] | None:
@@ -200,8 +146,12 @@ async def _safe_question_search(
 async def _safe_bm25_search(session: AsyncSession, tokens: list[str]) -> list[dict]:
     """bm25_search 예외를 격리하여 빈 결과 반환.
 
-    예외 발생 시 세션 트랜잭션을 롤백하여 이후 쿼리(search_persist 등)가
-    InFailedSQLTransactionError 로 연쇄 실패하지 않도록 복구한다.
+    명시 rollback (레거시 방어 코드):
+        제안 2(채널별 독립 세션)로 전환된 이후 이 세션은 이 채널 전용이며,
+        async with _run_channel() 블록 종료 시 __aexit__ 가 자동으로 반납한다.
+        따라서 명시 rollback 은 현재 구조에서 무해하지만 불필요하다.
+        과거 공유 세션 시대(0-1)에 InFailedSQLTransactionError 연쇄 실패를 막기
+        위해 추가된 코드이며, 독립 세션 전환 이후에는 삭제해도 무방하다.
     """
     try:
         return await bm25_search(tokens, session)
@@ -239,56 +189,105 @@ class VectorAgent:
     async def search(
         self,
         state: AgentState,
-        ai_session: AsyncSession,
     ) -> dict:
-        """질의 정제 → 임베딩 → 4채널 순차 검색 → 가중 RRF.
+        """질의 정제 → 임베딩 → 4채널 병렬 검색 → 가중 RRF.
 
-        ai_session : service_embeddings(on_ai)에 대한 의미 검색·BM25 용도
+        채널마다 독립 ai_session_ctx()로 세션을 열어 asyncio.gather로 동시 실행한다.
+        프로세스 글로벌 세마포어(core.concurrency.vector_global_sema)로 동시 채널 수를 cap한다.
 
-        vector_results 에는 검색 메타데이터만 채운다:
+        반환 state 의 vector.results 에는 검색 메타데이터만 채운다:
           [{service_id, rrf_score}, ...]
         원본 데이터 hydration 은 HydrationNode 가 단독으로 담당한다.
 
         Router가 이미 refined_query와 post-filter를 산출한 경우
-        (state["refined_query"] 존재), 중복 LLM 호출을 피하기 위해 refine 체인을 skip하고
-        state["max_class_name"/"area_name"/"service_status"] 값을 그대로 사용한다.
+        (state["plan"]["refined_query"] 존재), 중복 LLM 호출을 피하기 위해 refine 체인을
+        skip하고 state["filters"]의 max_class_name/area_name/service_status 값을
+        그대로 사용한다.
         """
-        router_refined = state.get("refined_query")
+        plan = state.get("plan") or {}
+        filters = state.get("filters") or {}
+        router_refined = plan.get("refined_query")
         if router_refined:
             refined = _RefinedQuery(
                 refined_query=router_refined,
-                max_class_name=state.get("max_class_name"),
-                area_name=state.get("area_name"),
-                service_status=state.get("service_status"),
+                max_class_name=filters.get("max_class_name"),
+                area_name=filters.get("area_name"),
+                service_status=filters.get("service_status"),
             )
         else:
             refined = await self._refine_chain.ainvoke({"message": state["message"]})
 
         query_vector = await self._embeddings.aembed_query(refined.refined_query)
-        tokens = tokenize_query(refined.refined_query)
+        # kiwipiepy.tokenize()는 동기 C 확장 — asyncio.to_thread()로 오프로드.
+        tokens = await atokenize_query(refined.refined_query)
         bm25_tokens = [t for t in tokens if t not in _BM25_STOPWORDS]
 
-        # 4채널 순차 실행.
-        # asyncpg 단일 세션은 동시 쿼리를 허용하지 않으므로 순차 실행한다.
-        # 각 _safe_* 래퍼가 예외를 개별 격리하므로 한 채널 실패가 전체에 영향을 주지 않는다.
-        a_rows = await _safe_vector_search(
-            ai_session,
-            query_vector,
-            row_kind="identity",
-            max_class_name=refined.max_class_name,
-            area_name=refined.area_name,
-            service_status=refined.service_status,
-        )
-        b_rows = await _safe_vector_search(ai_session, query_vector, row_kind="summary")
-        c_rows = await _safe_question_search(ai_session, query_vector)
+        # 4채널 병렬 실행.
+        # 채널마다 독립 ai_session_ctx()로 세션을 열어 asyncpg 동시 쿼리 제약을 우회한다.
+        # bm25_tokens 없으면 채널 D를 태스크에 포함하지 않고 빈 결과로 인덱스를 고정한다.
+        # 결과 인덱스: results[0]=a_rows, results[1]=b_rows, results[2]=c_rows, results[3]=d_rows
+        #
+        # 글로벌 세마포어(core.concurrency.vector_global_sema) — 동시 채널 단일 가드.
+        #   on_ai 풀(cap=50)이 고갈되지 않도록 프로세스 전체 동시 채널 수를 제한한다.
+        #   단일 인스턴스 200 QPS 기준(config.py 산정): 200 QPS × 4채널 fan-out 잠재 쿼리를
+        #   vector_global_concurrency(기본 40)로 캡해 풀(cap 50) 이내로 유지(persist/trace 여유 ~10).
+        #   모듈 속성(_concurrency.vector_global_sema)을 런타임에 읽어 lifespan 이후
+        #   init_global_sema()로 할당된 값을 정확히 참조한다.
+
+        async def _run_channel(coro_fn):
+            # lifespan 이전(테스트 환경)에는 vector_global_sema가 None이므로
+            # contextlib.nullcontext()로 대체하여 분기 중복을 제거한다.
+            #
+            # 세마포어/세션 획득 + 검색 전체를 try로 감싸 어떤 예외든 그 채널만
+            # 빈 리스트로 떨어뜨린다(옵션 b). _safe_* 래퍼는 검색 함수 내부 예외만
+            # 흡수하지만, 풀 고갈 시 ai_session_ctx() 세션 획득에서 발생하는
+            # TimeoutError(QueuePool/asyncpg)는 _safe_* 바깥이므로 여기서 격리해야
+            # gather(return_exceptions=False)로 전파돼 요청 전체 벡터 검색이
+            # 실패하거나 다른 채널이 orphan으로 남는 것을 막는다.
+            # CancelledError는 Exception 비상속(3.8+)이라 정상 취소 전파는 막지 않는다.
+            sema_ctx = _concurrency.vector_global_sema or contextlib.nullcontext()
+            try:
+                async with sema_ctx:
+                    async with ai_session_ctx() as session:
+                        return await coro_fn(session)
+            except Exception:
+                logger.warning(
+                    "채널 세션 획득/실행 실패 — 빈 결과로 대체", exc_info=True
+                )
+                return []
+
+        tasks = [
+            _run_channel(
+                lambda s: _safe_vector_search(
+                    s,
+                    query_vector,
+                    row_kind="identity",
+                    max_class_name=refined.max_class_name,
+                    area_name=refined.area_name,
+                    service_status=refined.service_status,
+                )
+            ),
+            _run_channel(
+                lambda s: _safe_vector_search(s, query_vector, row_kind="summary")
+            ),
+            _run_channel(lambda s: _safe_question_search(s, query_vector)),
+        ]
         if bm25_tokens:
-            d_rows = await _safe_bm25_search(ai_session, bm25_tokens)
-        else:
-            d_rows = []
+            tasks.append(
+                _run_channel(lambda s: _safe_bm25_search(s, bm25_tokens))
+            )
+
+        gathered = await asyncio.gather(*tasks)
+        a_rows: list[dict] = gathered[0]
+        b_rows: list[dict] = gathered[1]
+        c_rows: list[dict] = gathered[2]
+        d_rows: list[dict] = gathered[3] if bm25_tokens else []
+
+        if not bm25_tokens:
             logger.debug("유효 BM25 토큰 없음 — 벡터 단독 검색으로 진행")
 
         # 가중치 결정
-        sub_intent = state.get("vector_sub_intent")
+        sub_intent = plan.get("vector_sub_intent")
         weights = _resolve_weights(sub_intent)
 
         # 4채널 RRF 결합
@@ -309,7 +308,9 @@ class VectorAgent:
             {"service_id": sid, "rrf_score": score} for sid, score in rrf_top
         ]
 
-        # --- search_channels 구성 (6채널) ---
+        # --- search_channels 구성 (5채널) ---
+        # 트랙별 실제 운영값(config)을 그대로 기록한다.
+        track_top_k = settings.vector_track_top_k
         search_channels: dict[str, ChannelData] = {
             SearchChannel.VECTOR_A: ChannelData(
                 kind=SearchKind.VECTOR,
@@ -317,8 +318,8 @@ class VectorAgent:
                     query_text=refined.refined_query,
                     parameters={
                         "row_kind": "identity",
-                        "top_k": _VECTOR_TOP_K,
-                        "min_similarity": MIN_SIMILARITY,
+                        "top_k": track_top_k,
+                        "min_similarity": resolve_min_similarity("identity"),
                         "max_class_name": refined.max_class_name,
                         "area_name": refined.area_name,
                         "service_status": refined.service_status,
@@ -332,8 +333,8 @@ class VectorAgent:
                     query_text=refined.refined_query,
                     parameters={
                         "row_kind": "summary",
-                        "top_k": _VECTOR_TOP_K,
-                        "min_similarity": MIN_SIMILARITY,
+                        "top_k": track_top_k,
+                        "min_similarity": resolve_min_similarity("summary"),
                     },
                 ),
                 hits=_to_hits(b_rows, score_field="similarity"),
@@ -344,8 +345,8 @@ class VectorAgent:
                     query_text=refined.refined_query,
                     parameters={
                         "row_kind": "question",
-                        "top_k": _VECTOR_TOP_K,
-                        "min_similarity": MIN_SIMILARITY,
+                        "top_k": track_top_k,
+                        "min_similarity": resolve_min_similarity("question"),
                     },
                 ),
                 hits=_to_hits(c_rows, score_field="similarity"),
@@ -354,7 +355,7 @@ class VectorAgent:
                 kind=SearchKind.BM25,
                 query=ChannelQuery(
                     query_text=" ".join(bm25_tokens) if bm25_tokens else None,
-                    parameters={"tokens": bm25_tokens, "top_k": _VECTOR_TOP_K},
+                    parameters={"tokens": bm25_tokens, "top_k": _BM25_LIMIT},
                 ),
                 hits=_to_hits(d_rows, score_field="bm25_score"),
             ),
@@ -381,7 +382,7 @@ class VectorAgent:
         }
 
         return {
-            "refined_query": refined.refined_query,
-            "vector_results": meta_results,
+            "plan": {"refined_query": refined.refined_query},
+            "vector": {"results": meta_results},
             "search_channels": search_channels,
         }

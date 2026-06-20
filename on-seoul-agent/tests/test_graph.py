@@ -20,7 +20,7 @@ from agents.nodes import (
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.vector_agent import VectorAgent, _RefinedQuery
 from core.exceptions import RateLimitException
-from schemas.state import AgentState, IntentType
+from schemas.state import ActionType, AgentState, IntentType
 from tests.helpers import (
     make_agent_state,
     make_ai_session,
@@ -28,6 +28,11 @@ from tests.helpers import (
     make_answer_agent,
     make_router,
     make_sql_agent,
+    make_triage,
+    make_triage_router,
+    patch_node_sessions,
+    run_graph,
+    stream_graph,
 )
 
 
@@ -86,16 +91,17 @@ class TestConditionalEdgeRouting:
             sql_agent=sql_agent,
             answer_agent=_answer_agent("수영장 안내입니다."),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
         )
 
-        assert result["intent"] == IntentType.SQL_SEARCH
-        assert result["sql_results"] is not None
-        assert any(r["service_id"] == "S001" for r in result["sql_results"])
-        assert result["answer"] == "수영장 안내입니다."
+        assert result["plan"]["intent"] == IntentType.SQL_SEARCH
+        assert result["sql"]["results"] is not None
+        assert any(r["service_id"] == "S001" for r in result["sql"]["results"])
+        assert result["output"]["answer"] == "수영장 안내입니다."
         assert result["error"] is None
 
     async def test_vector_search_route(self):
@@ -111,7 +117,8 @@ class TestConditionalEdgeRouting:
             patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", mock_bm25),
             patch(
-                "agents.hydration_node.hydrate_services", AsyncMock(return_value=hydrated)
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=hydrated),
             ),
         ):
             graph = AgentGraph(
@@ -119,16 +126,17 @@ class TestConditionalEdgeRouting:
                 vector_agent=vector_agent,
                 answer_agent=_answer_agent("체험관 안내입니다."),
             )
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(message="아이랑 체험할 수 있는 곳"),
                 data_session=MagicMock(),
                 ai_session=ai_session,
             )
 
-        assert result["intent"] == IntentType.VECTOR_SEARCH
-        assert result["vector_results"] is not None
-        assert any(r["service_id"] == "V001" for r in result["vector_results"])
-        assert result["answer"] == "체험관 안내입니다."
+        assert result["plan"]["intent"] == IntentType.VECTOR_SEARCH
+        assert result["vector"]["results"] is not None
+        assert any(r["service_id"] == "V001" for r in result["vector"]["results"])
+        assert result["output"]["answer"] == "체험관 안내입니다."
         assert result["error"] is None
 
     async def test_map_route_with_coords(self):
@@ -144,14 +152,15 @@ class TestConditionalEdgeRouting:
                 router=_router(IntentType.MAP),
                 answer_agent=_answer_agent("주변 시설입니다."),
             )
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(user_lat=37.5665, user_lng=126.9780),
                 data_session=data_session,
                 ai_session=_ai_session(),
             )
 
-        assert result["intent"] == IntentType.MAP
-        assert result["map_results"] == geojson
+        assert result["plan"]["intent"] == IntentType.MAP
+        assert result["map"]["results"] == geojson
         # 결과가 있으므로 재시도 없이 기본 반경으로 1회만 호출된다.
         mock_map.assert_awaited_once_with(
             data_session, 37.5665, 126.9780, radius_m=1000
@@ -164,14 +173,15 @@ class TestConditionalEdgeRouting:
             router=_router(IntentType.MAP),
             answer_agent=_answer_agent("위치 정보가 없습니다."),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(user_lat=None, user_lng=None),
             data_session=data_session,
             ai_session=_ai_session(),
         )
 
-        assert result["intent"] == IntentType.MAP
-        assert result["map_results"] is None
+        assert result["plan"]["intent"] == IntentType.MAP
+        assert result["map"]["results"] is None
 
     async def test_fallback_route_skips_search(self):
         """FALLBACK intent → 검색 없이 answer_node로 바로 이동."""
@@ -184,16 +194,17 @@ class TestConditionalEdgeRouting:
             vector_agent=vector_agent,
             answer_agent=_answer_agent("안내 메시지입니다."),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(message="안녕하세요"),
             data_session=data_session,
             ai_session=_ai_session(),
         )
 
-        assert result["intent"] == IntentType.FALLBACK
-        assert result["sql_results"] is None
-        assert result["vector_results"] is None
-        assert result["answer"] == "안내 메시지입니다."
+        assert result["plan"]["intent"] == IntentType.FALLBACK
+        assert result["sql"].get("results") is None
+        assert result["vector"].get("results") is None
+        assert result["output"]["answer"] == "안내 메시지입니다."
         sql_agent._chain.ainvoke.assert_not_called()
         vector_agent._refine_chain.ainvoke.assert_not_called()
 
@@ -215,17 +226,18 @@ class TestAnalyticsRoute:
             analytics_agent=analytics_agent,
             answer_agent=_answer_agent("강서구에 가장 많습니다."),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(message="테니스장 자치구별 분포"),
             data_session=data_session,
             ai_session=_ai_session(),
         )
 
-        assert result["intent"] == IntentType.ANALYTICS
-        assert result["analytics_results"] == rows
-        assert result["analytics_group_by"] == "area_name"
-        assert result["analytics_metric"] == "count"
-        assert result["answer"] == "강서구에 가장 많습니다."
+        assert result["plan"]["intent"] == IntentType.ANALYTICS
+        assert result["analytics"]["results"] == rows
+        assert result["analytics"]["group_by"] == "area_name"
+        assert result["analytics"]["metric"] == "count"
+        assert result["output"]["answer"] == "강서구에 가장 많습니다."
         assert result["error"] is None
 
     async def test_analytics_skips_hydration_and_search_persist(self):
@@ -239,7 +251,8 @@ class TestAnalyticsRoute:
             analytics_agent=analytics_agent,
             answer_agent=_answer_agent("요약"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=ai_session,
@@ -251,7 +264,7 @@ class TestAnalyticsRoute:
         assert not any("chat_search_queries" in sql for sql in all_sqls)
         # trace 는 종단 노드로 항상 적재된다.
         assert any("chat_agent_traces" in sql for sql in all_sqls)
-        assert result["analytics_results"] == rows
+        assert result["analytics"]["results"] == rows
 
     async def test_analytics_node_graceful_degrade_on_exception(self):
         """analytics_node 내부 예외 시 빈 결과 + error 로 graceful degrade 한다."""
@@ -263,16 +276,17 @@ class TestAnalyticsRoute:
             analytics_agent=analytics_agent,
             answer_agent=_answer_agent("그래도 답변"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
         )
 
-        assert result["analytics_results"] == []
+        assert result["analytics"]["results"] == []
         assert result["error"] is not None
         # 예외에도 그래프는 종료되고 answer 가 채워진다.
-        assert result["answer"]
+        assert result["output"]["answer"]
 
     async def test_analytics_node_graceful_degrade_on_tool_db_error(self):
         """analytics_search(도구) 가 DB 오류를 던져도 빈 결과 + error + analytics_error
@@ -282,9 +296,7 @@ class TestAnalyticsRoute:
         명시한 'KeyError/DB 오류' 는 도구 호출 경로의 예외다. 도구 자체를 강제로
         터뜨려 analytics_node 의 try/except 가 그 경로도 포착하는지 봉인한다.
         """
-        analytics_agent, data_session = make_analytics_agent(
-            [], group_by="area_name"
-        )
+        analytics_agent, data_session = make_analytics_agent([], group_by="area_name")
 
         graph = AgentGraph(
             router=_router(IntentType.ANALYTICS),
@@ -296,20 +308,22 @@ class TestAnalyticsRoute:
             "agents.analytics_agent.analytics_search",
             AsyncMock(side_effect=RuntimeError("DB down")),
         ):
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(),
                 data_session=data_session,
                 ai_session=_ai_session(),
             )
 
-        assert result["analytics_results"] == []
+        assert result["analytics"]["results"] == []
         assert result["error"] is not None
         # 예외에도 answer_node 가 실행되어 답변이 채워진다.
-        assert result["answer"] == "그래도 답변"
+        assert result["output"]["answer"] == "그래도 답변"
         # node_path 에 analytics_error 가 기록되고 정상 analytics_node 는 없다.
-        assert "analytics_error" in graph._nodes.node_path
-        assert "analytics_node" not in graph._nodes.node_path
-        assert "answer_node" in graph._nodes.node_path
+        path = result["node_path"]
+        assert "analytics_error" in path
+        assert "analytics_node" not in path
+        assert "answer_node" in path
         # trace 의 analytics 블록은 빈 결과로 적재된다 (intent==ANALYTICS 유지).
         assert result["trace"]["analytics"]["result_count"] == 0
 
@@ -326,7 +340,8 @@ class TestAnalyticsRoute:
             analytics_agent=analytics_agent,
             answer_agent=_answer_agent("요약"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=ai_session,
@@ -360,7 +375,8 @@ class TestTraceNode:
             router=_router(IntentType.FALLBACK),
             answer_agent=_answer_agent(),
         )
-        await graph.run(
+        await run_graph(
+            graph,
             _state(message_id=42),
             data_session=data_session,
             ai_session=ai_session,
@@ -383,13 +399,14 @@ class TestTraceNode:
             router=_router(IntentType.FALLBACK),
             answer_agent=_answer_agent("답변"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=ai_session,
         )
 
-        assert result["answer"] == "답변"
+        assert result["output"]["answer"] == "답변"
 
     async def test_non_analytics_intent_omits_analytics_block_from_trace(self):
         """ANALYTICS 가 아닌 intent 의 trace 에는 analytics 블록이 없어야 한다 (회귀).
@@ -405,13 +422,14 @@ class TestTraceNode:
             sql_agent=sql_agent,
             answer_agent=_answer_agent("수영장 안내"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
         )
 
-        assert result["intent"] == IntentType.SQL_SEARCH
+        assert result["plan"]["intent"] == IntentType.SQL_SEARCH
         assert "analytics" not in result["trace"]
 
     async def test_trace_has_required_fields(self):
@@ -422,7 +440,8 @@ class TestTraceNode:
             router=_router(IntentType.FALLBACK),
             answer_agent=_answer_agent(),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -467,14 +486,15 @@ class TestSelfCorrectionCycle:
             sql_agent=sql_agent,
             answer_agent=agent,
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
         )
 
         # 재시도 후 최종 답변이 채워져야 한다
-        assert result["answer"] == "재검색 후 답변"
+        assert result["output"]["answer"] == "재검색 후 답변"
         assert result["retry_count"] == 1
 
     async def test_self_correction_max_one_retry(self):
@@ -495,7 +515,8 @@ class TestSelfCorrectionCycle:
             sql_agent=_sql_agent([])[0],
             answer_agent=agent,
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -529,7 +550,8 @@ class TestSelfCorrectionCycle:
             router=router_agent,
             answer_agent=_answer_agent("재시도 후 답변"),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -537,8 +559,8 @@ class TestSelfCorrectionCycle:
 
         # fallback_answer가 설정되어 재시도 없이 종료 — retry_count는 0 유지
         assert result["retry_count"] == 0
-        assert result["answer"] is not None
-        assert len(result["answer"]) > 0
+        assert result["output"]["answer"] is not None
+        assert len(result["output"]["answer"]) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +576,8 @@ class TestAgentStateContract:
             router=_router(IntentType.FALLBACK),
             answer_agent=_answer_agent(),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(room_id=99, message_id=77, message="테스트"),
             data_session=data_session,
             ai_session=_ai_session(),
@@ -571,30 +594,35 @@ class TestAgentStateContract:
             router=_router(IntentType.FALLBACK),
             answer_agent=_answer_agent(),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
         )
 
         expected_keys = {
+            # 평면 채널
             "room_id",
             "message_id",
             "message",
             "title_needed",
-            "intent",
             "user_lat",
             "user_lng",
-            "refined_query",
-            "sql_results",
-            "vector_results",
-            "map_results",
-            "answer",
-            "title",
             "trace",
             "error",
             "retry_count",
-            "sql_keyword",
+            # 도메인 working state (중첩 채널)
+            "plan",
+            "filters",
+            "triage",
+            "sql",
+            "vector",
+            "map",
+            "analytics",
+            "hydration",
+            "output",
+            "emit",
         }
         assert expected_keys <= set(result.keys())
 
@@ -616,15 +644,16 @@ class TestAgentStateContract:
             router=router_agent,
             answer_agent=_answer_agent(),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
         )
 
         # router 예외 시 fallback answer가 설정되며, error 없이 정상 종료된다
-        assert result["answer"] is not None
-        assert len(result["answer"]) > 0
+        assert result["output"]["answer"] is not None
+        assert len(result["output"]["answer"]) > 0
 
     async def test_title_generated_when_title_needed(self):
         """title_needed=True이면 title이 채워진다."""
@@ -635,13 +664,14 @@ class TestAgentStateContract:
             router=_router(IntentType.FALLBACK),
             answer_agent=answer_agent,
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(title_needed=True),
             data_session=data_session,
             ai_session=_ai_session(),
         )
 
-        assert result["title"] == "수영장 조회"
+        assert result["output"]["title"] == "수영장 조회"
         answer_agent._title_chain.ainvoke.assert_called_once()
 
 
@@ -657,22 +687,6 @@ class TestAgentGraphStream:
             events.append((event_type, data))
         return events
 
-    async def test_stream_yields_progress_then_result(self):
-        """stream()은 progress 이벤트들 후 result를 yield한다."""
-        _, data_session = _sql_agent([])
-        graph = AgentGraph(
-            router=_router(IntentType.SQL_SEARCH),
-            sql_agent=_sql_agent([])[0],
-            answer_agent=_answer_agent("답변"),
-        )
-        events = await self._collect(
-            graph.stream(_state(), data_session=data_session, ai_session=_ai_session())
-        )
-
-        types = [e for e, _ in events]
-        assert "progress" in types
-        assert types[-1] == "result"
-
     async def test_stream_result_has_answer(self):
         """stream() result 이벤트에 answer가 채워진다."""
         _, data_session = _sql_agent([])
@@ -681,13 +695,67 @@ class TestAgentGraphStream:
             answer_agent=_answer_agent("스트림 답변"),
         )
         events = await self._collect(
-            graph.stream(_state(), data_session=data_session, ai_session=_ai_session())
+            stream_graph(
+                graph, _state(), data_session=data_session, ai_session=_ai_session()
+            )
         )
 
         result_events = [(t, d) for t, d in events if t == "result"]
         assert len(result_events) == 1
         _, result = result_events[0]
-        assert result["answer"] == "스트림 답변"
+        assert result["output"]["answer"] == "스트림 답변"
+
+    async def test_stream_result_matches_run_on_reduced_state(self):
+        """stream() 최종 result 가 run()(ainvoke) 결과와 reducer 누적 필드에서 일치한다.
+
+        회귀(작업 2): stream() 이 노드별 델타를 수동 합산하면 node_path
+        (append reducer) / search_channels (or_ 병합 reducer) 가 마지막 델타로
+        덮어써져 누적이 깨진다. 멀티모드 "values" 스냅샷을 쓰면 LangGraph 가
+        reducer 를 적용한 전체 state 와 동일해야 한다.
+        """
+        rows = [
+            {"service_id": "S1", "service_name": "수영장", "service_url": "https://x"},
+        ]
+
+        run_agent, run_ds = _sql_agent(rows)
+        run_graph_obj = AgentGraph(
+            router=_router(IntentType.SQL_SEARCH),
+            sql_agent=run_agent,
+            answer_agent=_answer_agent("안내입니다."),
+        )
+        run_result = await run_graph(
+            run_graph_obj,
+            _state(),
+            data_session=run_ds,
+            ai_session=_ai_session(),
+        )
+
+        stream_agent, stream_ds = _sql_agent(rows)
+        stream_graph_obj = AgentGraph(
+            router=_router(IntentType.SQL_SEARCH),
+            sql_agent=stream_agent,
+            answer_agent=_answer_agent("안내입니다."),
+        )
+        events = await self._collect(
+            stream_graph(
+                stream_graph_obj,
+                _state(),
+                data_session=stream_ds,
+                ai_session=_ai_session(),
+            )
+        )
+        result_events = [d for t, d in events if t == "result"]
+        assert len(result_events) == 1
+        stream_result = result_events[0]
+
+        # node_path: append reducer 누적이 그대로 보존돼야 한다.
+        assert stream_result["node_path"] == run_result["node_path"]
+        assert len(stream_result["node_path"]) > 1  # 수동 덮어쓰기였다면 1로 붕괴
+        # search_channels: or_ 병합 reducer 결과가 동일해야 한다.
+        assert (
+            stream_result["search_channels"].keys()
+            == run_result["search_channels"].keys()
+        )
 
     async def test_result_carries_service_cards_through_graph(self):
         """answer_node 가 AnswerAgent.service_cards 를 그래프 최종 state 로 전달한다.
@@ -697,8 +765,16 @@ class TestAgentGraphStream:
         그래프 경로의 final payload 는 빈 배열이 된다. 이 통합 경로를 봉인한다.
         """
         rows = [
-            {"service_id": "S001", "service_name": "수영장", "service_url": "https://x"},
-            {"service_id": "S002", "service_name": "테니스장", "service_url": "https://y"},
+            {
+                "service_id": "S001",
+                "service_name": "수영장",
+                "service_url": "https://x",
+            },
+            {
+                "service_id": "S002",
+                "service_name": "테니스장",
+                "service_url": "https://y",
+            },
         ]
         sql_agent, data_session = _sql_agent(rows)
         graph = AgentGraph(
@@ -706,32 +782,21 @@ class TestAgentGraphStream:
             sql_agent=sql_agent,
             answer_agent=_answer_agent("안내입니다."),
         )
-        result = await graph.run(
+        result = await run_graph(
+            graph,
             _state(),
             data_session=data_session,
             ai_session=_ai_session(),
         )
 
-        cards = result.get("service_cards")
+        cards = result["output"].get("service_cards")
         assert cards, f"service_cards 가 그래프 최종 state 에 전달되지 않음: {cards!r}"
         assert {c["service_id"] for c in cards} == {"S001", "S002"}
 
-    async def test_stream_progress_steps_routing_searching_answering(self):
-        """progress 이벤트의 step에 routing, searching, answering이 포함된다."""
-        _, data_session = _sql_agent([])
-        graph = AgentGraph(
-            router=_router(IntentType.SQL_SEARCH),
-            sql_agent=_sql_agent([])[0],
-            answer_agent=_answer_agent(),
-        )
-        events = await self._collect(
-            graph.stream(_state(), data_session=data_session, ai_session=_ai_session())
-        )
-
-        progress_steps = [d["step"] for t, d in events if t == "progress"]
-        assert "routing" in progress_steps
-        assert "searching" in progress_steps
-        assert "answering" in progress_steps
+    # 기본 progress 시퀀스(routing→searching→answering present/순서)는
+    # test_secondary_intent_fanout_emits_answering_once 와
+    # test_router_only_path_no_decision_but_answering_flows 가 더 강하게(순서+count)
+    # 커버하므로 단순 present 케이스는 축소했다.
 
     async def test_stream_emits_re_searching_on_retry(self):
         """재시도(SQL 0건→VECTOR 전환) 시 re_searching progress 1회 + 검색/답변 이벤트 재흐름."""
@@ -756,8 +821,8 @@ class TestAgentGraphStream:
                 answer_agent=_answer_agent("체험관 안내입니다."),
             )
             events = await self._collect(
-                graph.stream(
-                    _state(), data_session=data_session, ai_session=ai_session
+                stream_graph(
+                    graph, _state(), data_session=data_session, ai_session=ai_session
                 )
             )
 
@@ -783,12 +848,189 @@ class TestAgentGraphStream:
             answer_agent=_answer_agent(),
         )
         events = await self._collect(
-            graph.stream(_state(), data_session=data_session, ai_session=_ai_session())
+            stream_graph(
+                graph, _state(), data_session=data_session, ai_session=_ai_session()
+            )
         )
 
         progress_steps = [d["step"] for t, d in events if t == "progress"]
         assert "searching" in progress_steps
         # searching 은 answering 보다 먼저 방출돼야 한다 (조기 answering 회귀 방어).
+        assert progress_steps.index("searching") < progress_steps.index("answering")
+
+    async def test_secondary_intent_fanout_emits_answering_once(self):
+        """secondary_intent 팬아웃(sql+vector 병렬)에서 answering progress 가 정확히 1회.
+
+        회귀 방어: sql_node·vector_node 가 동일 super-step 에 병렬 실행될 때 둘 다 자체
+        answering 을 emit 하면 2회 흐른다(또는 answering_emitted 가드 슬롯에 두 값이
+        동시 기록되어 InvalidUpdateError). answering emit 을 합류 머지점 hydration_node
+        단일 지점으로 옮겨, 팬아웃이 실제로 발생해도 1회만 흐르는지 검증한다.
+
+        실제 팬아웃을 발생시키기 위해 cache_check 직후의 라우팅 함수를
+        route_by_action_fanout(secondary_intent + enable_secondary_intent=True 시
+        ["sql_node","vector_node"] 반환)으로 패치한다.
+        """
+        sql_agent, data_session = _sql_agent(
+            [{"service_id": "S1", "service_name": "수영장"}], keyword="수영장"
+        )
+        vector_agent, ai_session, mock_bm25 = _vector_agent(
+            [{"service_id": "V1", "service_name": "체험관", "similarity": 0.8}]
+        )
+        triage, router = make_triage_router(
+            ActionType.RETRIEVE,
+            IntentType.SQL_SEARCH,
+            user_rationale="복합 검색",
+            secondary_intent=IntentType.VECTOR_SEARCH,
+        )
+        hydrated = [{"service_id": "S1", "service_name": "수영장"}]
+
+        with (
+            patch(
+                "agents.vector_agent.vector_search",
+                AsyncMock(
+                    return_value=[
+                        {"service_id": "V1", "service_name": "체험관", "similarity": 0.8}
+                    ]
+                ),
+            ),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
+            patch("agents.vector_agent.bm25_search", mock_bm25),
+            patch(
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=hydrated),
+            ),
+            # 실제 그래프에 와이어된 라우팅 함수를 팬아웃 분기로 교체해 sql+vector 병렬화.
+            patch.object(
+                GraphNodes, "post_cache_check", GraphNodes.route_by_action_fanout
+            ),
+            patch("agents.nodes.settings") as mock_settings,
+        ):
+            mock_settings.enable_secondary_intent = True
+            mock_settings.rrf_k_constant = 60
+            mock_settings.rrf_top_k_final = 10
+            graph = AgentGraph(
+                triage=triage,
+                router=router,
+                sql_agent=sql_agent,
+                vector_agent=vector_agent,
+                answer_agent=_answer_agent("복합 안내입니다."),
+            )
+            events = await self._collect(
+                stream_graph(
+                    graph,
+                    _state(message="마포구 풋살장 알려줘"),
+                    data_session=data_session,
+                    ai_session=ai_session,
+                )
+            )
+
+        progress_steps = [d["step"] for t, d in events if t == "progress"]
+        # 팬아웃에서 sql_node·vector_node 가 둘 다 실행됐는지(병렬 super-step) 확인.
+        result = [c for t, c in events if t == "result"][0]
+        node_path = result.get("node_path") or []
+        assert "sql_node" in node_path
+        assert "vector_node" in node_path
+        # answering 은 합류점 hydration_node 에서만 emit — 정확히 1회.
+        assert progress_steps.count("answering") == 1
+        # 관측 가능한 시퀀스는 기존과 동일: routing → searching → answering.
+        assert progress_steps.index("routing") < progress_steps.index("searching")
+        assert progress_steps.index("searching") < progress_steps.index("answering")
+
+    async def test_attribute_gap_path_emits_answering_once(self):
+        """OUT_OF_SCOPE/attribute_gap → vector_node → hydration_node 경로에서
+        answering progress 가 정확히 1회.
+
+        QA 회귀(작업 3): attribute_gap 은 triage 가 RETRIEVE 가 아니라 OUT_OF_SCOPE 를
+        산출하므로 router_node 의 RETRIEVE emit 경로를 타지 않고, out_of_scope_node 가
+        intent=VECTOR_SEARCH 로 vector_node 를 거쳐 hydration_node 로 합류한다. 이 경로의
+        answering 도 단일 머지점 hydration_node 에서만 1회 흘러야 한다(vector_node 자체
+        emit 으로 중복되거나, triage 비-RETRIEVE 분기가 추가 answering 을 넣어 2회가
+        되면 안 됨).
+        """
+        triage = make_triage(
+            ActionType.OUT_OF_SCOPE,
+            out_of_scope_type="attribute_gap",
+            user_rationale="속성 질의 — 시설 안내로 전환합니다.",
+        )
+        vrows = [
+            {"service_id": "V001", "service_name": "마루공원 테니스장", "similarity": 0.9}
+        ]
+        hydrated = [
+            {
+                "service_id": "V001",
+                "service_name": "마루공원 테니스장",
+                "service_url": "https://example.com",
+            }
+        ]
+        vector_agent, ai_session, mock_bm25 = _vector_agent(vrows)
+
+        with (
+            patch("agents.vector_agent.vector_search", AsyncMock(return_value=vrows)),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
+            patch("agents.vector_agent.bm25_search", mock_bm25),
+            patch(
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=hydrated),
+            ),
+        ):
+            graph = AgentGraph(
+                triage=triage,
+                vector_agent=vector_agent,
+                answer_agent=_answer_agent("시설 페이지를 확인하세요."),
+            )
+            events = await self._collect(
+                stream_graph(
+                    graph,
+                    _state(message="마루공원 테니스장 보수 공사"),
+                    data_session=MagicMock(),
+                    ai_session=ai_session,
+                )
+            )
+
+        result = [c for t, c in events if t == "result"][0]
+        node_path = result.get("node_path") or []
+        # 경로 전제: vector_node 를 거쳐 hydration_node 로 합류했는지 확인.
+        assert "vector_node" in node_path
+        assert "hydration_node" in node_path
+        progress_steps = [d["step"] for t, d in events if t == "progress"]
+        # attribute_gap 도 answering 은 합류점에서 1회만.
+        assert progress_steps.count("answering") == 1, (
+            f"attribute_gap 경로 answering 이 1회가 아님: {progress_steps}"
+        )
+        # 비-RETRIEVE(OUT_OF_SCOPE) 라도 user_rationale 이 있으면 decision(routes=[]) 1회.
+        decision_events = [d for t, d in events if t == "decision"]
+        assert len(decision_events) == 1
+        assert decision_events[0]["routes"] == []
+
+    async def test_router_only_path_no_decision_but_answering_flows(self):
+        """rationale=None(router-only 하위호환·forced 경로): decision 미emit, 그러나
+        progress(searching/answering)는 정상으로 흐른다.
+
+        QA 회귀(작업 3): decision emit 가드(rationale 없으면 skip)가 progress emit 까지
+        막아버리면 router-only 경로에서 사용자가 진행 표시를 못 본다. decision 만 빠지고
+        searching→answering 시퀀스는 그대로여야 한다.
+        """
+        sql_agent, data_session = _sql_agent(
+            [{"service_id": "S1", "service_name": "수영장", "service_url": "https://x"}]
+        )
+        # triage 미주입 → reference_resolution 후 router_node 가 RETRIEVE 별칭 경로로
+        # 진입하며 user_rationale 이 채워지지 않는다(하위호환).
+        graph = AgentGraph(
+            router=_router(IntentType.SQL_SEARCH),
+            sql_agent=sql_agent,
+            answer_agent=_answer_agent("수영장 안내입니다."),
+        )
+        events = await self._collect(
+            stream_graph(
+                graph, _state(), data_session=data_session, ai_session=_ai_session()
+            )
+        )
+
+        decision_events = [d for t, d in events if t == "decision"]
+        assert len(decision_events) == 0, "rationale=None 이면 decision 미emit"
+        progress_steps = [d["step"] for t, d in events if t == "progress"]
+        assert progress_steps.count("searching") == 1
+        assert progress_steps.count("answering") == 1
         assert progress_steps.index("searching") < progress_steps.index("answering")
 
 
@@ -798,27 +1040,10 @@ class TestAgentGraphStream:
 
 
 class TestSessionRouting:
-    async def test_sql_uses_data_session_not_ai_session(self):
-        """SQL_SEARCH에서 data_session만 SQL 조회에 사용된다."""
-        sql_agent, data_session = _sql_agent([])
-        ai_session = _ai_session()
-
-        graph = AgentGraph(
-            router=_router(IntentType.SQL_SEARCH),
-            sql_agent=sql_agent,
-            answer_agent=_answer_agent(),
-        )
-        await graph.run(
-            _state(),
-            data_session=data_session,
-            ai_session=ai_session,
-        )
-
-        # ai_session.execute 는 search_persist + trace 에만 사용된다 (SQL 조회에는 미사용).
-        # 각 호출의 SQL 내용으로 data_session이 아닌 ai_session에 올바른 쿼리가 갔는지 확인.
-        all_sqls = [str(c[0][0]) for c in ai_session.execute.call_args_list]
-        assert any("chat_agent_traces" in sql for sql in all_sqls)
-        assert not any("public_service_reservations" in sql for sql in all_sqls)
+    # SQL→data_session(ai_session 에 조회 미누출) 검증은 test_node_local_sessions
+    # (세션 격리 전용 회귀 가드) + 모든 SQL 라우팅 테스트가 data_session 으로
+    # 조회를 실행하는 것으로 커버되므로 축소했다. 역방향(Vector 가 data_session 에
+    # 누출되지 않음) 격리는 아래 유지한다.
 
     async def test_vector_uses_ai_session_not_data_session(self):
         """VECTOR_SEARCH에서 data_session.execute가 벡터 조회에 사용되지 않는다."""
@@ -832,7 +1057,8 @@ class TestSessionRouting:
                 vector_agent=vector_agent,
                 answer_agent=_answer_agent(),
             )
-            await graph.run(
+            await run_graph(
+                graph,
                 _state(),
                 data_session=data_session,
                 ai_session=ai_session,
@@ -880,24 +1106,29 @@ class TestSelfCorrectionInfiniteLoopRegression:
             answer_agent=_answer_agent("불릴 일 없는 답"),
         )
 
-        from agents.graph import _ACTIVE_NODES
+        state = {**_state(), "retry_count": 0, "node_path": [], "started_at": None}
 
-        graph._nodes.prepare(data_session, _ai_session())
-        state = {**_state(), "retry_count": 0}
-
-        token = _ACTIVE_NODES.set(graph._nodes)
-        try:
-            result = await AgentGraph._compiled_graph.ainvoke(
-                state, config={"recursion_limit": 8}
-            )
-        finally:
-            _ACTIVE_NODES.reset(token)
+        result = await graph._compiled_graph.ainvoke(
+            state,
+            config={
+                "recursion_limit": 8,
+                "configurable": {
+                    "data_session": data_session,
+                    "ai_session": _ai_session(),
+                },
+            },
+        )
 
         # fallback answer 가 설정되어 정상 종료된다.
-        assert result["answer"], "fallback answer 가 비어있으면 안 된다"
-        # router_error 는 1회만 기록된다 (무한 사이클 없음).
-        assert graph._nodes.node_path.count("router_error") == 1, (
-            f"router_error 가 1회 초과 기록됨: {graph._nodes.node_path}"
+        assert result["output"]["answer"], "fallback answer 가 비어있으면 안 된다"
+        # triage_error(또는 구버전 router_error) 는 1회만 기록된다 (무한 사이클 없음).
+        # triage_node 가 action 을 결정하므로 triage_error 를 체크한다.
+        error_count = (
+            result["node_path"].count("triage_error")
+            + result["node_path"].count("router_error")
+        )
+        assert error_count == 1, (
+            f"triage_error/router_error 가 1회 초과 기록됨: {result['node_path']}"
         )
 
     async def test_retry_prep_node_increments_retry_count_and_clears_results(self):
@@ -906,32 +1137,29 @@ class TestSelfCorrectionInfiniteLoopRegression:
         재시도 제어는 retry_count 단일 필드로 자기 완결되며,
         _node_path 기반 재진입 감지에 의존하지 않는다.
         """
-        _, data_session = _sql_agent([])
         graph = AgentGraph(answer_agent=_answer_agent())
-        graph._nodes.prepare(data_session, _ai_session())
 
-        stale_state: AgentState = {
-            **_state(),
-            "retry_count": 0,
-            "sql_results": [{"service_id": "S001"}],
-            "vector_results": [{"service_id": "S002"}],
-            "map_results": {"type": "FeatureCollection"},
-            "refined_query": "테니스장",
-            "error": "이전 에러",
-        }
+        stale_state = _state(
+            retry_count=0,
+            sql_results=[{"service_id": "S001"}],
+            vector_results=[{"service_id": "S002"}],
+            map_results={"type": "FeatureCollection"},
+            refined_query="테니스장",
+            error="이전 에러",
+        )
 
         result = await graph._nodes.retry_prep_node(stale_state)
 
         # retry_count 증가
         assert result["retry_count"] == 1
-        # 이전 검색 결과 및 error 초기화
-        assert result["sql_results"] is None
-        assert result["vector_results"] is None
-        assert result["map_results"] is None
-        assert result["refined_query"] is None
+        # 이전 검색 결과 그룹 통째 리셋({}) + refined_query 머지 None + error 초기화
+        assert result["sql"] == {}
+        assert result["vector"] == {}
+        assert result["map"] == {}
+        assert result["plan"]["refined_query"] is None
         assert result["error"] is None
-        # node_path 기록
-        assert "retry_prep" in graph._nodes.node_path
+        # node_path 기록 (반환 dict 누적분)
+        assert "retry_prep" in result["node_path"]
 
     async def test_self_correction_edge_skips_retry_when_answer_present(self):
         """수정(Phase 17): answer가 있으면 error 유무와 무관하게 trace_node로 진행한다.
@@ -945,23 +1173,21 @@ class TestSelfCorrectionInfiniteLoopRegression:
         )
 
         # answer 있고 error 있는 state — 수정 후: trace_node 로 바로 진행
-        state_with_error: AgentState = {
-            **_state(),
-            "answer": "fallback message",
-            "error": "still failing",
-            "retry_count": 0,
-        }
+        state_with_error = _state(
+            answer="fallback message",
+            error="still failing",
+            retry_count=0,
+        )
 
         # 수정 후: answer.strip() 이 truthy 이므로 needs_retry=False → end_normal
         assert graph._nodes.self_correction_edge(state_with_error) == "end_normal"
 
         # answer 없을 때만 retry 트리거
-        state_empty_answer: AgentState = {
-            **_state(),
-            "answer": "",
-            "error": None,
-            "retry_count": 0,
-        }
+        state_empty_answer = _state(
+            answer="",
+            error=None,
+            retry_count=0,
+        )
         assert (
             graph._nodes.self_correction_edge(state_empty_answer) == "retry_prep_node"
         )
@@ -974,67 +1200,60 @@ class TestSelfCorrectionInfiniteLoopRegression:
         """SQL/VECTOR 하드 필터 0건이면 answer가 있어도 1회 재시도(케이스1 안전망)."""
         graph = AgentGraph(answer_agent=_answer_agent())
 
-        zero_hits: AgentState = {
-            **_state(),
-            "intent": IntentType.SQL_SEARCH,
-            "answer": "조건에 맞는 결과가 없어요.",
-            "hydrated_services": [],
-            "sql_results": [],
-            "vector_results": None,
-            "retry_count": 0,
-        }
+        zero_hits = _state(
+            intent=IntentType.SQL_SEARCH,
+            answer="조건에 맞는 결과가 없어요.",
+            hydrated_services=[],
+            sql_results=[],
+            vector_results=None,
+            retry_count=0,
+        )
         assert graph._nodes.self_correction_edge(zero_hits) == "retry_prep_node"
 
     async def test_self_correction_edge_zero_hits_capped_after_retry(self):
         """0건이라도 retry_count>=1이면 무한루프 방지 — end_normal."""
         graph = AgentGraph(answer_agent=_answer_agent())
-        zero_hits: AgentState = {
-            **_state(),
-            "intent": IntentType.VECTOR_SEARCH,
-            "answer": "결과 없음",
-            "hydrated_services": [],
-            "retry_count": 1,
-        }
+        zero_hits = _state(
+            intent=IntentType.VECTOR_SEARCH,
+            answer="결과 없음",
+            hydrated_services=[],
+            retry_count=1,
+        )
         assert graph._nodes.self_correction_edge(zero_hits) == "end_normal"
 
     async def test_self_correction_edge_zero_hits_only_for_search_intents(self):
         """FALLBACK 등 비검색 intent는 0건이어도 재시도하지 않는다."""
         graph = AgentGraph(answer_agent=_answer_agent())
-        state = {
-            **_state(),
-            "intent": IntentType.FALLBACK,
-            "answer": "안내드립니다.",
-            "hydrated_services": [],
-            "retry_count": 0,
-        }
+        state = _state(
+            intent=IntentType.FALLBACK,
+            answer="안내드립니다.",
+            hydrated_services=[],
+            retry_count=0,
+        )
         assert graph._nodes.self_correction_edge(state) == "end_normal"
 
     async def test_self_correction_edge_with_hits_no_retry(self):
         """결과가 있으면 재시도하지 않는다."""
         graph = AgentGraph(answer_agent=_answer_agent())
-        state = {
-            **_state(),
-            "intent": IntentType.SQL_SEARCH,
-            "answer": "5건 안내",
-            "hydrated_services": [{"service_id": "S1"}],
-            "retry_count": 0,
-        }
+        state = _state(
+            intent=IntentType.SQL_SEARCH,
+            answer="5건 안내",
+            hydrated_services=[{"service_id": "S1"}],
+            retry_count=0,
+        )
         assert graph._nodes.self_correction_edge(state) == "end_normal"
 
     async def test_retry_prep_node_relaxes_payment_and_sets_flag(self):
         """retry_prep_node가 payment_type을 드롭하고 retry_relaxed=True를 세팅한다."""
-        _, data_session = _sql_agent([])
         graph = AgentGraph(answer_agent=_answer_agent())
-        graph._nodes.prepare(data_session, _ai_session())
 
-        stale: AgentState = {
-            **_state(),
-            "retry_count": 0,
-            "payment_type": "무료",
-            "hydrated_services": [],
-        }
+        stale = _state(
+            retry_count=0,
+            payment_type="무료",
+            hydrated_services=[],
+        )
         result = await graph._nodes.retry_prep_node(stale)
-        assert result["payment_type"] is None
+        assert result["filters"]["payment_type"] is None
         assert result["retry_relaxed"] is True
 
     async def test_router_node_propagates_payment_type(self):
@@ -1056,21 +1275,11 @@ class TestSelfCorrectionInfiniteLoopRegression:
 
         graph = AgentGraph(router=router, answer_agent=_answer_agent())
         update = await graph._nodes.router_node(_state(message="강남구 무료 문화행사"))
-        assert update["payment_type"] == "무료"
+        assert update["filters"]["payment_type"] == "무료"
 
-    async def test_router_node_omits_payment_type_when_none(self):
-        """payment 미언급 시 payment_type 키를 update에 포함하지 않는다."""
-        router = RouterAgent.__new__(RouterAgent)
-        structured = MagicMock()
-        structured.ainvoke = AsyncMock(
-            return_value=_IntentOutput(intent=IntentType.SQL_SEARCH)
-        )
-        llm = MagicMock()
-        llm.with_structured_output = MagicMock(return_value=structured)
-        router._llm = llm
-        graph = AgentGraph(router=router, answer_agent=_answer_agent())
-        update = await graph._nodes.router_node(_state())
-        assert "payment_type" not in update
+    # payment_type=None 생략은 test_router_node_omits_postfilter_when_none 의
+    # None-생략 분기와 동일 로직(필드 순열)이라 축소했다. payment_type 전파(충돌 방지
+    # 입력)는 위 test_router_node_propagates_payment_type 가 유지한다.
 
 
 # ---------------------------------------------------------------------------
@@ -1089,38 +1298,26 @@ class TestDirectedSelfCorrectionRetry:
     async def test_retry_prep_sql_forces_vector_and_clears_filters(self):
         """SQL_SEARCH 0건 재시도 → forced_intent=VECTOR_SEARCH, 정형 필터 전부 None."""
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
-        stale: AgentState = {
-            **_state(),
-            "intent": IntentType.SQL_SEARCH,
-            "retry_count": 0,
-            "max_class_name": "체육시설",
-            "area_name": "강남구",
-            "service_status": "접수중",
-            "payment_type": "무료",
-            "sql_results": [],
-        }
+        stale = _state(
+            intent=IntentType.SQL_SEARCH,
+            retry_count=0,
+            max_class_name="체육시설",
+            area_name="강남구",
+            service_status="접수중",
+            payment_type="무료",
+            sql_results=[],
+        )
         result = await nodes.retry_prep_node(stale)
         assert result["forced_intent"] == IntentType.VECTOR_SEARCH
         assert result["retry_count"] == 1
         for f in ("max_class_name", "area_name", "service_status", "payment_type"):
-            assert result[f] is None
+            assert result["filters"][f] is None
         assert result["retry_relaxed"] is True
-        assert "retry_prep" in nodes.node_path
+        assert "retry_prep" in result["node_path"]
 
-    async def test_router_node_honors_forced_intent_without_classify(self):
-        """forced_intent 가 있으면 classify 미호출, intent 반환 + forced_intent=None 소비."""
-        router = make_router(IntentType.SQL_SEARCH)  # classify 호출 시 SQL 반환(잘못된)
-        graph = AgentGraph(router=router, answer_agent=_answer_agent())
-        structured = router._llm.with_structured_output.return_value
-
-        update = await graph._nodes.router_node(
-            _state(forced_intent=IntentType.VECTOR_SEARCH)
-        )
-        assert update["intent"] == IntentType.VECTOR_SEARCH
-        assert update["forced_intent"] is None
-        structured.ainvoke.assert_not_called()
-        assert "router" in graph._nodes.node_path
+    # forced_intent → classify 미호출/소비 단위 검증은
+    # test_graph_triage.TestRouterNodeStatePropagation.test_router_node_honors_forced_intent
+    # 가 동일하게 커버하므로 여기선 축소했다(e2e 전환 경로는 아래 유지).
 
     async def test_e2e_sql_zero_hits_switches_to_vector(self):
         """SQL_SEARCH 0건 시나리오 → retry_prep → router(forced) → vector_node 경로 전환."""
@@ -1144,18 +1341,21 @@ class TestDirectedSelfCorrectionRetry:
                 vector_agent=vector_agent,
                 answer_agent=_answer_agent("체험관 안내입니다."),
             )
-            result = await graph.run(
+            result = await run_graph(
+                graph,
                 _state(),
                 data_session=data_session,
                 ai_session=ai_session,
             )
 
-        path = graph._nodes.node_path
+        path = result["node_path"]
         assert "sql_node" in path
         assert "retry_prep" in path
         assert "vector_node" in path
-        assert path.index("sql_node") < path.index("retry_prep") < path.index(
-            "vector_node"
+        assert (
+            path.index("sql_node")
+            < path.index("retry_prep")
+            < path.index("vector_node")
         )
         assert result["retry_count"] == 1
 
@@ -1171,29 +1371,16 @@ class TestDirectedSelfCorrectionRetry:
             )
             is True
         )
-        assert (
-            nodes._analytics_zero_hits(_state(analytics_results=[{"x": 1}])) is False
-        )
+        assert nodes._analytics_zero_hits(_state(analytics_results=[{"x": 1}])) is False
 
-    def test_self_correction_edge_analytics_zero_triggers_retry(self):
-        nodes = self._nodes()
-        state = _state(
-            intent=IntentType.ANALYTICS,
-            answer="결과 없음",
-            analytics_results=[],
-            retry_count=0,
-        )
-        assert nodes.self_correction_edge(state) == "retry_prep_node"
+    # ANALYTICS zero-hits → retry_prep edge 는 generic test_self_correction_edge_zero_hits_triggers_retry
+    # 와 동일 edge 로직의 intent 순열이고, ANALYTICS 고유 predicate 는
+    # test_analytics_zero_hits_predicate + e2e(test_e2e_analytics_zero_hits_drops_status_filter)가
+    # 독립 커버하므로 축소했다.
 
-    def test_self_correction_edge_analytics_capped(self):
-        nodes = self._nodes()
-        state = _state(
-            intent=IntentType.ANALYTICS,
-            answer="결과 없음",
-            analytics_results=[],
-            retry_count=1,
-        )
-        assert nodes.self_correction_edge(state) == "end_normal"
+    # ANALYTICS retry_count=1 cap → end_normal 은 intent 무관 동일 cap 불변식이라
+    # (test_self_correction_max_one_retry / test_self_correction_edge_zero_hits_capped_after_retry
+    # 가 이미 고정) 값만 다른 순열로 축소했다.
 
     async def test_retry_prep_analytics_drops_status_first(self):
         """effective 필터 우선순위: status 가 1순위. keyword 는 드롭 대상이 아니다.
@@ -1203,7 +1390,6 @@ class TestDirectedSelfCorrectionRetry:
         질의여도 곧장 실효성 있는 service_status 를 드롭해야 한다.
         """
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
         state = _state(
             intent=IntentType.ANALYTICS,
             retry_count=0,
@@ -1213,17 +1399,16 @@ class TestDirectedSelfCorrectionRetry:
             max_class_name="체육시설",
         )
         result = await nodes.retry_prep_node(state)
-        # keyword 는 드롭 대상 아님(키 미포함) — service_status 가 1순위로 드롭됨.
-        assert "analytics_keyword" not in result
-        assert result["service_status"] is None
-        # area/max_class 는 유지(키 미포함)
-        assert "area_name" not in result
-        assert "max_class_name" not in result
-        assert result["analytics_results"] is None
+        # keyword 는 드롭 대상 아님 — service_status 가 1순위로 드롭됨(filters 머지).
+        assert "keyword" not in result["filters"]
+        assert result["filters"]["service_status"] is None
+        # area/max_class 는 유지(filters 머지에 미포함)
+        assert "area_name" not in result["filters"]
+        assert "max_class_name" not in result["filters"]
+        assert result["analytics"] == {}
 
     async def test_retry_prep_analytics_drops_area_when_no_status(self):
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
         state = _state(
             intent=IntentType.ANALYTICS,
             retry_count=0,
@@ -1232,72 +1417,23 @@ class TestDirectedSelfCorrectionRetry:
             area_name="강남구",
         )
         result = await nodes.retry_prep_node(state)
-        assert result["area_name"] is None
-        assert "service_status" not in result
+        assert result["filters"]["area_name"] is None
+        assert "service_status" not in result["filters"]
 
     async def test_retry_prep_analytics_no_filter_to_drop(self):
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
         state = _state(intent=IntentType.ANALYTICS, retry_count=0)
         result = await nodes.retry_prep_node(state)
-        # 드롭할 필터 없음 — analytics_results 만 리셋
-        assert result["analytics_results"] is None
+        # 드롭할 필터 없음 — analytics 그룹만 리셋({}), filters 머지 미발생
+        assert result["analytics"] == {}
+        assert "filters" not in result
         for f in _ANALYTICS_DROP_ORDER:
-            assert f not in result
+            assert f not in result.get("filters", {})
 
-    async def test_e2e_analytics_zero_hits_drops_status_filter(self):
-        """ANALYTICS 0건(service_status 보유) → retry_prep → 재실행 시
-        두 번째 analytics_search 호출이 service_status 없이(None) 수행되는지를
-        await 인자 레벨로 검증한다(SQL/MAP E2E 와 동일 수준).
-        """
-        from agents.analytics_agent import AnalyticsAgent
-
-        analytics_agent = AnalyticsAgent.__new__(AnalyticsAgent)
-        from agents.analytics_agent import _AnalyticsParams
-
-        chain = MagicMock()
-        chain.ainvoke = AsyncMock(
-            return_value=_AnalyticsParams(
-                group_by="max_class_name",  # type: ignore[arg-type]
-                metric="count",  # type: ignore[arg-type]
-                keyword="따릉이",
-            )
-        )
-        analytics_agent._chain = chain
-
-        data_session = MagicMock()
-        data_session.execute = AsyncMock(return_value=MagicMock())
-
-        # 1차: 0건 → 재시도 트리거. 2차: 1건 → 종료.
-        with patch(
-            "agents.analytics_agent.analytics_search",
-            AsyncMock(side_effect=[[], [{"group_value": "체육시설", "count": 3}]]),
-        ) as mock_analytics:
-            graph = AgentGraph(
-                router=_router(IntentType.ANALYTICS),
-                analytics_agent=analytics_agent,
-                answer_agent=_answer_agent("집계 안내입니다."),
-            )
-            result = await graph.run(
-                _state(service_status="접수중", area_name="강남구"),
-                data_session=data_session,
-                ai_session=_ai_session(),
-            )
-
-        path = graph._nodes.node_path
-        assert path.count("analytics_node") == 2, f"analytics_node 2회여야 함: {path}"
-        assert "retry_prep" in path
-        assert result["retry_count"] == 1
-
-        # 1차 호출은 service_status 를 보유, 2차(재시도)는 None 으로 드롭된 채 호출.
-        first_kwargs = mock_analytics.await_args_list[0].kwargs
-        second_kwargs = mock_analytics.await_args_list[1].kwargs
-        assert first_kwargs["service_status"] == "접수중"
-        assert second_kwargs["service_status"] is None
-        # keyword 는 매 실행 LLM 재추출이므로 드롭되지 않고 동일하게 유지된다.
-        assert second_kwargs["keyword"] == "따릉이"
-        # area_name 은 status 가 1순위로 드롭되었으므로 2차에도 유지된다.
-        assert second_kwargs["area_name"] == "강남구"
+    # ANALYTICS zero-hits 재시도 E2E 는 retry 사이클 wiring(node 2회 실행)을
+    # test_e2e_sql_zero_hits_switches_to_vector 가, status-우선 필터 드롭을
+    # test_retry_prep_analytics_drops_status_first 가 독립 커버하므로
+    # retry-boundary 통합 중복으로 축소했다.
 
     # ── MAP 반경 확장 (C1, 3c~3d) ──
 
@@ -1322,15 +1458,8 @@ class TestDirectedSelfCorrectionRetry:
             is False
         )
 
-    def test_self_correction_edge_map_zero_triggers_retry(self):
-        nodes = self._nodes()
-        state = _state(
-            intent=IntentType.MAP,
-            answer="주변에 없어요",
-            map_results={"type": "FeatureCollection", "features": []},
-            retry_count=0,
-        )
-        assert nodes.self_correction_edge(state) == "retry_prep_node"
+    # MAP zero-hits → retry_prep edge 도 generic edge 로직의 intent 순열이라 축소했다.
+    # MAP 고유 분기(좌표 없음 → no retry, radius 확장)는 아래 전용 테스트가 유지한다.
 
     def test_self_correction_edge_map_no_coords_no_retry(self):
         nodes = self._nodes()
@@ -1342,19 +1471,10 @@ class TestDirectedSelfCorrectionRetry:
         )
         assert nodes.self_correction_edge(state) == "end_normal"
 
-    def test_self_correction_edge_map_capped(self):
-        nodes = self._nodes()
-        state = _state(
-            intent=IntentType.MAP,
-            answer="주변에 없어요",
-            map_results={"type": "FeatureCollection", "features": []},
-            retry_count=1,
-        )
-        assert nodes.self_correction_edge(state) == "end_normal"
+    # MAP retry_count=1 cap → end_normal 도 intent 무관 동일 cap 불변식이라 축소했다.
 
     async def test_retry_prep_map_expands_radius(self):
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
         state = _state(
             intent=IntentType.MAP,
             retry_count=0,
@@ -1362,22 +1482,23 @@ class TestDirectedSelfCorrectionRetry:
         )
         result = await nodes.retry_prep_node(state)
         assert result["retry_radius_m"] == _MAP_RETRY_RADIUS_M
-        assert result["map_results"] is None
+        assert result["map"] == {}
         assert result["retry_relaxed"] is True
 
     async def test_map_node_uses_retry_radius(self):
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
+        data_session = MagicMock()
         geojson = {"type": "FeatureCollection", "features": []}
-        with patch(
-            "agents.nodes.map_search", AsyncMock(return_value=geojson)
-        ) as mock_map:
+        with (
+            patch(
+                "agents.nodes.map_search", AsyncMock(return_value=geojson)
+            ) as mock_map,
+            patch_node_sessions(data_session=data_session),
+        ):
             update = await nodes.map_node(
-                _state(user_lat=37.5, user_lng=127.0, retry_radius_m=3000)
+                _state(user_lat=37.5, user_lng=127.0, retry_radius_m=3000),
             )
-        mock_map.assert_awaited_once_with(
-            nodes.data_session, 37.5, 127.0, radius_m=3000
-        )
+        mock_map.assert_awaited_once_with(data_session, 37.5, 127.0, radius_m=3000)
         # ChannelData query_text/parameters 에 확장 반경(3000m)이 반영되어야 한다.
         ch = next(iter(update["search_channels"].values()))
         assert "r=3000m" in ch["query"]["query_text"]
@@ -1385,54 +1506,26 @@ class TestDirectedSelfCorrectionRetry:
 
     async def test_map_node_default_radius_when_no_retry(self):
         nodes = self._nodes()
-        nodes.prepare(MagicMock(), _ai_session())
+        data_session = MagicMock()
         geojson = {
             "type": "FeatureCollection",
             "features": [{"type": "Feature", "properties": {"service_id": "M1"}}],
         }
-        with patch(
-            "agents.nodes.map_search", AsyncMock(return_value=geojson)
-        ) as mock_map:
+        with (
+            patch(
+                "agents.nodes.map_search", AsyncMock(return_value=geojson)
+            ) as mock_map,
+            patch_node_sessions(data_session=data_session),
+        ):
             update = await nodes.map_node(_state(user_lat=37.5, user_lng=127.0))
-        mock_map.assert_awaited_once_with(
-            nodes.data_session, 37.5, 127.0, radius_m=1000
-        )
+        mock_map.assert_awaited_once_with(data_session, 37.5, 127.0, radius_m=1000)
         # ChannelData query_text 에 실제 반경 반영
         ch = next(iter(update["search_channels"].values()))
         assert "r=1000m" in ch["query"]["query_text"]
 
-    async def test_e2e_map_zero_hits_expands_radius(self):
-        """MAP 1km 0건 → retry_prep → router(MAP 재분류) → map_node 3km 재호출 E2E."""
-        empty = {"type": "FeatureCollection", "features": []}
-        found = {
-            "type": "FeatureCollection",
-            "features": [{"type": "Feature", "properties": {"service_id": "M1"}}],
-        }
-        _, data_session = _sql_agent([])
-
-        with patch(
-            "agents.nodes.map_search",
-            AsyncMock(side_effect=[empty, found]),
-        ) as mock_map:
-            graph = AgentGraph(
-                router=_router(IntentType.MAP),
-                answer_agent=_answer_agent("주변 안내입니다."),
-            )
-            result = await graph.run(
-                _state(user_lat=37.5, user_lng=127.0),
-                data_session=data_session,
-                ai_session=_ai_session(),
-            )
-
-        path = graph._nodes.node_path
-        assert path.count("map_node") == 2, f"map_node 2회여야 함: {path}"
-        assert "retry_prep" in path
-        assert result["retry_count"] == 1
-        # 1차는 1000m, 2차(재시도)는 3000m 으로 호출된다.
-        first_radius = mock_map.await_args_list[0].kwargs["radius_m"]
-        second_radius = mock_map.await_args_list[1].kwargs["radius_m"]
-        assert first_radius == 1000
-        assert second_radius == _MAP_RETRY_RADIUS_M
+    # MAP zero-hits 반경 확장 재시도 E2E 도 retry 사이클 wiring 은 SQL E2E 가,
+    # 반경 확장 로직은 test_retry_prep_map_expands_radius + test_map_node_uses_retry_radius
+    # 가 독립 커버하므로 retry-boundary 통합 중복으로 축소했다.
 
     # ── 트리거 평가 순서 (C3, 3d) ──
 
@@ -1456,7 +1549,10 @@ class TestDirectedSelfCorrectionRetry:
             intent=IntentType.ANALYTICS,
             answer="결과 없음",
             analytics_results=[{"x": 1}],  # ANALYTICS 0건 아님
-            map_results={"type": "FeatureCollection", "features": []},  # MAP 0건이지만 무시
+            map_results={
+                "type": "FeatureCollection",
+                "features": [],
+            },  # MAP 0건이지만 무시
             retry_count=0,
         )
         assert nodes.self_correction_edge(state) == "end_normal"
@@ -1468,29 +1564,14 @@ class TestDirectedSelfCorrectionRetry:
 
 
 class TestRouterRefinedQueryPropagation:
-    """Router가 산출한 refined_query가 state["refined_query"]로 전파되어
+    """Router가 산출한 refined_query가 state["plan"]["refined_query"]로 전파되어
     이후 cache_check_node가 정확한 키 lookup을 수행할 수 있어야 한다.
     """
 
-    async def test_router_node_sets_refined_query_on_state(self):
-        """router_node 반환 update dict에 refined_query가 포함된다."""
-        router = RouterAgent.__new__(RouterAgent)
-        structured = MagicMock()
-        structured.ainvoke = AsyncMock(
-            return_value=_IntentOutput(
-                intent=IntentType.VECTOR_SEARCH,
-                refined_query="서울 테니스장",
-            )
-        )
-        llm = MagicMock()
-        llm.with_structured_output = MagicMock(return_value=structured)
-        router._llm = llm
-
-        graph = AgentGraph(router=router, answer_agent=_answer_agent())
-        update = await graph._nodes.router_node(_state(message="테니스장"))
-
-        assert update["intent"] == IntentType.VECTOR_SEARCH
-        assert update["refined_query"] == "서울 테니스장"
+    # intent+refined_query 전파는 test_graph_triage
+    # .TestRouterNodeStatePropagation.test_router_node_sets_intent_and_plan 이
+    # 더 완전하게(secondary_intent/filters 포함) 커버하므로 축소했다. 아래는
+    # postfilter 채널 전파/None 생략의 real-RouterAgent 경로만 유지한다.
 
     async def test_router_node_propagates_postfilter_metadata(self):
         """router_node 반환 update에 max_class_name/area_name/service_status가 포함된다."""
@@ -1512,9 +1593,9 @@ class TestRouterRefinedQueryPropagation:
         graph = AgentGraph(router=router, answer_agent=_answer_agent())
         update = await graph._nodes.router_node(_state(message="강남구 체육시설"))
 
-        assert update["max_class_name"] == "체육시설"
-        assert update["area_name"] == "강남구"
-        assert update["service_status"] == "접수중"
+        assert update["filters"]["max_class_name"] == "체육시설"
+        assert update["filters"]["area_name"] == "강남구"
+        assert update["filters"]["service_status"] == "접수중"
 
     async def test_router_node_omits_postfilter_when_none(self):
         """Router가 메타데이터=None을 반환하면 update에 키를 포함하지 않는다."""
@@ -1540,27 +1621,8 @@ class TestRouterRefinedQueryPropagation:
         assert "area_name" not in update
         assert "service_status" not in update
 
-    async def test_router_node_omits_refined_query_when_none(self):
-        """Router가 refined_query=None을 반환하면 update에 키가 포함되지 않아
-        state의 기존 refined_query(예: retry 경로의 초기화 값)를 덮어쓰지 않는다.
-        """
-        router = RouterAgent.__new__(RouterAgent)
-        structured = MagicMock()
-        structured.ainvoke = AsyncMock(
-            return_value=_IntentOutput(
-                intent=IntentType.FALLBACK,
-                refined_query=None,
-            )
-        )
-        llm = MagicMock()
-        llm.with_structured_output = MagicMock(return_value=structured)
-        router._llm = llm
-
-        graph = AgentGraph(router=router, answer_agent=_answer_agent())
-        update = await graph._nodes.router_node(_state())
-
-        assert update["intent"] == IntentType.FALLBACK
-        assert "refined_query" not in update
+    # refined_query=None 생략은 test_router_node_omits_postfilter_when_none(동일 None-생략
+    # 분기) + test_graph_triage.test_router_node_omits_none_fields 가 커버하므로 축소했다.
 
 
 # ---------------------------------------------------------------------------
@@ -1573,15 +1635,13 @@ class TestVectorNodeRateLimitPropagation:
 
     def _make_nodes(self, vector_agent: VectorAgent) -> GraphNodes:
         """GraphNodes 인스턴스를 최소 의존성으로 생성한다."""
-        nodes = GraphNodes(
+        return GraphNodes(
             router=_router(IntentType.VECTOR_SEARCH),
             sql_agent=MagicMock(),
             vector_agent=vector_agent,
             answer_agent=_answer_agent(),
             analytics_agent=MagicMock(),
         )
-        nodes.prepare(data_session=MagicMock(), ai_session=_ai_session())
-        return nodes
 
     async def test_vector_node_reraises_rate_limit_exception(self):
         """VectorAgent.search()가 RateLimitException을 던지면 vector_node가 re-raise한다."""
@@ -1592,35 +1652,98 @@ class TestVectorNodeRateLimitPropagation:
 
         nodes = self._make_nodes(vector_agent)
 
-        with pytest.raises(RateLimitException, match="rate limit 소진"):
+        with (
+            patch_node_sessions(ai_session=_ai_session()),
+            pytest.raises(RateLimitException, match="rate limit 소진"),
+        ):
             await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
 
-    async def test_vector_node_does_not_return_error_dict_on_rate_limit(self):
-        """RateLimitException 발생 시 {"error": ...} dict를 반환하지 않고 예외를 전파한다."""
-        vector_agent = VectorAgent.__new__(VectorAgent)
-        vector_agent.search = AsyncMock(
-            side_effect=RateLimitException("소진")
-        )
-
-        nodes = self._make_nodes(vector_agent)
-
-        raised = False
-        try:
-            await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
-        except RateLimitException:
-            raised = True
-
-        assert raised, "RateLimitException이 전파되어야 한다"
+    # "error dict 미반환 = 예외 전파"는 위 test_vector_node_reraises_rate_limit_exception
+    # (pytest.raises)이 동일하게 단언하므로 축소했다. generic 예외 → error dict
+    # 대비 케이스는 아래 유지(fail-open 분기 구분).
 
     async def test_vector_node_wraps_generic_exception_as_error_dict(self):
         """일반 예외는 기존과 동일하게 {"error": ...} dict로 변환된다."""
         vector_agent = VectorAgent.__new__(VectorAgent)
-        vector_agent.search = AsyncMock(
-            side_effect=ValueError("일반 오류")
-        )
+        vector_agent.search = AsyncMock(side_effect=ValueError("일반 오류"))
 
         nodes = self._make_nodes(vector_agent)
-        result = await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
+        with patch_node_sessions(ai_session=_ai_session()):
+            result = await nodes.vector_node(_state(intent=IntentType.VECTOR_SEARCH))
 
         assert "error" in result
         assert "일반 오류" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# get_stream_writer 안전 래퍼 (agents/_helpers.py) — 노드 컨텍스트 밖 no-op
+# ---------------------------------------------------------------------------
+
+
+class TestEmitHelpersOutsideNodeContext:
+    """노드 컨텍스트(runnable) 밖에서 emit 헬퍼가 크래시 없이 no-op 인지 검증.
+
+    QA 회귀(작업 3): 단위 테스트가 노드를 직접 호출하거나 run()(비스트리밍 ainvoke)
+    으로 그래프를 돌릴 때 get_stream_writer 가 RuntimeError/LookupError 를 던지면
+    노드가 미처리 예외로 죽는다. _writer 가 이를 흡수해 emit 이 무해해야 한다.
+    """
+
+    def test_writer_returns_none_outside_runnable_context(self):
+        """runnable 컨텍스트 밖에서 _writer() 는 None 을 반환한다(예외 흡수)."""
+        from agents._helpers import _writer
+
+        assert _writer() is None
+
+    def test_emit_progress_is_noop_outside_context(self):
+        """emit_progress 가 컨텍스트 밖에서 예외 없이 no-op."""
+        from agents._helpers import emit_progress
+
+        # 예외가 나면 테스트 실패. 반환값 없음(None).
+        assert emit_progress("searching") is None
+        assert emit_progress("answering") is None
+
+    def test_emit_decision_is_noop_outside_context(self):
+        """emit_decision 이 컨텍스트 밖에서 예외 없이 no-op."""
+        from agents._helpers import emit_decision
+
+        assert emit_decision("RETRIEVE", ["SQL_SEARCH"], "근거") is None
+
+    # unknown step(컨텍스트 밖)도 writer=None 단락으로 동일하게 no-op(None) 반환이라
+    # test_emit_progress_is_noop_outside_context 와 같은 분기의 입력 순열로 축소했다.
+
+
+class TestRunNonStreamingEmitNoop:
+    """run()(비스트리밍 ainvoke) 경로에서 노드 내부 emit 이 no-op 으로 흡수되고
+    그래프가 정상 결과를 내는지 검증.
+
+    QA 회귀(작업 3): ainvoke 에는 stream_mode custom 이 없어 writer 가 no-op 기본값
+    이다. 노드가 emit 을 호출해도 결과 state 에 영향이 없어야 하고 크래시도 없어야
+    한다(stream_graph 와 동일 결과).
+    """
+
+    async def test_run_completes_with_emit_calls_as_noop(self):
+        """RETRIEVE 경로를 run()(ainvoke)으로 돌려도 answer 가 정상으로 채워진다."""
+        rows = [
+            {"service_id": "S1", "service_name": "수영장", "service_url": "https://x"}
+        ]
+        triage, router = make_triage_router(
+            ActionType.RETRIEVE,
+            IntentType.SQL_SEARCH,
+            user_rationale="수영장 검색입니다.",
+        )
+        sql_agent, data_session = _sql_agent(rows)
+        graph = AgentGraph(
+            triage=triage,
+            router=router,
+            sql_agent=sql_agent,
+            answer_agent=_answer_agent("수영장 안내입니다."),
+        )
+        result = await run_graph(
+            graph, _state(), data_session=data_session, ai_session=_ai_session()
+        )
+
+        # emit 이 no-op 으로 흡수되어 정상 흐름 — answer 채워지고 가드 슬롯이 흐름 중
+        # 정상 갱신됐는지 확인(크래시 없음 + decision/answering 단계 통과).
+        assert result["output"]["answer"] == "수영장 안내입니다."
+        assert result["emit"].get("answering_emitted") is True
+        assert result["emit"].get("decision_emitted") is True

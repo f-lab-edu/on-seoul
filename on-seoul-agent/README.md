@@ -49,48 +49,43 @@ flowchart LR
 
 ## 에이전트 워크플로우
 
+상위 흐름만 요약합니다. 노드별 상세 토폴로지·엣지 조건·관측 종단 체인은 [docs/ai-agent-design.md](docs/ai-agent-design.md)를 참고하세요.
+
 ```mermaid
 flowchart TD
     START(["사용자 질문"])
-    ROUTER["Router Agent\nLLM 의도 분류"]
-    CACHE_CHECK["Answer Cache\nlookup"]
-    SQL["SQL Agent"]
-    VECTOR["Vector Agent\nTrack A(identity)+B(summary)+C(question)+BM25\nRRF 결합 → Hydration"]
-    MAP["map_search\n도구"]
-    FALLBACK["Fallback"]
+    REF{{"reference_resolution\n지시 참조 선판정 (규칙 기반)"}}
+    REHYDRATE["rehydrate → describe\n직전 결과 재조회 + 설명"]
+    TRIAGE["TriageAgent\naction 결정 + retrieval_intent 분류"]
+    SEARCH["검색 경로\nSQL / Vector / Map / Analytics\n→ Hydration → RRF"]
+    DIRECT["DIRECT_ANSWER / AMBIGUOUS\n/ OUT_OF_SCOPE / EXPLAIN\n직접 답변"]
     ANSWER["Answer Agent\n자연어 답변 + 시설 카드 생성"]
-    SELF_CORR{{"Self-Correction\n답변 비어있고\nretry_count=0?"}}
-    CACHE_WRITE["Answer Cache\n저장"]
-    SEARCH_PERSIST(["search_persist\nchat_search_queries +\nchat_search_results"])
-    TRACE(["Trace 저장 → SSE 스트리밍 응답"])
+    TERMINAL(["cache_write → search_persist → trace\n→ SSE 스트리밍 응답"])
 
-    START --> ROUTER
-    ROUTER --> CACHE_CHECK
-    CACHE_CHECK -- "hit" --> SEARCH_PERSIST
-    CACHE_CHECK -- "miss · SQL_SEARCH" --> SQL
-    CACHE_CHECK -- "miss · VECTOR_SEARCH" --> VECTOR
-    CACHE_CHECK -- "miss · MAP" --> MAP
-    CACHE_CHECK -- "miss · FALLBACK" --> FALLBACK
-
-    SQL --> ANSWER
-    VECTOR --> ANSWER
-    MAP --> ANSWER
-    FALLBACK --> ANSWER
-
-    ANSWER --> SELF_CORR
-    SELF_CORR -- "Yes (최대 1회)" --> ROUTER
-    SELF_CORR -- "No" --> CACHE_WRITE
-    CACHE_WRITE --> SEARCH_PERSIST
-    SEARCH_PERSIST --> TRACE
+    START --> REF
+    REF -- "참조성 질의" --> REHYDRATE
+    REF -- "신규 질의" --> TRIAGE
+    TRIAGE -- "action=RETRIEVE" --> SEARCH
+    TRIAGE -- "그 외 action" --> DIRECT
+    SEARCH --> ANSWER
+    SEARCH -. "0건 (최대 1회 재시도)" .-> TRIAGE
+    REHYDRATE --> TERMINAL
+    DIRECT --> TERMINAL
+    ANSWER --> TERMINAL
 ```
+
+- **action 2축 분리**: TriageAgent는 `action`(RETRIEVE / DIRECT_ANSWER / AMBIGUOUS / OUT_OF_SCOPE / EXPLAIN)과 `retrieval_intent`(SQL_SEARCH / VECTOR_SEARCH / MAP / ANALYTICS)를 함께 판정합니다. RETRIEVE만 검색 경로로, 나머지는 직접 답변으로 분기합니다.
+- **참조 해소**: "그중에서", "방금 그거" 같은 지시 참조성 질의는 규칙 기반 선판정으로 직전 결과를 재조회(rehydrate)한 뒤 설명(describe)합니다.
+- **decision SSE**: TriageAgent 분류 직후 판단 근거(action·routes·user_rationale)를 `decision` 이벤트로 스트리밍하여 투명성을 제공합니다.
 
 ### 에이전트 (LLM 추론)
 
 | 에이전트 | 역할 |
 |---|---|
-| Router Agent | 사용자 질문의 의도를 분류하고 다음 에이전트/도구를 결정 |
+| Triage Agent | action(5종)과 retrieval_intent를 2축으로 분류하고 다음 경로를 결정. RouterAgent를 대체 |
 | SQL Agent | sql_search 도구를 호출하여 정형 데이터 조회 |
-| Vector Agent | 질의를 정제한 뒤 vector_search 도구를 호출하여 유사도 검색 |
+| Vector Agent | 질의를 정제한 뒤 vector_search / bm25_search를 호출하여 하이브리드 유사도 검색 |
+| Analytics Agent | 집계·통계성 질의(ANALYTICS)를 처리 |
 | Answer Agent | 조회 결과를 자연어 답변과 시설 카드로 가공. URL 미존재 시 fallback 링크 처리 |
 
 ### 도구 (룰베이스, LLM 추론 없음)
@@ -113,22 +108,27 @@ on-seoul-agent/
 ├── routers/
 │   └── chat.py              # POST /chat/stream — SSE 스트리밍 엔드포인트
 ├── agents/
-│   ├── graph.py             # LangGraph StateGraph 워크플로우 (Router→Search→Answer→Self-Correction)
-│   ├── workflow.py          # LangChain(LCEL) 워크플로우 — graph.py 전환 전 레거시
-│   ├── router_agent.py      # 의도 분류
+│   ├── graph.py             # LangGraph StateGraph 조립·실행 (조건부 엣지 라우팅)
+│   ├── nodes.py             # GraphNodes — 노드·엣지 구현 본체
+│   ├── triage_agent.py      # action 결정 + retrieval_intent 분류 (RouterAgent 대체)
+│   ├── router_agent.py      # 의도 분류 (하위호환 alias)
+│   ├── _reference_resolution.py  # 지시 참조 선판정 (규칙 기반, LLM 미사용)
+│   ├── hydration_node.py    # RRF 결과 → 원본 서비스 hydration
 │   ├── sql_agent.py         # SQL 조회 에이전트
 │   ├── vector_agent.py      # 벡터 검색 에이전트 (BM25 + vector 하이브리드)
+│   ├── analytics_agent.py   # 집계·통계성 질의 처리 에이전트
 │   └── answer_agent.py      # 답변 생성 에이전트
 ├── tools/
 │   ├── sql_search.py        # PostgreSQL 정형 조회
 │   ├── vector_search.py     # pgvector 유사도 검색 (post-filter)
 │   ├── question_search.py   # 예상 질문 임베딩 검색, service_id별 dedup (Track C)
 │   ├── bm25_search.py       # ParadeDB BM25 전문 검색
+│   ├── tokenizer.py         # Kiwi(kiwipiepy) 형태소 분석기 (BM25 쿼리 토크나이징)
 │   └── map_search.py        # 반경 검색 + GeoJSON 반환
 ├── llm/
 │   ├── client.py            # LLM API 호출 추상화 (Gemini / GPT)
 │   ├── embedder.py          # 텍스트 → 벡터 변환
-│   └── tokenizer.py         # Lindera KoDic 형태소 분석기 (BM25 쿼리 토크나이징)
+│   └── embedding_config.py  # 임베딩 도메인 상수
 ├── schemas/
 │   ├── state.py             # AgentState (LangGraph StateGraph 공유 상태)
 │   ├── search.py            # ChannelData / SearchKind / SearchChannel 상수, search_channels_reducer
