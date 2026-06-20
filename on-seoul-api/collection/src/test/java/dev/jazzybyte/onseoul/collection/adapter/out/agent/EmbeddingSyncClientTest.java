@@ -27,7 +27,7 @@ class EmbeddingSyncClientTest {
         mockWebServer.start();
 
         String baseUrl = mockWebServer.url("/").toString();
-        EmbeddingSyncProperties properties = new EmbeddingSyncProperties(baseUrl, 10);
+        EmbeddingSyncProperties properties = new EmbeddingSyncProperties(baseUrl, 10, "token", 3);
         WebClient webClient = WebClient.builder().baseUrl(baseUrl).build();
         client = new EmbeddingSyncClient(webClient, properties);
     }

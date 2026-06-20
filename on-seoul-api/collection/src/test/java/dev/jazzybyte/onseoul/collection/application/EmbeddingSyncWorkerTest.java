@@ -91,6 +91,21 @@ class EmbeddingSyncWorkerTest {
     }
 
     @Test
+    @DisplayName("발행하는 EmbeddingSyncCompletedEvent에 CollectionCompletedEvent.runStartedAt을 그대로 전파한다 (flush 판정 기준 일치)")
+    void propagatesRunStartedAtIntoPublishedEvent() {
+        when(loadChangedServiceIdsPort.loadSince(any()))
+                .thenReturn(new ChangedServiceIds(List.of(), List.of()));
+
+        worker.onCollectionCompleted(event);
+
+        ArgumentCaptor<EmbeddingSyncCompletedEvent> captor =
+                ArgumentCaptor.forClass(EmbeddingSyncCompletedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().runStartedAt())
+                .isEqualTo(Instant.parse("2026-01-01T00:00:00Z"));
+    }
+
+    @Test
     @DisplayName("upsert+delete 합계가 500을 넘으면 500 이하 청크로 분할해 여러 번 호출한다")
     void chunkedWhenOver500() {
         List<String> upsert = IntStream.range(0, 600).mapToObj(i -> "U-" + i).toList();

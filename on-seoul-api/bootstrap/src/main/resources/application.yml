@@ -75,6 +75,13 @@ app:
     # 쉼표로 구분된 허용 Origin 목록. 와일드카드 패턴 지원 (예: https://*.example.com).
     # 로컬 개발 기본값: localhost 3000/5173 포트. 운영에서는 CORS_ALLOWED_ORIGINS 환경변수로 재정의.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+  rate-limit:
+    # 사용자 기준 RPM 레이트 리밋(Redis ZSET 슬라이딩 윈도우). 인증 이후 적용.
+    # ChatConcurrencyGuard(동시 실행 cap)와 보완 관계 — 이쪽은 분당 호출 수를 제한한다.
+    enabled: ${RATE_LIMIT_ENABLED:true}
+    requests-per-minute: ${RATE_LIMIT_RPM:20}   # 윈도우 내 허용 요청 수
+    window-seconds: ${RATE_LIMIT_WINDOW_SECONDS:60}
+    path: ${RATE_LIMIT_PATH:/api/chat/query}     # 대상 경로(POST). 그 외 경로는 미적용.
 jwt:
   secret: ${JWT_SECRET}
   access-token-minutes: 15
@@ -101,6 +108,10 @@ ai:
     # Phase 7: 임베딩 동기화(POST /embeddings/services/sync) 호출 timeout.
     # 청크당 최대 500건이므로 템플릿 생성보다 넉넉하게 설정한다.
     embedding-sync-timeout-seconds: 30
+    # AI 내부 관리 엔드포인트(POST /admin/cache/flush) X-Internal-Token 공유 시크릿. 평문 금지 — env 주입.
+    admin-internal-token: ${ADMIN_INTERNAL_TOKEN:}
+    # answer cache flush 호출 timeout. best-effort라 짧게 설정한다.
+    admin-cache-flush-timeout-seconds: 3
 
 chat:
   history:
@@ -125,6 +136,18 @@ management:
   endpoint:
     health:
       show-details: never
+  otlp:
+    metrics:
+      export:
+        # Micrometer OTLP 레지스트리는 기본 HTTP/protobuf. SigNoz의 HTTP 수신 포트(4318)/v1/metrics.
+        # 트레이스·로그는 Java Agent가 gRPC(4317)로 별도 전송한다.
+        enabled: ${OTEL_ENABLED:false}
+        url: ${OTEL_METRICS_OTLP_URL:http://on-seoul-signoz:4318/v1/metrics}
+        step: 60s
+  metrics:
+    tags:
+      service.name: ${OTEL_SERVICE_NAME:on-seoul-api}
+      deployment.environment: ${OTEL_ENVIRONMENT:local}
 
 knock:
   api-key: ${KNOCK_API_KEY}    # Knock API 키. 필수 — 미설정 시 앱 시작 실패

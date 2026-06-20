@@ -38,6 +38,16 @@ public class ChatMessageJpaEntity {
     @Column(name = "service_cards")
     private String serviceCards;
 
+    // ASSISTANT 메시지의 intent(예: "SQL_SEARCH"). USER는 null. 다음 턴 carryover(prev_intent)용.
+    @Column(name = "intent", length = 20)
+    private String intent;
+
+    // ASSISTANT 메시지의 triage decision(action/routes/user_rationale/sources) opaque JSON. USER는 null.
+    // user_rationale을 다음 턴 carryover(prev_reasoning)로 추출하는 데 사용. raw JSON text passthrough.
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "decision")
+    private String decision;
+
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
@@ -47,7 +57,8 @@ public class ChatMessageJpaEntity {
     }
 
     public ChatMessage toDomain() {
-        return new ChatMessage(id, roomId, seq, ChatMessageRole.valueOf(role), content, serviceCards, createdAt);
+        return new ChatMessage(id, roomId, seq, ChatMessageRole.valueOf(role), content,
+                serviceCards, intent, decision, createdAt);
     }
 
     public static ChatMessageJpaEntity fromDomain(ChatMessage message) {
@@ -58,6 +69,8 @@ public class ChatMessageJpaEntity {
         entity.role = message.getRole().name();
         entity.content = message.getContent();
         entity.serviceCards = message.getServiceCards();
+        entity.intent = message.getIntent();
+        entity.decision = message.getDecision();
         entity.createdAt = message.getCreatedAt();
         return entity;
     }

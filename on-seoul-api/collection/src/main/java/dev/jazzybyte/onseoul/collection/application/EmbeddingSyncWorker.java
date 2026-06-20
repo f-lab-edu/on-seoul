@@ -79,7 +79,7 @@ public class EmbeddingSyncWorker {
                     e.getMessage(), e);
         } finally {
             running.set(false);
-            eventPublisher.publishEvent(new EmbeddingSyncCompletedEvent());
+            eventPublisher.publishEvent(new EmbeddingSyncCompletedEvent(event.runStartedAt()));
             log.info("[EmbeddingSyncWorker] 임베딩 동기화 완료 이벤트 발행");
         }
     }

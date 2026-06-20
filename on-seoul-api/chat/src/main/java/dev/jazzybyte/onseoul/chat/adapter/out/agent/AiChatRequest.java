@@ -12,10 +12,19 @@ record AiChatRequest(
         @JsonProperty("message") String message,
         @JsonProperty("lat") Double lat,
         @JsonProperty("lng") Double lng,
-        @JsonProperty("history") List<Turn> history
+        @JsonProperty("history") List<Turn> history,
+        // ── 멀티턴 참조 해소(carryover) — AI는 optional로 수용 ──
+        @JsonProperty("prev_entities") List<PrevEntity> prevEntities,
+        @JsonProperty("prev_intent") String prevIntent,
+        @JsonProperty("prev_reasoning") String prevReasoning
 ) {
     record Turn(
             @JsonProperty("role") String role,
             @JsonProperty("content") String content
+    ) {}
+
+    record PrevEntity(
+            @JsonProperty("service_id") String serviceId,
+            @JsonProperty("label") String label
     ) {}
 }

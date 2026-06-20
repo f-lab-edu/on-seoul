@@ -1,6 +1,8 @@
 package dev.jazzybyte.onseoul.collection.adapter.out.agent;
 
 import dev.jazzybyte.onseoul.collection.port.out.EmbeddingSyncPort;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
@@ -33,12 +35,15 @@ class EmbeddingSyncClient implements EmbeddingSyncPort {
     }
 
     @Override
+    @WithSpan("ai.embedding.sync")
     public void sync(List<String> upsert, List<String> delete) {
         if (upsert.isEmpty() && delete.isEmpty()) {
             // 빈배열 가드: 둘 다 비면 AI 서비스가 422를 반환하므로 호출하지 않는다.
             log.debug("[EmbeddingSync] upsert/delete 모두 비어 있음 — AI 호출 생략");
             return;
         }
+        Span.current().setAttribute("embedding.upsert_count", upsert.size());
+        Span.current().setAttribute("embedding.delete_count", delete.size());
 
         EmbeddingSyncResponse response = webClient.post()
                 .uri("/embeddings/services/sync")

@@ -45,7 +45,13 @@ export interface UseChatStreamResult {
   reset: () => void;
 }
 
-/** 진행(progress) 이벤트의 trace 라벨. `message`가 있으면 그것만 쓴다(특정 type에 의존 X). */
+/**
+ * 진행(progress) 이벤트의 trace 라벨. `step` 값(routing/searching/answering/re_searching 등)에
+ * 의존하지 않고 채워진 `message`만 그대로 쓴다 — AI가 새 step을 추가해도 코드 변경 없이 흡수.
+ *
+ * 사용자에게는 step 구분 없이 동일하게 `⏳ {message}` 한 줄로 노출되며(AgentTrace에 누적),
+ * 예: 재시도(re_searching) 시 "⏳ 다른 방식으로 다시 검색하고 있습니다..." 가 한 줄 더 쌓인다.
+ */
 function progressLabel(ev: Record<string, unknown>): string | null {
   return typeof ev.message === "string" && ev.message.length > 0 ? `⏳ ${ev.message}` : null;
 }

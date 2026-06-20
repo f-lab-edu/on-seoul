@@ -6,6 +6,7 @@ import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.MediaType;
@@ -28,12 +29,15 @@ import java.util.Map;
 @Slf4j
 @Configuration
 @EnableWebSecurity
+@EnableConfigurationProperties(RateLimitProperties.class)
 public class SecurityConfig {
 
     private final TokenIssuerPort tokenIssuerPort;
     private final OAuth2LoginSuccessHandler oauth2LoginSuccessHandler;
     private final CookieOAuth2AuthorizationRequestRepository authorizationRequestRepository;
     private final ObjectMapper objectMapper;
+    private final SlidingWindowRateLimiter rateLimiter;
+    private final RateLimitProperties rateLimitProperties;
     private final String frontendBaseUrl;
     private final String corsAllowedOriginsRaw;
 
@@ -41,12 +45,16 @@ public class SecurityConfig {
                           final OAuth2LoginSuccessHandler oauth2LoginSuccessHandler,
                           final CookieOAuth2AuthorizationRequestRepository authorizationRequestRepository,
                           final ObjectMapper objectMapper,
+                          final SlidingWindowRateLimiter rateLimiter,
+                          final RateLimitProperties rateLimitProperties,
                           @Value("${app.frontend-base-url}") final String frontendBaseUrl,
                           @Value("${app.cors.allowed-origins}") final String corsAllowedOriginsRaw) {
         this.tokenIssuerPort = tokenIssuerPort;
         this.oauth2LoginSuccessHandler = oauth2LoginSuccessHandler;
         this.authorizationRequestRepository = authorizationRequestRepository;
         this.objectMapper = objectMapper;
+        this.rateLimiter = rateLimiter;
+        this.rateLimitProperties = rateLimitProperties;
         this.frontendBaseUrl = frontendBaseUrl;
         this.corsAllowedOriginsRaw = corsAllowedOriginsRaw;
     }
@@ -105,7 +113,10 @@ public class SecurityConfig {
                         })
                 )
                 .addFilterBefore(new JwtAuthenticationFilter(tokenIssuerPort),
-                        UsernamePasswordAuthenticationFilter.class);
+                        UsernamePasswordAuthenticationFilter.class)
+                // 인증 이후(userId 확보 뒤) RPM 레이트 리밋을 적용한다.
+                .addFilterAfter(new RateLimitFilter(rateLimiter, rateLimitProperties, objectMapper),
+                        JwtAuthenticationFilter.class);
 
         return http.build();
     }

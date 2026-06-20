@@ -4,6 +4,8 @@ import dev.jazzybyte.onseoul.notification.domain.NotificationTemplate;
 import dev.jazzybyte.onseoul.notification.domain.NotificationTemplateRequest;
 import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
 import dev.jazzybyte.onseoul.notification.port.out.TemplateGenerationPort;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
@@ -30,7 +32,9 @@ class TemplateAgentClient implements TemplateGenerationPort {
     }
 
     @Override
+    @WithSpan("ai.notification.template")
     public TemplateResult generate(NotificationTemplateRequest request) {
+        Span.current().setAttribute("notification.service_count", request.services().size());
         try {
             TemplateAgentResponse response = webClient.post()
                     .uri("/notification/template")
