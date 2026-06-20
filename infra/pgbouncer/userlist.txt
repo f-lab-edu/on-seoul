@@ -6,7 +6,7 @@
 # 이 verifier 는 PostgreSQL 의 pg_authid.rolpassword 값과 동일하다. 그대로 복사해 넣는다:
 #   SELECT rolname, rolpassword
 #     FROM pg_authid
-#    WHERE rolname IN ('on_ai_app','on_data_app','on_ai_reader','pgbouncer');
+#    WHERE rolname IN ('on_ai_app','on_data_app','on_data_reader');
 #
 # 실제 verifier(=비밀번호 검증자)는 절대 커밋하지 않는다.
 # 배포 시 CI/CD 파이프라인(Vault, AWS SSM, GitHub Actions Secret 등)에서
@@ -17,7 +17,18 @@
 #     PG 의 challenge 에 평문으로 응답), verifier 주입이 안전하므로 권장하지 않는다.
 #   - userlist.txt 대신 pgbouncer.ini 의 auth_query 로 PG 에서 동적 조회하는 방식도 있다.
 #
+# A 방식(클라이언트 롤 pass-through)에서는 PgBouncer 가 클라이언트 롤 그대로 PG 에
+# 로그인하므로, 실제로 연결하는 3롤 모두의 자격증명이 여기 있어야 한다:
+#   - on_ai_app     : AI 서비스 → on_ai (CRUD)
+#   - on_data_app   : API 서비스 / Spring Boot → on_data (CRUD)
+#   - on_data_reader : AI 서비스 → on_data (SELECT 전용, 최소권한)
+# 누락 시 해당 롤의 (db,롤) 풀이 PG SCRAM 로그인 실패 → 해당 경로 전면 인증 장애.
+# 이 파일이 자격증명의 단일 출처다(PGBOUNCER_* 환경변수 아님).
+#
 # 예시 행 (실제 배포 전 반드시 교체 — 아래는 형식 예시일 뿐 유효한 verifier 아님):
-# "on_ai_app"    "SCRAM-SHA-256$4096:REPLACE_SALT$REPLACE_STOREDKEY:REPLACE_SERVERKEY"
-# "on_data_app"  "SCRAM-SHA-256$4096:REPLACE_SALT$REPLACE_STOREDKEY:REPLACE_SERVERKEY"
-# "pgbouncer"    "SCRAM-SHA-256$4096:REPLACE_SALT$REPLACE_STOREDKEY:REPLACE_SERVERKEY"
+# "on_ai_app"      "SCRAM-SHA-256$4096:REPLACE_SALT$REPLACE_STOREDKEY:REPLACE_SERVERKEY"
+# "on_data_app"    "SCRAM-SHA-256$4096:REPLACE_SALT$REPLACE_STOREDKEY:REPLACE_SERVERKEY"
+# "on_data_reader" "SCRAM-SHA-256$4096:REPLACE_SALT$REPLACE_STOREDKEY:REPLACE_SERVERKEY"
+#
+# (verifier 추출이 어려우면 평문도 가능 — scram-sha-256 에서 PgBouncer 가 PG 챌린지에
+#  평문으로 응답한다. 단 verifier 주입이 더 안전하므로 권장. 어느 쪽이든 실제 값 커밋 금지.)
