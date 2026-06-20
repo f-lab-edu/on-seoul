@@ -36,8 +36,6 @@ export interface ChatMessageItem {
   seq: number;
   role: ChatRole;
   content: string;
-  /** ASSISTANT 메시지에만 존재. 스트리밍 final 이벤트와 동일한 카드 배열. USER/카드 미동반 시 null. */
-  service_cards: ServiceCard[] | null;
   createdAt: string; // ISO 8601 (UTC)
   /** ASSISTANT 메시지의 저장된 시설 카드. USER/카드 미동반 시 null. SSE final과 동일 형태. */
   service_cards: ServiceCard[] | null;
