@@ -606,6 +606,17 @@ class GraphNodes:
             emit.update(self._emit_answering(state).get("emit", {}))
         return {"emit": emit} if emit else {}
 
+    @staticmethod
+    def _route_fallback_breadcrumb(state: AgentState) -> list[str]:
+        """route_by_action 의 else→router_node fallback(action=None/미지) 진입 마커.
+
+        router_node 의 forced 분기 이후에만 호출되므로 forced=None 이 확정이다. 이때
+        action 이 RETRIEVE 가 아니면 정상 RETRIEVE·forced 재시도가 아닌 fallback 진입이라,
+        정상 검색과 구분하도록 node_path 에 breadcrumb 를 남긴다(관측용 공유상태 기록).
+        """
+        action = state["triage"].get("action")
+        return ["route_unknown_action"] if action != ActionType.RETRIEVE else []
+
     async def router_node(self, state: AgentState) -> dict[str, Any]:
         """RouterAgent.classify() 호출 — 검색 계획 수립.
 
@@ -689,7 +700,7 @@ class GraphNodes:
                 history=history,
             )
             update = _build_router_update(result)
-            update["node_path"] = ["router"]
+            update["node_path"] = ["router", *self._route_fallback_breadcrumb(state)]
             # miss → 정상 update 구성 후 SET. classify 예외 시 SET 안 함(아래 except).
             await set_cached_refine(message, history, _serialize_refine(update), redis)
             logger.info(
@@ -738,7 +749,11 @@ class GraphNodes:
             cached.get("intent"),
         )
         update = _restore_refine(cached)
-        update["node_path"] = ["router", "refine_cache_hit"]
+        update["node_path"] = [
+            "router",
+            "refine_cache_hit",
+            *self._route_fallback_breadcrumb(state),
+        ]
         update.update(self._emit_router_events(state, update))
         return update
 
@@ -956,6 +971,9 @@ class GraphNodes:
         """
         action = state["triage"].get("action")
         oos_type = state["triage"].get("out_of_scope_type")
+        # action=None 은 route_by_action 의 else→router_node fallback(검색 실행)과
+        # 대칭이라 RETRIEVE 와 동일 취급한다. 입구에서 검색을 돌려놓고 이 게이트만
+        # 건너뛰면 빈 컨텍스트로 answer_node 에 진입하므로 None 도 검색 경로로 본다.
         # attribute_gap 은 검색 경로라 0건 체크에 포함한다(중첩 경로).
         is_search_path = action in (ActionType.RETRIEVE, None) or (
             action == ActionType.OUT_OF_SCOPE and oos_type == "attribute_gap"
@@ -1583,8 +1601,17 @@ class GraphNodes:
         elif action == ActionType.EXPLAIN:
             return "explain_node"
         else:
-            # fallback: action 미설정 또는 미지 값 → router_node(검색 계획 수립).
-            # RETRIEVE 경로와 동일하게 router 가 intent 를 채운 뒤 cache_check 로 이어진다.
+            # fallback: action 미설정(None) 또는 미지 값 → router_node(검색 계획 수립).
+            # 데이터 질의일 수 있으므로 컨텍스트 없는 DIRECT_ANSWER(대화형/할루시네이션
+            # 위험) 대신 RETRIEVE 와 동일하게 검색을 시도해 grounded 답변으로 수렴시킨다
+            # (0건이면 0건 게이트+retry → 근거 있는 '못 찾음'). triage_node 는 라이브
+            # 경로에서 항상 action 을 채우므로 이 분기는 should-never-happen 방어용이다.
+            # 미지 ActionType 추가 시 분기 누락을 표면화하도록 warning 을 남긴다(관측).
+            logger.warning(
+                "route_by_action: 미처리 action=%s → router_node fallback room=%s",
+                state["triage"].get("action"),
+                state.get("room_id"),
+            )
             return "router_node"
 
     def route_by_action_fanout(self, state: AgentState) -> list[str] | str:
