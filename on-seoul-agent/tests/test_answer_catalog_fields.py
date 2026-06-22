@@ -8,7 +8,12 @@ service_open_*_dt 는 신뢰불가로 계속 제외한다.
 import datetime
 import json
 
-from agents.answer_agent import AnswerAgent, _STRUCT_DETAIL
+from agents.answer_agent import (
+    AnswerAgent,
+    _STRUCT_DETAIL,
+    _guarded_use_time,
+    _parse_time,
+)
 from schemas.state import IntentType
 from tests.helpers import make_agent_state, make_answer_agent
 
@@ -133,6 +138,65 @@ class TestUseTimeRenderGuard:
         assert out["use_time_end"] is None
 
 
+class TestParseTimeSafety:
+    """_parse_time 는 어떤 입력에도 throw 없이 datetime.time | None 만 반환한다.
+
+    DB async 드라이버는 datetime.time 을, 일부 경로/테스트는 isoformat str 을
+    줄 수 있고, 오염 경로로 잘못된 타입/문자열이 유입될 수 있다. 가드 비교가
+    예외로 떨어지지 않도록 모든 입력을 안전 처리하는지 직접 검증한다.
+    """
+
+    def test_none_returns_none(self):
+        assert _parse_time(None) is None
+
+    def test_time_object_passthrough(self):
+        t = datetime.time(9, 30, 0)
+        assert _parse_time(t) == t
+
+    def test_isoformat_str_hms(self):
+        assert _parse_time("09:00:00") == datetime.time(9, 0, 0)
+
+    def test_isoformat_str_hm(self):
+        # HH:MM(초 없음)도 fromisoformat 가 처리한다.
+        assert _parse_time("09:00") == datetime.time(9, 0)
+
+    def test_garbage_str_returns_none_no_throw(self):
+        assert _parse_time("garbage") is None
+
+    def test_out_of_range_24h_returns_none(self):
+        # 24:00:00 은 fromisoformat 가 거부 → None (throw 아님).
+        assert _parse_time("24:00:00") is None
+
+    def test_wrong_types_return_none_no_throw(self):
+        # int/float/list/dict 등 비-str·비-time 타입도 str() 후 파싱 실패 → None.
+        for bad in (123, 9.5, [], {}, ("09", "00")):
+            assert _parse_time(bad) is None
+
+
+class TestUseTimeZeroPadComparison:
+    """zero-pad 안 된 값에서 사전식 str 비교 오판을 _parse_time 이 차단하는지.
+
+    핵심 회귀: raw str 로 비교하면 "9:00" > "18:00" (사전식)이 True 가 되어 정상
+    윈도를 placeholder 로 오판한다. 가드는 datetime.time 으로 파싱 후 비교하므로
+    이 함정에 빠지지 않아야 한다. 단, fromisoformat 는 zero-pad 를 요구하므로
+    non-zero-pad("9:00")는 파싱 불가로 (None, None) omit 된다(보수적 안전).
+    """
+
+    def test_non_zero_pad_not_lexically_misjudged(self):
+        # 사전식이면 "9:00">"18:00" → start>=end 로 오판하지만, 실제로는 파싱
+        # 불가라 (None, None). 어느 경로든 raw str 비교 오판은 발생하지 않는다.
+        assert _guarded_use_time("9:00", "18:00") == (None, None)
+
+    def test_zero_pad_valid_window_survives(self):
+        # zero-pad 정상 윈도는 datetime.time 비교로 살아남는다.
+        assert _guarded_use_time("09:00", "18:00") == ("09:00", "18:00")
+
+    def test_time_object_comparison_not_lexical(self):
+        # raw datetime.time 비교 — 9시<18시가 정확히 성립(사전식 아님).
+        s, e = datetime.time(9, 0), datetime.time(18, 0)
+        assert _guarded_use_time(s, e) == (s, e)
+
+
 class TestTelNoRenderGuard:
     """tel_no 가드 — phone-shape 만 통과, 한글 등 garbage 는 omit.
 
@@ -155,9 +219,62 @@ class TestTelNoRenderGuard:
         out = AnswerAgent._normalize(self._row("02-123 담당자김"))
         assert out["tel_no"] is None
 
+    def test_multi_number_with_space_passes(self):
+        # 실DB 형태 복수번호("02-724-0200, 0232") — 콤마+공백 구분자가 허용 집합.
+        out = AnswerAgent._normalize(self._row("02-724-0200, 0232"))
+        assert out["tel_no"] == "02-724-0200, 0232"
+
     def test_none_passthrough(self):
         out = AnswerAgent._normalize(self._row(None))
         assert out["tel_no"] is None
+
+    def test_empty_string_omitted(self):
+        # 빈문자열은 정규식이 비매칭(1+ 글자 요구) → omit. None/빈문자 경계 보강.
+        out = AnswerAgent._normalize(self._row(""))
+        assert out["tel_no"] is None
+
+
+class TestRenderGuardAppliesToBothPaths:
+    """가드는 service_cards(프론트)와 results_json(LLM 컨텍스트) 양쪽에 동일 적용된다.
+
+    두 출력은 동일한 _normalize(display) 결과에서 파생되므로, 오염값(omit 대상)이
+    어느 한쪽에만 새거나 살아남지 않는지 회귀로 고정한다.
+    """
+
+    async def test_polluted_use_time_omitted_in_cards_and_json(self):
+        # 08:00-00:00 자정 artifact + 한글 tel garbage 가 둘 다 omit 되는지.
+        agent = make_answer_agent("안내입니다.")
+        rows = [
+            {
+                "service_id": "A1",
+                "service_name": "오염 시설",
+                "place_name": "어딘가",
+                "use_time_start": "08:00:00",
+                "use_time_end": "00:00:00",
+                "tel_no": "02-123 담당자김",
+                "service_url": "https://yeyak.seoul.go.kr/a1",
+            }
+        ]
+        state = make_agent_state(
+            intent=IntentType.VECTOR_SEARCH,
+            vector_sub_intent="identification",
+            message="오염 시설 이용시간",
+            hydrated_services=rows,
+        )
+        result = await agent.answer(state)
+
+        displayed = json.loads(
+            agent._answer_chain.ainvoke.call_args[0][0]["results_json"]
+        )
+        # LLM 컨텍스트(results_json): 오염값 omit.
+        assert displayed[0]["use_time_start"] is None
+        assert displayed[0]["use_time_end"] is None
+        assert displayed[0]["tel_no"] is None
+        # service_cards(프론트): 동일하게 omit.
+        card = result["service_cards"][0]
+        assert card["use_time_start"] is None
+        assert card["use_time_end"] is None
+        assert card["tel_no"] is None
 
 
 class TestDetailPromptMentionsNewFields:
