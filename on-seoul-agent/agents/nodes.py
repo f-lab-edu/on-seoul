@@ -276,53 +276,14 @@ def _restore_refine(cached: dict[str, Any]) -> dict[str, Any]:
     return update
 
 
-class GraphNodes:
-    """AgentGraph 노드·엣지 구현 (무상태).
+class ReferenceNodes:
+    """참조 해소 페이즈 — reference_resolution / rehydrate / describe 노드.
 
-    인스턴스는 AgentGraph.__init__()에서 1회 생성되어 프로세스 내에서 공유된다.
-    제안 0(요청 격리): 요청별 가변 자원/상태를 인스턴스 속성으로 두지 않는다.
-      - node_path → AgentState 슬롯 (node_path_reducer 로 per-invoke 누적).
-      - 시작 시각 → AgentState["started_at"].
-    따라서 동시 요청이 같은 GraphNodes 를 공유해도 세션/경로 교차가 발생하지 않는다.
-
-    제안 0-6(노드 로컬 세션): DB 를 쓰는 노드는 0-1 의 config 주입 장수명 세션 대신
-    노드 내부에서 `data_session_ctx()`/`ai_session_ctx()` 로 풀에서 세션을 잡고 즉시
-    반납한다(acquire-use-release). 커넥션 점유가 노드 쿼리 윈도우(수십 ms)로 축소되어
-    answer LLM 스트리밍 동안 커넥션을 잡지 않는다. 세션은 노드 메서드 지역 변수로만
-    존재하므로 인스턴스 속성 교차도 원천 차단된다.
-      - data_session : sql / map / analytics / hydration
-      - ai_session   : vector / search_persist / trace
-    search_persist 와 trace 는 0-1 에서 한 ai_session 을 공유했으나, 노드 로컬에서는
-    각자 독립 세션을 연다(서로 다른 테이블 INSERT 이고 search_persist 가 먼저 commit
-    하므로 트랜잭션 공유 의존성 없음).
+    의존: answer(AnswerAgent.describe).
     """
 
-    def __init__(
-        self,
-        router: RouterAgent | TriageAgent | None = None,
-        sql_agent: SqlAgent | None = None,
-        vector_agent: VectorAgent | None = None,
-        answer_agent: AnswerAgent | None = None,
-        analytics_agent: AnalyticsAgent | None = None,
-        redis: Any = None,
-        hydration: HydrationNode | None = None,
-        triage: TriageAgent | None = None,
-    ) -> None:
-        # triage 우선, router는 하위호환 별칭
-        self._triage = triage or (router if isinstance(router, TriageAgent) else None)
-        self._router = router if isinstance(router, RouterAgent) else None
-        self._sql = sql_agent or SqlAgent()
-        self._vector = vector_agent or VectorAgent()
-        self._answer = answer_agent or AnswerAgent()
-        self._analytics = analytics_agent or AnalyticsAgent()
-        self._hydration = hydration or HydrationNode()
-        self._redis = redis  # refine 캐시(router_node) 공유 — answer 캐시 노드와 동일 클라이언트
-        self._cache_check = CacheCheckNode(redis=redis)
-        self._cache_write = CacheWriteNode(redis=redis)
-
-    # ------------------------------------------------------------------
-    # 노드 구현
-    # ------------------------------------------------------------------
+    def __init__(self, answer: AnswerAgent) -> None:
+        self._answer = answer
 
     async def reference_resolution_node(self, state: AgentState) -> dict[str, Any]:
         """참조 해소 게이트 — START 직후 선판정.
@@ -365,7 +326,7 @@ class GraphNodes:
         target_ids = state.get("target_service_ids") or []
         # 참조 해소 경로: 재-hydrate 후 describe 답변 단계로 — answering emit.
         # (기존 stream() 의 rehydrate_node 분기와 동일. 신규 SSE 이벤트 미도입.)
-        guard = self._emit_answering(state)
+        guard = _emit.emit_answering(state)
         try:
             async with data_session_ctx() as data_session:
                 rows = await hydrate_services(data_session, target_ids)
@@ -423,6 +384,23 @@ class GraphNodes:
             return "rehydrate_node"
         return "triage_node"
 
+
+class PlanningNodes:
+    """계획 페이즈 — triage / router 노드 + 라우팅 엣지.
+
+    의존: triage(TriageAgent), router(RouterAgent), redis(refine 캐시).
+    """
+
+    def __init__(
+        self,
+        triage: TriageAgent | None,
+        router: RouterAgent | None,
+        redis: Any,
+    ) -> None:
+        self._triage = triage
+        self._router = router
+        self._redis = redis
+
     async def triage_node(self, state: AgentState) -> dict[str, Any]:
         """TriageAgent.classify() 호출 — action 결정 전담.
 
@@ -462,7 +440,7 @@ class GraphNodes:
                         },
                         "plan": {"intent": IntentType.FALLBACK},
                         "node_path": ["triage"],
-                        **self._emit_triage_events(
+                        **_emit.emit_triage_events(
                             state, ActionType.DIRECT_ANSWER, None
                         ),
                     }
@@ -510,7 +488,7 @@ class GraphNodes:
                     "user_rationale": rationale,
                 },
                 "node_path": ["triage"],
-                **self._emit_triage_events(state, result.action, rationale),
+                **_emit.emit_triage_events(state, result.action, rationale),
             }
         except Exception as exc:
             logger.exception("triage_node 실행 오류")
@@ -522,26 +500,6 @@ class GraphNodes:
                 "triage": {"action": ActionType.DIRECT_ANSWER},
                 "node_path": ["triage_error"],
             }
-
-    # ------------------------------------------------------------------
-    # SSE 이벤트 emit 헬퍼 (작업 3 — 노드-내부 emit)
-    # ------------------------------------------------------------------
-
-    def _emit_answering(self, state: AgentState) -> dict[str, Any]:
-        """agents._emit.emit_answering 위임(C1: 자유 함수로 추출)."""
-        return _emit.emit_answering(state)
-
-    def _emit_triage_events(
-        self, state: AgentState, action: ActionType, rationale: str | None
-    ) -> dict[str, Any]:
-        """agents._emit.emit_triage_events 위임(C1: 자유 함수로 추출)."""
-        return _emit.emit_triage_events(state, action, rationale)
-
-    def _emit_router_events(
-        self, state: AgentState, update: dict[str, Any]
-    ) -> dict[str, Any]:
-        """agents._emit.emit_router_events 위임(C1: 자유 함수로 추출)."""
-        return _emit.emit_router_events(state, update)
 
     @staticmethod
     def _route_fallback_breadcrumb(state: AgentState) -> list[str]:
@@ -582,14 +540,14 @@ class GraphNodes:
                 "forced_intent": None,
                 "node_path": ["router"],
             }
-            update.update(self._emit_router_events(state, update))
+            update.update(_emit.emit_router_events(state, update))
             return update
 
         if self._router is None:
             # RETRIEVE 로 판정됐으나 RouterAgent 미주입 — 안전망으로 FALLBACK 처리.
             logger.warning("router_node — RouterAgent 미주입, intent=FALLBACK 처리")
             update = {"plan": {"intent": IntentType.FALLBACK}, "node_path": ["router"]}
-            update.update(self._emit_router_events(state, update))
+            update.update(_emit.emit_router_events(state, update))
             return update
 
         # (0-3-3) refine 캐시 — raw query(+history) 기준 LLM(검색 계획) 결과 공유.
@@ -651,7 +609,7 @@ class GraphNodes:
                 result.area_name,
                 result.service_status,
             )
-            update.update(self._emit_router_events(state, update))
+            update.update(_emit.emit_router_events(state, update))
             return update
         except Exception as exc:
             logger.exception("router_node 실행 오류")
@@ -663,7 +621,7 @@ class GraphNodes:
                 "node_path": ["router_error"],
             }
             # intent 미확정(plan 없음) → answering emit (기존 stream() else 분기 동일).
-            err_update.update(self._emit_router_events(state, err_update))
+            err_update.update(_emit.emit_router_events(state, err_update))
             return err_update
         finally:
             # ★ 락 누수 가드: classify 성공·예외·early-return 어디서도 락을 해제한다.
@@ -691,12 +649,122 @@ class GraphNodes:
             "refine_cache_hit",
             *self._route_fallback_breadcrumb(state),
         ]
-        update.update(self._emit_router_events(state, update))
+        update.update(_emit.emit_router_events(state, update))
         return update
 
     # ------------------------------------------------------------------
-    # action별 노드
+    # 엣지 로직 (라우팅)
     # ------------------------------------------------------------------
+
+    def route_by_action(self, state: AgentState) -> str:
+        """triage_node 직후 — action에 따라 다음 노드를 결정한다.
+
+        RETRIEVE → router_node (검색 계획 수립 후 cache_check)
+        DIRECT_ANSWER → direct_answer_node
+        AMBIGUOUS → ambiguous_node
+        OUT_OF_SCOPE/domain_outside → out_of_scope_node
+        OUT_OF_SCOPE/attribute_gap → out_of_scope_node (내부에서 vector_node로 라우팅)
+        EXPLAIN → explain_node
+        error(answer 이미 설정) → answer_node
+        """
+        error = state.get("error")
+        answer = state["output"].get("answer") or ""
+        if error and answer.strip():
+            return "answer_node"
+
+        action = state["triage"].get("action")
+        if action == ActionType.RETRIEVE:
+            return "router_node"
+        elif action == ActionType.DIRECT_ANSWER:
+            return "direct_answer_node"
+        elif action == ActionType.AMBIGUOUS:
+            return "ambiguous_node"
+        elif action == ActionType.OUT_OF_SCOPE:
+            return "out_of_scope_node"
+        elif action == ActionType.EXPLAIN:
+            return "explain_node"
+        else:
+            # fallback: action 미설정(None) 또는 미지 값 → router_node(검색 계획 수립).
+            # 데이터 질의일 수 있으므로 컨텍스트 없는 DIRECT_ANSWER(대화형/할루시네이션
+            # 위험) 대신 RETRIEVE 와 동일하게 검색을 시도해 grounded 답변으로 수렴시킨다
+            # (0건이면 0건 게이트+retry → 근거 있는 '못 찾음'). triage_node 는 라이브
+            # 경로에서 항상 action 을 채우므로 이 분기는 should-never-happen 방어용이다.
+            # 미지 ActionType 추가 시 분기 누락을 표면화하도록 warning 을 남긴다(관측).
+            logger.warning(
+                "route_by_action: 미처리 action=%s → router_node fallback room=%s",
+                state["triage"].get("action"),
+                state.get("room_id"),
+            )
+            return "router_node"
+
+    def route_by_action_fanout(self, state: AgentState) -> list[str] | str:
+        """RETRIEVE 경로 내 secondary_intent 팬아웃 분기.
+
+        enable_secondary_intent=True이고 secondary_intent가 있으면 SQL+VECTOR 병렬 팬아웃.
+        그 외에는 route_by_intent(기존 단일 라우트).
+
+        LangGraph 조건부 엣지가 list를 반환하면 병렬 팬아웃을 수행한다.
+        """
+        if not settings.enable_secondary_intent:
+            return self.route_by_intent(state)
+
+        secondary = state["plan"].get("secondary_intent")
+        primary = state["plan"].get("intent")
+        if secondary is not None and primary in (
+            IntentType.SQL_SEARCH,
+            IntentType.VECTOR_SEARCH,
+        ):
+            return ["sql_node", "vector_node"]
+
+        return self.route_by_intent(state)
+
+    def post_cache_check(self, state: AgentState) -> str:
+        """cache_check 직후 라우팅 — hit 시 search_persist_node → trace 경로, miss면 intent 분기.
+
+        cache hit 시 검색이 수행되지 않으므로 search_channels 는 {} 상태다.
+        search_persist_node 는 빈 채널 맵에서 즉시 skip 하고 return {} 하므로
+        성능 오버헤드는 없다. 명시적으로 경유함으로써 종단 체인
+        (cache_write → search_persist → trace) 의 일관성을 유지한다.
+
+        NOTE: 직접 trace_node 로 라우팅하면 나중에 cache-hit 경로에서도 채널 데이터가
+        존재하는 케이스가 생길 때 search_persist 가 묵묵히 스킵되는 latent bug 가 된다.
+        """
+        if state.get("cache_hit"):
+            return "search_persist_node"
+        return self.route_by_intent(state)
+
+    def route_by_intent(self, state: AgentState) -> str:
+        """intent 값에 따라 다음 노드를 결정한다."""
+        error = state.get("error")
+        answer = state["output"].get("answer") or ""
+
+        # router_node 예외 시 fallback_answer + error가 모두 설정됨.
+        # intent가 None이므로 아래 else 분기가 동일하게 처리하지만, 의도 명시용 early-return.
+        if error and answer.strip():
+            return "answer_node"
+
+        intent = state["plan"].get("intent")
+        if intent == IntentType.SQL_SEARCH:
+            return "sql_node"
+        elif intent == IntentType.VECTOR_SEARCH:
+            return "vector_node"
+        elif intent == IntentType.MAP:
+            return "map_node"
+        elif intent == IntentType.ANALYTICS:
+            return "analytics_node"
+        else:
+            return "answer_node"
+
+
+class AnswerNodes:
+    """답변 페이즈 — action별 답변 노드 + answer_node.
+
+    의존: answer(AnswerAgent). explain_node→direct_answer_node 교차 호출은
+    동일 클래스 내부이므로 self.direct_answer_node 로 유지된다.
+    """
+
+    def __init__(self, answer: AnswerAgent) -> None:
+        self._answer = answer
 
     async def direct_answer_node(self, state: AgentState) -> dict[str, Any]:
         """DIRECT_ANSWER action — DB 없이 LLM 직접 응답.
@@ -849,6 +917,70 @@ class GraphNodes:
                 "node_path": ["explain_error"],
             }
 
+    async def answer_node(self, state: AgentState) -> dict[str, Any]:
+        """AnswerAgent.answer() 호출 — answer, title 설정."""
+        if state.get("error") and state["output"].get("answer"):
+            return {"node_path": ["answer_node"]}
+
+        try:
+            new_state = await self._answer.answer(state)
+            answer = new_state.get("answer") or ""
+            logger.info(
+                "answer.generated room=%s len=%d", state.get("room_id"), len(answer)
+            )
+            # 관측: 검색 결과는 있는데 카드가 비어 있으면 normalize 무음 실패 신호.
+            # 동작은 바꾸지 않고 경고만 남긴다.
+            intent = state["plan"].get("intent")
+            if intent in (IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH):
+                hydrated = state["hydration"].get("hydrated_services") or []
+                sql_results = state["sql"].get("results") or []
+                if (hydrated or sql_results) and not new_state.get("service_cards"):
+                    logger.warning(
+                        "answer.cards_empty_with_results room=%s intent=%s "
+                        "hydrated=%d sql=%d",
+                        state.get("room_id"),
+                        getattr(intent, "value", intent),
+                        len(hydrated),
+                        len(sql_results),
+                    )
+            return {
+                "output": {
+                    "answer": new_state.get("answer"),
+                    "title": new_state.get("title"),
+                    "service_cards": new_state.get("service_cards"),
+                },
+                "node_path": ["answer_node"],
+            }
+        except Exception as exc:
+            logger.exception("answer_node 실행 오류")
+            return {
+                "error": str(exc),
+                "output": {
+                    "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+                },
+                "node_path": ["answer_error"],
+            }
+
+
+class RetrievalNodes:
+    """검색 페이즈 — sql/vector/map/analytics/hydration + rrf/게이트 노드·엣지.
+
+    의존: sql(SqlAgent), vector(VectorAgent), analytics(AnalyticsAgent),
+    hydration(HydrationNode).
+    """
+
+    def __init__(
+        self,
+        sql: SqlAgent,
+        vector: VectorAgent,
+        analytics: AnalyticsAgent,
+        hydration: HydrationNode,
+    ) -> None:
+        self._sql = sql
+        self._vector = vector
+        self._analytics = analytics
+        self._hydration = hydration
+
     async def rrf_fusion_node(self, state: AgentState) -> dict[str, Any]:
         """SQL + VECTOR 병렬 팬아웃 결과를 RRF로 통합한다.
 
@@ -941,6 +1073,242 @@ class GraphNodes:
             return "retry_prep_node"
 
         return "answer_node"
+
+    async def sql_node(self, state: AgentState) -> dict[str, Any]:
+        """SqlAgent.search() 호출 — sql_results + search_channels 설정.
+
+        노드 로컬 세션(0-6): data_session 을 풀에서 잡고 쿼리 후 즉시 반납한다.
+
+        answering progress 는 여기서 emit 하지 않는다. sql_node 는 secondary_intent
+        팬아웃(enable_secondary_intent=True)으로 vector_node 와 동일 super-step 에 병렬
+        실행될 수 있어, 두 노드가 각자 emit 하면 answering 이 2회 흐른다(회귀). emit 은
+        팬아웃·단일 라우트·attribute_gap 경로가 모두 합류하는 단일 머지점 hydration_node
+        가 1회 담당한다(graph.py: sql_node/vector_node → hydration_node).
+        """
+        try:
+            async with data_session_ctx() as data_session:
+                new_state = await self._sql.search(state, data_session)
+            sql_slot = new_state.get("sql") or {}
+            sql_rows = sql_slot.get("results") or []
+            keyword = sql_slot.get("keyword")
+            logger.info(
+                "sql.results room=%s count=%d", state.get("room_id"), len(sql_rows)
+            )
+
+            filters = state["filters"]
+            channel_data = ChannelData(
+                kind=SearchKind.SQL,
+                query=ChannelQuery(
+                    query_text=keyword,
+                    parameters={
+                        "max_class_name": filters.get("max_class_name"),
+                        "area_name": filters.get("area_name"),
+                        "service_status": filters.get("service_status"),
+                        "payment_type": filters.get("payment_type"),
+                        "keyword": keyword,
+                        "top_k": _SQL_TOP_K,
+                    },
+                ),
+                hits=_to_hits(sql_rows, score_field=None),
+            )
+            return {
+                "sql": {"results": sql_slot.get("results"), "keyword": keyword},
+                "search_channels": {SearchChannel.SQL: channel_data},
+                "node_path": ["sql_node"],
+            }
+        except Exception as exc:
+            logger.exception("sql_node 실행 오류")
+            return {"error": str(exc), "node_path": ["sql_error"]}
+
+    async def vector_node(self, state: AgentState) -> dict[str, Any]:
+        """VectorAgent.search() 호출 — vector_results(메타데이터 only), refined_query 설정.
+
+        hydration(원본 조회)은 후속 hydration_node 가 담당한다.
+        세션 관리(제안 2): VectorAgent.search() 내부에서 4채널마다 독립 ai_session_ctx() 로
+        세션을 열고 asyncio.gather 병렬 실행한다. vector_node 는 세션을 직접 다루지 않는다.
+
+        answering progress 는 여기서 emit 하지 않는다. vector_node 는 secondary_intent
+        팬아웃(enable_secondary_intent=True)으로 sql_node 와 동일 super-step 에 병렬
+        실행될 수 있어, 두 노드가 각자 emit 하면 answering 이 2회 흐른다(회귀). emit 은
+        합류 머지점 hydration_node 가 1회 담당한다(graph.py: vector_node → hydration_node).
+        """
+        try:
+            new_state = await self._vector.search(state)
+            vector_slot = new_state.get("vector") or {}
+            plan_slot = new_state.get("plan") or {}
+            results = vector_slot.get("results") or []
+            refined = plan_slot.get("refined_query")
+            logger.info(
+                "vector.results room=%s count=%d refined=%r",
+                state.get("room_id"),
+                len(results),
+                (refined or "")[:40],
+            )
+            ret: dict[str, Any] = {
+                "vector": {"results": vector_slot.get("results")},
+                "plan": {"refined_query": refined},
+                "node_path": ["vector_node"],
+            }
+            # VectorAgent 가 search_channels 를 채웠으면 전파한다.
+            # 빈 dict 는 reducer 의 리셋 시그널이므로 포함하지 않는다.
+            if channels := new_state.get("search_channels"):
+                ret["search_channels"] = channels
+            return ret
+        except RateLimitException:
+            raise
+        except Exception as exc:
+            logger.exception("vector_node 실행 오류")
+            return {"error": str(exc), "node_path": ["vector_error"]}
+
+    async def hydration_node(self, state: AgentState) -> dict[str, Any]:
+        """검색 결과 service_id → 원본 데이터 통합 슬롯 매핑.
+
+        sql_node / vector_node 직후, answer_node 직전에 실행된다.
+        검색 노드별 출력 형식(sql_results / vector_results)을
+        단일 슬롯 hydrated_services 로 통합하여 AnswerAgent 가 검색 경로에 의존하지
+        않도록 한다.
+
+        세션(노드 로컬, 0-6):
+            data_session — public_service_reservations 원본 조회 전용 (on_data_reader).
+            풀에서 잡고 조회 후 즉시 반납한다.
+
+        answering progress emit 단일 지점:
+            sql_node / vector_node 는 secondary_intent 팬아웃으로 동일 super-step 에
+            병렬 실행될 수 있어 emit 주체가 될 수 없다(둘 다 emit → 2회 회귀). 검색 경로
+            (단일 sql/vector·팬아웃·out_of_scope attribute_gap)가 모두 합류하는 단일
+            머지점이 hydration_node 이므로, answering 은 여기서 1회만 emit 한다
+            (_emit_answering 가드 슬롯으로 retry 재진입까지 1회 보장). map_node /
+            analytics_node 는 hydration 을 거치지 않고 answer_node 로 직행하므로 자체
+            emit 을 유지한다(이 둘은 팬아웃 대상이 아니라 중복 없음).
+        """
+        guard = _emit.emit_answering(state)
+        try:
+            async with data_session_ctx() as data_session:
+                update = await self._hydration(state, data_session)
+            hydrated = (update.get("hydration") or {}).get("hydrated_services") or []
+            logger.info(
+                "hydration.done room=%s count=%d",
+                state.get("room_id"),
+                len(hydrated),
+            )
+            update["node_path"] = ["hydration_node"]
+            update.update(guard)
+            return update
+        except Exception:
+            logger.exception("hydration_node 실행 오류")
+            return {
+                "hydration": {"hydrated_services": []},
+                "node_path": ["hydration_error"],
+                **guard,
+            }
+
+    async def map_node(self, state: AgentState) -> dict[str, Any]:
+        """map_search 호출 — map_results 설정.
+
+        lat/lng 미제공 시 검색을 생략하고 map_results=None을 반환한다.
+        라우팅은 항상 이 노드를 거치므로 map 분기 처리는 내부에서 담당한다.
+        노드 로컬 세션(0-6): data_session 을 풀에서 잡고 검색 후 즉시 반납한다.
+        """
+        # 검색 노드 완료 → answering 단계로 (기존 stream() _SEARCH_NODES 분기 동일).
+        guard = _emit.emit_answering(state)
+        lat = state.get("user_lat")
+        lng = state.get("user_lng")
+        if lat is not None and lng is not None:
+            try:
+                # MAP 0건 재시도 시 retry_prep_node 가 retry_radius_m 을 세팅한다.
+                # 없으면 기본 반경(1000m). ChannelData 에도 실제 사용 반경을 반영한다.
+                radius = state.get("retry_radius_m") or _MAP_DEFAULT_RADIUS_M
+                async with data_session_ctx() as data_session:
+                    geojson = await map_search(data_session, lat, lng, radius_m=radius)
+                features = (geojson or {}).get("features") or []
+                channel_data = ChannelData(
+                    kind=SearchKind.MAP,
+                    query=ChannelQuery(
+                        query_text=f"lat={lat},lng={lng},r={radius}m",
+                        parameters={
+                            "lat": lat,
+                            "lng": lng,
+                            "radius_m": radius,
+                            "top_k": _MAP_TOP_K,
+                        },
+                    ),
+                    hits=_to_hits(
+                        [f["properties"] for f in features if "properties" in f],
+                        score_field="distance_m",
+                        meta_fn=lambda f: {"distance_m": f.get("distance_m")},
+                    ),
+                )
+                return {
+                    "map": {"results": geojson},
+                    "search_channels": {SearchChannel.MAP: channel_data},
+                    "node_path": ["map_node"],
+                    **guard,
+                }
+            except Exception as exc:
+                logger.exception("map_node 실행 오류")
+                return {"error": str(exc), "node_path": ["map_error"], **guard}
+        else:
+            logger.warning("map_node — lat/lng 미제공, map_results=None 처리")
+            return {"map": {"results": None}, "node_path": ["map_node"], **guard}
+
+    async def analytics_node(self, state: AgentState) -> dict[str, Any]:
+        """AnalyticsAgent.run() 호출 — analytics_results/group_by/metric 설정.
+
+        집계는 on_data(data_session) 에서 수행한다. hydration 없이 answer_node 로 직행한다.
+        search_channels 는 채우지 않으므로 search_persist_node 가 즉시 skip 한다.
+        노드 로컬 세션(0-6): data_session 을 풀에서 잡고 집계 후 즉시 반납한다.
+
+        graceful degrade:
+            _AnalyticsParams Literal+validator 로 group_by 화이트리스트를 강제하지만,
+            만일의 KeyError/DB 오류라도 미처리 500 으로 새지 않도록 예외를 잡아
+            빈 결과 + error + node_path "analytics_error" 로 처리한다.
+        """
+        # 검색 노드 완료 → answering 단계로 (기존 stream() _SEARCH_NODES 분기 동일).
+        guard = _emit.emit_answering(state)
+        try:
+            async with data_session_ctx() as data_session:
+                new_state = await self._analytics.run(state, data_session)
+            analytics_slot = new_state.get("analytics") or {}
+            rows = analytics_slot.get("results") or []
+            logger.info(
+                "analytics.results room=%s group_by=%s metric=%s count=%d",
+                state.get("room_id"),
+                analytics_slot.get("group_by"),
+                analytics_slot.get("metric"),
+                len(rows),
+            )
+            return {
+                "analytics": {
+                    "results": analytics_slot.get("results"),
+                    "group_by": analytics_slot.get("group_by"),
+                    "metric": analytics_slot.get("metric"),
+                    "keyword": analytics_slot.get("keyword"),
+                },
+                "node_path": ["analytics_node"],
+                **guard,
+            }
+        except Exception as exc:
+            logger.exception("analytics_node 실행 오류")
+            # error 를 세팅하면 _analytics_zero_hits 가 참이 되어 1회 재시도된다:
+            # 결정적 error 라도 1회는 재시도해 일시 오류(DB 순단 등) 회복 기회를 준다.
+            # 2회차는 retry_count 캡(self_correction_edge ①)으로 종료되므로 무한 루프 없음.
+            return {
+                "analytics": {"results": []},
+                "error": str(exc),
+                "node_path": ["analytics_error"],
+                **guard,
+            }
+
+
+
+class CorrectionNodes:
+    """자기 교정 페이즈 — retry_prep 노드 + self_correction 엣지·0건 판정 헬퍼.
+
+    의존: redis(재진입 전 answer 락 해제).
+    """
+
+    def __init__(self, redis: Any) -> None:
+        self._redis = redis
 
     async def retry_prep_node(self, state: AgentState) -> dict[str, Any]:
         """자기 교정 재시도 준비 노드 (intent별 방향성 분기).
@@ -1091,289 +1459,83 @@ class GraphNodes:
         )
         return update
 
-    async def sql_node(self, state: AgentState) -> dict[str, Any]:
-        """SqlAgent.search() 호출 — sql_results + search_channels 설정.
+    def self_correction_edge(self, state: AgentState) -> str:
+        """answer_node 완료 후 자기 교정 여부를 결정한다.
 
-        노드 로컬 세션(0-6): data_session 을 풀에서 잡고 쿼리 후 즉시 반납한다.
+        평가 순서(고정) — 다중 조건 동시 참 시 비결정성을 제거한다. 위에서부터
+        먼저 매칭되는 하나만 적용(1회 캡이므로 단일 완화):
+          ⓪ 비-RETRIEVE action(DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE/EXPLAIN) → end_normal.
+          ① retry_count 캡: 이미 1회 소진 → 종료(무한 루프 방지).
+          ② 빈 답변: intent 무관 최우선 재시도(기존 동작).
+          ③ intent별 0건:
+             - SQL_SEARCH/VECTOR_SEARCH → _hard_filter_zero_hits
+             - ANALYTICS               → _analytics_zero_hits
+             - MAP                     → _map_zero_hits
 
-        answering progress 는 여기서 emit 하지 않는다. sql_node 는 secondary_intent
-        팬아웃(enable_secondary_intent=True)으로 vector_node 와 동일 super-step 에 병렬
-        실행될 수 있어, 두 노드가 각자 emit 하면 answering 이 2회 흐른다(회귀). emit 은
-        팬아웃·단일 라우트·attribute_gap 경로가 모두 합류하는 단일 머지점 hydration_node
-        가 1회 담당한다(graph.py: sql_node/vector_node → hydration_node).
+        intent 분기는 상호배타라 한 순회에 하나만 평가된다. retry_prep_node 가
+        retry_count 를 1 로 올리므로 다음 순회에서는 ①에서 즉시 종료된다.
         """
-        try:
-            async with data_session_ctx() as data_session:
-                new_state = await self._sql.search(state, data_session)
-            sql_slot = new_state.get("sql") or {}
-            sql_rows = sql_slot.get("results") or []
-            keyword = sql_slot.get("keyword")
-            logger.info(
-                "sql.results room=%s count=%d", state.get("room_id"), len(sql_rows)
-            )
+        # ⓪ 비-RETRIEVE action은 self-correction 제외
+        action = state["triage"].get("action")
+        if action is not None and action != ActionType.RETRIEVE:
+            return "end_normal"
 
-            filters = state["filters"]
-            channel_data = ChannelData(
-                kind=SearchKind.SQL,
-                query=ChannelQuery(
-                    query_text=keyword,
-                    parameters={
-                        "max_class_name": filters.get("max_class_name"),
-                        "area_name": filters.get("area_name"),
-                        "service_status": filters.get("service_status"),
-                        "payment_type": filters.get("payment_type"),
-                        "keyword": keyword,
-                        "top_k": _SQL_TOP_K,
-                    },
-                ),
-                hits=_to_hits(sql_rows, score_field=None),
-            )
-            return {
-                "sql": {"results": sql_slot.get("results"), "keyword": keyword},
-                "search_channels": {SearchChannel.SQL: channel_data},
-                "node_path": ["sql_node"],
-            }
-        except Exception as exc:
-            logger.exception("sql_node 실행 오류")
-            return {"error": str(exc), "node_path": ["sql_error"]}
+        retry_count = state.get("retry_count", 0)
+        if retry_count != 0:
+            return "end_normal"  # ① 캡
 
-    async def vector_node(self, state: AgentState) -> dict[str, Any]:
-        """VectorAgent.search() 호출 — vector_results(메타데이터 only), refined_query 설정.
+        answer = state["output"].get("answer") or ""
+        if not answer.strip():
+            return "retry_prep_node"  # ② 빈 답변 (최우선, intent 무관)
 
-        hydration(원본 조회)은 후속 hydration_node 가 담당한다.
-        세션 관리(제안 2): VectorAgent.search() 내부에서 4채널마다 독립 ai_session_ctx() 로
-        세션을 열고 asyncio.gather 병렬 실행한다. vector_node 는 세션을 직접 다루지 않는다.
+        intent = state["plan"].get("intent")  # ③ intent별 0건
+        if intent in (IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH):
+            if self._hard_filter_zero_hits(state):
+                return "retry_prep_node"
+        elif intent == IntentType.ANALYTICS:
+            if self._analytics_zero_hits(state):
+                return "retry_prep_node"
+        elif intent == IntentType.MAP:
+            if self._map_zero_hits(state):
+                return "retry_prep_node"
 
-        answering progress 는 여기서 emit 하지 않는다. vector_node 는 secondary_intent
-        팬아웃(enable_secondary_intent=True)으로 sql_node 와 동일 super-step 에 병렬
-        실행될 수 있어, 두 노드가 각자 emit 하면 answering 이 2회 흐른다(회귀). emit 은
-        합류 머지점 hydration_node 가 1회 담당한다(graph.py: vector_node → hydration_node).
+        return "end_normal"
+
+    @staticmethod
+    def _hard_filter_zero_hits(state: AgentState) -> bool:
+        """검색·하이드레이션 슬롯이 모두 비어 있는지(0건) 판정한다."""
+        return not (
+            state["hydration"].get("hydrated_services")
+            or state["sql"].get("results")
+            or state["vector"].get("results")
+        )
+
+    @staticmethod
+    def _analytics_zero_hits(state: AgentState) -> bool:
+        """ANALYTICS 결과가 없거나(0행) error 인지 판정한다."""
+        if state.get("error"):
+            return True
+        return not state["analytics"].get("results")  # [] / None 모두 True
+
+    @staticmethod
+    def _map_zero_hits(state: AgentState) -> bool:
+        """MAP 반경 내 0건인지 판정한다.
+
+        lat/lng 미제공(map.results=None)은 위치 안내가 최선이므로 재시도 제외.
+        features=[] (반경 내 0건)만 반경 확장 재시도 대상이다.
         """
-        try:
-            new_state = await self._vector.search(state)
-            vector_slot = new_state.get("vector") or {}
-            plan_slot = new_state.get("plan") or {}
-            results = vector_slot.get("results") or []
-            refined = plan_slot.get("refined_query")
-            logger.info(
-                "vector.results room=%s count=%d refined=%r",
-                state.get("room_id"),
-                len(results),
-                (refined or "")[:40],
-            )
-            ret: dict[str, Any] = {
-                "vector": {"results": vector_slot.get("results")},
-                "plan": {"refined_query": refined},
-                "node_path": ["vector_node"],
-            }
-            # VectorAgent 가 search_channels 를 채웠으면 전파한다.
-            # 빈 dict 는 reducer 의 리셋 시그널이므로 포함하지 않는다.
-            if channels := new_state.get("search_channels"):
-                ret["search_channels"] = channels
-            return ret
-        except RateLimitException:
-            raise
-        except Exception as exc:
-            logger.exception("vector_node 실행 오류")
-            return {"error": str(exc), "node_path": ["vector_error"]}
+        mr = state["map"].get("results")
+        if mr is None:
+            return False
+        return not (mr.get("features") or [])
 
-    async def hydration_node(self, state: AgentState) -> dict[str, Any]:
-        """검색 결과 service_id → 원본 데이터 통합 슬롯 매핑.
 
-        sql_node / vector_node 직후, answer_node 직전에 실행된다.
-        검색 노드별 출력 형식(sql_results / vector_results)을
-        단일 슬롯 hydrated_services 로 통합하여 AnswerAgent 가 검색 경로에 의존하지
-        않도록 한다.
 
-        세션(노드 로컬, 0-6):
-            data_session — public_service_reservations 원본 조회 전용 (on_data_reader).
-            풀에서 잡고 조회 후 즉시 반납한다.
+class ObservabilityNodes:
+    """관측 페이즈 — search_persist / trace 종단 노드 (best-effort).
 
-        answering progress emit 단일 지점:
-            sql_node / vector_node 는 secondary_intent 팬아웃으로 동일 super-step 에
-            병렬 실행될 수 있어 emit 주체가 될 수 없다(둘 다 emit → 2회 회귀). 검색 경로
-            (단일 sql/vector·팬아웃·out_of_scope attribute_gap)가 모두 합류하는 단일
-            머지점이 hydration_node 이므로, answering 은 여기서 1회만 emit 한다
-            (_emit_answering 가드 슬롯으로 retry 재진입까지 1회 보장). map_node /
-            analytics_node 는 hydration 을 거치지 않고 answer_node 로 직행하므로 자체
-            emit 을 유지한다(이 둘은 팬아웃 대상이 아니라 중복 없음).
-        """
-        guard = self._emit_answering(state)
-        try:
-            async with data_session_ctx() as data_session:
-                update = await self._hydration(state, data_session)
-            hydrated = (update.get("hydration") or {}).get("hydrated_services") or []
-            logger.info(
-                "hydration.done room=%s count=%d",
-                state.get("room_id"),
-                len(hydrated),
-            )
-            update["node_path"] = ["hydration_node"]
-            update.update(guard)
-            return update
-        except Exception:
-            logger.exception("hydration_node 실행 오류")
-            return {
-                "hydration": {"hydrated_services": []},
-                "node_path": ["hydration_error"],
-                **guard,
-            }
-
-    async def map_node(self, state: AgentState) -> dict[str, Any]:
-        """map_search 호출 — map_results 설정.
-
-        lat/lng 미제공 시 검색을 생략하고 map_results=None을 반환한다.
-        라우팅은 항상 이 노드를 거치므로 map 분기 처리는 내부에서 담당한다.
-        노드 로컬 세션(0-6): data_session 을 풀에서 잡고 검색 후 즉시 반납한다.
-        """
-        # 검색 노드 완료 → answering 단계로 (기존 stream() _SEARCH_NODES 분기 동일).
-        guard = self._emit_answering(state)
-        lat = state.get("user_lat")
-        lng = state.get("user_lng")
-        if lat is not None and lng is not None:
-            try:
-                # MAP 0건 재시도 시 retry_prep_node 가 retry_radius_m 을 세팅한다.
-                # 없으면 기본 반경(1000m). ChannelData 에도 실제 사용 반경을 반영한다.
-                radius = state.get("retry_radius_m") or _MAP_DEFAULT_RADIUS_M
-                async with data_session_ctx() as data_session:
-                    geojson = await map_search(data_session, lat, lng, radius_m=radius)
-                features = (geojson or {}).get("features") or []
-                channel_data = ChannelData(
-                    kind=SearchKind.MAP,
-                    query=ChannelQuery(
-                        query_text=f"lat={lat},lng={lng},r={radius}m",
-                        parameters={
-                            "lat": lat,
-                            "lng": lng,
-                            "radius_m": radius,
-                            "top_k": _MAP_TOP_K,
-                        },
-                    ),
-                    hits=_to_hits(
-                        [f["properties"] for f in features if "properties" in f],
-                        score_field="distance_m",
-                        meta_fn=lambda f: {"distance_m": f.get("distance_m")},
-                    ),
-                )
-                return {
-                    "map": {"results": geojson},
-                    "search_channels": {SearchChannel.MAP: channel_data},
-                    "node_path": ["map_node"],
-                    **guard,
-                }
-            except Exception as exc:
-                logger.exception("map_node 실행 오류")
-                return {"error": str(exc), "node_path": ["map_error"], **guard}
-        else:
-            logger.warning("map_node — lat/lng 미제공, map_results=None 처리")
-            return {"map": {"results": None}, "node_path": ["map_node"], **guard}
-
-    async def analytics_node(self, state: AgentState) -> dict[str, Any]:
-        """AnalyticsAgent.run() 호출 — analytics_results/group_by/metric 설정.
-
-        집계는 on_data(data_session) 에서 수행한다. hydration 없이 answer_node 로 직행한다.
-        search_channels 는 채우지 않으므로 search_persist_node 가 즉시 skip 한다.
-        노드 로컬 세션(0-6): data_session 을 풀에서 잡고 집계 후 즉시 반납한다.
-
-        graceful degrade:
-            _AnalyticsParams Literal+validator 로 group_by 화이트리스트를 강제하지만,
-            만일의 KeyError/DB 오류라도 미처리 500 으로 새지 않도록 예외를 잡아
-            빈 결과 + error + node_path "analytics_error" 로 처리한다.
-        """
-        # 검색 노드 완료 → answering 단계로 (기존 stream() _SEARCH_NODES 분기 동일).
-        guard = self._emit_answering(state)
-        try:
-            async with data_session_ctx() as data_session:
-                new_state = await self._analytics.run(state, data_session)
-            analytics_slot = new_state.get("analytics") or {}
-            rows = analytics_slot.get("results") or []
-            logger.info(
-                "analytics.results room=%s group_by=%s metric=%s count=%d",
-                state.get("room_id"),
-                analytics_slot.get("group_by"),
-                analytics_slot.get("metric"),
-                len(rows),
-            )
-            return {
-                "analytics": {
-                    "results": analytics_slot.get("results"),
-                    "group_by": analytics_slot.get("group_by"),
-                    "metric": analytics_slot.get("metric"),
-                    "keyword": analytics_slot.get("keyword"),
-                },
-                "node_path": ["analytics_node"],
-                **guard,
-            }
-        except Exception as exc:
-            logger.exception("analytics_node 실행 오류")
-            # error 를 세팅하면 _analytics_zero_hits 가 참이 되어 1회 재시도된다:
-            # 결정적 error 라도 1회는 재시도해 일시 오류(DB 순단 등) 회복 기회를 준다.
-            # 2회차는 retry_count 캡(self_correction_edge ①)으로 종료되므로 무한 루프 없음.
-            return {
-                "analytics": {"results": []},
-                "error": str(exc),
-                "node_path": ["analytics_error"],
-                **guard,
-            }
-
-    async def answer_node(self, state: AgentState) -> dict[str, Any]:
-        """AnswerAgent.answer() 호출 — answer, title 설정."""
-        if state.get("error") and state["output"].get("answer"):
-            return {"node_path": ["answer_node"]}
-
-        try:
-            new_state = await self._answer.answer(state)
-            answer = new_state.get("answer") or ""
-            logger.info(
-                "answer.generated room=%s len=%d", state.get("room_id"), len(answer)
-            )
-            # 관측: 검색 결과는 있는데 카드가 비어 있으면 normalize 무음 실패 신호.
-            # 동작은 바꾸지 않고 경고만 남긴다.
-            intent = state["plan"].get("intent")
-            if intent in (IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH):
-                hydrated = state["hydration"].get("hydrated_services") or []
-                sql_results = state["sql"].get("results") or []
-                if (hydrated or sql_results) and not new_state.get("service_cards"):
-                    logger.warning(
-                        "answer.cards_empty_with_results room=%s intent=%s "
-                        "hydrated=%d sql=%d",
-                        state.get("room_id"),
-                        getattr(intent, "value", intent),
-                        len(hydrated),
-                        len(sql_results),
-                    )
-            return {
-                "output": {
-                    "answer": new_state.get("answer"),
-                    "title": new_state.get("title"),
-                    "service_cards": new_state.get("service_cards"),
-                },
-                "node_path": ["answer_node"],
-            }
-        except Exception as exc:
-            logger.exception("answer_node 실행 오류")
-            return {
-                "error": str(exc),
-                "output": {
-                    "answer": "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
-                },
-                "node_path": ["answer_error"],
-            }
-
-    async def cache_check_node(self, state: AgentState) -> dict[str, Any]:
-        """router 직후 cache 조회 — hit 시 state 복원, cache_hit 플래그 설정."""
-        result = await self._cache_check(state)
-        if result.get("cache_hit"):
-            result["node_path"] = ["cache_check_hit"]
-        else:
-            result["node_path"] = ["cache_check_miss"]
-        return result
-
-    async def cache_write_node(self, state: AgentState) -> dict[str, Any]:
-        """answer 직후 정상 결과만 캐싱 (skip 조건은 노드 내부 처리)."""
-        result = await self._cache_write(state)
-        result["node_path"] = ["cache_write"]
-        return result
+    의존 없음. INSERT SQL·_save_trace 는 모듈 전역 함수/상수를 호출한다.
+    """
 
     async def search_persist_node(self, state: AgentState) -> dict[str, Any]:
         """chat_search_queries + chat_search_results 일괄 적재 (best-effort 종단 노드).
@@ -1512,179 +1674,6 @@ class GraphNodes:
                 exc_info=True,
             )
         return {"trace": trace_payload, "node_path": ["trace"]}
-
-    # ------------------------------------------------------------------
-    # 엣지 로직
-    # ------------------------------------------------------------------
-
-    def route_by_action(self, state: AgentState) -> str:
-        """triage_node 직후 — action에 따라 다음 노드를 결정한다.
-
-        RETRIEVE → router_node (검색 계획 수립 후 cache_check)
-        DIRECT_ANSWER → direct_answer_node
-        AMBIGUOUS → ambiguous_node
-        OUT_OF_SCOPE/domain_outside → out_of_scope_node
-        OUT_OF_SCOPE/attribute_gap → out_of_scope_node (내부에서 vector_node로 라우팅)
-        EXPLAIN → explain_node
-        error(answer 이미 설정) → answer_node
-        """
-        error = state.get("error")
-        answer = state["output"].get("answer") or ""
-        if error and answer.strip():
-            return "answer_node"
-
-        action = state["triage"].get("action")
-        if action == ActionType.RETRIEVE:
-            return "router_node"
-        elif action == ActionType.DIRECT_ANSWER:
-            return "direct_answer_node"
-        elif action == ActionType.AMBIGUOUS:
-            return "ambiguous_node"
-        elif action == ActionType.OUT_OF_SCOPE:
-            return "out_of_scope_node"
-        elif action == ActionType.EXPLAIN:
-            return "explain_node"
-        else:
-            # fallback: action 미설정(None) 또는 미지 값 → router_node(검색 계획 수립).
-            # 데이터 질의일 수 있으므로 컨텍스트 없는 DIRECT_ANSWER(대화형/할루시네이션
-            # 위험) 대신 RETRIEVE 와 동일하게 검색을 시도해 grounded 답변으로 수렴시킨다
-            # (0건이면 0건 게이트+retry → 근거 있는 '못 찾음'). triage_node 는 라이브
-            # 경로에서 항상 action 을 채우므로 이 분기는 should-never-happen 방어용이다.
-            # 미지 ActionType 추가 시 분기 누락을 표면화하도록 warning 을 남긴다(관측).
-            logger.warning(
-                "route_by_action: 미처리 action=%s → router_node fallback room=%s",
-                state["triage"].get("action"),
-                state.get("room_id"),
-            )
-            return "router_node"
-
-    def route_by_action_fanout(self, state: AgentState) -> list[str] | str:
-        """RETRIEVE 경로 내 secondary_intent 팬아웃 분기.
-
-        enable_secondary_intent=True이고 secondary_intent가 있으면 SQL+VECTOR 병렬 팬아웃.
-        그 외에는 route_by_intent(기존 단일 라우트).
-
-        LangGraph 조건부 엣지가 list를 반환하면 병렬 팬아웃을 수행한다.
-        """
-        if not settings.enable_secondary_intent:
-            return self.route_by_intent(state)
-
-        secondary = state["plan"].get("secondary_intent")
-        primary = state["plan"].get("intent")
-        if secondary is not None and primary in (
-            IntentType.SQL_SEARCH,
-            IntentType.VECTOR_SEARCH,
-        ):
-            return ["sql_node", "vector_node"]
-
-        return self.route_by_intent(state)
-
-    def post_cache_check(self, state: AgentState) -> str:
-        """cache_check 직후 라우팅 — hit 시 search_persist_node → trace 경로, miss면 intent 분기.
-
-        cache hit 시 검색이 수행되지 않으므로 search_channels 는 {} 상태다.
-        search_persist_node 는 빈 채널 맵에서 즉시 skip 하고 return {} 하므로
-        성능 오버헤드는 없다. 명시적으로 경유함으로써 종단 체인
-        (cache_write → search_persist → trace) 의 일관성을 유지한다.
-
-        NOTE: 직접 trace_node 로 라우팅하면 나중에 cache-hit 경로에서도 채널 데이터가
-        존재하는 케이스가 생길 때 search_persist 가 묵묵히 스킵되는 latent bug 가 된다.
-        """
-        if state.get("cache_hit"):
-            return "search_persist_node"
-        return self.route_by_intent(state)
-
-    def route_by_intent(self, state: AgentState) -> str:
-        """intent 값에 따라 다음 노드를 결정한다."""
-        error = state.get("error")
-        answer = state["output"].get("answer") or ""
-
-        # router_node 예외 시 fallback_answer + error가 모두 설정됨.
-        # intent가 None이므로 아래 else 분기가 동일하게 처리하지만, 의도 명시용 early-return.
-        if error and answer.strip():
-            return "answer_node"
-
-        intent = state["plan"].get("intent")
-        if intent == IntentType.SQL_SEARCH:
-            return "sql_node"
-        elif intent == IntentType.VECTOR_SEARCH:
-            return "vector_node"
-        elif intent == IntentType.MAP:
-            return "map_node"
-        elif intent == IntentType.ANALYTICS:
-            return "analytics_node"
-        else:
-            return "answer_node"
-
-    def self_correction_edge(self, state: AgentState) -> str:
-        """answer_node 완료 후 자기 교정 여부를 결정한다.
-
-        평가 순서(고정) — 다중 조건 동시 참 시 비결정성을 제거한다. 위에서부터
-        먼저 매칭되는 하나만 적용(1회 캡이므로 단일 완화):
-          ⓪ 비-RETRIEVE action(DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE/EXPLAIN) → end_normal.
-          ① retry_count 캡: 이미 1회 소진 → 종료(무한 루프 방지).
-          ② 빈 답변: intent 무관 최우선 재시도(기존 동작).
-          ③ intent별 0건:
-             - SQL_SEARCH/VECTOR_SEARCH → _hard_filter_zero_hits
-             - ANALYTICS               → _analytics_zero_hits
-             - MAP                     → _map_zero_hits
-
-        intent 분기는 상호배타라 한 순회에 하나만 평가된다. retry_prep_node 가
-        retry_count 를 1 로 올리므로 다음 순회에서는 ①에서 즉시 종료된다.
-        """
-        # ⓪ 비-RETRIEVE action은 self-correction 제외
-        action = state["triage"].get("action")
-        if action is not None and action != ActionType.RETRIEVE:
-            return "end_normal"
-
-        retry_count = state.get("retry_count", 0)
-        if retry_count != 0:
-            return "end_normal"  # ① 캡
-
-        answer = state["output"].get("answer") or ""
-        if not answer.strip():
-            return "retry_prep_node"  # ② 빈 답변 (최우선, intent 무관)
-
-        intent = state["plan"].get("intent")  # ③ intent별 0건
-        if intent in (IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH):
-            if self._hard_filter_zero_hits(state):
-                return "retry_prep_node"
-        elif intent == IntentType.ANALYTICS:
-            if self._analytics_zero_hits(state):
-                return "retry_prep_node"
-        elif intent == IntentType.MAP:
-            if self._map_zero_hits(state):
-                return "retry_prep_node"
-
-        return "end_normal"
-
-    @staticmethod
-    def _hard_filter_zero_hits(state: AgentState) -> bool:
-        """검색·하이드레이션 슬롯이 모두 비어 있는지(0건) 판정한다."""
-        return not (
-            state["hydration"].get("hydrated_services")
-            or state["sql"].get("results")
-            or state["vector"].get("results")
-        )
-
-    @staticmethod
-    def _analytics_zero_hits(state: AgentState) -> bool:
-        """ANALYTICS 결과가 없거나(0행) error 인지 판정한다."""
-        if state.get("error"):
-            return True
-        return not state["analytics"].get("results")  # [] / None 모두 True
-
-    @staticmethod
-    def _map_zero_hits(state: AgentState) -> bool:
-        """MAP 반경 내 0건인지 판정한다.
-
-        lat/lng 미제공(map.results=None)은 위치 안내가 최선이므로 재시도 제외.
-        features=[] (반경 내 0건)만 반경 확장 재시도 대상이다.
-        """
-        mr = state["map"].get("results")
-        if mr is None:
-            return False
-        return not (mr.get("features") or [])
 
 
 # ---------------------------------------------------------------------------
@@ -1946,3 +1935,247 @@ class CacheWriteNode:
         empty = not snap["vector_results"] and not snap["sql_results"]
         logger.info("cache.write intent=%s empty=%s", intent.value, empty)
         return {"answer_lock_key": None}
+
+
+# ---------------------------------------------------------------------------
+# GraphNodes — composition root + 위임 facade
+# ---------------------------------------------------------------------------
+
+
+class GraphNodes:
+    """AgentGraph 노드·엣지 facade (composition root).
+
+    주입 의존(에이전트·redis·hydration)과 페이즈 인스턴스만 보유하며 요청별 가변
+    상태는 두지 않는다. 인스턴스는 AgentGraph.__init__()에서 1회 생성되어 프로세스
+    내에서 공유된다.
+    제안 0(요청 격리): 요청별 가변 자원/상태를 인스턴스 속성으로 두지 않는다.
+      - node_path → AgentState 슬롯 (node_path_reducer 로 per-invoke 누적).
+      - 시작 시각 → AgentState["started_at"].
+    따라서 동시 요청이 같은 GraphNodes 를 공유해도 세션/경로 교차가 발생하지 않는다.
+
+    구조(C2): god-class 를 6개 페이즈 클래스(Reference/Planning/Retrieval/Answer/
+    Correction/Observability)로 분해하고, GraphNodes 는 각 페이즈 인스턴스를 보유한
+    composition root + 위임 facade 로 남는다. graph.py 가 등록하는 노드명·테스트가
+    직접 호출하는 메서드명을 위임 메서드로 그대로 노출해 외부 표면을 보존한다.
+
+    제안 0-6(노드 로컬 세션): DB 를 쓰는 노드는 노드 내부에서 `data_session_ctx()`/
+    `ai_session_ctx()` 로 풀에서 세션을 잡고 즉시 반납한다(acquire-use-release).
+    세션은 노드 메서드 지역 변수로만 존재하므로 인스턴스 속성 교차도 원천 차단된다.
+    """
+
+    def __init__(
+        self,
+        router: RouterAgent | TriageAgent | None = None,
+        sql_agent: SqlAgent | None = None,
+        vector_agent: VectorAgent | None = None,
+        answer_agent: AnswerAgent | None = None,
+        analytics_agent: AnalyticsAgent | None = None,
+        redis: Any = None,
+        hydration: HydrationNode | None = None,
+        triage: TriageAgent | None = None,
+    ) -> None:
+        # triage 우선, router는 하위호환 별칭
+        self._triage = triage or (router if isinstance(router, TriageAgent) else None)
+        self._router = router if isinstance(router, RouterAgent) else None
+        self._sql = sql_agent or SqlAgent()
+        self._vector = vector_agent or VectorAgent()
+        self._answer = answer_agent or AnswerAgent()
+        self._analytics = analytics_agent or AnalyticsAgent()
+        # _redis/_hydration 은 property — 테스트가 facade 속성을 사후 변이(graph._nodes.
+        # _hydration = X / nodes._redis = redis)했을 때 보유 페이즈 인스턴스로 전파한다
+        # (god-class 시절 동작 보존). backing 은 _redis_val/_hydration_val.
+        self._redis = redis  # refine 캐시(router_node) 공유 — answer 캐시 노드와 동일 클라이언트
+        self._hydration = hydration or HydrationNode()
+        self._cache_check = CacheCheckNode(redis=redis)
+        self._cache_write = CacheWriteNode(redis=redis)
+
+        # 페이즈 인스턴스 — 각 페이즈는 자신이 쓰는 의존만 받는다(설계 기준 ④).
+        self._reference = ReferenceNodes(answer=self._answer)
+        self._planning = PlanningNodes(
+            triage=self._triage, router=self._router, redis=self._redis
+        )
+        self._retrieval = RetrievalNodes(
+            sql=self._sql,
+            vector=self._vector,
+            analytics=self._analytics,
+            hydration=self._hydration,
+        )
+        self._answer_nodes = AnswerNodes(answer=self._answer)
+        self._correction = CorrectionNodes(redis=self._redis)
+        self._observability = ObservabilityNodes()
+
+    # ------------------------------------------------------------------
+    # 변이 전파 property (테스트 사후 변이 호환) + 지연 페이즈 빌더
+    # ------------------------------------------------------------------
+    # 일부 테스트는 facade 인스턴스의 _redis/_hydration 을 __init__ 이후 직접 교체하거나
+    # GraphNodes.__new__ 로 __init__ 을 우회한 뒤 _redis 만 세팅하고 retry_prep_node 를
+    # 호출한다(god-class 시절 직접 동작). 페이즈 분해 후에도 이 표면을 보존하기 위해
+    # _redis/_hydration 변이를 페이즈 인스턴스로 전파하고, 페이즈가 없으면 지연 생성한다.
+
+    @property
+    def _redis(self) -> Any:
+        return self.__dict__.get("_redis_val")
+
+    @_redis.setter
+    def _redis(self, value: Any) -> None:
+        self.__dict__["_redis_val"] = value
+        for attr in ("_planning", "_correction", "_cache_check", "_cache_write"):
+            phase = self.__dict__.get(attr)
+            if phase is not None:
+                phase._redis = value
+
+    @property
+    def _hydration(self) -> HydrationNode:
+        return self.__dict__.get("_hydration_val")
+
+    @_hydration.setter
+    def _hydration(self, value: HydrationNode) -> None:
+        self.__dict__["_hydration_val"] = value
+        retrieval = self.__dict__.get("_retrieval")
+        if retrieval is not None:
+            retrieval._hydration = value
+
+    def _correction_phase(self) -> "CorrectionNodes":
+        """_correction 페이즈를 반환하되, __new__ 우회로 없으면 _redis 로 지연 생성한다."""
+        phase = self.__dict__.get("_correction")
+        if phase is None:
+            phase = CorrectionNodes(redis=self._redis)
+            self.__dict__["_correction"] = phase
+        return phase
+
+    # ------------------------------------------------------------------
+    # Reference 페이즈 위임
+    # ------------------------------------------------------------------
+
+    async def reference_resolution_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._reference.reference_resolution_node(state)
+
+    async def rehydrate_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._reference.rehydrate_node(state)
+
+    async def describe_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._reference.describe_node(state)
+
+    def route_after_reference(self, state: AgentState) -> str:
+        return self._reference.route_after_reference(state)
+
+    # ------------------------------------------------------------------
+    # Planning 페이즈 위임
+    # ------------------------------------------------------------------
+
+    async def triage_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._planning.triage_node(state)
+
+    async def router_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._planning.router_node(state)
+
+    def route_by_action(self, state: AgentState) -> str:
+        return self._planning.route_by_action(state)
+
+    def route_by_action_fanout(self, state: AgentState) -> list[str] | str:
+        return self._planning.route_by_action_fanout(state)
+
+    def post_cache_check(self, state: AgentState) -> str:
+        return self._planning.post_cache_check(state)
+
+    def route_by_intent(self, state: AgentState) -> str:
+        return self._planning.route_by_intent(state)
+
+    # ------------------------------------------------------------------
+    # Retrieval 페이즈 위임
+    # ------------------------------------------------------------------
+
+    async def sql_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._retrieval.sql_node(state)
+
+    async def vector_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._retrieval.vector_node(state)
+
+    async def map_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._retrieval.map_node(state)
+
+    async def analytics_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._retrieval.analytics_node(state)
+
+    async def hydration_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._retrieval.hydration_node(state)
+
+    async def rrf_fusion_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._retrieval.rrf_fusion_node(state)
+
+    async def pre_answer_gate_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._retrieval.pre_answer_gate_node(state)
+
+    def route_pre_answer_gate(self, state: AgentState) -> str:
+        return self._retrieval.route_pre_answer_gate(state)
+
+    # ------------------------------------------------------------------
+    # Answer 페이즈 위임
+    # ------------------------------------------------------------------
+
+    async def answer_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._answer_nodes.answer_node(state)
+
+    async def direct_answer_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._answer_nodes.direct_answer_node(state)
+
+    async def ambiguous_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._answer_nodes.ambiguous_node(state)
+
+    async def out_of_scope_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._answer_nodes.out_of_scope_node(state)
+
+    async def explain_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._answer_nodes.explain_node(state)
+
+    # ------------------------------------------------------------------
+    # Correction 페이즈 위임
+    # ------------------------------------------------------------------
+
+    async def retry_prep_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._correction_phase().retry_prep_node(state)
+
+    def self_correction_edge(self, state: AgentState) -> str:
+        return self._correction_phase().self_correction_edge(state)
+
+    # self-correction 0건 판정 헬퍼 — 일부 테스트가 facade 인스턴스에서 직접 호출한다.
+    @staticmethod
+    def _hard_filter_zero_hits(state: AgentState) -> bool:
+        return CorrectionNodes._hard_filter_zero_hits(state)
+
+    @staticmethod
+    def _analytics_zero_hits(state: AgentState) -> bool:
+        return CorrectionNodes._analytics_zero_hits(state)
+
+    @staticmethod
+    def _map_zero_hits(state: AgentState) -> bool:
+        return CorrectionNodes._map_zero_hits(state)
+
+    # ------------------------------------------------------------------
+    # Observability 페이즈 위임
+    # ------------------------------------------------------------------
+
+    async def search_persist_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._observability.search_persist_node(state)
+
+    async def trace_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._observability.trace_node(state)
+
+    # ------------------------------------------------------------------
+    # Cache 노드 — node_path 부여 래퍼 (facade 보유 유지)
+    # ------------------------------------------------------------------
+
+    async def cache_check_node(self, state: AgentState) -> dict[str, Any]:
+        """router 직후 cache 조회 — hit 시 state 복원, cache_hit 플래그 설정."""
+        result = await self._cache_check(state)
+        if result.get("cache_hit"):
+            result["node_path"] = ["cache_check_hit"]
+        else:
+            result["node_path"] = ["cache_check_miss"]
+        return result
+
+    async def cache_write_node(self, state: AgentState) -> dict[str, Any]:
+        """answer 직후 정상 결과만 캐싱 (skip 조건은 노드 내부 처리)."""
+        result = await self._cache_write(state)
+        result["node_path"] = ["cache_write"]
+        return result
