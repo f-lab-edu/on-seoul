@@ -95,13 +95,26 @@ jobs:
         run: |
           mkdir -p ~/on-seoul
           cp docker-compose-app.yml ~/on-seoul/
+          cp .env.otel ~/on-seoul/          # git 관리 정적 OTEL 설정을 매 배포 갱신
           if [ ! -f ~/on-seoul/.env.secret ]; then
             echo "ERROR: ~/on-seoul/.env.secret not found."
             exit 1
           fi
           cd ~/on-seoul
-          echo "AGENT_TAG=${SHA}" > .env.deploy
-          echo "GITHUB_REPOSITORY_OWNER=${REPO_OWNER,,}" >> .env.deploy
+
+          # .env.deploy 는 두 워크플로우(ai/api)가 공유하는 영속 파일이다.
+          # 통째로 덮어쓰면 상대 서비스의 태그와 OTEL 설정이 날아가므로,
+          # 자신이 소유한 키만 교체(upsert)하고 나머지 줄은 보존한다.
+          touch .env.deploy
+          upsert_env() {
+            local key="$1" val="$2" file=".env.deploy"
+            grep -v "^${key}=" "$file" > "$file.tmp" 2>/dev/null || true
+            mv "$file.tmp" "$file"
+            echo "${key}=${val}" >> "$file"
+          }
+          upsert_env AGENT_TAG "${SHA}"
+          upsert_env GITHUB_REPOSITORY_OWNER "${REPO_OWNER,,}"
+
           docker compose -f docker-compose-app.yml --env-file .env.deploy pull agent
           docker compose -f docker-compose-app.yml --env-file .env.deploy up -d --no-deps agent
           docker image prune -f

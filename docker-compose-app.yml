@@ -8,6 +8,7 @@ services:
       - SPRING_PROFILES_ACTIVE=dev
     env_file:
       - .env.deploy
+      - .env.otel
       - .env.api
     restart: always
     networks:
@@ -20,6 +21,7 @@ services:
       - "49890:8000"
     env_file:
       - .env.deploy
+      - .env.otel
       - .env.agent
     restart: always
     networks:
