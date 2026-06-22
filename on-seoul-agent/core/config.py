@@ -188,6 +188,17 @@ class Settings(BaseSettings):
             "track_c": 0.25,
             "bm25": 0.5,
         },
+        # attribute_gap 은 시설 식별 검색을 그대로 수행하므로(out_of_scope_node 가
+        # intent=VECTOR_SEARCH + vector_sub_intent=attribute_gap 로 식별 검색 경로에
+        # 연결한다) identification 과 동일한 식별 가중치를 공유한다. 별도 프로파일이
+        # 없으면 vector_sub_intent_enabled=True 전환 시 semantic 디폴트(track_a=0.15)로
+        # 떨어져 식별 정확도가 저하되므로 alias 로 둔다.
+        "attribute_gap": {
+            "track_a": 0.5,
+            "track_b": 0.25,
+            "track_c": 0.25,
+            "bm25": 0.5,
+        },
         "detail": {"track_a": 0.2, "track_b": 0.5, "track_c": 0.3, "bm25": 0.4},
         "semantic": {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3},
     }

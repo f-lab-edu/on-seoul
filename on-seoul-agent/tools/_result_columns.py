@@ -9,5 +9,7 @@ PUBLIC_SERVICE_RESERVATIONS_COLUMNS = """
     area_name, place_name, service_status, payment_type,
     service_url, receipt_start_dt, receipt_end_dt,
     service_open_start_dt, service_open_end_dt,
+    use_time_start, use_time_end,
+    cancel_std_type, cancel_std_days, tel_no,
     coord_x, coord_y, target_info
 """

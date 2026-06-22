@@ -842,14 +842,21 @@ class GraphNodes:
         """OUT_OF_SCOPE action — 서브타입 분기.
 
         domain_outside: 즉시 거절 메시지, 검색 없음, END로.
-        attribute_gap: refined_query + vector_sub_intent=identification으로
-                       vector_node → answer 경로. service_url 안내, 환각 금지.
+        attribute_gap: refined_query + vector_sub_intent=attribute_gap으로
+                       vector_node → answer 경로. 데이터-성격 갭 프레이밍, 환각 금지.
         """
         oos_type = state["triage"].get("out_of_scope_type")
         if oos_type == "attribute_gap":
             # attribute_gap은 시설 식별 검색이 필요하므로 vector_node로 넘긴다.
             # intent=VECTOR_SEARCH를 명시해야 HydrationNode가 올바르게 hydrate한다.
             # (HydrationNode는 intent==VECTOR_SEARCH를 체크해 hydrated_services를 채운다.)
+            #
+            # 결정 C: 정상 DETAIL("이 시설 자세히")과 동일 신호(identification)로
+            # 위장하지 않고 전용 vector_sub_intent="attribute_gap"을 전달한다. 검색
+            # 동작(식별 검색)은 동일하지만(vector_node/hydration 은 intent 만 보고
+            # 동작), AnswerAgent 는 이 값으로 갭 전용 분기를 선택해 물어본 속성을 무시한
+            # 채 예약 정보만 풀로 나열하던 결함(room 63)을 끊는다. triage user_rationale
+            # 은 state["triage"]에 보존되어 answer 단계가 시드로 읽는다.
             logger.info(
                 "out_of_scope.attribute_gap room=%s refined=%r",
                 state.get("room_id"),
@@ -858,7 +865,7 @@ class GraphNodes:
             return {
                 "plan": {
                     "intent": IntentType.VECTOR_SEARCH,
-                    "vector_sub_intent": "identification",
+                    "vector_sub_intent": "attribute_gap",
                 },
                 "node_path": ["out_of_scope_attribute_gap"],
             }

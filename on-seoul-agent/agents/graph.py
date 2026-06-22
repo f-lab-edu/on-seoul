@@ -196,7 +196,7 @@ def _build_graph(nodes: GraphNodes) -> Any:
 
     # ── out_of_scope_node: attribute_gap → vector_node, domain_outside → END 체인 ──
     # attribute_gap은 out_of_scope_node 내부에서 intent=VECTOR_SEARCH +
-    # vector_sub_intent=identification 세팅 후 일반 검색 경로로 연결된다.
+    # vector_sub_intent=attribute_gap 세팅 후 일반 검색 경로로 연결된다.
     # domain_outside는 answer가 이미 세팅되므로 search_persist → trace 종단 체인.
     builder.add_conditional_edges(
         "out_of_scope_node",

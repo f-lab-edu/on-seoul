@@ -12,7 +12,13 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agents.answer_agent import AnswerAgent, _STRUCT_CARD_LIST, _STRUCT_FALLBACK
+from agents.answer_agent import (
+    AnswerAgent,
+    _STRUCT_ATTRIBUTE_GAP,
+    _STRUCT_CARD_LIST,
+    _STRUCT_DETAIL,
+    _STRUCT_FALLBACK,
+)
 from agents.graph import AgentGraph
 from agents.nodes import _FALLBACK_ANSWER, GraphNodes
 from schemas.state import ActionType, AgentState, IntentType
@@ -89,6 +95,45 @@ class TestPreAnswerGateAttributeGap:
 
 
 # ---------------------------------------------------------------------------
+# out_of_scope_node — attribute_gap 전용 신호 (결정 C)
+# ---------------------------------------------------------------------------
+
+
+class TestOutOfScopeNodeAttributeGapSignal:
+    def _nodes(self) -> GraphNodes:
+        return AgentGraph(answer_agent=make_answer_agent())._nodes
+
+    async def test_attribute_gap_emits_dedicated_sub_intent(self):
+        """attribute_gap 은 identification 으로 위장하지 않고 전용 신호를 전달한다.
+
+        AnswerAgent 가 정상 DETAIL(identification)과 구분할 수 있어야 한다(결정 C).
+        """
+        nodes = self._nodes()
+        state = _state(
+            action=ActionType.OUT_OF_SCOPE,
+            out_of_scope_type="attribute_gap",
+            refined_query="마루공원 테니스장",
+        )
+        update = await nodes.out_of_scope_node(state)
+        # vector_node/hydration 호환을 위해 intent=VECTOR_SEARCH 유지.
+        assert update["plan"]["intent"] == IntentType.VECTOR_SEARCH
+        # 전용 신호 — identification 과 분리.
+        assert update["plan"]["vector_sub_intent"] == "attribute_gap"
+        assert "out_of_scope_attribute_gap" in update["node_path"]
+
+    async def test_domain_outside_uses_rationale(self):
+        nodes = self._nodes()
+        state = _state(
+            action=ActionType.OUT_OF_SCOPE,
+            out_of_scope_type="domain_outside",
+            user_rationale="날씨 정보는 제공하지 않습니다.",
+        )
+        update = await nodes.out_of_scope_node(state)
+        assert update["output"]["answer"] == "날씨 정보는 제공하지 않습니다."
+        assert "out_of_scope_domain_outside" in update["node_path"]
+
+
+# ---------------------------------------------------------------------------
 # M1-재진입 — retry_prep attribute_gap 분기(검색 컨텍스트 보존)
 # ---------------------------------------------------------------------------
 
@@ -105,7 +150,7 @@ class TestRetryPrepAttributeGapBranch:
             action=ActionType.OUT_OF_SCOPE,
             out_of_scope_type="attribute_gap",
             intent=IntentType.VECTOR_SEARCH,
-            vector_sub_intent="identification",
+            vector_sub_intent="attribute_gap",
             refined_query="마루공원 테니스장",
             payment_type="무료",
             area_name="강남구",
@@ -136,7 +181,7 @@ class TestRetryPrepAttributeGapBranch:
             action=ActionType.OUT_OF_SCOPE,
             out_of_scope_type="attribute_gap",
             intent=IntentType.VECTOR_SEARCH,
-            vector_sub_intent="identification",
+            vector_sub_intent="attribute_gap",
             refined_query="마루공원 테니스장",
             max_class_name="체육시설",
             retry_count=0,
@@ -239,6 +284,73 @@ class TestAttributeGapRelaxRetryE2E:
         assert "완화한 결과입니다" in last_system
         # 유료→무료 오안내 가드 보존.
         assert "유료 시설을 무료라고 표현하지 마세요" in last_system
+
+    async def test_attribute_gap_signal_survives_retry_to_answer(self):
+        """M1 회귀: attribute_gap 0건 → retry_prep(forced_intent) → router 재진입 →
+        2차 hit → answer 가 *여전히* ATTRIBUTE_GAP 프롬프트를 고른다.
+
+        retry_prep 이 plan 을 리셋하지 않고 forced_intent 분기가 vector_sub_intent 를
+        덮지 않으므로 'attribute_gap' 신호가 보존돼야 한다. 보존 실패 시 answer 는
+        DETAIL/CARD_LIST 로 빠져 room 63 결함이 재현된다.
+        """
+        triage = _attribute_gap_triage()
+        vrows_hit = [
+            {"service_id": "V1", "service_name": "마루공원 테니스장", "similarity": 0.9}
+        ]
+        hydrated_hit = [
+            {
+                "service_id": "V1",
+                "service_name": "마루공원 테니스장",
+                "place_name": "마루공원",
+                "service_url": "https://example.com",
+            }
+        ]
+
+        async def _hydrate(session, ids):
+            return hydrated_hit if ids else []
+
+        mock_model = MagicMock()
+        mock_model.__or__ = MagicMock(return_value=MagicMock())
+        mock_model.with_structured_output = MagicMock(return_value=MagicMock())
+        answer_agent = AnswerAgent(model=mock_model)
+        answer_agent._answer_chain = MagicMock()
+        answer_agent._answer_chain.ainvoke = AsyncMock(
+            return_value="예약 데이터에는 보수 일정 같은 운영 상세는 담겨있지 않아요."
+        )
+
+        side = self._vector_search_side_effect([[], vrows_hit])
+
+        from tests.helpers import make_router
+
+        router = make_router(IntentType.VECTOR_SEARCH, payment_type="무료")
+        with patch(
+            "agents.vector_agent.VectorAgent.search", AsyncMock(side_effect=side)
+        ), patch(
+            "agents.hydration_node.hydrate_services", AsyncMock(side_effect=_hydrate)
+        ):
+            graph = AgentGraph(
+                triage=triage,
+                router=router,
+                answer_agent=answer_agent,
+            )
+            result = await run_graph(
+                graph,
+                _state(
+                    message="마루공원 테니스장 보수공사 일정 알려줘",
+                    payment_type="무료",
+                ),
+                data_session=MagicMock(),
+                ai_session=make_ai_session(),
+            )
+
+        assert result["retry_count"] == 1
+        # 재시도 후 plan 의 attribute_gap 신호가 보존됨.
+        assert result["plan"]["vector_sub_intent"] == "attribute_gap"
+        # answer 가 ATTRIBUTE_GAP 프롬프트를 선택(DETAIL/목록형 아님).
+        last_system = answer_agent._answer_chain.ainvoke.call_args[0][0]["system"]
+        assert _STRUCT_ATTRIBUTE_GAP[:30] in last_system
+        assert _STRUCT_DETAIL[:30] not in last_system
+        assert _STRUCT_CARD_LIST[:30] not in last_system
 
     async def test_relaxed_still_zero_honest_message(self):
         """완화 후에도 0건: retry_count 캡으로 answer_node 통과 → '찾지 못했습니다' 정직 안내."""

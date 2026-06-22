@@ -107,6 +107,31 @@ class TestTriageOutputShape:
         assert out.user_rationale is None
 
 
+# 답변 가능 속성 카탈로그 grounding (결정 A의 예방축)
+class TestTriageCatalogGrounding:
+    """이용시간/취소기준/문의처가 답변 가능 속성으로 명시되어 attribute_gap
+    오분류를 예방하는지 검증한다(결정 A). 기존 attribute_gap 예시(보수공사 등)는 유지."""
+
+    def test_answerable_catalog_lists_newly_answerable_attributes(self):
+        from llm.prompts.triage import TRIAGE_SYSTEM
+
+        assert "이용시간" in TRIAGE_SYSTEM
+        assert "취소기준" in TRIAGE_SYSTEM
+        assert "문의처" in TRIAGE_SYSTEM
+
+    def test_attribute_gap_examples_preserved(self):
+        from llm.prompts.triage import TRIAGE_SYSTEM
+
+        # 여전히 답변 불가한 속성 예시는 유지.
+        assert "보수공사" in TRIAGE_SYSTEM or "보수 공사" in TRIAGE_SYSTEM
+
+    def test_maru_few_shot_preserved(self):
+        from llm.prompts.triage import TRIAGE_FEW_SHOT_EXAMPLES
+
+        messages = [ex["message"] for ex in TRIAGE_FEW_SHOT_EXAMPLES]
+        assert any("마루공원" in m for m in messages)
+
+
 # FALLBACK 액션이 ActionType에 존재하지 않음을 명시적으로 확인 (test_triage_gaps.py 에서 이관)
 class TestFallbackActionRemoved:
     def test_no_fallback_in_action_type(self):
