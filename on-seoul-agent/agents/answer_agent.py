@@ -15,7 +15,9 @@ Tier 2 — 런타임 조립 (SQL_SEARCH / VECTOR_SEARCH):
   조건: "접수중" 시설 존재 여부, 사용자 질문 내 자치구 명시 여부.
 """
 
+import datetime
 import json
+import re
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
@@ -130,9 +132,18 @@ _STRUCT_DETAIL = """\
    - 요금(payment_type), 대상(target_info), 접수기간
      (receipt_start_dt ~ receipt_end_dt)을 본문에 실제 값으로 서술하세요.
      카드에만 숨기지 말고 문장으로 풀어 안내합니다.
-   - 이용시간(use_time_start ~ use_time_end), 취소기준(cancel_std_type /
-     cancel_std_days), 문의처(tel_no)가 값으로 들어와 있으면 본문에 자연스럽게
-     덧붙이세요. 값이 없으면(null) 해당 항목은 생략하고 지어내지 마세요.
+   - 이용 시간(use_time_start ~ use_time_end): 값이 있으면 "이용 시간"처럼
+     중립적으로 서술하세요. 카테고리에 따라 운영시간창일 수도, 개별 세션 시각일
+     수도 있으므로 "운영시간"이라 단정하지 말고, 정확한 시간은 '바로가기'에서
+     확인하라는 톤을 유지하세요. 값이 없으면(null) 이용 시간 문장은 통째로 생략.
+   - 취소기준: cancel_std_type(기준일 명칭: 이용일/접수종료일/이용기간시작일 등)과
+     cancel_std_days(일수)가 둘 다 값으로 있을 때만, 반드시 묶어
+     "{cancel_std_type} 기준 {cancel_std_days}일 전까지 취소 가능" 형태로만
+     서술하세요. cancel_std_type 만 단독으로 노출하지 마세요(기준점 라벨이라 단독
+     서술 시 의미가 성립하지 않습니다). 둘 중 하나라도 없으면 취소기준 문장 전체를
+     생략하세요.
+   - 문의처: tel_no 가 값으로 있으면 문의처로 안내하고, 없으면(null) 생략하세요.
+   - 위 항목 모두 값이 없으면(null) 지어내지 마세요.
    - 예약 방법: 접수중인 공간은 카드의 '바로가기' 링크(service_url)로
      예약할 수 있다고 안내하세요.
 
@@ -552,6 +563,54 @@ def _iso_or_none(value):
     return value
 
 
+# tel_no 표시 가드. phone-shape(숫자/괄호/+/-/,/./슬래시/공백)만 허용한다.
+# 실DB 검증: present 2206건 중 87.1% phone-shape, 11.3%(250건)에 한글 포함
+# (담당자명·부가설명 등 garbage 혼재). 한글 등 비-phone 문자가 하나라도 섞이면
+# 통째로 omit 한다. 복수번호("02-…, 0232")는 구분자가 허용 집합이라 정상 통과.
+_TEL_PHONE_RE = re.compile(r"^[0-9()+\-,./\s]+$")
+
+
+def _guarded_tel_no(value):
+    """phone-shape 가 아니면 None 으로 omit, 맞으면 원본 유지."""
+    if value is None:
+        return None
+    return value if _TEL_PHONE_RE.match(str(value)) else None
+
+
+def _parse_time(value) -> datetime.time | None:
+    """비교용으로 use_time 값을 datetime.time 으로 파싱한다.
+
+    DB async 드라이버는 datetime.time 을, 일부 경로/테스트는 isoformat str
+    ("09:00:00")을 줄 수 있으므로 둘 다 처리한다. 파싱 불가는 None.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime.time):
+        return value
+    try:
+        return datetime.time.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _guarded_use_time(start, end):
+    """use_time 렌더 가드 — 오염값을 (None, None) 으로 omit 한다.
+
+    실DB 검증: 미입력을 00:00-00:00 으로 인코딩한 placeholder(399건)와, 24h
+    정규화 부작용(08:00-00:00 = 원래 08:00-24:00 이 24:00→00:00 으로 망가진
+    artifact)이 섞여 있다. start>=end 위반율은 진료복지 40.9%, 교육강좌 30.4%,
+    공간시설 29.3% 등으로, 이 위반의 정체가 곧 위 두 오염이다. 도메인상 자정넘김
+    운영창(예: 22:00-02:00)은 전무(Q4b)하므로 start>=end 를 전부 오염으로 보고
+    둘 다 omit 해도 정상값 오삭제 위험이 없다. 한쪽이라도 None 이면 함께 omit.
+
+    raw 값으로 비교한 뒤, 살아남은 경우에만 호출부에서 _iso_or_none 직렬화한다.
+    """
+    ts, te = _parse_time(start), _parse_time(end)
+    if ts is None or te is None or ts >= te:
+        return None, None
+    return start, end
+
+
 class _TitleOutput(BaseModel):
     title: str
 
@@ -963,6 +1022,13 @@ class AnswerAgent:
         if not url or not str(url).startswith(("http://", "https://")):
             url = _FALLBACK_URL
 
+        # use_time / tel_no 렌더 가드 (실DB 검증 후속 보정). 가드 근거·임계는
+        # _guarded_use_time / _guarded_tel_no docstring 참조. raw 값으로 가드한 뒤
+        # 살아남은 use_time 만 _iso_or_none 으로 직렬화한다.
+        use_start, use_end = _guarded_use_time(
+            row.get("use_time_start"), row.get("use_time_end")
+        )
+
         return {
             "service_id": row.get("service_id"),
             "service_name": row.get("service_name"),
@@ -976,10 +1042,11 @@ class AnswerAgent:
             "receipt_start_dt": _iso_or_none(row.get("receipt_start_dt")),
             "receipt_end_dt": _iso_or_none(row.get("receipt_end_dt")),
             # 신규 답변 가능 카탈로그(결정 A) — use_time 은 TIME 이라 isoformat 보정.
-            "use_time_start": _iso_or_none(row.get("use_time_start")),
-            "use_time_end": _iso_or_none(row.get("use_time_end")),
+            # 가드 통과분만 직렬화(오염값은 위에서 None 으로 omit 됨).
+            "use_time_start": _iso_or_none(use_start),
+            "use_time_end": _iso_or_none(use_end),
             "cancel_std_type": row.get("cancel_std_type"),
             "cancel_std_days": row.get("cancel_std_days"),
-            "tel_no": row.get("tel_no"),
+            "tel_no": _guarded_tel_no(row.get("tel_no")),
             "service_url": url,
         }

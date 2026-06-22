@@ -83,6 +83,83 @@ class TestNormalizeNewFields:
         assert out_n["cancel_std_days"] == 7
 
 
+class TestUseTimeRenderGuard:
+    """use_time 렌더 가드 — start>=end(placeholder/자정정규화 artifact) 둘 다 omit.
+
+    실DB 검증: 미입력 00:00-00:00(399건) + 자정 정규화 artifact(08:00-00:00 =
+    원래 08:00-24:00). 도메인상 자정넘김 운영창 전무라 start>=end 는 전부 오염.
+    """
+
+    def _row(self, start, end):
+        return {
+            "service_id": "A1",
+            "service_url": "https://x.io",
+            "use_time_start": start,
+            "use_time_end": end,
+        }
+
+    def test_zero_placeholder_omitted(self):
+        out = AnswerAgent._normalize(self._row("00:00:00", "00:00:00"))
+        assert out["use_time_start"] is None
+        assert out["use_time_end"] is None
+
+    def test_midnight_normalize_artifact_omitted(self):
+        # 08:00-00:00 = 원래 08:00-24:00 이 망가진 artifact. start>=end → omit.
+        out = AnswerAgent._normalize(self._row("08:00:00", "00:00:00"))
+        assert out["use_time_start"] is None
+        assert out["use_time_end"] is None
+
+    def test_start_after_end_omitted(self):
+        out = AnswerAgent._normalize(self._row("18:00:00", "09:00:00"))
+        assert out["use_time_start"] is None
+        assert out["use_time_end"] is None
+
+    def test_valid_window_survives_str(self):
+        out = AnswerAgent._normalize(self._row("09:00:00", "18:00:00"))
+        assert out["use_time_start"] == "09:00:00"
+        assert out["use_time_end"] == "18:00:00"
+
+    def test_valid_window_survives_time_object(self):
+        out = AnswerAgent._normalize(
+            self._row(datetime.time(10, 0, 0), datetime.time(11, 30, 0))
+        )
+        assert out["use_time_start"] == "10:00:00"
+        assert out["use_time_end"] == "11:30:00"
+        json.dumps(out, ensure_ascii=False)
+
+    def test_one_side_missing_both_omitted(self):
+        out = AnswerAgent._normalize(self._row("09:00:00", None))
+        assert out["use_time_start"] is None
+        assert out["use_time_end"] is None
+
+
+class TestTelNoRenderGuard:
+    """tel_no 가드 — phone-shape 만 통과, 한글 등 garbage 는 omit.
+
+    실DB 검증: present 중 11.3%(250건)에 한글 포함(부가설명/garbage). phone-shape
+    정규식(^[0-9()+\\-,./\\s]+$) 매칭만 노출, 복수번호는 정상 통과.
+    """
+
+    def _row(self, tel):
+        return {"service_id": "A1", "service_url": "https://x.io", "tel_no": tel}
+
+    def test_plain_phone_passes(self):
+        out = AnswerAgent._normalize(self._row("02-123-4567"))
+        assert out["tel_no"] == "02-123-4567"
+
+    def test_multi_number_passes(self):
+        out = AnswerAgent._normalize(self._row("02-1,0232"))
+        assert out["tel_no"] == "02-1,0232"
+
+    def test_korean_garbage_omitted(self):
+        out = AnswerAgent._normalize(self._row("02-123 담당자김"))
+        assert out["tel_no"] is None
+
+    def test_none_passthrough(self):
+        out = AnswerAgent._normalize(self._row(None))
+        assert out["tel_no"] is None
+
+
 class TestDetailPromptMentionsNewFields:
     """_STRUCT_DETAIL 이 이용시간·취소기준·문의처를 본문 서술하도록 지시한다."""
 
@@ -94,6 +171,12 @@ class TestDetailPromptMentionsNewFields:
 
     def test_detail_prompt_mentions_tel(self):
         assert "문의" in _STRUCT_DETAIL or "연락처" in _STRUCT_DETAIL
+
+    def test_cancel_std_must_be_bundled(self):
+        # cancel_std_type 단독 노출 금지: type+days 를 묶고 하나라도 없으면 생략 지시.
+        assert "cancel_std_type" in _STRUCT_DETAIL
+        assert "cancel_std_days" in _STRUCT_DETAIL
+        assert "생략" in _STRUCT_DETAIL
 
 
 class TestUseTimeExposedInDetailPath:
