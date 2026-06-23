@@ -3,7 +3,7 @@
 사용자 질문을 의도별로 분류하고 검색·답변 생성까지 처리하는 에이전트 모듈입니다.
 
 **책임 범위**:
-* LangGraph StateGraph 워크플로우 조립 및 실행 (`graph.py`, `nodes.py`)
+* LangGraph StateGraph 워크플로우 조립 및 실행 (`graph.py`, `nodes/` 패키지)
 * 참조 해소 — 규칙 기반 지시 참조 판정 (`_reference_resolution.py`)
 * 행동(action) 결정 (`triage_agent.py`) + 검색 계획(retrieval_intent) (`router_agent.py`)
 * 정형 데이터 조회 (`sql_agent.py`)
@@ -21,7 +21,16 @@
 ```
 agents/
 ├── graph.py                 # LangGraph StateGraph 조립·실행 (AgentGraph)
-├── nodes.py                 # 노드·엣지 구현 (GraphNodes)
+├── nodes/                    # 노드·엣지 구현 (페이즈별 모듈 + GraphNodes facade)
+│   ├── graph_nodes.py        # GraphNodes composition root (페이즈 인스턴스 보유 + 위임 facade)
+│   ├── reference.py          # ReferenceNodes (reference_resolution/rehydrate/describe/route_after_reference)
+│   ├── planning.py           # PlanningNodes (triage/router/route_by_*/post_cache_check + refine 직렬화 helpers)
+│   ├── retrieval.py          # RetrievalNodes (sql/vector/map/analytics/hydration/rrf/pre_answer_gate)
+│   ├── answer.py             # AnswerNodes (answer/direct_answer/ambiguous/out_of_scope/explain)
+│   ├── correction.py         # CorrectionNodes (retry_prep/self_correction_edge/zero-hit)
+│   ├── observability.py      # ObservabilityNodes (search_persist/trace) + INSERT SQL
+│   ├── cache_nodes.py        # CacheCheckNode / CacheWriteNode
+│   └── _shared.py            # _FALLBACK_ANSWER 등 공유 상수 + sanitize_user_rationale
 ├── _reference_resolution.py # 지시 참조 규칙 (LLM 미사용)
 ├── triage_agent.py          # action 결정 (TriageAgent) — 무엇을 할지
 ├── router_agent.py          # 검색 계획 (RouterAgent) — retrieval_intent + 파라미터, RETRIEVE 경로 전용

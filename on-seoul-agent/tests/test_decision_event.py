@@ -269,7 +269,7 @@ class TestStreamDecisionEvent:
         ]
 
         with patch(
-            "agents.nodes.resolve_reference",
+            "agents.nodes.reference.resolve_reference",
             return_value=["S001"],
         ):
             with patch(

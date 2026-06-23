@@ -410,7 +410,7 @@ class TestSearchPersistNodeBestEffort:
         channels = {SearchChannel.SQL: _make_channel(SearchKind.SQL)}
         state = _base_state(search_channels=channels)
 
-        with patch("agents.nodes.logger") as mock_logger:
+        with patch("agents.nodes.observability.logger") as mock_logger:
             await _call_persist(nodes, state, session)
             mock_logger.warning.assert_called_once()
 

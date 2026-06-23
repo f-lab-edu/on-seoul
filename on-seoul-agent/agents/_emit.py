@@ -1,8 +1,8 @@
 """SSE 이벤트 emit 헬퍼 (자유 함수).
 
-GraphNodes 의 emit 헬퍼(`_emit_answering`/`_emit_triage_events`/`_emit_router_events`)를
-`self` 미사용 순수 state 함수로 추출했다. 페이즈 분리 시 Reference/Planning/Retrieval
-가 공유하던 유일한 교차 결합을 제거한다.
+emit 헬퍼(`emit_answering`/`emit_triage_events`/`emit_router_events`)는 `self` 미사용
+순수 state 함수다. 페이즈 분리 시 Reference/Planning/Retrieval 가 공유하던 유일한
+교차 결합을 제거한다.
 
 저수준 writer 는 `agents/_helpers.py` 의 `emit_progress`/`emit_decision` 를 재사용한다.
 동작·SSE emit 시점·횟수(decision 1회, progress 단계별 1회)는 원본과 동일하다.
