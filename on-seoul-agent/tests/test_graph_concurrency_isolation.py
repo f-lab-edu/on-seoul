@@ -110,8 +110,8 @@ class TestConcurrentRequestIsolation:
         ai_ctx = _unique_session_ctx("ai")
 
         with (
-            patch("agents.nodes.data_session_ctx", data_ctx),
-            patch("agents.nodes.ai_session_ctx", ai_ctx),
+            patch("agents._ondata_gateway.data_session_ctx", data_ctx),
+            patch("agents._onai_gateway.ai_session_ctx", ai_ctx),
             patch("agents.hydration_node.hydrate_services", AsyncMock(return_value=[])),
         ):
             res_a, res_b = await asyncio.gather(
@@ -146,8 +146,8 @@ class TestConcurrentRequestIsolation:
         )
 
         with (
-            patch("agents.nodes.data_session_ctx", _unique_session_ctx("data")),
-            patch("agents.nodes.ai_session_ctx", _unique_session_ctx("ai")),
+            patch("agents._ondata_gateway.data_session_ctx", _unique_session_ctx("data")),
+            patch("agents._onai_gateway.ai_session_ctx", _unique_session_ctx("ai")),
             patch(
                 "agents.hydration_node.hydrate_services",
                 AsyncMock(return_value=[{"service_id": "S1"}]),

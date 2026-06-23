@@ -157,7 +157,7 @@ class TestRetryPrepAttributeGapBranch:
             max_class_name="체육시설",
             retry_count=0,
         )
-        with patch("agents.nodes.release_answer_lock", AsyncMock()):
+        with patch("agents._redis_gateway.release_answer_lock", AsyncMock()):
             update = await nodes.retry_prep_node(state)
 
         # forced_intent 로 2회차 router_node 가 재분류 skip.
@@ -186,7 +186,7 @@ class TestRetryPrepAttributeGapBranch:
             max_class_name="체육시설",
             retry_count=0,
         )
-        with patch("agents.nodes.release_answer_lock", AsyncMock()):
+        with patch("agents._redis_gateway.release_answer_lock", AsyncMock()):
             update = await nodes.retry_prep_node(state)
         assert update["relaxed_filters"] == []
         assert update["forced_intent"] == IntentType.VECTOR_SEARCH

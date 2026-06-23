@@ -59,8 +59,8 @@ async def _call_node(node_method, state, session):
         yield session
 
     with (
-        patch("agents.nodes.data_session_ctx", _ctx),
-        patch("agents.nodes.ai_session_ctx", _ctx),
+        patch("agents._ondata_gateway.data_session_ctx", _ctx),
+        patch("agents._onai_gateway.ai_session_ctx", _ctx),
     ):
         return await node_method(state)
 
@@ -415,7 +415,7 @@ class TestMapNodeChannelData:
         nodes = _make_nodes()
         session = _mock_session()
 
-        with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
+        with patch("agents._ondata_gateway._map_search", AsyncMock(return_value=geojson)):
             state = make_agent_state(user_lat=37.56, user_lng=126.97)
             result = await _call_node(nodes.map_node, state, session)
 
@@ -426,7 +426,7 @@ class TestMapNodeChannelData:
         nodes = _make_nodes()
         session = _mock_session()
 
-        with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
+        with patch("agents._ondata_gateway._map_search", AsyncMock(return_value=geojson)):
             state = make_agent_state(user_lat=37.56, user_lng=126.97)
             result = await _call_node(nodes.map_node, state, session)
 
@@ -438,7 +438,7 @@ class TestMapNodeChannelData:
         nodes = _make_nodes()
         session = _mock_session()
 
-        with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
+        with patch("agents._ondata_gateway._map_search", AsyncMock(return_value=geojson)):
             state = make_agent_state(user_lat=37.5665, user_lng=126.9780)
             result = await _call_node(nodes.map_node, state, session)
 
@@ -456,7 +456,7 @@ class TestMapNodeChannelData:
         nodes = _make_nodes()
         session = _mock_session()
 
-        with patch("agents.nodes.map_search", AsyncMock(return_value=geojson)):
+        with patch("agents._ondata_gateway._map_search", AsyncMock(return_value=geojson)):
             state = make_agent_state(user_lat=37.56, user_lng=126.97)
             result = await _call_node(nodes.map_node, state, session)
 
@@ -483,7 +483,7 @@ class TestMapNodeChannelData:
         session = _mock_session()
 
         with patch(
-            "agents.nodes.map_search", AsyncMock(side_effect=RuntimeError("DB 오류"))
+            "agents._ondata_gateway._map_search", AsyncMock(side_effect=RuntimeError("DB 오류"))
         ):
             state = make_agent_state(user_lat=37.56, user_lng=126.97)
             result = await _call_node(nodes.map_node, state, session)

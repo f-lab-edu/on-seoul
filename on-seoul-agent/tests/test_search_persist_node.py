@@ -31,7 +31,7 @@ async def _call_persist(nodes: GraphNodes, state: dict, session: Any) -> dict:
     """노드 로컬 세션(0-6) 전환 후 search_persist_node 는 세션 인자를 받지 않고
     ai_session_ctx() 로 세션을 잡는다. 이 헬퍼가 그 ctx 를 주어진 session 으로 패치한다.
     """
-    with patch("agents.nodes.ai_session_ctx", lambda: _session_ctx(session)):
+    with patch("agents._onai_gateway.ai_session_ctx", lambda: _session_ctx(session)):
         return await nodes.search_persist_node(state)
 
 

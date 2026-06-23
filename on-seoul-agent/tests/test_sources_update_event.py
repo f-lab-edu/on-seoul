@@ -295,7 +295,7 @@ class TestStreamSourcesUpdateEvent:
                 "refined_query": "수영장",
             },
         }
-        with patch("agents.nodes.get_cached_answer_by_key", return_value=cache_payload):
+        with patch("agents._redis_gateway.get_cached_answer_by_key", return_value=cache_payload):
             events = await self._collect(
                 graph,
                 make_agent_state(message="수영장 알려줘", refined_query="수영장"),

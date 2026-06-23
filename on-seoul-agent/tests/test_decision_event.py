@@ -273,7 +273,7 @@ class TestStreamDecisionEvent:
             return_value=["S001"],
         ):
             with patch(
-                "agents.nodes.hydrate_services",
+                "agents._ondata_gateway._hydrate_services",
                 AsyncMock(
                     return_value=[{"service_id": "S001", "service_name": "수영장"}]
                 ),
@@ -356,7 +356,7 @@ class TestStreamDecisionEvent:
                 "refined_query": "수영장",
             },
         }
-        with _patch("agents.nodes.get_cached_answer_by_key", return_value=cache_payload):
+        with _patch("agents._redis_gateway.get_cached_answer_by_key", return_value=cache_payload):
             events = await self._collect(
                 graph,
                 make_agent_state(

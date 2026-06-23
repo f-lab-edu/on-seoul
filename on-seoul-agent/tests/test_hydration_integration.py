@@ -134,7 +134,7 @@ class TestCacheCheckNodeHydratedServicesRestore:
             },
         }
         with patch(
-            "agents.nodes.get_cached_answer_by_key",
+            "agents._redis_gateway.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())
@@ -155,7 +155,7 @@ class TestCacheCheckNodeHydratedServicesRestore:
             },
         }
         with patch(
-            "agents.nodes.get_cached_answer_by_key",
+            "agents._redis_gateway.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())
@@ -185,7 +185,7 @@ class TestCacheWriteNodeHydratedServicesSnap:
             hydrated_services=hydrated,
         )
 
-        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
+        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(state)
 
@@ -204,7 +204,7 @@ class TestCacheWriteNodeHydratedServicesSnap:
         )
         # hydrated_services 키 자체가 없는 경우 state.get() → None
 
-        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
+        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(state)
 

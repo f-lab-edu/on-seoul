@@ -75,7 +75,7 @@ async def _run_in_edge_order(
         return [hydrated_by_id[i] for i in ids if i in hydrated_by_id]
 
     with (
-        patch("agents.nodes.data_session_ctx", _ctx),
+        patch("agents._ondata_gateway.data_session_ctx", _ctx),
         patch("agents.hydration_node.hydrate_services", AsyncMock(side_effect=_fake_hydrate)),
     ):
         # ── 실제 배선 순서: hydration 먼저, fusion 나중 ──
@@ -138,10 +138,11 @@ class TestRRFFusionTopologyGuard:
             "V1": {"service_id": "V1", "service_name": "체험관"},
         }
 
-        with patch("agents.nodes.settings") as mock_settings:
-            mock_settings.enable_secondary_intent = True
-            mock_settings.rrf_k_constant = 60
-            mock_settings.rrf_top_k_final = 10
+        with (
+            patch.object(settings, "enable_secondary_intent", True),
+            patch.object(settings, "rrf_k_constant", 60),
+            patch.object(settings, "rrf_top_k_final", 10),
+        ):
             order = await _run_in_edge_order(
                 nodes, state, hydrated_by_id=hydrated_by_id
             )

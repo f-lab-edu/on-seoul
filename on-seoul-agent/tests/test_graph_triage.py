@@ -21,6 +21,7 @@ from agents.graph import AgentGraph
 from agents.nodes import GraphNodes
 from agents.triage_agent import TriageAgent
 from core.cache import _cache_key
+from core.config import settings
 from schemas.state import ActionType, AgentState, IntentType
 from tests.helpers import (
     make_agent_state,
@@ -428,10 +429,11 @@ class TestRRFFusionNode:
             sql_results=[{"service_id": "S1"}],
             vector_results=[{"service_id": "V1"}],
         )
-        with patch("agents.nodes.settings") as mock_settings:
-            mock_settings.enable_secondary_intent = False
-            mock_settings.rrf_k_constant = 60
-            mock_settings.rrf_top_k_final = 10
+        with (
+            patch.object(settings, "enable_secondary_intent", False),
+            patch.object(settings, "rrf_k_constant", 60),
+            patch.object(settings, "rrf_top_k_final", 10),
+        ):
             result = await nodes.rrf_fusion_node(state)
         assert "rrf_fusion_bypass" in result.get("node_path", [])
         assert "rrf_merged_ids" not in result
@@ -444,10 +446,11 @@ class TestRRFFusionNode:
             sql_results=[{"service_id": "S1"}],
             vector_results=[{"service_id": "V1"}],
         )
-        with patch("agents.nodes.settings") as mock_settings:
-            mock_settings.enable_secondary_intent = True
-            mock_settings.rrf_k_constant = 60
-            mock_settings.rrf_top_k_final = 10
+        with (
+            patch.object(settings, "enable_secondary_intent", True),
+            patch.object(settings, "rrf_k_constant", 60),
+            patch.object(settings, "rrf_top_k_final", 10),
+        ):
             result = await nodes.rrf_fusion_node(state)
         assert "rrf_fusion_bypass" in result.get("node_path", [])
 
@@ -465,10 +468,11 @@ class TestRRFFusionNode:
                 {"service_id": "S1"},  # SQL과 겹치는 결과
             ],
         )
-        with patch("agents.nodes.settings") as mock_settings:
-            mock_settings.enable_secondary_intent = True
-            mock_settings.rrf_k_constant = 60
-            mock_settings.rrf_top_k_final = 10
+        with (
+            patch.object(settings, "enable_secondary_intent", True),
+            patch.object(settings, "rrf_k_constant", 60),
+            patch.object(settings, "rrf_top_k_final", 10),
+        ):
             result = await nodes.rrf_fusion_node(state)
 
         assert "rrf_merged_ids" in result
@@ -485,10 +489,11 @@ class TestRRFFusionNode:
             sql_results=[],
             vector_results=[],
         )
-        with patch("agents.nodes.settings") as mock_settings:
-            mock_settings.enable_secondary_intent = True
-            mock_settings.rrf_k_constant = 60
-            mock_settings.rrf_top_k_final = 10
+        with (
+            patch.object(settings, "enable_secondary_intent", True),
+            patch.object(settings, "rrf_k_constant", 60),
+            patch.object(settings, "rrf_top_k_final", 10),
+        ):
             result = await nodes.rrf_fusion_node(state)
         assert "rrf_fusion_empty" in result.get("node_path", [])
 
@@ -632,10 +637,10 @@ class TestRouterNodeRefineCache:
         with (
             patch_node_sessions(),
             patch(
-                "agents.nodes.get_cached_refine_by_key",
+                "agents._redis_gateway.get_cached_refine_by_key",
                 AsyncMock(return_value=cached),
             ),
-            patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
+            patch("agents._redis_gateway.set_cached_refine", AsyncMock()) as mock_set,
         ):
             update = await nodes.router_node(_state(message="테니스장"))
 
@@ -659,10 +664,10 @@ class TestRouterNodeRefineCache:
         with (
             patch_node_sessions(),
             patch(
-                "agents.nodes.get_cached_refine_by_key",
+                "agents._redis_gateway.get_cached_refine_by_key",
                 AsyncMock(return_value=None),
             ),
-            patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
+            patch("agents._redis_gateway.set_cached_refine", AsyncMock()) as mock_set,
         ):
             update = await nodes.router_node(_state(message="마포구 풋살장"))
 
@@ -679,8 +684,8 @@ class TestRouterNodeRefineCache:
         nodes = self._nodes(router)
         with (
             patch_node_sessions(),
-            patch("agents.nodes.get_cached_refine_by_key", AsyncMock()) as mock_get,
-            patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
+            patch("agents._redis_gateway.get_cached_refine_by_key", AsyncMock()) as mock_get,
+            patch("agents._redis_gateway.set_cached_refine", AsyncMock()) as mock_set,
         ):
             update = await nodes.router_node(
                 _state(forced_intent=IntentType.VECTOR_SEARCH)
@@ -698,10 +703,10 @@ class TestRouterNodeRefineCache:
         with (
             patch_node_sessions(),
             patch(
-                "agents.nodes.get_cached_refine_by_key",
+                "agents._redis_gateway.get_cached_refine_by_key",
                 AsyncMock(return_value=None),
             ),
-            patch("agents.nodes.set_cached_refine", AsyncMock()) as mock_set,
+            patch("agents._redis_gateway.set_cached_refine", AsyncMock()) as mock_set,
         ):
             update = await nodes.router_node(_state())
         mock_set.assert_not_called()

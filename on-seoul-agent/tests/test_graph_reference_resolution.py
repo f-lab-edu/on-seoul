@@ -50,7 +50,7 @@ class TestReferentialPath:
         sql_agent, data_session = make_sql_agent([])
 
         with patch(
-            "agents.nodes.hydrate_services", AsyncMock(return_value=hydrated)
+            "agents._ondata_gateway._hydrate_services", AsyncMock(return_value=hydrated)
         ) as mock_hydrate:
             graph = AgentGraph(
                 router=router,
@@ -83,7 +83,7 @@ class TestReferentialPath:
         """서수 참조('세번째') → 세 번째 엔티티(S3) 재-hydrate."""
         hydrated = [{"service_id": "S3", "service_name": "마포 청소년 코딩 강좌"}]
         with patch(
-            "agents.nodes.hydrate_services", AsyncMock(return_value=hydrated)
+            "agents._ondata_gateway._hydrate_services", AsyncMock(return_value=hydrated)
         ) as mock_hydrate:
             graph = AgentGraph(
                 router=make_router(IntentType.SQL_SEARCH),
@@ -109,7 +109,7 @@ class TestReferentialPath:
                 "service_url": "https://yeyak.seoul.go.kr/x",
             }
         ]
-        with patch("agents.nodes.hydrate_services", AsyncMock(return_value=hydrated)):
+        with patch("agents._ondata_gateway._hydrate_services", AsyncMock(return_value=hydrated)):
             graph = AgentGraph(
                 router=make_router(IntentType.SQL_SEARCH),
                 answer_agent=make_answer_agent("마루공원 테니스장은 노원구 시설입니다."),
@@ -127,7 +127,7 @@ class TestReferentialPath:
 
     async def test_rehydrate_zero_hits_honest_notice(self):
         """재-hydrate 0건(삭제/마감) → 빈 카드 + 정직 안내(환각 금지)."""
-        with patch("agents.nodes.hydrate_services", AsyncMock(return_value=[])):
+        with patch("agents._ondata_gateway._hydrate_services", AsyncMock(return_value=[])):
             graph = AgentGraph(
                 router=make_router(IntentType.SQL_SEARCH),
                 answer_agent=make_answer_agent(
@@ -152,7 +152,7 @@ class TestReferentialPath:
             {"service_id": "S3", "service_name": "마포 청소년 코딩 강좌"},
         ]
         with patch(
-            "agents.nodes.hydrate_services", AsyncMock(return_value=hydrated)
+            "agents._ondata_gateway._hydrate_services", AsyncMock(return_value=hydrated)
         ) as mock_hydrate:
             graph = AgentGraph(
                 router=make_router(IntentType.SQL_SEARCH),
@@ -178,7 +178,7 @@ class TestReferentialPath:
         # 요청 3건 중 S2 만 살아있음(S1/S3 마감·삭제).
         hydrated = [{"service_id": "S2", "service_name": "강남구민체육센터 수영장"}]
         with patch(
-            "agents.nodes.hydrate_services", AsyncMock(return_value=hydrated)
+            "agents._ondata_gateway._hydrate_services", AsyncMock(return_value=hydrated)
         ) as mock_hydrate:
             graph = AgentGraph(
                 router=make_router(IntentType.SQL_SEARCH),
@@ -220,7 +220,7 @@ class TestReferentialPath:
             answer_agent=make_answer_agent("설명입니다."),
         )
         with (
-            patch("agents.nodes.hydrate_services", _fake_hydrate),
+            patch("agents._ondata_gateway._hydrate_services", _fake_hydrate),
             patch_node_sessions(data_session=data_sess, ai_session=MagicMock()) as (
                 d_ctx,
                 _a_ctx,
@@ -240,7 +240,7 @@ class TestReferentialPath:
         downstream(DB) 실패 시 500 으로 새지 않고 빈 카드 + 안내로 graceful degrade.
         """
         with patch(
-            "agents.nodes.hydrate_services",
+            "agents._ondata_gateway._hydrate_services",
             AsyncMock(side_effect=RuntimeError("DB down")),
         ):
             graph = AgentGraph(
@@ -270,7 +270,7 @@ class TestReferentialPath:
         hydrated = [{"service_id": "S1", "service_name": "마루공원 테니스장"}]
         answer_agent = make_answer_agent("쓰이지 않음")
         answer_agent.describe = AsyncMock(side_effect=RuntimeError("LLM down"))
-        with patch("agents.nodes.hydrate_services", AsyncMock(return_value=hydrated)):
+        with patch("agents._ondata_gateway._hydrate_services", AsyncMock(return_value=hydrated)):
             graph = AgentGraph(
                 router=make_router(IntentType.SQL_SEARCH),
                 answer_agent=answer_agent,
@@ -294,7 +294,7 @@ class TestReferentialStreamEvents:
         (하위호환) 확인한다. 검색 노드를 우회하므로 "searching" 이벤트는 없어야 한다.
         """
         hydrated = [{"service_id": "S1", "service_name": "마루공원 테니스장"}]
-        with patch("agents.nodes.hydrate_services", AsyncMock(return_value=hydrated)):
+        with patch("agents._ondata_gateway._hydrate_services", AsyncMock(return_value=hydrated)):
             graph = AgentGraph(
                 router=make_router(IntentType.SQL_SEARCH),
                 answer_agent=make_answer_agent("설명입니다."),

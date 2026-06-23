@@ -98,8 +98,8 @@ class TestSessionAcquireRelease:
         )
 
         with (
-            patch("agents.nodes.data_session_ctx", tracking_data_ctx),
-            patch("agents.nodes.ai_session_ctx", ai_ctx),
+            patch("agents._ondata_gateway.data_session_ctx", tracking_data_ctx),
+            patch("agents._onai_gateway.ai_session_ctx", ai_ctx),
             patch(
                 "agents.hydration_node.hydrate_services",
                 AsyncMock(return_value=[{"service_id": "S1"}]),
@@ -176,8 +176,8 @@ class TestConcurrentIsolationNodeLocal:
         )
 
         with (
-            patch("agents.nodes.data_session_ctx", data_ctx),
-            patch("agents.nodes.ai_session_ctx", ai_ctx),
+            patch("agents._ondata_gateway.data_session_ctx", data_ctx),
+            patch("agents._onai_gateway.ai_session_ctx", ai_ctx),
             patch(
                 "agents.hydration_node.hydrate_services",
                 AsyncMock(return_value=[{"service_id": "S1"}]),
@@ -302,8 +302,8 @@ class TestSessionAcquireFailureBestEffort:
         )
 
         with (
-            patch("agents.nodes.data_session_ctx", good_data_ctx),
-            patch("agents.nodes.ai_session_ctx", failing_ai_ctx),
+            patch("agents._ondata_gateway.data_session_ctx", good_data_ctx),
+            patch("agents._onai_gateway.ai_session_ctx", failing_ai_ctx),
             patch(
                 "agents.hydration_node.hydrate_services",
                 AsyncMock(return_value=[{"service_id": "S1"}]),

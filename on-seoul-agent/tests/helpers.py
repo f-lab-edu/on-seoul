@@ -444,8 +444,8 @@ def patch_node_sessions(
     d = _ctx_factory(*(data_sessions or ((data_session,) if data_session else ())))
     a = _ctx_factory(*(ai_sessions or ((ai_session,) if ai_session else ())))
     with (
-        patch("agents.nodes.data_session_ctx", d),
-        patch("agents.nodes.ai_session_ctx", a),
+        patch("agents._ondata_gateway.data_session_ctx", d),
+        patch("agents._onai_gateway.ai_session_ctx", a),
         patch("agents.vector_agent.ai_session_ctx", a),
     ):
         yield d, a

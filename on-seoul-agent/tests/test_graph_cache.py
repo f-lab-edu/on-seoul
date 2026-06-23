@@ -81,7 +81,7 @@ class TestCacheCheckNode:
             },
         }
         with patch(
-            "agents.nodes.get_cached_answer_by_key",
+            "agents._redis_gateway.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())
@@ -101,7 +101,7 @@ class TestCacheCheckNode:
 
         base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         with patch(
-            "agents.nodes.get_cached_answer_by_key",
+            "agents._redis_gateway.get_cached_answer_by_key",
             AsyncMock(return_value=None),
         ):
             node = CacheCheckNode(redis=AsyncMock())
@@ -114,7 +114,7 @@ class TestCacheCheckNode:
         from agents.nodes import CacheCheckNode
 
         base_state["plan"]["intent"] = IntentType.MAP
-        with patch("agents.nodes.get_cached_answer_by_key", AsyncMock()) as mock_get:
+        with patch("agents._redis_gateway.get_cached_answer_by_key", AsyncMock()) as mock_get:
             node = CacheCheckNode(redis=AsyncMock())
             result = await node(base_state)
 
@@ -161,7 +161,7 @@ class TestCacheCheckNode:
 
         base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         base_state["plan"]["refined_query"] = None
-        with patch("agents.nodes.get_cached_answer_by_key", AsyncMock()) as mock_get:
+        with patch("agents._redis_gateway.get_cached_answer_by_key", AsyncMock()) as mock_get:
             node = CacheCheckNode(redis=AsyncMock())
             result = await node(base_state)
 
@@ -181,7 +181,7 @@ class TestCacheWriteNode:
         base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         base_state["output"]["answer"] = "신규 답변"
         base_state["vector"]["results"] = [{"service_id": "S1"}]
-        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
+        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -198,7 +198,7 @@ class TestCacheWriteNode:
         base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         base_state["output"]["answer"] = "x"
         base_state["error"] = "boom"
-        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
+        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -210,7 +210,7 @@ class TestCacheWriteNode:
         base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         base_state["cache_hit"] = True
         base_state["output"]["answer"] = "x"
-        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
+        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -226,7 +226,7 @@ class TestCacheWriteNode:
             {"service_id": "S1", "service_name": "수영장"},
             {"service_id": "S2", "service_name": "체육관"},
         ]
-        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
+        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -255,7 +255,7 @@ class TestCacheWriteNode:
             "state": {"refined_query": "서울 테니스장"},
         }
         with patch(
-            "agents.nodes.get_cached_answer_by_key",
+            "agents._redis_gateway.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())
@@ -276,7 +276,7 @@ class TestCacheWriteNode:
             "state": {"refined_query": "서울 테니스장"},
         }
         with patch(
-            "agents.nodes.get_cached_answer_by_key",
+            "agents._redis_gateway.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             node = CacheCheckNode(redis=AsyncMock())
@@ -292,7 +292,7 @@ class TestCacheWriteNode:
 
         base_state["plan"]["intent"] = IntentType.MAP
         base_state["output"]["answer"] = "x"
-        with patch("agents.nodes.set_cached_answer", AsyncMock()) as mock_set:
+        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -373,7 +373,7 @@ class TestGraphRouting:
         )
 
         with patch(
-            "agents.nodes.get_cached_answer_by_key",
+            "agents._redis_gateway.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             graph = AgentGraph(
@@ -481,7 +481,7 @@ class TestSingleflightLockLeak:
 
         # 재진입 cache_check (동일 키): poll을 호출하지 않고 락 재획득해야 한다
         poll_mock = AsyncMock()
-        with patch("agents.nodes.poll_for_answer", poll_mock):
+        with patch("agents._redis_gateway.poll_for_answer", poll_mock):
             reentry = await check(self._eligible_state())
 
         poll_mock.assert_not_called()
@@ -545,7 +545,7 @@ class TestSingleflightLockLeak:
         }
         redis = _FakeRedis()
         with patch(
-            "agents.nodes.get_cached_answer_by_key",
+            "agents._redis_gateway.get_cached_answer_by_key",
             AsyncMock(return_value=envelope),
         ):
             result = await CacheCheckNode(redis=redis)(base_state)
@@ -570,8 +570,8 @@ class TestSingleflightLockLeak:
             "state": {"refined_query": "서울 테니스장", "vector_results": [], "sql_results": None},
         }
         with (
-            patch("agents.nodes.acquire_answer_lock", AsyncMock(return_value=False)),
-            patch("agents.nodes.poll_for_answer", AsyncMock(return_value=envelope)),
+            patch("agents._redis_gateway.acquire_answer_lock", AsyncMock(return_value=False)),
+            patch("agents._redis_gateway.poll_for_answer", AsyncMock(return_value=envelope)),
         ):
             result = await CacheCheckNode(redis=redis)(self._eligible_state())
 
@@ -584,8 +584,8 @@ class TestSingleflightLockLeak:
 
         redis = _FakeRedis()
         with (
-            patch("agents.nodes.acquire_answer_lock", AsyncMock(return_value=False)),
-            patch("agents.nodes.poll_for_answer", AsyncMock(return_value=None)),
+            patch("agents._redis_gateway.acquire_answer_lock", AsyncMock(return_value=False)),
+            patch("agents._redis_gateway.poll_for_answer", AsyncMock(return_value=None)),
         ):
             result = await CacheCheckNode(redis=redis)(self._eligible_state())
 
@@ -706,7 +706,7 @@ class TestSingleflightLockLeak:
         with (
             patch("agents.vector_agent.vector_search", AsyncMock(return_value=[])),
             patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
-            patch("agents.nodes.poll_for_answer", poll_spy),
+            patch("agents._redis_gateway.poll_for_answer", poll_spy),
         ):
             graph = AgentGraph(
                 triage=triage,

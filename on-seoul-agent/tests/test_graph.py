@@ -19,6 +19,7 @@ from agents.nodes import (
 )
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.vector_agent import VectorAgent, _RefinedQuery
+from core.config import settings
 from core.exceptions import RateLimitException
 from schemas.state import ActionType, AgentState, IntentType
 from tests.helpers import (
@@ -147,7 +148,7 @@ class TestConditionalEdgeRouting:
         }
         _, data_session = _sql_agent([])
 
-        with patch("agents.nodes.map_search", return_value=geojson) as mock_map:
+        with patch("agents._ondata_gateway._map_search", return_value=geojson) as mock_map:
             graph = AgentGraph(
                 router=_router(IntentType.MAP),
                 answer_agent=_answer_agent("주변 시설입니다."),
@@ -903,11 +904,10 @@ class TestAgentGraphStream:
             patch.object(
                 GraphNodes, "post_cache_check", GraphNodes.route_by_action_fanout
             ),
-            patch("agents.nodes.settings") as mock_settings,
+            patch.object(settings, "enable_secondary_intent", True),
+            patch.object(settings, "rrf_k_constant", 60),
+            patch.object(settings, "rrf_top_k_final", 10),
         ):
-            mock_settings.enable_secondary_intent = True
-            mock_settings.rrf_k_constant = 60
-            mock_settings.rrf_top_k_final = 10
             graph = AgentGraph(
                 triage=triage,
                 router=router,
@@ -1491,7 +1491,7 @@ class TestDirectedSelfCorrectionRetry:
         geojson = {"type": "FeatureCollection", "features": []}
         with (
             patch(
-                "agents.nodes.map_search", AsyncMock(return_value=geojson)
+                "agents._ondata_gateway._map_search", AsyncMock(return_value=geojson)
             ) as mock_map,
             patch_node_sessions(data_session=data_session),
         ):
@@ -1513,7 +1513,7 @@ class TestDirectedSelfCorrectionRetry:
         }
         with (
             patch(
-                "agents.nodes.map_search", AsyncMock(return_value=geojson)
+                "agents._ondata_gateway._map_search", AsyncMock(return_value=geojson)
             ) as mock_map,
             patch_node_sessions(data_session=data_session),
         ):
