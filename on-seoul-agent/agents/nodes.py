@@ -30,7 +30,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agents import _emit
+from agents import _emit, _onai_gateway, _ondata_gateway, _redis_gateway
 from agents._helpers import emit_progress
 from agents._reference_resolution import resolve_reference
 from agents._search_channel_utils import _to_hits
@@ -41,22 +41,7 @@ from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
-from core.cache import (
-    acquire_answer_lock,
-    acquire_refine_lock,
-    build_answer_cache_key,
-    build_refine_cache_key,
-    get_cached_answer_by_key,
-    get_cached_refine_by_key,
-    poll_for_answer,
-    poll_for_refine,
-    release_answer_lock,
-    release_refine_lock,
-    set_cached_answer,
-    set_cached_refine,
-)
 from core.config import settings
-from core.database import ai_session_ctx, data_session_ctx
 from core.exceptions import RateLimitException
 from core.rrf import reciprocal_rank_fusion
 from schemas.search import (
@@ -68,10 +53,8 @@ from schemas.search import (
     kind_of,
 )
 from schemas.state import ActionType, AgentState, IntentType
-from tools.hydrate_services import hydrate_services
 from tools.map_search import DEFAULT_RADIUS_M as _MAP_DEFAULT_RADIUS_M
 from tools.map_search import TOP_K as _MAP_TOP_K
-from tools.map_search import map_search
 from tools.sql_search import TOP_K as _SQL_TOP_K
 
 logger = logging.getLogger(__name__)
@@ -328,8 +311,7 @@ class ReferenceNodes:
         # (기존 stream() 의 rehydrate_node 분기와 동일. 신규 SSE 이벤트 미도입.)
         guard = _emit.emit_answering(state)
         try:
-            async with data_session_ctx() as data_session:
-                rows = await hydrate_services(data_session, target_ids)
+            rows = await _ondata_gateway.hydrate(target_ids)
             logger.info(
                 "rehydrate.done room=%s requested=%d hydrated=%d",
                 state.get("room_id"),
@@ -558,20 +540,20 @@ class PlanningNodes:
         message = state["message"]
         history = state.get("history") or []
         redis = self._redis
-        key = build_refine_cache_key(message, history)
-        cached = await get_cached_refine_by_key(key, redis)
+        key = _redis_gateway.build_refine_cache_key(message, history)
+        cached = await _redis_gateway.get_cached_refine_by_key(key, redis)
         if cached is not None:
             return self._refine_cache_hit_update(state, cached)
 
         # singleflight: 첫 miss 호출자만 classify, 나머지는 결과 대기.
-        acquired = await acquire_refine_lock(
+        acquired = await _redis_gateway.acquire_refine_lock(
             key, redis, ttl=settings.refine_cache_lock_ttl
         )
         if not acquired:
             logger.info(
                 "router.refine_singleflight.wait room=%s", state.get("room_id")
             )
-            polled = await poll_for_refine(
+            polled = await _redis_gateway.poll_for_refine(
                 key,
                 redis,
                 retries=settings.refine_cache_lock_poll_retries,
@@ -597,7 +579,9 @@ class PlanningNodes:
             update = _build_router_update(result)
             update["node_path"] = ["router", *self._route_fallback_breadcrumb(state)]
             # miss → 정상 update 구성 후 SET. classify 예외 시 SET 안 함(아래 except).
-            await set_cached_refine(message, history, _serialize_refine(update), redis)
+            await _redis_gateway.set_cached_refine(
+                message, history, _serialize_refine(update), redis
+            )
             logger.info(
                 "router.classify room=%s intent=%s secondary=%s refined=%r "
                 "max_class=%s area=%s status=%s",
@@ -628,7 +612,7 @@ class PlanningNodes:
             # acquired(획득 플래그)인 경우에만 release — fail-open(poll 타임아웃) 경로는
             # 락 미보유라 release 하지 않는다(없는 락 DEL 회피).
             if acquired:
-                await release_refine_lock(key, redis)
+                await _redis_gateway.release_refine_lock(key, redis)
 
     def _refine_cache_hit_update(
         self, state: AgentState, cached: dict[str, Any]
@@ -1086,7 +1070,7 @@ class RetrievalNodes:
         가 1회 담당한다(graph.py: sql_node/vector_node → hydration_node).
         """
         try:
-            async with data_session_ctx() as data_session:
+            async with _ondata_gateway.session() as data_session:
                 new_state = await self._sql.search(state, data_session)
             sql_slot = new_state.get("sql") or {}
             sql_rows = sql_slot.get("results") or []
@@ -1183,7 +1167,7 @@ class RetrievalNodes:
         """
         guard = _emit.emit_answering(state)
         try:
-            async with data_session_ctx() as data_session:
+            async with _ondata_gateway.session() as data_session:
                 update = await self._hydration(state, data_session)
             hydrated = (update.get("hydration") or {}).get("hydrated_services") or []
             logger.info(
@@ -1218,8 +1202,7 @@ class RetrievalNodes:
                 # MAP 0건 재시도 시 retry_prep_node 가 retry_radius_m 을 세팅한다.
                 # 없으면 기본 반경(1000m). ChannelData 에도 실제 사용 반경을 반영한다.
                 radius = state.get("retry_radius_m") or _MAP_DEFAULT_RADIUS_M
-                async with data_session_ctx() as data_session:
-                    geojson = await map_search(data_session, lat, lng, radius_m=radius)
+                geojson = await _ondata_gateway.map_proximity(lat, lng, radius)
                 features = (geojson or {}).get("features") or []
                 channel_data = ChannelData(
                     kind=SearchKind.MAP,
@@ -1266,7 +1249,7 @@ class RetrievalNodes:
         # 검색 노드 완료 → answering 단계로 (기존 stream() _SEARCH_NODES 분기 동일).
         guard = _emit.emit_answering(state)
         try:
-            async with data_session_ctx() as data_session:
+            async with _ondata_gateway.session() as data_session:
                 new_state = await self._analytics.run(state, data_session)
             analytics_slot = new_state.get("analytics") or {}
             rows = analytics_slot.get("results") or []
@@ -1352,7 +1335,7 @@ class CorrectionNodes:
         # 리셋 이전·이후 순서와 무관하게 키 불일치 위험이 없다. release 는 멱등.
         lock_key = state.get("answer_lock_key")
         if lock_key:
-            await release_answer_lock(lock_key, self._redis)
+            await _redis_gateway.release_answer_lock(lock_key, self._redis)
 
         # 재시도 경계: re_searching emit + progress 가드 리셋(다음 순회의
         # searching/answering 이벤트가 다시 흐르게 한다 — 기존 stream() 동작 보존).
@@ -1603,7 +1586,7 @@ class ObservabilityNodes:
                 )
 
         try:
-            async with ai_session_ctx() as ai_session:
+            async with _onai_gateway.session() as ai_session:
                 if query_rows:
                     await ai_session.execute(
                         text(_INSERT_SEARCH_QUERIES_SQL),
@@ -1664,7 +1647,7 @@ class ObservabilityNodes:
                 "result": analytics_rows,
             }
         try:
-            async with ai_session_ctx() as ai_session:
+            async with _onai_gateway.session() as ai_session:
                 await _save_trace(ai_session, state["message_id"], trace_payload)
         except Exception:
             # 세션 획득 실패도 best-effort 종단 노드 정책상 무시한다(워크플로우 결과 불변).
@@ -1753,7 +1736,7 @@ class CacheCheckNode:
         payment_type = filters.get("payment_type")
         routes = self._build_routes_key(intent, plan.get("secondary_intent"))
 
-        key = build_answer_cache_key(
+        key = _redis_gateway.build_answer_cache_key(
             refined,
             max_class_name=max_class_name,
             area_name=area_name,
@@ -1766,10 +1749,10 @@ class CacheCheckNode:
         # poll-timeout 경로는 락을 들지 않으므로 None 으로 둔다.
         lock_key: str | None = None
 
-        envelope = await get_cached_answer_by_key(key, self._redis)
+        envelope = await _redis_gateway.get_cached_answer_by_key(key, self._redis)
         if envelope is None:
             # singleflight: 첫 miss 호출자만 LLM 실행, 나머지는 결과 대기.
-            acquired = await acquire_answer_lock(
+            acquired = await _redis_gateway.acquire_answer_lock(
                 key, self._redis, ttl=settings.answer_cache_lock_ttl
             )
             if acquired:
@@ -1784,7 +1767,7 @@ class CacheCheckNode:
                     intent.value,
                     refined[:40],
                 )
-                envelope = await poll_for_answer(
+                envelope = await _redis_gateway.poll_for_answer(
                     key,
                     self._redis,
                     retries=settings.answer_cache_lock_poll_retries,
@@ -1884,7 +1867,7 @@ class CacheWriteNode:
         payment_type = filters.get("payment_type")
         routes = CacheCheckNode._build_routes_key(intent, plan.get("secondary_intent"))
 
-        key = build_answer_cache_key(
+        key = _redis_gateway.build_answer_cache_key(
             refined,
             max_class_name=max_class_name,
             area_name=area_name,
@@ -1917,7 +1900,7 @@ class CacheWriteNode:
             # HydrationNode 가 채운 통합 슬롯 — cache hit 시 hydration 라운드트립 절감.
             "hydrated_services": state["hydration"].get("hydrated_services"),
         }
-        await set_cached_answer(
+        await _redis_gateway.set_cached_answer(
             refined,
             payload,
             snap,
@@ -1931,7 +1914,9 @@ class CacheWriteNode:
         # singleflight 락 조기 해제 — waiter가 poll 주기를 기다리지 않고 즉시 hit.
         # cache_check 가 기록한 키(answer_lock_key)를 우선 사용해 획득 시점과 정확히
         # 정합되게 해제한다. 없으면(구 경로/락 미보유) 재계산 키로 폴백(DEL 멱등).
-        await release_answer_lock(state.get("answer_lock_key") or key, self._redis)
+        await _redis_gateway.release_answer_lock(
+            state.get("answer_lock_key") or key, self._redis
+        )
         empty = not snap["vector_results"] and not snap["sql_results"]
         logger.info("cache.write intent=%s empty=%s", intent.value, empty)
         return {"answer_lock_key": None}
