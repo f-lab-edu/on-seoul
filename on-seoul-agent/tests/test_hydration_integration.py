@@ -9,11 +9,13 @@
    (hydrated_services 있으면 sql/vector_results 무시)
 """
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents.answer_agent import AnswerAgent
 from agents.graph import AgentGraph
 from agents.nodes import CacheCheckNode, CacheWriteNode
+from agents.nodes.retrieval import RetrievalNodes
 from schemas.state import AgentState, IntentType
 from tests.helpers import (
     make_agent_state,
@@ -23,6 +25,28 @@ from tests.helpers import (
     make_sql_agent,
     patch_node_sessions,
 )
+
+
+class _FakeOnDataReader:
+    """B3-1: RetrievalNodes 에 주입하는 가짜 게이트웨이 — patch 불필요.
+
+    session() 은 더미 세션을 yield 한다(hydration 콜러블은 주입된 hydration 이 처리).
+    """
+
+    @asynccontextmanager
+    async def session(self):
+        yield MagicMock()
+
+
+def _make_retrieval(*, hydration) -> RetrievalNodes:
+    """가짜 OnDataReader 를 주입한 RetrievalNodes 를 생성한다."""
+    return RetrievalNodes(
+        sql=MagicMock(),
+        vector=MagicMock(),
+        analytics=MagicMock(),
+        hydration=hydration,
+        ondata=_FakeOnDataReader(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -44,8 +68,9 @@ class TestHydrationNodeExceptionHandler:
             sql_agent=make_sql_agent([{"service_id": "S1"}])[0],
             answer_agent=make_answer_agent("답변"),
         )
-        # GraphNodes 의 _hydration 을 예외 던지는 callable 로 교체
-        graph._nodes._hydration = bad_hydration
+        # B3-1: hydration 은 RetrievalNodes 가 보유하므로 거기에 주입한다
+        # (facade _hydration 전파 property 퇴역). 예외 던지는 callable 로 교체.
+        graph._nodes._retrieval._hydration = bad_hydration
 
         with patch_node_sessions(
             data_session=data_session, ai_session=make_ai_session()
@@ -58,21 +83,20 @@ class TestHydrationNodeExceptionHandler:
         assert "hydration_error" in result["node_path"]
 
     async def test_hydration_node_error_path_sets_empty_hydrated_services(self):
-        """GraphNodes.hydration_node 예외 핸들러가 hydrated_services=[] 를 반환한다."""
+        """RetrievalNodes.hydration_node 예외 핸들러가 hydrated_services=[] 를 반환한다.
+
+        B3-1: 가짜 OnDataReader 를 RetrievalNodes 에 주입해 patch 없이 격리한다
+        (data_session_ctx 패치 불필요 — reader.session() 이 더미 세션을 yield).
+        """
         bad_hydration = AsyncMock(side_effect=ValueError("예외"))
 
-        _, data_session = make_sql_agent([])
-        graph = AgentGraph(answer_agent=make_answer_agent())
-        graph._nodes._hydration = bad_hydration
-
+        nodes = _make_retrieval(hydration=bad_hydration)
         state = make_agent_state(
             intent=IntentType.SQL_SEARCH,
             sql_results=[{"service_id": "S1"}],
         )
 
-        # 노드 로컬 세션(0-6): hydration_node 는 data_session_ctx 로 세션을 잡는다.
-        with patch_node_sessions(data_session=data_session):
-            result = await graph._nodes.hydration_node(state)
+        result = await nodes.hydration_node(state)
 
         assert result["hydration"]["hydrated_services"] == []
         assert "hydration_error" in result["node_path"]

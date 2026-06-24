@@ -23,6 +23,7 @@ AgentGraph에서 노드/엣지 로직 책임을 분리한다.
 
 from typing import Any
 
+from agents._ondata_gateway import OnDataReader, default_reader
 from agents.analytics_agent import AnalyticsAgent
 from agents.answer_agent import AnswerAgent
 from agents.hydration_node import HydrationNode
@@ -71,6 +72,7 @@ class GraphNodes:
         redis: Any = None,
         hydration: HydrationNode | None = None,
         triage: TriageAgent | None = None,
+        ondata: OnDataReader | None = None,
     ) -> None:
         # triage 우선, router는 하위호환 별칭
         self._triage = triage or (router if isinstance(router, TriageAgent) else None)
@@ -79,11 +81,15 @@ class GraphNodes:
         self._vector = vector_agent or VectorAgent()
         self._answer = answer_agent or AnswerAgent()
         self._analytics = analytics_agent or AnalyticsAgent()
-        # _redis/_hydration 은 property — 테스트가 facade 속성을 사후 변이(graph._nodes.
-        # _hydration = X / nodes._redis = redis)했을 때 보유 페이즈 인스턴스로 전파한다
-        # (god-class 시절 동작 보존). backing 은 _redis_val/_hydration_val.
+        # _redis 는 property — 테스트가 facade 속성을 사후 변이(nodes._redis = redis)
+        # 했을 때 보유 페이즈 인스턴스로 전파한다(god-class 시절 동작 보존). backing 은
+        # _redis_val. _hydration 은 B3-1 에서 RetrievalNodes 생성자 주입으로 옮겨가
+        # 전파 property 를 퇴역시켰다(평범한 인스턴스 속성).
         self._redis = redis  # refine 캐시(router_node) 공유 — answer 캐시 노드와 동일 클라이언트
         self._hydration = hydration or HydrationNode()
+        # on_data 읽기 게이트웨이(B3-1): RetrievalNodes 에 주입. 기본 default_reader 라
+        # 프로덕션 동작 불변. 테스트가 가짜 reader 를 GraphNodes(ondata=...)로 주입 가능.
+        self._ondata = ondata or default_reader
         self._cache_check = CacheCheckNode(redis=redis)
         self._cache_write = CacheWriteNode(redis=redis)
 
@@ -97,18 +103,21 @@ class GraphNodes:
             vector=self._vector,
             analytics=self._analytics,
             hydration=self._hydration,
+            ondata=self._ondata,
         )
         self._answer_nodes = AnswerNodes(answer=self._answer)
         self._correction = CorrectionNodes(redis=self._redis)
         self._observability = ObservabilityNodes()
 
     # ------------------------------------------------------------------
-    # 변이 전파 property (테스트 사후 변이 호환) + 지연 페이즈 빌더
+    # _redis 변이 전파 property (테스트 호환 — 잔여 계약, B3-1 이후 부분 유지)
     # ------------------------------------------------------------------
-    # 일부 테스트는 facade 인스턴스의 _redis/_hydration 을 __init__ 이후 직접 교체하거나
-    # GraphNodes.__new__ 로 __init__ 을 우회한 뒤 _redis 만 세팅하고 retry_prep_node 를
-    # 호출한다(god-class 시절 직접 동작). 페이즈 분해 후에도 이 표면을 보존하기 위해
-    # _redis/_hydration 변이를 페이즈 인스턴스로 전파하고, 페이즈가 없으면 지연 생성한다.
+    # 사유: Planning/Correction/Cache 페이즈는 아직 B2(모듈 경유) 단계라 redis 를 facade
+    # 가 보유·전파한다. 일부 테스트(test_graph_cache)는 facade _redis 를 직접 세팅한 뒤
+    # 캐시·correction 노드를 구동한다. 해당 페이즈들이 게이트웨이 주입으로 전환되기 전까지
+    # 이 property 를 부분 유지한다(설계 기준 ⑦ 가역성 — 무리한 일괄 제거 금지). backing 은
+    # _redis_val. (_hydration 전파 property·_correction_phase 지연 빌더는 B3-1 에서
+    # Retrieval 주입 전환과 함께 퇴역시켰다.)
 
     @property
     def _redis(self) -> Any:
@@ -121,25 +130,6 @@ class GraphNodes:
             phase = self.__dict__.get(attr)
             if phase is not None:
                 phase._redis = value
-
-    @property
-    def _hydration(self) -> HydrationNode:
-        return self.__dict__.get("_hydration_val")
-
-    @_hydration.setter
-    def _hydration(self, value: HydrationNode) -> None:
-        self.__dict__["_hydration_val"] = value
-        retrieval = self.__dict__.get("_retrieval")
-        if retrieval is not None:
-            retrieval._hydration = value
-
-    def _correction_phase(self) -> "CorrectionNodes":
-        """_correction 페이즈를 반환하되, __new__ 우회로 없으면 _redis 로 지연 생성한다."""
-        phase = self.__dict__.get("_correction")
-        if phase is None:
-            phase = CorrectionNodes(redis=self._redis)
-            self.__dict__["_correction"] = phase
-        return phase
 
     # ------------------------------------------------------------------
     # Reference 페이즈 위임
@@ -231,10 +221,10 @@ class GraphNodes:
     # ------------------------------------------------------------------
 
     async def retry_prep_node(self, state: AgentState) -> dict[str, Any]:
-        return await self._correction_phase().retry_prep_node(state)
+        return await self._correction.retry_prep_node(state)
 
     def self_correction_edge(self, state: AgentState) -> str:
-        return self._correction_phase().self_correction_edge(state)
+        return self._correction.self_correction_edge(state)
 
     # self-correction 0건 판정 헬퍼 — 일부 테스트가 facade 인스턴스에서 직접 호출한다.
     @staticmethod

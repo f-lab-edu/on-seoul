@@ -440,7 +440,8 @@ class TestSingleflightLockLeak:
 
     async def test_retry_prep_releases_recorded_lock(self):
         """retry_prep_node가 answer_lock_key로 락을 DEL하고 슬롯을 비운다."""
-        from agents.nodes import GraphNodes, CacheCheckNode
+        from agents.nodes import CacheCheckNode
+        from agents.nodes.correction import CorrectionNodes
         from core.cache import _LOCK_SUFFIX
 
         redis = _FakeRedis()
@@ -452,9 +453,10 @@ class TestSingleflightLockLeak:
         assert lock_full in redis.store
 
         # retry_prep로 진입 (state에 lock key 반영)
+        # B3-1: __new__ 우회 + _redis 세팅 대신 CorrectionNodes 정상 생성/주입
+        # (facade _correction_phase 지연 빌더 퇴역).
         state["answer_lock_key"] = lock_key
-        nodes = GraphNodes.__new__(GraphNodes)
-        nodes._redis = redis
+        nodes = CorrectionNodes(redis=redis)
         retry_update = await nodes.retry_prep_node(state)
 
         # 첫 패스 락이 해제되고 슬롯이 비워졌다
@@ -463,7 +465,8 @@ class TestSingleflightLockLeak:
 
     async def test_reentry_cache_check_acquires_without_poll(self):
         """retry_prep 락 해제 후 재진입 cache_check가 SET NX 성공 → poll 미진입."""
-        from agents.nodes import GraphNodes, CacheCheckNode
+        from agents.nodes import CacheCheckNode
+        from agents.nodes.correction import CorrectionNodes
 
         redis = _FakeRedis()
         check = CacheCheckNode(redis=redis)
@@ -473,10 +476,9 @@ class TestSingleflightLockLeak:
         first = await check(state)
         lock_key = first["answer_lock_key"]
 
-        # C2 게이트 → retry_prep 가 락 해제
+        # C2 게이트 → retry_prep 가 락 해제 (B3-1: CorrectionNodes 정상 생성)
         state["answer_lock_key"] = lock_key
-        nodes = GraphNodes.__new__(GraphNodes)
-        nodes._redis = redis
+        nodes = CorrectionNodes(redis=redis)
         await nodes.retry_prep_node(state)
 
         # 재진입 cache_check (동일 키): poll을 호출하지 않고 락 재획득해야 한다
@@ -511,7 +513,8 @@ class TestSingleflightLockLeak:
 
     async def test_singleflight_disabled_is_noop(self):
         """singleflight 비활성 시 cache_check는 락을 잡지 않고 슬롯도 비운다."""
-        from agents.nodes import GraphNodes, CacheCheckNode
+        from agents.nodes import CacheCheckNode
+        from agents.nodes.correction import CorrectionNodes
         from core.config import settings
 
         redis = _FakeRedis()
@@ -522,11 +525,10 @@ class TestSingleflightLockLeak:
         assert not any(k.endswith(":lock") for k in redis.store)
         assert result["cache_hit"] is False
 
-        # retry_prep도 no-op release (raise 없음)
+        # retry_prep도 no-op release (raise 없음) — CorrectionNodes 정상 생성
         state = self._eligible_state()
         state["answer_lock_key"] = result.get("answer_lock_key")
-        nodes = GraphNodes.__new__(GraphNodes)
-        nodes._redis = redis
+        nodes = CorrectionNodes(redis=redis)
         with patch.object(settings, "answer_cache_singleflight_enabled", False):
             await nodes.retry_prep_node(state)  # no raise
 
@@ -600,7 +602,8 @@ class TestSingleflightLockLeak:
         기록한다. 이후 retry_prep의 release가 DEL에서 예외를 던져도 메인 흐름이
         막히지 않아야 한다(release_answer_lock의 except가 삼킴).
         """
-        from agents.nodes import GraphNodes, CacheCheckNode
+        from agents.nodes import CacheCheckNode
+        from agents.nodes.correction import CorrectionNodes
 
         class _RaisingRedis(_FakeRedis):
             async def set(self, key, value, *, nx=False, ex=None):  # noqa: ANN001
@@ -618,8 +621,7 @@ class TestSingleflightLockLeak:
         # retry_prep의 release가 DEL 예외를 삼켜야 한다(메인 흐름 안 막힘)
         state = self._eligible_state()
         state["answer_lock_key"] = check_result["answer_lock_key"]
-        nodes = GraphNodes.__new__(GraphNodes)
-        nodes._redis = redis
+        nodes = CorrectionNodes(redis=redis)
         retry_update = await nodes.retry_prep_node(state)  # no raise
         assert retry_update["answer_lock_key"] is None
 
@@ -629,7 +631,8 @@ class TestSingleflightLockLeak:
         2회차 retry_count 캡 도달 등으로 동일 락 키에 대해 release가 두 번
         호출되어도 DEL은 멱등(이미 없는 키 → no-op)이라 예외/오류가 없다.
         """
-        from agents.nodes import GraphNodes, CacheCheckNode, CacheWriteNode
+        from agents.nodes import CacheCheckNode, CacheWriteNode
+        from agents.nodes.correction import CorrectionNodes
         from core.cache import _LOCK_SUFFIX
 
         redis = _FakeRedis()
@@ -638,11 +641,10 @@ class TestSingleflightLockLeak:
         lock_full = f"{lock_key}{_LOCK_SUFFIX}"
         assert lock_full in redis.store
 
-        # 1차 해제 (retry_prep)
+        # 1차 해제 (retry_prep) — CorrectionNodes 정상 생성
         state = self._eligible_state()
         state["answer_lock_key"] = lock_key
-        nodes = GraphNodes.__new__(GraphNodes)
-        nodes._redis = redis
+        nodes = CorrectionNodes(redis=redis)
         await nodes.retry_prep_node(state)
         assert lock_full not in redis.store
 

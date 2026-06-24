@@ -3,7 +3,8 @@
 import logging
 from typing import Any
 
-from agents import _emit, _ondata_gateway
+from agents import _emit
+from agents._ondata_gateway import OnDataReader, default_reader
 from agents._search_channel_utils import _to_hits
 from agents.analytics_agent import AnalyticsAgent
 from agents.hydration_node import HydrationNode
@@ -30,7 +31,11 @@ class RetrievalNodes:
     """검색 페이즈 — sql/vector/map/analytics/hydration + rrf/게이트 노드·엣지.
 
     의존: sql(SqlAgent), vector(VectorAgent), analytics(AnalyticsAgent),
-    hydration(HydrationNode).
+    hydration(HydrationNode), ondata(OnDataReader — on_data 읽기 게이트웨이).
+
+    B3-1(선택적 주입): on_data 세션·tool 접근을 `OnDataReader` 생성자 주입으로 받는다.
+    테스트는 가짜 OnDataReader 를 주입해 patch 없이 격리한다(설계 기준 ④ 최소 명시 주입).
+    기본값은 프로세스 공유 default_reader 라 프로덕션 동작은 불변이다.
     """
 
     def __init__(
@@ -39,11 +44,13 @@ class RetrievalNodes:
         vector: VectorAgent,
         analytics: AnalyticsAgent,
         hydration: HydrationNode,
+        ondata: OnDataReader | None = None,
     ) -> None:
         self._sql = sql
         self._vector = vector
         self._analytics = analytics
         self._hydration = hydration
+        self._ondata = ondata or default_reader
 
     async def rrf_fusion_node(self, state: AgentState) -> dict[str, Any]:
         """SQL + VECTOR 병렬 팬아웃 결과를 RRF로 통합한다.
@@ -150,7 +157,7 @@ class RetrievalNodes:
         가 1회 담당한다(graph.py: sql_node/vector_node → hydration_node).
         """
         try:
-            async with _ondata_gateway.session() as data_session:
+            async with self._ondata.session() as data_session:
                 new_state = await self._sql.search(state, data_session)
             sql_slot = new_state.get("sql") or {}
             sql_rows = sql_slot.get("results") or []
@@ -247,7 +254,7 @@ class RetrievalNodes:
         """
         guard = _emit.emit_answering(state)
         try:
-            async with _ondata_gateway.session() as data_session:
+            async with self._ondata.session() as data_session:
                 update = await self._hydration(state, data_session)
             hydrated = (update.get("hydration") or {}).get("hydrated_services") or []
             logger.info(
@@ -282,7 +289,7 @@ class RetrievalNodes:
                 # MAP 0건 재시도 시 retry_prep_node 가 retry_radius_m 을 세팅한다.
                 # 없으면 기본 반경(1000m). ChannelData 에도 실제 사용 반경을 반영한다.
                 radius = state.get("retry_radius_m") or _MAP_DEFAULT_RADIUS_M
-                geojson = await _ondata_gateway.map_proximity(lat, lng, radius)
+                geojson = await self._ondata.map_proximity(lat, lng, radius)
                 features = (geojson or {}).get("features") or []
                 channel_data = ChannelData(
                     kind=SearchKind.MAP,
@@ -329,7 +336,7 @@ class RetrievalNodes:
         # 검색 노드 완료 → answering 단계로 (다른 검색 노드와 동일한 emit 시점).
         guard = _emit.emit_answering(state)
         try:
-            async with _ondata_gateway.session() as data_session:
+            async with self._ondata.session() as data_session:
                 new_state = await self._analytics.run(state, data_session)
             analytics_slot = new_state.get("analytics") or {}
             rows = analytics_slot.get("results") or []
