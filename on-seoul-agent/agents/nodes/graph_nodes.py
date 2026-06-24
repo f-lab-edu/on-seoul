@@ -81,20 +81,21 @@ class GraphNodes:
         self._vector = vector_agent or VectorAgent()
         self._answer = answer_agent or AnswerAgent()
         self._analytics = analytics_agent or AnalyticsAgent()
-        # _redis 는 property — 테스트가 facade 속성을 사후 변이(nodes._redis = redis)
-        # 했을 때 보유 페이즈 인스턴스로 전파한다(god-class 시절 동작 보존). backing 은
-        # _redis_val. _hydration 은 B3-1 에서 RetrievalNodes 생성자 주입으로 옮겨가
-        # 전파 property 를 퇴역시켰다(평범한 인스턴스 속성).
+        # _redis 는 평범한 인스턴스 속성 — 생성자 시점 1회 주입으로 각 페이즈에 전달한다
+        # (B3-2 에서 전파 property 를 퇴역). 사후 변이(nodes._redis=) 전파 계약은 더 이상
+        # 없으며, redis 의존이 필요한 테스트는 해당 페이즈(CacheCheckNode/CorrectionNodes)를
+        # redis 주입으로 직접 생성하거나 GraphNodes(redis=...)로 주입한다.
         self._redis = redis  # refine 캐시(router_node) 공유 — answer 캐시 노드와 동일 클라이언트
         self._hydration = hydration or HydrationNode()
-        # on_data 읽기 게이트웨이(B3-1): RetrievalNodes 에 주입. 기본 default_reader 라
+        # on_data 읽기 게이트웨이(B3-1/B3-2): Retrieval/Reference 에 주입. 기본 default_reader 라
         # 프로덕션 동작 불변. 테스트가 가짜 reader 를 GraphNodes(ondata=...)로 주입 가능.
         self._ondata = ondata or default_reader
         self._cache_check = CacheCheckNode(redis=redis)
         self._cache_write = CacheWriteNode(redis=redis)
 
         # 페이즈 인스턴스 — 각 페이즈는 자신이 쓰는 의존만 받는다(설계 기준 ④).
-        self._reference = ReferenceNodes(answer=self._answer)
+        # Reference/Retrieval 은 동일 default_reader(self._ondata)를 공유한다(B3-2).
+        self._reference = ReferenceNodes(answer=self._answer, ondata=self._ondata)
         self._planning = PlanningNodes(
             triage=self._triage, router=self._router, redis=self._redis
         )
@@ -108,28 +109,6 @@ class GraphNodes:
         self._answer_nodes = AnswerNodes(answer=self._answer)
         self._correction = CorrectionNodes(redis=self._redis)
         self._observability = ObservabilityNodes()
-
-    # ------------------------------------------------------------------
-    # _redis 변이 전파 property (테스트 호환 — 잔여 계약, B3-1 이후 부분 유지)
-    # ------------------------------------------------------------------
-    # 사유: Planning/Correction/Cache 페이즈는 아직 B2(모듈 경유) 단계라 redis 를 facade
-    # 가 보유·전파한다. 일부 테스트(test_graph_cache)는 facade _redis 를 직접 세팅한 뒤
-    # 캐시·correction 노드를 구동한다. 해당 페이즈들이 게이트웨이 주입으로 전환되기 전까지
-    # 이 property 를 부분 유지한다(설계 기준 ⑦ 가역성 — 무리한 일괄 제거 금지). backing 은
-    # _redis_val. (_hydration 전파 property·_correction_phase 지연 빌더는 B3-1 에서
-    # Retrieval 주입 전환과 함께 퇴역시켰다.)
-
-    @property
-    def _redis(self) -> Any:
-        return self.__dict__.get("_redis_val")
-
-    @_redis.setter
-    def _redis(self, value: Any) -> None:
-        self.__dict__["_redis_val"] = value
-        for attr in ("_planning", "_correction", "_cache_check", "_cache_write"):
-            phase = self.__dict__.get(attr)
-            if phase is not None:
-                phase._redis = value
 
     # ------------------------------------------------------------------
     # Reference 페이즈 위임
@@ -225,19 +204,6 @@ class GraphNodes:
 
     def self_correction_edge(self, state: AgentState) -> str:
         return self._correction.self_correction_edge(state)
-
-    # self-correction 0건 판정 헬퍼 — 일부 테스트가 facade 인스턴스에서 직접 호출한다.
-    @staticmethod
-    def _hard_filter_zero_hits(state: AgentState) -> bool:
-        return CorrectionNodes._hard_filter_zero_hits(state)
-
-    @staticmethod
-    def _analytics_zero_hits(state: AgentState) -> bool:
-        return CorrectionNodes._analytics_zero_hits(state)
-
-    @staticmethod
-    def _map_zero_hits(state: AgentState) -> bool:
-        return CorrectionNodes._map_zero_hits(state)
 
     # ------------------------------------------------------------------
     # Observability 페이즈 위임

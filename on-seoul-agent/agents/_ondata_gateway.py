@@ -6,15 +6,15 @@
 노드 로컬 세션(제약 #2/#5): 각 메서드는 호출당 1회 acquire-use-release.
 data_session_ctx() 로 풀에서 세션을 잡고 사용 후 즉시 반납한다(장수명 세션 노출 금지).
 
-B3-1(선택적 주입): on_data 읽기를 `OnDataReader` 클래스로 승격해 RetrievalNodes 가
-생성자 주입으로 받을 수 있게 했다. 모듈 함수(session/hydrate/map_proximity)는
-기본 인스턴스(default_reader)로 위임해 다른 페이즈(Reference 등)와의 모듈 경유
-호출부 호환을 유지한다. 따라서 Retrieval 만 농도를 올리고 나머지는 B2 그대로다.
+B3-1/B3-2(선택적 주입): on_data 읽기를 `OnDataReader` 클래스로 승격해 RetrievalNodes 와
+ReferenceNodes 가 생성자 주입으로 받는다. 모든 on_data 호출부가 게이트웨이 주입으로
+전환됨에 따라 B2 호환 모듈 함수(session/hydrate/map_proximity)는 호출자 0이 되어
+퇴역시켰다(설계 기준 ⑦ 가역성 — 호출자가 사라진 예약 표면은 유지하지 않는다).
 
-테스트 patch 타깃(모듈 경유 호출부용 — Reference 등):
+테스트 patch 타깃(tool/세션 심볼 — 주입한 OnDataReader 메서드가 경유한다):
   - 세션: agents._ondata_gateway.data_session_ctx
   - tool: agents._ondata_gateway._hydrate_services / agents._ondata_gateway._map_search
-Retrieval 단위 테스트는 patch 대신 가짜 OnDataReader 를 RetrievalNodes 에 주입한다.
+페이즈 단위 테스트는 patch 대신 가짜 OnDataReader 를 페이즈에 주입한다.
 """
 
 from contextlib import asynccontextmanager
@@ -58,30 +58,9 @@ class OnDataReader:
             return await _map_search(s, lat, lng, radius_m=radius_m)
 
 
-#: 프로세스 공유 기본 reader. 모듈 함수와 RetrievalNodes 기본 의존이 이를 공유한다.
+#: 프로세스 공유 기본 reader. 게이트웨이 주입 페이즈(Retrieval/Reference)의 기본
+#: 의존이 이를 공유한다(무상태이므로 단일 인스턴스 공유 안전).
 default_reader = OnDataReader()
 
 
-# B2 호환 모듈 함수 — default_reader 위임. 현재 살아있는 호출자는 hydrate() 뿐이다
-# (reference.py:rehydrate_node). session()/map_proximity() 는 Retrieval 이 주입 경로로
-# 옮겨가며 호출자가 사라졌으나, 아직 B2(모듈 경유)인 다른 페이즈가 on_data 세션·근접
-# 검색을 쓰게 될 때를 대비해 예약 표면으로 남긴다(가역성, 설계 기준 ⑦).
-# 정리 트리거: 모든 페이즈가 게이트웨이 주입으로 전환되면 이 두 함수를 제거한다.
-@asynccontextmanager
-async def session():
-    """B2 호환 모듈 함수 — default_reader.session() 위임(현재 호출자 없음, 예약)."""
-    async with default_reader.session() as s:
-        yield s
-
-
-async def hydrate(ids: list[str]) -> list[dict[str, Any]]:
-    """B2 호환 모듈 함수 — default_reader.hydrate() 위임(Reference 등 모듈 경유)."""
-    return await default_reader.hydrate(ids)
-
-
-async def map_proximity(lat: float, lng: float, radius_m: int) -> dict[str, Any]:
-    """B2 호환 모듈 함수 — default_reader.map_proximity() 위임(현재 호출자 없음, 예약)."""
-    return await default_reader.map_proximity(lat, lng, radius_m)
-
-
-__all__ = ["OnDataReader", "default_reader", "session", "hydrate", "map_proximity"]
+__all__ = ["OnDataReader", "default_reader"]

@@ -8,16 +8,17 @@
      OnDataReader 자체에 직접 찌른다(1차의 graph-level isolation 을 넘어서).
   2. 주입 경계 누락: RetrievalNodes 의 on_data 쓰는 노드가 전부 self._ondata 경유인지
      sabotage(주입 reader 가 호출되지 않으면 RuntimeError) 로 실증.
-  3. 퇴역 호환장치 잔존 영향: _hydration property·_correction_phase 제거 후
-     모듈 함수 위임이 여전히 default_reader 경유인지.
-  4. 에러 경로 전파: session/hydrate/map_proximity 에서 세션 획득 실패·tool 예외가
-     기존(모듈 함수 시절)과 동일하게 호출자에게 전파되는지.
+  3. 퇴역 호환장치 잔존 영향: _hydration property·_correction_phase·_redis property·
+     zero-hit staticmethod·_ondata 모듈 함수가 모두 제거됐는지(B3-2).
+  4. 에러 경로 전파: OnDataReader.session/hydrate/map_proximity 에서 세션 획득 실패·
+     tool 예외가 기존(모듈 함수 시절)과 동일하게 호출자에게 전파되는지.
   5. import 시점 부작용: default_reader 생성이 무해(DB 연결 미발생)한지.
 
 전부 가짜 OnDataReader 주입 또는 data_session_ctx 패치만 쓰고 실 DB 는 건드리지 않는다.
 """
 
 from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -288,6 +289,82 @@ class TestInjectionBoundaryNoLeak:
 
 
 # ===========================================================================
+# 각도 2b — Reference 페이즈 주입 경계 (B3-2)
+# ===========================================================================
+#
+# QA 갭(B3-2 검증 중 발견): TestInjectionBoundaryNoLeak 는 Retrieval 노드만 덮고
+# ReferenceNodes.rehydrate_node 의 주입 경계는 미검증이었다. test_graph_reference_resolution
+# 의 rehydrate 테스트는 agents._ondata_gateway._hydrate_services 를 patch 하는데,
+# 이 심볼은 주입 reader 든 default_reader 든 둘 다 경유하므로 "self._ondata 경유"를
+# 증명하지 못한다(production 을 self._ondata→default_reader 로 sabotage 해도 전부 통과).
+# 아래 테스트는 가짜 reader 를 ReferenceNodes 에 주입하고 그 reader 의 hydrate 가
+# 실제로 호출되는지 카운터로 실증한다(미경유 시 0 으로 남아 잡아낸다).
+
+
+class _HydrateSabotageReader:
+    """rehydrate_node 가 self._ondata.hydrate 를 경유하면 카운터가 오른다.
+
+    노드가 주입 reader 를 우회하고 default_reader/모듈 함수로 새면 calls=0 으로
+    남아 테스트가 잡아낸다(silent no-op 방지).
+    """
+
+    def __init__(self, rows: list[dict[str, Any]] | None = None) -> None:
+        self.calls = 0
+        self.last_ids: list[str] | None = None
+        self._rows = rows if rows is not None else [{"service_id": "R1"}]
+
+    async def hydrate(self, ids: list[str]) -> list[dict[str, Any]]:
+        self.calls += 1
+        self.last_ids = ids
+        return self._rows
+
+
+class TestReferenceInjectionBoundary:
+    """ReferenceNodes.rehydrate_node 가 self._ondata.hydrate 를 경유하는지(B3-2)."""
+
+    async def test_rehydrate_uses_injected_reader(self):
+        from agents.nodes.reference import ReferenceNodes
+
+        reader = _HydrateSabotageReader(rows=[{"service_id": "R1", "name": "재수화"}])
+        nodes = ReferenceNodes(answer=MagicMock(), ondata=reader)
+        state = make_agent_state()
+        state["target_service_ids"] = ["R1"]
+
+        result = await nodes.rehydrate_node(state)
+
+        assert reader.calls == 1, (
+            "rehydrate_node 가 주입 reader.hydrate 를 안 씀(self._ondata 미경유 — "
+            "default_reader/모듈 함수로 누수)"
+        )
+        assert reader.last_ids == ["R1"]
+        assert result["hydration"]["hydrated_services"] == [
+            {"service_id": "R1", "name": "재수화"}
+        ]
+        assert "rehydrate_node" in result["node_path"]
+
+    async def test_rehydrate_default_reader_fallback_when_unset(self):
+        """ondata 미주입 시 default_reader 로 폴백(기본 동작 보존)."""
+        from agents.nodes import reference as ref_mod
+        from agents.nodes.reference import ReferenceNodes
+
+        nodes = ReferenceNodes(answer=MagicMock())
+        assert nodes._ondata is ref_mod.default_reader
+
+        # 폴백 reader 가 tool/세션 심볼을 경유하는지(patch 가 도달하면 주입 경로 일관).
+        with (
+            patch.object(gw, "data_session_ctx", _SessionTracker()) as _tracker,
+            patch.object(
+                gw, "_hydrate_services", AsyncMock(return_value=[{"service_id": "D1"}])
+            ),
+        ):
+            state = make_agent_state()
+            state["target_service_ids"] = ["D1"]
+            result = await nodes.rehydrate_node(state)
+
+        assert result["hydration"]["hydrated_services"] == [{"service_id": "D1"}]
+
+
+# ===========================================================================
 # 각도 3 — 퇴역 호환장치(_hydration property·_correction_phase) 잔존 영향
 # ===========================================================================
 
@@ -311,44 +388,50 @@ class TestRetiredShimsGone:
             "_correction_phase 지연 빌더가 아직 살아있음(퇴역 누락)"
         )
 
-    def test_redis_property_still_propagates(self):
-        """대조군: _redis 전파 property 는 의도적으로 유지(부분 퇴역)됐는지 확인."""
+    def test_redis_property_is_retired(self):
+        """B3-2: _redis 전파 property 가 퇴역하고 평범한 인스턴스 속성이어야 한다."""
         from agents.nodes.graph_nodes import GraphNodes
 
-        assert isinstance(GraphNodes.__dict__.get("_redis"), property)
+        # 클래스 표면에 property 가 없어야 한다(사후 변이 전파 계약 제거).
+        assert not isinstance(GraphNodes.__dict__.get("_redis"), property), (
+            "_redis 전파 property 가 아직 살아있음(B3-2 퇴역 누락)"
+        )
+
+    def test_facade_zero_hit_staticmethods_are_retired(self):
+        """B3-2: facade zero-hit staticmethod 3종이 제거됐어야 한다."""
+        from agents.nodes.graph_nodes import GraphNodes
+
+        for name in (
+            "_hard_filter_zero_hits",
+            "_analytics_zero_hits",
+            "_map_zero_hits",
+        ):
+            assert name not in GraphNodes.__dict__, (
+                f"facade {name} 가 아직 노출됨(B3-2 퇴역 누락)"
+            )
 
 
 # ===========================================================================
-# 각도 3 보강 — 모듈 함수 위임이 여전히 default_reader 경유인지
+# 각도 3 보강 — 퇴역한 on_data 모듈 함수가 표면에서 사라졌는지(B3-2)
 # ===========================================================================
 
 
-class TestModuleFunctionDelegation:
-    """B2 호환 모듈 함수(hydrate/session/map_proximity)가 default_reader 위임 유지."""
+class TestModuleFunctionsRetired:
+    """B3-2: 모든 on_data 호출부가 게이트웨이 주입으로 전환돼 모듈 함수가 퇴역했다.
 
-    async def test_module_hydrate_delegates_to_default_reader(self):
-        """gw.hydrate(ids) 가 default_reader.hydrate 로 위임되는지(Reference 경로)."""
-        with patch.object(
-            default_reader, "hydrate", AsyncMock(return_value=[{"service_id": "X"}])
-        ) as m:
-            out = await gw.hydrate(["X"])
-        m.assert_awaited_once_with(["X"])
-        assert out == [{"service_id": "X"}]
+    (B3-1 시절엔 default_reader 위임 함수로 유지했으나, 호출자 0이 되어 제거.)
+    """
 
-    async def test_module_map_proximity_delegates_to_default_reader(self):
-        with patch.object(
-            default_reader, "map_proximity", AsyncMock(return_value={"features": []})
-        ) as m:
-            out = await gw.map_proximity(1.0, 2.0, 500)
-        m.assert_awaited_once_with(1.0, 2.0, 500)
-        assert out == {"features": []}
+    def test_module_hydrate_session_map_proximity_removed(self):
+        """gw.hydrate/session/map_proximity 모듈 함수가 제거됐어야 한다."""
+        for name in ("hydrate", "session", "map_proximity"):
+            assert not hasattr(gw, name), (
+                f"_ondata_gateway.{name} 모듈 함수가 아직 살아있음(B3-2 퇴역 누락)"
+            )
 
-    async def test_module_session_delegates_to_default_reader(self):
-        tracker = _SessionTracker()
-        with patch.object(gw, "data_session_ctx", tracker):
-            async with gw.session() as s:
-                assert s == "session-1"
-        assert tracker.live == 0  # 위임 경로도 acquire-use-release
+    def test_all_only_exposes_class_and_default_reader(self):
+        """__all__ 은 OnDataReader·default_reader 만 노출한다(예약 표면 제거)."""
+        assert set(gw.__all__) == {"OnDataReader", "default_reader"}
 
 
 # ===========================================================================

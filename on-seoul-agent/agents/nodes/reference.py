@@ -3,7 +3,8 @@
 import logging
 from typing import Any
 
-from agents import _emit, _ondata_gateway
+from agents import _emit
+from agents._ondata_gateway import OnDataReader, default_reader
 from agents._reference_resolution import resolve_reference
 from agents.answer_agent import AnswerAgent
 from schemas.state import AgentState
@@ -14,11 +15,19 @@ logger = logging.getLogger(__name__)
 class ReferenceNodes:
     """참조 해소 페이즈 — reference_resolution / rehydrate / describe 노드.
 
-    의존: answer(AnswerAgent.describe).
+    의존: answer(AnswerAgent.describe), ondata(OnDataReader — on_data 읽기 게이트웨이).
+
+    B3-2(선택적 주입): rehydrate 의 on_data 읽기를 `OnDataReader` 생성자 주입으로 받는다
+    (B3-1 RetrievalNodes 와 동일 패턴). 테스트는 가짜 OnDataReader 를 주입하거나
+    tool/세션 심볼(_hydrate_services/data_session_ctx)을 patch 해 격리한다. 기본값은
+    프로세스 공유 default_reader 라 프로덕션 동작은 불변이다.
     """
 
-    def __init__(self, answer: AnswerAgent) -> None:
+    def __init__(
+        self, answer: AnswerAgent, ondata: OnDataReader | None = None
+    ) -> None:
         self._answer = answer
+        self._ondata = ondata or default_reader
 
     async def reference_resolution_node(self, state: AgentState) -> dict[str, Any]:
         """참조 해소 게이트 — START 직후 선판정.
@@ -62,7 +71,7 @@ class ReferenceNodes:
         # 참조 해소 경로: 재-hydrate 후 describe 답변 단계로 — answering emit.
         guard = _emit.emit_answering(state)
         try:
-            rows = await _ondata_gateway.hydrate(target_ids)
+            rows = await self._ondata.hydrate(target_ids)
             logger.info(
                 "rehydrate.done room=%s requested=%d hydrated=%d",
                 state.get("room_id"),

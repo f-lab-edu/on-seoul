@@ -1362,16 +1362,17 @@ class TestDirectedSelfCorrectionRetry:
     # ── ANALYTICS 완화 (3c~3d) ──
 
     def test_analytics_zero_hits_predicate(self):
-        nodes = self._nodes()
-        assert nodes._analytics_zero_hits(_state(analytics_results=[])) is True
-        assert nodes._analytics_zero_hits(_state(analytics_results=None)) is True
+        # B3-2: facade zero-hit staticmethod 퇴역 — CorrectionNodes 경유로 호출.
+        corr = self._nodes()._correction
+        assert corr._analytics_zero_hits(_state(analytics_results=[])) is True
+        assert corr._analytics_zero_hits(_state(analytics_results=None)) is True
         assert (
-            nodes._analytics_zero_hits(
+            corr._analytics_zero_hits(
                 _state(analytics_results=[{"x": 1}], error="boom")
             )
             is True
         )
-        assert nodes._analytics_zero_hits(_state(analytics_results=[{"x": 1}])) is False
+        assert corr._analytics_zero_hits(_state(analytics_results=[{"x": 1}])) is False
 
     # ANALYTICS zero-hits → retry_prep edge 는 generic test_self_correction_edge_zero_hits_triggers_retry
     # 와 동일 edge 로직의 intent 순열이고, ANALYTICS 고유 predicate 는
@@ -1438,16 +1439,17 @@ class TestDirectedSelfCorrectionRetry:
     # ── MAP 반경 확장 (C1, 3c~3d) ──
 
     def test_map_zero_hits_predicate(self):
-        nodes = self._nodes()
-        assert nodes._map_zero_hits(_state(map_results=None)) is False
+        # B3-2: facade zero-hit staticmethod 퇴역 — CorrectionNodes 경유로 호출.
+        corr = self._nodes()._correction
+        assert corr._map_zero_hits(_state(map_results=None)) is False
         assert (
-            nodes._map_zero_hits(
+            corr._map_zero_hits(
                 _state(map_results={"type": "FeatureCollection", "features": []})
             )
             is True
         )
         assert (
-            nodes._map_zero_hits(
+            corr._map_zero_hits(
                 _state(
                     map_results={
                         "type": "FeatureCollection",
