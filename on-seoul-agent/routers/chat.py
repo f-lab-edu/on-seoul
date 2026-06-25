@@ -80,6 +80,76 @@ def _resolve_graph(request: Request) -> AgentGraph:
     return graph
 
 
+def _build_prev_working_set(request: ChatRequest) -> dict[str, Any] | None:
+    """ChatRequest → prev_working_set 중첩 채널 (P1).
+
+    신규 채널(request.prev_working_set) 우선. 미전송 시 평면 슬롯(prev_entities/
+    prev_intent/prev_reasoning)으로 폴백한다(하위호환). 폴백 시 신규 필드
+    (refined_query/applied_filters/relaxed/relaxed_filters)는 None/기본값이다.
+
+    셋 다 비어 있으면(첫 턴/구 클라이언트) None 을 반환해 현행 동작과 100% 동일하게 한다.
+    """
+    ws = request.prev_working_set
+    if ws is not None:
+        return {
+            "entities": [e.model_dump() for e in ws.entities],
+            "intent": ws.intent,
+            "reasoning": ws.reasoning,
+            "refined_query": ws.refined_query,
+            "applied_filters": dict(ws.applied_filters),
+            "relaxed": ws.relaxed,
+            "relaxed_filters": list(ws.relaxed_filters),
+        }
+    # 평면 폴백 — 신규 필드는 없음.
+    if not (request.prev_entities or request.prev_intent or request.prev_reasoning):
+        return None
+    return {
+        "entities": [e.model_dump() for e in request.prev_entities],
+        "intent": request.prev_intent,
+        "reasoning": request.prev_reasoning,
+        "refined_query": None,
+        "applied_filters": {},
+        "relaxed": False,
+        "relaxed_filters": [],
+    }
+
+
+_WS_FILTER_KEYS = ("max_class_name", "area_name", "service_status", "payment_type")
+
+
+def _emit_working_set(result: dict[str, Any]) -> dict[str, Any]:
+    """result(최종 AgentState) → 다음 턴 carryover 용 prev_working_set (P1-2/P1-4).
+
+    applied_filters 는 result["filters"] (dict_merge 채널)에서 읽는다 — retry_prep 의
+    완화 드롭이 머지로 반영된 *effective(완화 후)* 필터다(요청 필터가 아님, P1-4).
+    entities 는 노출된 service_cards 의 (service_id, label) 정체성만 담는다(레시피·정체성
+    운반, 결과 스냅샷 아님).
+    """
+    plan = result.get("plan") or {}
+    filters = result.get("filters") or {}
+    output = result.get("output") or {}
+    intent = plan.get("intent")
+    cards = output.get("service_cards") or []
+    entities = [
+        {
+            "service_id": str(c.get("service_id")),
+            "label": str(c.get("service_name") or c.get("label") or ""),
+        }
+        for c in cards
+        if c.get("service_id")
+    ][:10]
+    applied = {k: filters.get(k) for k in _WS_FILTER_KEYS if filters.get(k) is not None}
+    return {
+        "entities": entities,
+        "intent": intent.value if intent is not None else None,
+        "reasoning": (result.get("triage") or {}).get("user_rationale"),
+        "refined_query": plan.get("refined_query"),
+        "applied_filters": applied,
+        "relaxed": bool(result.get("retry_relaxed")),
+        "relaxed_filters": result.get("relaxed_filters") or [],
+    }
+
+
 async def _stream(
     request: ChatRequest, graph: AgentGraph
 ) -> AsyncGenerator[bytes, None]:
@@ -90,6 +160,12 @@ async def _stream(
         request.message_id,
         request.message[:60],
     )
+    prev_working_set = _build_prev_working_set(request)
+    # 평면 슬롯은 prev_working_set 에서 파생한다(신규 채널 우선·평면 폴백 일원화).
+    # intake/rehydrate/explain 등 평면 슬롯을 읽는 기존 경로의 하위호환을 보존한다.
+    ws_entities = (prev_working_set or {}).get("entities") or []
+    ws_intent = (prev_working_set or {}).get("intent")
+    ws_reasoning = (prev_working_set or {}).get("reasoning")
     state = AgentState(
         # ── 보편 입력 (평면) ──
         room_id=request.room_id,
@@ -102,9 +178,10 @@ async def _stream(
         # ── carryover 입력 (평면) ──
         # 결과 엔티티 carryover + 참조 해소. 미전송 시 빈 배열/None →
         # reference_resolution_node 가 non-referential 로 처리(기존 흐름 보존).
-        prev_entities=[e.model_dump() for e in request.prev_entities],
-        prev_intent=request.prev_intent,
-        prev_reasoning=request.prev_reasoning,
+        prev_entities=ws_entities,
+        prev_intent=ws_intent,
+        prev_reasoning=ws_reasoning,
+        prev_working_set=prev_working_set,
         target_service_ids=None,
         # ── 재시도 제어 (평면) ──
         retry_count=0,
@@ -160,6 +237,8 @@ async def _stream(
                     "title": output.get("title"),
                     "cache_hit": bool(result.get("cache_hit")),
                     "service_cards": output.get("service_cards") or [],
+                    # P1-2/P1-4: 다음 턴 carryover 용 워킹셋(effective 필터 포함).
+                    "prev_working_set": _emit_working_set(result),
                 }
                 if result.get("error"):
                     logger.error(

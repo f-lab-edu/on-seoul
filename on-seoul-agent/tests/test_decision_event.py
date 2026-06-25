@@ -20,13 +20,14 @@ from httpx import ASGITransport, AsyncClient
 from agents.graph import AgentGraph
 from agents.nodes import sanitize_user_rationale
 from schemas.events import DecisionEvent
+from schemas.intake import IntakeAction, TurnKind
 from schemas.state import ActionType, IntentType
 from tests.helpers import (
     make_agent_state,
     make_answer_agent,
+    make_intake,
     make_router,
     make_sql_agent,
-    make_triage,
     make_ai_session,
     stream_graph,
 )
@@ -167,14 +168,15 @@ class TestStreamDecisionEvent:
 
     async def test_decision_event_emitted_after_triage(self):
         """RETRIEVE 경로에서 router_node 완료 후 decision 이벤트가 방출된다."""
-        triage = make_triage(
-            ActionType.RETRIEVE,
+        intake = make_intake(
+            turn_kind=TurnKind.NEW,
+            action=IntakeAction.RETRIEVE,
             user_rationale="수영장 관련 질문으로 판단합니다.",
         )
         router = make_router(IntentType.SQL_SEARCH)
         sql_agent, data_session = make_sql_agent([])
         graph = AgentGraph(
-            triage=triage,
+            intake=intake,
             router=router,
             sql_agent=sql_agent,
             answer_agent=make_answer_agent(),
@@ -192,8 +194,9 @@ class TestStreamDecisionEvent:
 
     async def test_decision_event_schema(self):
         """방출된 decision 이벤트 데이터가 올바른 필드를 포함한다."""
-        triage = make_triage(
-            ActionType.RETRIEVE,
+        intake = make_intake(
+            turn_kind=TurnKind.NEW,
+            action=IntakeAction.RETRIEVE,
             user_rationale="마포구 풋살장 검색입니다.",
         )
         router = make_router(
@@ -202,7 +205,7 @@ class TestStreamDecisionEvent:
         )
         sql_agent, data_session = make_sql_agent([])
         graph = AgentGraph(
-            triage=triage,
+            intake=intake,
             router=router,
             sql_agent=sql_agent,
             answer_agent=make_answer_agent(),
@@ -229,14 +232,15 @@ class TestStreamDecisionEvent:
 
     async def test_decision_not_emitted_when_rationale_none(self):
         """user_rationale=None이면 decision 이벤트가 방출되지 않는다."""
-        triage = make_triage(
-            ActionType.RETRIEVE,
+        intake = make_intake(
+            turn_kind=TurnKind.NEW,
+            action=IntakeAction.RETRIEVE,
             user_rationale=None,  # None → emit 스킵
         )
         router = make_router(IntentType.SQL_SEARCH)
         sql_agent, data_session = make_sql_agent([])
         graph = AgentGraph(
-            triage=triage,
+            intake=intake,
             router=router,
             sql_agent=sql_agent,
             answer_agent=make_answer_agent(),
@@ -252,54 +256,55 @@ class TestStreamDecisionEvent:
         decision_events = [(t, d) for t, d in events if t == "decision"]
         assert len(decision_events) == 0, "user_rationale=None이면 decision 미방출"
 
-    async def test_decision_not_emitted_on_reference_resolution_path(self):
-        """참조 해소 경로(referential)는 triage_node를 거치지 않으므로 decision 미방출."""
+    async def test_decision_emitted_on_drill_reference_path(self):
+        """DRILL 참조 경로(검색 스킵) — intake 가 decision 을 직접 1회 발행한다.
 
-        triage = make_triage(ActionType.RETRIEVE, IntentType.VECTOR_SEARCH)
+        입구 단일화 후 intake 가 decision 발행 주체다. 검색 스킵 경로(DRILL/RELEVANCE/
+        META)는 router 로 위임하지 않고 intake 가 곧장 decision 을 emit 한다.
+        """
+        intake = make_intake(
+            turn_kind=TurnKind.DRILL,
+            ref_indices=[1],
+            user_rationale="첫 번째 시설을 안내합니다.",
+        )
         graph = AgentGraph(
-            triage=triage,
+            intake=intake,
             answer_agent=make_answer_agent("첫 번째 시설 안내입니다."),
         )
 
-        # prev_entities가 있어야 resolve_reference가 referential로 판정할 수 있다.
-        # "1번이랑 2번" 같은 표현 + prev_entities로 referential 경로 트리거.
         prev_entities = [
             {"service_id": "S001", "label": "수영장"},
             {"service_id": "S002", "label": "체육관"},
         ]
 
         with patch(
-            "agents.nodes.reference.resolve_reference",
-            return_value=["S001"],
+            "agents._ondata_gateway._hydrate_services",
+            AsyncMock(return_value=[{"service_id": "S001", "service_name": "수영장"}]),
         ):
-            with patch(
-                "agents._ondata_gateway._hydrate_services",
-                AsyncMock(
-                    return_value=[{"service_id": "S001", "service_name": "수영장"}]
+            events = await self._collect(
+                graph,
+                make_agent_state(
+                    message="1번 자세히 알려줘",
+                    prev_entities=prev_entities,
                 ),
-            ):
-                events = await self._collect(
-                    graph,
-                    make_agent_state(
-                        message="1번 자세히 알려줘",
-                        prev_entities=prev_entities,
-                    ),
-                    data_session=MagicMock(),
-                    ai_session=make_ai_session(),
-                )
+                data_session=MagicMock(),
+                ai_session=make_ai_session(),
+            )
 
         decision_events = [(t, d) for t, d in events if t == "decision"]
-        assert len(decision_events) == 0, "참조 해소 경로에서는 decision 미방출"
+        assert len(decision_events) == 1, "DRILL 참조 경로는 intake 가 decision 1회 발행"
+        _, data = decision_events[0]
+        assert data["routes"] == []
 
     async def test_decision_routes_empty_for_non_retrieve_action(self):
         """DIRECT_ANSWER action 시 routes=[] 이고 decision 이벤트가 방출된다."""
-        triage = make_triage(
-            ActionType.DIRECT_ANSWER,
-            IntentType.FALLBACK,
+        intake = make_intake(
+            turn_kind=TurnKind.NEW,
+            action=IntakeAction.DIRECT_ANSWER,
             user_rationale="서비스 범위 외 질문입니다.",
         )
         graph = AgentGraph(
-            triage=triage,
+            intake=intake,
             answer_agent=make_answer_agent("직접 답변"),
         )
 
@@ -329,14 +334,15 @@ class TestStreamDecisionEvent:
         """
         from unittest.mock import patch as _patch
 
-        triage = make_triage(
-            ActionType.RETRIEVE,
+        intake = make_intake(
+            turn_kind=TurnKind.NEW,
+            action=IntakeAction.RETRIEVE,
             user_rationale="캐시 히트 경로 테스트입니다.",
         )
         router = make_router(IntentType.SQL_SEARCH, refined_query="수영장")
         sql_agent, data_session = make_sql_agent([])
         graph = AgentGraph(
-            triage=triage,
+            intake=intake,
             router=router,
             sql_agent=sql_agent,
             answer_agent=make_answer_agent(),
@@ -509,8 +515,9 @@ class TestDecisionEmitOnceAcrossRetry:
         return events
 
     async def test_decision_emitted_once_when_router_reenters_on_retry(self):
-        triage = make_triage(
-            ActionType.RETRIEVE,
+        intake = make_intake(
+            turn_kind=TurnKind.NEW,
+            action=IntakeAction.RETRIEVE,
             user_rationale="수영장 검색입니다.",
         )
         # VECTOR_SEARCH 0건 → 케이스 C 완화 재시도 → router_node 재진입.
@@ -523,7 +530,7 @@ class TestDecisionEmitOnceAcrossRetry:
             AsyncMock(return_value=[]),
         ):
             graph = AgentGraph(
-                triage=triage,
+                intake=intake,
                 router=router,
                 answer_agent=make_answer_agent("재시도 후 답변"),
             )

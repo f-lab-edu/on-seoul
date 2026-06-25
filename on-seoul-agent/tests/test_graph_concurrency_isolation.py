@@ -27,11 +27,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents.graph import AgentGraph
 from agents.sql_agent import SqlAgent, _SqlParams
+from schemas.intake import IntakeAction, TurnKind
 from schemas.state import IntentType, node_path_reducer
 from tests.helpers import (
     make_agent_state,
     make_ai_session,
     make_answer_agent,
+    make_intake,
     make_router,
     run_graph,
 )
@@ -96,11 +98,17 @@ class TestConcurrentRequestIsolation:
 
         # 컨테이너당 싱글톤 그래프를 모사하되, 요청별 sql_agent 로 seen_sessions 를 분리 관측.
         graph_a = AgentGraph(
+            intake=make_intake(
+                turn_kind=TurnKind.NEW, action=IntakeAction.RETRIEVE
+            ),
             router=make_router(IntentType.SQL_SEARCH),
             sql_agent=sql_a,
             answer_agent=make_answer_agent("답변"),
         )
         graph_b = AgentGraph(
+            intake=make_intake(
+                turn_kind=TurnKind.NEW, action=IntakeAction.RETRIEVE
+            ),
             router=make_router(IntentType.SQL_SEARCH),
             sql_agent=sql_b,
             answer_agent=make_answer_agent("답변"),
@@ -135,11 +143,17 @@ class TestConcurrentRequestIsolation:
         sql_b = _RecordingSqlAgent([{"service_id": "S2"}], barrier=barrier)
 
         graph_a = AgentGraph(
+            intake=make_intake(
+                turn_kind=TurnKind.NEW, action=IntakeAction.RETRIEVE
+            ),
             router=make_router(IntentType.SQL_SEARCH),
             sql_agent=sql_a,
             answer_agent=make_answer_agent("답변"),
         )
         graph_b = AgentGraph(
+            intake=make_intake(
+                turn_kind=TurnKind.NEW, action=IntakeAction.RETRIEVE
+            ),
             router=make_router(IntentType.SQL_SEARCH),
             sql_agent=sql_b,
             answer_agent=make_answer_agent("답변"),
@@ -158,17 +172,16 @@ class TestConcurrentRequestIsolation:
                 graph_b.run(_state(room_id=2, message_id=2)),
             )
 
-        # 각 요청의 node_path 는 reference_resolution → triage → sql → ... → trace 의
-        # 자기 경로만 가진다 (START 직후 참조 해소 선판정 노드).
-        # path[1] = "triage".
+        # 각 요청의 node_path 는 intake → router → sql → ... → trace 의
+        # 자기 경로만 가진다 (START 직후 입구 단일화 노드).
         for res in (res_a, res_b):
             path = res["node_path"]
-            assert path[0] == "reference_resolution"
-            assert path[1] == "triage"
+            assert path[0] == "intake"
+            assert "router" in path
             assert "sql_node" in path
             assert path[-1] == "trace"
             # 동일 노드가 (재시도 없이) 중복 누적되지 않는다 = 상대 요청 경로 미혼입.
-            assert path.count("triage") == 1
+            assert path.count("intake") == 1
             assert path.count("sql_node") == 1
 
 
@@ -234,6 +247,9 @@ class TestRetryNodePathAccumulation:
             ),
         ):
             graph = AgentGraph(
+                intake=make_intake(
+                    turn_kind=TurnKind.NEW, action=IntakeAction.RETRIEVE
+                ),
                 router=make_router(IntentType.SQL_SEARCH),
                 sql_agent=sql_agent,
                 vector_agent=vector_agent,

@@ -31,11 +31,12 @@ from agents.answer_agent import (
 )
 from agents.graph import AgentGraph
 from agents.nodes import GraphNodes
+from schemas.intake import IntakeAction, TurnKind
 from schemas.state import ActionType, AgentState, IntentType
 from tests.helpers import (
     make_agent_state,
     make_ai_session,
-    make_triage,
+    make_intake,
     run_graph,
 )
 
@@ -83,7 +84,7 @@ class TestDirectAnswerNodeReturnsFallbackIntent:
 
     async def test_return_dict_includes_fallback_intent(self):
         agent = _real_answer_agent_with_fake_llm()
-        nodes = GraphNodes(triage=make_triage(ActionType.DIRECT_ANSWER), answer_agent=agent)
+        nodes = GraphNodes(intake=make_intake(), answer_agent=agent)
 
         update = await nodes.direct_answer_node(_state(message="안녕하세요", intent=None))
 
@@ -97,7 +98,7 @@ class TestDirectAnswerNodeReturnsFallbackIntent:
         FALLBACK 프롬프트임을 통해 입력 state가 FALLBACK이었음을 역으로 검증.
         """
         agent = _real_answer_agent_with_fake_llm()
-        nodes = GraphNodes(triage=make_triage(ActionType.DIRECT_ANSWER), answer_agent=agent)
+        nodes = GraphNodes(intake=make_intake(), answer_agent=agent)
 
         # intent=None(회귀 조건)으로 진입 — node가 FALLBACK을 주입해야 한다.
         await nodes.direct_answer_node(_state(message="안녕하세요", intent=None))
@@ -122,7 +123,7 @@ class TestDirectAnswerSelectsFallbackBranch:
 
     async def test_fallback_prompt_selected_not_card(self):
         agent = _real_answer_agent_with_fake_llm()
-        nodes = GraphNodes(triage=make_triage(ActionType.DIRECT_ANSWER), answer_agent=agent)
+        nodes = GraphNodes(intake=make_intake(), answer_agent=agent)
 
         await nodes.direct_answer_node(_state(message="안녕하세요", intent=None))
 
@@ -140,7 +141,7 @@ class TestDirectAnswerSelectsFallbackBranch:
         _build_card_system을 호출한다. 이 spy가 그 호출을 잡아낸다.
         """
         agent = _real_answer_agent_with_fake_llm()
-        nodes = GraphNodes(triage=make_triage(ActionType.DIRECT_ANSWER), answer_agent=agent)
+        nodes = GraphNodes(intake=make_intake(), answer_agent=agent)
 
         with patch.object(
             answer_agent_mod,
@@ -166,7 +167,7 @@ class TestExplainFallbackSelectsFallbackBranch:
 
     async def test_explain_no_prev_reasoning_uses_fallback_prompt(self):
         agent = _real_answer_agent_with_fake_llm()
-        nodes = GraphNodes(triage=make_triage(ActionType.EXPLAIN), answer_agent=agent)
+        nodes = GraphNodes(intake=make_intake(), answer_agent=agent)
 
         update = await nodes.explain_node(_state(message="왜 그랬어?", prev_reasoning=None, intent=None))
 
@@ -183,7 +184,7 @@ class TestExplainFallbackSelectsFallbackBranch:
         LLM 재서술한다. FALLBACK/카드 분기가 아니라 EXPLAIN 프롬프트를 고른다.
         """
         agent = _real_answer_agent_with_fake_llm()
-        nodes = GraphNodes(triage=make_triage(ActionType.EXPLAIN), answer_agent=agent)
+        nodes = GraphNodes(intake=make_intake(), answer_agent=agent)
 
         await nodes.explain_node(
             _state(message="왜 그랬어?", prev_reasoning="자연 체험 키워드가 있었습니다.")
@@ -210,8 +211,10 @@ class TestDirectAnswerBranchEndToEnd:
 
     async def test_direct_answer_e2e_selects_fallback_prompt(self):
         agent = _real_answer_agent_with_fake_llm()
-        triage = make_triage(ActionType.DIRECT_ANSWER)
-        graph = AgentGraph(triage=triage, answer_agent=agent)
+        intake = make_intake(
+            turn_kind=TurnKind.NEW, action=IntakeAction.DIRECT_ANSWER
+        )
+        graph = AgentGraph(intake=intake, answer_agent=agent)
 
         result = await run_graph(
             graph,
@@ -230,8 +233,8 @@ class TestDirectAnswerBranchEndToEnd:
 
     async def test_explain_fallback_e2e_selects_fallback_prompt(self):
         agent = _real_answer_agent_with_fake_llm()
-        triage = make_triage(ActionType.EXPLAIN)
-        graph = AgentGraph(triage=triage, answer_agent=agent)
+        intake = make_intake(turn_kind=TurnKind.META)
+        graph = AgentGraph(intake=intake, answer_agent=agent)
 
         result = await run_graph(
             graph,
@@ -240,7 +243,8 @@ class TestDirectAnswerBranchEndToEnd:
             ai_session=make_ai_session(),
         )
 
-        assert result["triage"]["action"] == ActionType.EXPLAIN
+        # META turn_kind → explain_node → prev_reasoning 없음 → direct_answer 폴백.
+        assert result["triage"]["turn_kind"] == "META"
         assert result["plan"]["intent"] == IntentType.FALLBACK
         assert "direct_answer_node" in result["node_path"]
 

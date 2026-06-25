@@ -61,11 +61,16 @@ class ActionType(str, Enum):
 
 
 class TriageState(TypedDict, total=False):
-    """TriageAgent 산출 — triage_node 가 통째 set."""
+    """입구 분류 산출 — intake_node 가 통째 set (구 triage_node 채널).
+
+    turn_kind: intake 가 산출하는 턴 성격(= 기존 follow_up_type). REFINE/DRILL/
+    RELEVANCE/META/NEW. route_intake 가 1차 분기에 사용한다.
+    """
 
     action: "ActionType | None"
     out_of_scope_type: str | None
     user_rationale: str | None
+    turn_kind: str | None
 
 
 class PlanState(TypedDict, total=False):
@@ -140,6 +145,29 @@ class EmitState(TypedDict, total=False):
     answering_emitted: bool
 
 
+class PrevWorkingSet(TypedDict, total=False):
+    """직전 턴 대화 워킹셋(P1) — 입력 전용 중첩 채널(그래프 내 갱신 없음, 리듀서 불필요).
+
+    "검색 레시피"지 "결과 스냅샷"이 아니다 — 후속은 레시피에 제약을 더해 재검색한다
+    (carryover 철학: 정체성만 운반, 사실은 rehydrate 재조회).
+
+    entities: 직전 노출 결과 [{service_id, label}, ...] (= 기존 prev_entities).
+    intent:   직전 분류 intent (REFINE 재검색의 forced_intent 입력).
+    reasoning: 직전 판단 근거(= 기존 prev_reasoning). META 가 소비.
+    refined_query: 직전 정제 질의.
+    applied_filters: effective(완화 후) 필터 — 후속이 올바른 베이스에 얹히도록.
+    relaxed/relaxed_filters: 직전 결과가 자동 완화로 나왔는지 + 드롭된 항목.
+    """
+
+    entities: "list[dict[str, str]] | None"
+    intent: "IntentType | None"
+    reasoning: str | None
+    refined_query: str | None
+    applied_filters: "dict[str, str | None] | None"
+    relaxed: bool
+    relaxed_filters: "list[str] | None"
+
+
 class AgentState(TypedDict):
     # ── 보편 입력 (평면) ──
     room_id: int
@@ -159,6 +187,10 @@ class AgentState(TypedDict):
     prev_intent: IntentType | None
     # 직전 턴의 판단 근거(user_rationale). EXPLAIN action 이 소비한다.
     prev_reasoning: str | None
+    # 대화 워킹셋(P1) — 직전 검색 레시피. 입력 전용 중첩 채널(리듀서 없음).
+    # 신규 채널 우선, 미전송 시 평면 슬롯(prev_entities/prev_intent/prev_reasoning)
+    # 으로 폴백한다(routers/chat.py 조립). 첫 턴/구 클라이언트면 전부 None(하위호환).
+    prev_working_set: "PrevWorkingSet | None"
     # 참조 해소 결과: 현재 message 가 지시 참조일 때 바인딩된 service_id 리스트.
     target_service_ids: list[str] | None
     # ── 재시도 제어 (평면) ──

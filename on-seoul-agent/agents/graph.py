@@ -1,13 +1,15 @@
 """LangGraph StateGraph 기반 멀티에이전트 워크플로우 (Answer Cache + SearchPersist).
 
-그래프 구조:
+그래프 구조 (입구 단일화: reference_resolution + triage → intake_node):
     START
       ↓
-    reference_resolution_node   — 지시 참조 선판정 (규칙 기반, LLM 미사용)
-      ├─ referential → rehydrate_node → describe_node → search_persist_node → trace_node
-      └─ non-referential → triage_node
+    intake_node                 — IntakeAgent.classify(), turn_kind + action + ref_indices 단일 판정
+      ├─ REFINE → working_set_refine_node → router_node(forced_intent) → 검색 재진입
+      ├─ DRILL/RELEVANCE → rehydrate_node → describe_node → search_persist_node → trace_node
+      ├─ META → explain_node
+      └─ NEW → action 서브스위치
            ↓
-    triage_node                 — TriageAgent.classify(), action 결정만(action·out_of_scope_type·user_rationale)
+    (NEW action 서브스위치)
       ├─ RETRIEVE     → router_node (RouterAgent.classify(), intent·refined_query·post-filter·secondary_intent)
       │                  → cache_check_node → [sql/vector/map/analytics]
       │                  → hydration_node → rrf_fusion_node → pre_answer_gate_node
@@ -122,11 +124,12 @@ def _build_graph(nodes: GraphNodes) -> Any:
     builder: StateGraph = StateGraph(AgentState)
 
     # ── 노드 등록 (GraphNodes 바운드 메서드 직접 등록) ──
-    builder.add_node("reference_resolution_node", nodes.reference_resolution_node)
+    # 입구 단일화: reference_resolution + triage → intake_node(단일 LLM 분류).
+    builder.add_node("intake_node", nodes.intake_node)
+    builder.add_node("working_set_refine_node", nodes.working_set_refine_node)
     builder.add_node("rehydrate_node", nodes.rehydrate_node)
     builder.add_node("describe_node", nodes.describe_node)
-    # 책임 분리: triage_node(action 결정) → router_node(검색 계획) → cache_check.
-    builder.add_node("triage_node", nodes.triage_node)
+    # 검색 계획: router_node(RETRIEVE 경로) → cache_check.
     builder.add_node("router_node", nodes.router_node)
     builder.add_node("cache_check_node", nodes.cache_check_node)
     builder.add_node("cache_write_node", nodes.cache_write_node)
@@ -147,35 +150,37 @@ def _build_graph(nodes: GraphNodes) -> Any:
     builder.add_node("out_of_scope_node", nodes.out_of_scope_node)
     builder.add_node("explain_node", nodes.explain_node)
 
-    # ── START → reference_resolution ──
-    builder.add_edge(START, "reference_resolution_node")
+    # ── START → intake_node (입구 단일화) ──
+    builder.add_edge(START, "intake_node")
+    # route_intake: turn_kind 1차 분기 + NEW→action 서브스위치.
+    #   REFINE → working_set_refine_node (머지 필터 재검색)
+    #   DRILL/RELEVANCE → rehydrate_node → describe_node (검색 스킵)
+    #   META → explain_node
+    #   NEW → router/direct/ambiguous/out_of_scope
     builder.add_conditional_edges(
-        "reference_resolution_node",
-        nodes.route_after_reference,
+        "intake_node",
+        nodes.route_intake,
         {
+            "working_set_refine_node": "working_set_refine_node",
             "rehydrate_node": "rehydrate_node",
-            "triage_node": "triage_node",
-        },
-    )
-
-    # ── 참조 해소 경로 ──
-    builder.add_edge("rehydrate_node", "describe_node")
-    builder.add_edge("describe_node", "search_persist_node")
-
-    # ── triage_node → route_by_action ──
-    # RETRIEVE 는 router_node(검색 계획)로, 나머지 4종 action 은 각 종단 노드로.
-    builder.add_conditional_edges(
-        "triage_node",
-        nodes.route_by_action,
-        {
+            "explain_node": "explain_node",
             "router_node": "router_node",
             "direct_answer_node": "direct_answer_node",
             "ambiguous_node": "ambiguous_node",
             "out_of_scope_node": "out_of_scope_node",
-            "explain_node": "explain_node",
             "answer_node": "answer_node",
         },
     )
+
+    # ── REFINE 경로: working_set_refine → router_node 재진입(forced_intent honor) ──
+    # router_node 의 forced 분기가 prev intent 를 그대로 쓰고 decision/searching 을 emit
+    # 한다(검색 계획 재수립 책임 유지). 머지 필터는 filters 채널에 이미 깔려 있다.
+    # forced_intent 미상(prev intent 없음)이면 router_node 가 정상 분류한다.
+    builder.add_edge("working_set_refine_node", "router_node")
+
+    # ── DRILL/RELEVANCE 경로: rehydrate → describe → 종단 ──
+    builder.add_edge("rehydrate_node", "describe_node")
+    builder.add_edge("describe_node", "search_persist_node")
 
     # ── router_node(검색 계획) → cache_check ──
     builder.add_edge("router_node", "cache_check_node")
@@ -340,6 +345,8 @@ def _prepare_state(state: AgentState) -> AgentState:
     # 직접 넘길 때를 위한 방어 코드다.
     if "retry_count" not in state:
         overrides["retry_count"] = 0
+    if "prev_working_set" not in state:
+        overrides["prev_working_set"] = None
     overrides["started_at"] = time.monotonic()
     overrides["node_path"] = []
     # 중첩 채널 방어 초기화: 부분 dict 주입 테스트에서 leaf .get() 접근이
@@ -385,6 +392,7 @@ class AgentGraph:
         analytics_agent: AnalyticsAgent | None = None,
         redis: Any = None,
         triage: TriageAgent | None = None,
+        intake: Any = None,
     ) -> None:
         # 책임 분리: TriageAgent(action 결정) + RouterAgent(검색 계획) 둘 다 노드에서 쓰인다.
         #   - triage: action 결정 노드(triage_node)
@@ -398,6 +406,12 @@ class AgentGraph:
             _triage = TriageAgent()
         if _triage is not None and _router is None:
             _router = RouterAgent()
+        # 입구 단일화(intake): reference_resolution + triage 를 단일 LLM 노드로 병합.
+        # 테스트는 intake=make_intake(...) 로 fake LLM 을 주입한다. 미주입 시 IntakeAgent()
+        # 기본 생성(프로덕션 — 실 LLM). triage/router 는 RETRIEVE 검색 계획에만 쓰인다.
+        from agents.intake_agent import IntakeAgent
+
+        _intake = intake or IntakeAgent()
         self._nodes = GraphNodes(
             router=_router,
             sql_agent=sql_agent or SqlAgent(),
@@ -406,6 +420,7 @@ class AgentGraph:
             analytics_agent=analytics_agent or AnalyticsAgent(),
             redis=redis,
             triage=_triage,
+            intake=_intake,
         )
 
         # 그래프는 인스턴스 단위로 1회 컴파일한다(바운드 메서드 직접 등록).

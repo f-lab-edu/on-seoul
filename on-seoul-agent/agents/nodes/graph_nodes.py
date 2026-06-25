@@ -27,9 +27,11 @@ from agents._ondata_gateway import OnDataReader, default_reader
 from agents.analytics_agent import AnalyticsAgent
 from agents.answer_agent import AnswerAgent
 from agents.hydration_node import HydrationNode
+from agents.intake_agent import IntakeAgent
 from agents.nodes.answer import AnswerNodes
 from agents.nodes.cache_nodes import CacheCheckNode, CacheWriteNode
 from agents.nodes.correction import CorrectionNodes
+from agents.nodes.intake import IntakeNodes
 from agents.nodes.observability import ObservabilityNodes
 from agents.nodes.planning import PlanningNodes
 from agents.nodes.reference import ReferenceNodes
@@ -73,10 +75,12 @@ class GraphNodes:
         hydration: HydrationNode | None = None,
         triage: TriageAgent | None = None,
         ondata: OnDataReader | None = None,
+        intake: IntakeAgent | None = None,
     ) -> None:
         # triage 우선, router는 하위호환 별칭
         self._triage = triage or (router if isinstance(router, TriageAgent) else None)
         self._router = router if isinstance(router, RouterAgent) else None
+        self._intake_agent = intake
         self._sql = sql_agent or SqlAgent()
         self._vector = vector_agent or VectorAgent()
         self._answer = answer_agent or AnswerAgent()
@@ -95,6 +99,9 @@ class GraphNodes:
 
         # 페이즈 인스턴스 — 각 페이즈는 자신이 쓰는 의존만 받는다(설계 기준 ④).
         # Reference/Retrieval 은 동일 default_reader(self._ondata)를 공유한다(B3-2).
+        # intake 의 working_set_refine_node(REFINE 경로)는 이번 발화의 신규 제약만
+        # RouterAgent 로 정제한다 — router_node 와 동일 RouterAgent 를 공유한다.
+        self._intake = IntakeNodes(intake=self._intake_agent, router=self._router)
         self._reference = ReferenceNodes(answer=self._answer, ondata=self._ondata)
         self._planning = PlanningNodes(
             triage=self._triage, router=self._router, redis=self._redis
@@ -111,11 +118,21 @@ class GraphNodes:
         self._observability = ObservabilityNodes()
 
     # ------------------------------------------------------------------
-    # Reference 페이즈 위임
+    # Intake 페이즈 위임 (reference_resolution + triage 병합)
     # ------------------------------------------------------------------
 
-    async def reference_resolution_node(self, state: AgentState) -> dict[str, Any]:
-        return await self._reference.reference_resolution_node(state)
+    async def intake_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._intake.intake_node(state)
+
+    async def working_set_refine_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._intake.working_set_refine_node(state)
+
+    def route_intake(self, state: AgentState) -> str:
+        return self._intake.route_intake(state)
+
+    # ------------------------------------------------------------------
+    # Reference 페이즈 위임 (rehydrate/describe — DRILL·RELEVANCE 경로)
+    # ------------------------------------------------------------------
 
     async def rehydrate_node(self, state: AgentState) -> dict[str, Any]:
         return await self._reference.rehydrate_node(state)
@@ -123,21 +140,12 @@ class GraphNodes:
     async def describe_node(self, state: AgentState) -> dict[str, Any]:
         return await self._reference.describe_node(state)
 
-    def route_after_reference(self, state: AgentState) -> str:
-        return self._reference.route_after_reference(state)
-
     # ------------------------------------------------------------------
-    # Planning 페이즈 위임
+    # Planning 페이즈 위임 (router — RETRIEVE 검색 계획)
     # ------------------------------------------------------------------
-
-    async def triage_node(self, state: AgentState) -> dict[str, Any]:
-        return await self._planning.triage_node(state)
 
     async def router_node(self, state: AgentState) -> dict[str, Any]:
         return await self._planning.router_node(state)
-
-    def route_by_action(self, state: AgentState) -> str:
-        return self._planning.route_by_action(state)
 
     def route_by_action_fanout(self, state: AgentState) -> list[str] | str:
         return self._planning.route_by_action_fanout(state)

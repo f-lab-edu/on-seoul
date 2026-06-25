@@ -21,12 +21,13 @@ from agents.answer_agent import (
 )
 from agents.graph import AgentGraph
 from agents.nodes import _FALLBACK_ANSWER, GraphNodes
+from schemas.intake import IntakeAction, TurnKind
 from schemas.state import ActionType, AgentState, IntentType
 from tests.helpers import (
     make_agent_state,
     make_answer_agent,
     make_ai_session,
-    make_triage,
+    make_intake,
     run_graph,
 )
 
@@ -35,10 +36,11 @@ def _state(**kwargs) -> AgentState:
     return make_agent_state(**kwargs)
 
 
-def _attribute_gap_triage():
-    return make_triage(
-        ActionType.OUT_OF_SCOPE,
-        out_of_scope_type="attribute_gap",
+def _attribute_gap_intake():
+    return make_intake(
+        turn_kind=TurnKind.NEW,
+        action=IntakeAction.OUT_OF_SCOPE,
+        oos_type="attribute_gap",
         user_rationale="특정 시설 식별이 필요합니다.",
     )
 
@@ -221,7 +223,7 @@ class TestAttributeGapRelaxRetryE2E:
     async def test_relaxed_hit_sets_retry_relaxed_and_notice(self):
         """완화 후 결과 有: retry_relaxed=True & relaxed_filters 채워짐 &
         '대신 이런 곳' 톤 완화 안내가 answer system 에 실린다."""
-        triage = _attribute_gap_triage()
+        intake = _attribute_gap_intake()
         # 1차 vector 0건, 2차(완화 후) vector 1건.
         vrows_hit = [
             {"service_id": "V1", "service_name": "마루공원 테니스장", "similarity": 0.9}
@@ -259,7 +261,7 @@ class TestAttributeGapRelaxRetryE2E:
             "agents.hydration_node.hydrate_services", AsyncMock(side_effect=_hydrate)
         ):
             graph = AgentGraph(
-                triage=triage,
+                intake=intake,
                 router=router,
                 answer_agent=answer_agent,
             )
@@ -293,7 +295,7 @@ class TestAttributeGapRelaxRetryE2E:
         덮지 않으므로 'attribute_gap' 신호가 보존돼야 한다. 보존 실패 시 answer 는
         DETAIL/CARD_LIST 로 빠져 room 63 결함이 재현된다.
         """
-        triage = _attribute_gap_triage()
+        intake = _attribute_gap_intake()
         vrows_hit = [
             {"service_id": "V1", "service_name": "마루공원 테니스장", "similarity": 0.9}
         ]
@@ -329,7 +331,7 @@ class TestAttributeGapRelaxRetryE2E:
             "agents.hydration_node.hydrate_services", AsyncMock(side_effect=_hydrate)
         ):
             graph = AgentGraph(
-                triage=triage,
+                intake=intake,
                 router=router,
                 answer_agent=answer_agent,
             )
@@ -354,7 +356,7 @@ class TestAttributeGapRelaxRetryE2E:
 
     async def test_relaxed_still_zero_honest_message(self):
         """완화 후에도 0건: retry_count 캡으로 answer_node 통과 → '찾지 못했습니다' 정직 안내."""
-        triage = _attribute_gap_triage()
+        intake = _attribute_gap_intake()
         answer_agent = make_answer_agent("죄송합니다, 조건에 맞는 시설을 찾지 못했습니다.")
         side = self._vector_search_side_effect([[], []])
 
@@ -367,7 +369,7 @@ class TestAttributeGapRelaxRetryE2E:
             "agents.hydration_node.hydrate_services", AsyncMock(return_value=[])
         ):
             graph = AgentGraph(
-                triage=triage,
+                intake=intake,
                 router=router,
                 answer_agent=answer_agent,
             )
@@ -383,7 +385,7 @@ class TestAttributeGapRelaxRetryE2E:
 
     async def test_no_infinite_loop_terminates(self):
         """무한루프 없음: attribute_gap 완화 재시도가 2회차에 종단(trace 도달)."""
-        triage = _attribute_gap_triage()
+        intake = _attribute_gap_intake()
         answer_agent = make_answer_agent("정직 안내")
         side = self._vector_search_side_effect([[], []])
 
@@ -396,7 +398,7 @@ class TestAttributeGapRelaxRetryE2E:
             "agents.hydration_node.hydrate_services", AsyncMock(return_value=[])
         ):
             graph = AgentGraph(
-                triage=triage,
+                intake=intake,
                 router=router,
                 answer_agent=answer_agent,
             )
@@ -463,7 +465,7 @@ class TestEmptyAnswerGuard:
         """AnswerAgent 가 빈 answer 반환 시 direct_answer_node 가 폴백 문구 세팅."""
         agent = make_answer_agent("")  # 빈 답변
         nodes = GraphNodes(
-            triage=make_triage(ActionType.DIRECT_ANSWER), answer_agent=agent
+            intake=make_intake(), answer_agent=agent
         )
         update = await nodes.direct_answer_node(_state(message="안녕", intent=None))
         assert update["output"]["answer"] == _FALLBACK_ANSWER
@@ -472,7 +474,7 @@ class TestEmptyAnswerGuard:
     async def test_direct_answer_whitespace_uses_fallback(self):
         agent = make_answer_agent("   \n  ")
         nodes = GraphNodes(
-            triage=make_triage(ActionType.DIRECT_ANSWER), answer_agent=agent
+            intake=make_intake(), answer_agent=agent
         )
         update = await nodes.direct_answer_node(_state(message="안녕", intent=None))
         assert update["output"]["answer"] == _FALLBACK_ANSWER
@@ -480,7 +482,7 @@ class TestEmptyAnswerGuard:
     async def test_direct_answer_nonempty_passes_through(self):
         agent = make_answer_agent("안녕하세요! 무엇을 도와드릴까요?")
         nodes = GraphNodes(
-            triage=make_triage(ActionType.DIRECT_ANSWER), answer_agent=agent
+            intake=make_intake(), answer_agent=agent
         )
         update = await nodes.direct_answer_node(_state(message="안녕", intent=None))
         assert update["output"]["answer"] == "안녕하세요! 무엇을 도와드릴까요?"
@@ -494,7 +496,7 @@ class TestEmptyAnswerGuard:
             return_value={**_state(message="좋은 곳"), "answer": "", "service_cards": []}
         )
         nodes = GraphNodes(
-            triage=make_triage(ActionType.AMBIGUOUS), answer_agent=agent
+            intake=make_intake(), answer_agent=agent
         )
         update = await nodes.ambiguous_node(_state(message="좋은 곳"))
         assert update["output"]["answer"] == _CLARIFY_FALLBACK
@@ -524,7 +526,7 @@ class TestExplainRephrase:
         """
         agent = self._real_answer_agent("자연 체험으로 안내드린 이유를 쉽게 설명드릴게요.")
         nodes = GraphNodes(
-            triage=make_triage(ActionType.EXPLAIN), answer_agent=agent
+            intake=make_intake(), answer_agent=agent
         )
         prev = "intent=VECTOR_SEARCH, area_name=강남구, service_id=S001 로 분류함"
         update = await nodes.explain_node(
@@ -554,7 +556,7 @@ class TestExplainRephrase:
         """prev_reasoning 없음 → direct_answer 폴백(FALLBACK 분기)."""
         agent = self._real_answer_agent("안녕하세요! 무엇을 도와드릴까요?")
         nodes = GraphNodes(
-            triage=make_triage(ActionType.EXPLAIN), answer_agent=agent
+            intake=make_intake(), answer_agent=agent
         )
         update = await nodes.explain_node(
             _state(message="왜 그랬어?", prev_reasoning=None, intent=None)
@@ -568,7 +570,7 @@ class TestExplainRephrase:
         agent = make_answer_agent()
         agent.explain = AsyncMock(side_effect=RuntimeError("llm down"))
         nodes = GraphNodes(
-            triage=make_triage(ActionType.EXPLAIN), answer_agent=agent
+            intake=make_intake(), answer_agent=agent
         )
         update = await nodes.explain_node(
             _state(message="왜 그랬어?", prev_reasoning="근거")
@@ -584,7 +586,7 @@ class TestExplainRephrase:
             return_value={**_state(), "answer": "", "service_cards": []}
         )
         nodes = GraphNodes(
-            triage=make_triage(ActionType.EXPLAIN), answer_agent=agent
+            intake=make_intake(), answer_agent=agent
         )
         update = await nodes.explain_node(
             _state(message="왜 그랬어?", prev_reasoning="근거")

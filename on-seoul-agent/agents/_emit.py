@@ -1,8 +1,8 @@
 """SSE 이벤트 emit 헬퍼 (자유 함수).
 
-emit 헬퍼(`emit_answering`/`emit_triage_events`/`emit_router_events`)는 `self` 미사용
-순수 state 함수다. 페이즈 분리 시 Reference/Planning/Retrieval 가 공유하던 유일한
-교차 결합을 제거한다.
+emit 헬퍼(`emit_answering`/`emit_router_events`)는 `self` 미사용 순수 state 함수다.
+페이즈 분리 시 Intake/Planning/Retrieval 가 공유하던 교차 결합을 제거한다.
+(intake 의 decision emit 은 agents/nodes/intake.py 의 `_emit_intake` 가 담당한다.)
 
 저수준 writer 는 `agents/_helpers.py` 의 `emit_progress`/`emit_decision` 를 재사용한다.
 동작·SSE emit 시점·횟수(decision 1회, progress 단계별 1회)는 원본과 동일하다.
@@ -34,26 +34,6 @@ def emit_answering(state: AgentState) -> dict[str, Any]:
         return {}
     emit_progress("answering")
     return {"emit": {"answering_emitted": True}}
-
-
-def emit_triage_events(
-    state: AgentState, action: ActionType, rationale: str | None
-) -> dict[str, Any]:
-    """triage_node 의 비-RETRIEVE emit — decision(routes=[]) + answering.
-
-    RETRIEVE 는 emit 하지 않는다(router_node 가 routes 확정 후 emit). 반환 dict 는
-    triage_node 가 자기 update 에 머지해 emit-once 가드 슬롯을 state 로 전파한다.
-    """
-    if action == ActionType.RETRIEVE:
-        return {}
-    emit: dict[str, Any] = {}
-    # 비-RETRIEVE decision: routes=[]. user_rationale 있을 때만 emit, 전체 1회.
-    if rationale and not state["emit"].get("decision_emitted"):
-        emit_decision(action.value, [], rationale)
-        emit["decision_emitted"] = True
-    # 비-RETRIEVE 는 검색 없이 곧장 answering 단계로.
-    emit.update(emit_answering(state).get("emit", {}))
-    return {"emit": emit} if emit else {}
 
 
 def emit_router_events(state: AgentState, update: dict[str, Any]) -> dict[str, Any]:

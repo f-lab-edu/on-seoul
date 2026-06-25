@@ -32,9 +32,11 @@ from agents.answer_agent import (
     _STRUCT_FALLBACK,
     _STRUCT_MAP,
 )
+from agents.intake_agent import IntakeAgent
 from agents.router_agent import RouterAgent, _IntentOutput
 from agents.sql_agent import SqlAgent, _SqlParams
 from agents.triage_agent import TriageAgent, TriageOutput
+from schemas.intake import IntakeAction, IntakeOutput, TurnKind
 from schemas.state import ActionType, AgentState, IntentType
 
 
@@ -115,6 +117,7 @@ def make_agent_state(**overrides: Any) -> AgentState:
         prev_entities=None,
         prev_intent=None,
         prev_reasoning=None,
+        prev_working_set=None,
         target_service_ids=None,
         retry_count=0,
         retry_relaxed=False,
@@ -230,6 +233,79 @@ def make_triage(
     agent._llm = llm
     agent._build_context_block = lambda history: ""
     return agent
+
+
+def make_intake(
+    *,
+    turn_kind: TurnKind = TurnKind.NEW,
+    action: IntakeAction = IntakeAction.RETRIEVE,
+    oos_type: str | None = None,
+    ref_indices: list[int] | None = None,
+    user_rationale: str | None = None,
+    raise_exc: Exception | None = None,
+) -> IntakeAgent:
+    """고정 IntakeOutput 을 반환하는 IntakeAgent mock (입구 단일화 fake LLM).
+
+    raise_exc 가 주어지면 classify 가 그 예외를 던진다((B) 노드 예외 폴백 검증용).
+    """
+    agent = IntakeAgent.__new__(IntakeAgent)
+    structured = MagicMock()
+    if raise_exc is not None:
+        structured.ainvoke = AsyncMock(side_effect=raise_exc)
+    else:
+        structured.ainvoke = AsyncMock(
+            return_value=IntakeOutput(
+                turn_kind=turn_kind,
+                action=action,
+                oos_type=oos_type,  # type: ignore[arg-type]
+                ref_indices=ref_indices or [],
+                user_rationale=user_rationale,
+            )
+        )
+    llm = MagicMock()
+    llm.with_structured_output = MagicMock(return_value=structured)
+    agent._llm = llm
+    return agent
+
+
+def make_intake_router(
+    *,
+    turn_kind: TurnKind = TurnKind.NEW,
+    action: IntakeAction = IntakeAction.RETRIEVE,
+    oos_type: str | None = None,
+    ref_indices: list[int] | None = None,
+    user_rationale: str | None = None,
+    intent: IntentType | None = None,
+    refined_query: str | None = None,
+    max_class_name: str | None = None,
+    area_name: str | None = None,
+    service_status: str | None = None,
+    payment_type: str | None = None,
+    vector_sub_intent: str | None = None,
+    secondary_intent: IntentType | None = None,
+) -> tuple[IntakeAgent, RouterAgent]:
+    """(intake, router) 한 쌍 — NEW+RETRIEVE E2E 테스트용.
+
+    intake 는 turn_kind/action 을, router 는 intent + 검색 계획을 산출한다.
+    """
+    intake = make_intake(
+        turn_kind=turn_kind,
+        action=action,
+        oos_type=oos_type,
+        ref_indices=ref_indices,
+        user_rationale=user_rationale,
+    )
+    router = make_router(
+        intent if intent is not None else IntentType.FALLBACK,
+        refined_query=refined_query,
+        max_class_name=max_class_name,
+        area_name=area_name,
+        service_status=service_status,
+        payment_type=payment_type,
+        vector_sub_intent=vector_sub_intent,
+        secondary_intent=secondary_intent,
+    )
+    return intake, router
 
 
 def make_triage_router(

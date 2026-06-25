@@ -40,6 +40,37 @@ class PrevEntity(BaseModel):
     label: str = Field(min_length=0, max_length=200)
 
 
+class PrevWorkingSetPayload(BaseModel):
+    """직전 턴 대화 워킹셋(P1) — 단일 중첩 채널.
+
+    Spring 이 영속·중계하고 AI 가 소비한다(옵션 A). emit 측 `final` 의 prev_working_set
+    을 거울처럼 반영한다. 미전송 시 ChatRequest 가 평면 슬롯(prev_entities/prev_intent/
+    prev_reasoning)으로 폴백한다(하위호환).
+
+    철학: "검색 레시피"지 "결과 스냅샷"이 아니다. applied_filters 는 effective(완화 후)
+    필터여야 후속이 올바른 베이스에 얹힌다(P1-4).
+    """
+
+    entities: list[PrevEntity] = Field(default_factory=list, max_length=10)
+    intent: IntentType | None = Field(default=None)
+    reasoning: str | None = Field(default=None, max_length=500)
+    refined_query: str | None = Field(default=None, max_length=500)
+    # effective(완화 후) 필터. 키: max_class_name/area_name/service_status/payment_type.
+    applied_filters: dict[str, str | None] = Field(default_factory=dict)
+    relaxed: bool = Field(default=False)
+    relaxed_filters: list[str] = Field(default_factory=list)
+
+    @field_validator("intent", mode="before")
+    @classmethod
+    def _coerce_unknown_intent(cls, v: Any) -> Any:
+        """알 수 없는 intent 문자열은 None 으로 폴백(ChatRequest.prev_intent 와 동일 정책)."""
+        if v is None or isinstance(v, IntentType):
+            return v
+        if isinstance(v, str) and v not in IntentType.__members__:
+            return None
+        return v
+
+
 class ChatRequest(BaseModel):
     room_id: int = Field(ge=1)
     message_id: int = Field(ge=1)
@@ -62,6 +93,9 @@ class ChatRequest(BaseModel):
     prev_intent: IntentType | None = Field(default=None)
     # 직전 턴 판단 근거(user_rationale). 미전송 시 None. EXPLAIN action 이 소비.
     prev_reasoning: str | None = Field(default=None, max_length=500)
+    # ─── 대화 워킹셋(P1) — 단일 중첩 채널 ───
+    # Spring 이 영속·중계. 미전송 시 위 평면 슬롯으로 폴백한다(하위호환).
+    prev_working_set: PrevWorkingSetPayload | None = Field(default=None)
 
     @field_validator("prev_intent", mode="before")
     @classmethod

@@ -21,16 +21,17 @@ from agents.router_agent import RouterAgent, _IntentOutput
 from agents.vector_agent import VectorAgent, _RefinedQuery
 from core.config import settings
 from core.exceptions import RateLimitException
-from schemas.state import ActionType, AgentState, IntentType
+from schemas.intake import IntakeAction, TurnKind
+from schemas.state import AgentState, IntentType
 from tests.helpers import (
     make_agent_state,
     make_ai_session,
     make_analytics_agent,
     make_answer_agent,
+    make_intake,
+    make_intake_router,
     make_router,
     make_sql_agent,
-    make_triage,
-    make_triage_router,
     patch_node_sessions,
     run_graph,
     stream_graph,
@@ -877,9 +878,10 @@ class TestAgentGraphStream:
         vector_agent, ai_session, mock_bm25 = _vector_agent(
             [{"service_id": "V1", "service_name": "체험관", "similarity": 0.8}]
         )
-        triage, router = make_triage_router(
-            ActionType.RETRIEVE,
-            IntentType.SQL_SEARCH,
+        intake, router = make_intake_router(
+            turn_kind=TurnKind.NEW,
+            action=IntakeAction.RETRIEVE,
+            intent=IntentType.SQL_SEARCH,
             user_rationale="복합 검색",
             secondary_intent=IntentType.VECTOR_SEARCH,
         )
@@ -909,7 +911,7 @@ class TestAgentGraphStream:
             patch.object(settings, "rrf_top_k_final", 10),
         ):
             graph = AgentGraph(
-                triage=triage,
+                intake=intake,
                 router=router,
                 sql_agent=sql_agent,
                 vector_agent=vector_agent,
@@ -947,9 +949,10 @@ class TestAgentGraphStream:
         emit 으로 중복되거나, triage 비-RETRIEVE 분기가 추가 answering 을 넣어 2회가
         되면 안 됨).
         """
-        triage = make_triage(
-            ActionType.OUT_OF_SCOPE,
-            out_of_scope_type="attribute_gap",
+        intake = make_intake(
+            turn_kind=TurnKind.NEW,
+            action=IntakeAction.OUT_OF_SCOPE,
+            oos_type="attribute_gap",
             user_rationale="속성 질의 — 시설 안내로 전환합니다.",
         )
         vrows = [
@@ -974,7 +977,7 @@ class TestAgentGraphStream:
             ),
         ):
             graph = AgentGraph(
-                triage=triage,
+                intake=intake,
                 vector_agent=vector_agent,
                 answer_agent=_answer_agent("시설 페이지를 확인하세요."),
             )
@@ -1013,9 +1016,15 @@ class TestAgentGraphStream:
         sql_agent, data_session = _sql_agent(
             [{"service_id": "S1", "service_name": "수영장", "service_url": "https://x"}]
         )
-        # triage 미주입 → reference_resolution 후 router_node 가 RETRIEVE 별칭 경로로
-        # 진입하며 user_rationale 이 채워지지 않는다(하위호환).
+        # intake 가 rationale=None 으로 NEW+RETRIEVE 를 산출 → router 가 검색 계획만
+        # 세우고 decision 은 미emit(rationale 게이트), progress 는 정상 흐름.
+        intake = make_intake(
+            turn_kind=TurnKind.NEW,
+            action=IntakeAction.RETRIEVE,
+            user_rationale=None,
+        )
         graph = AgentGraph(
+            intake=intake,
             router=_router(IntentType.SQL_SEARCH),
             sql_agent=sql_agent,
             answer_agent=_answer_agent("수영장 안내입니다."),
@@ -1102,6 +1111,9 @@ class TestSelfCorrectionInfiniteLoopRegression:
         router_agent._llm = llm
 
         graph = AgentGraph(
+            intake=make_intake(
+                turn_kind=TurnKind.NEW, action=IntakeAction.RETRIEVE
+            ),
             router=router_agent,
             answer_agent=_answer_agent("불릴 일 없는 답"),
         )
@@ -1121,14 +1133,11 @@ class TestSelfCorrectionInfiniteLoopRegression:
 
         # fallback answer 가 설정되어 정상 종료된다.
         assert result["output"]["answer"], "fallback answer 가 비어있으면 안 된다"
-        # triage_error(또는 구버전 router_error) 는 1회만 기록된다 (무한 사이클 없음).
-        # triage_node 가 action 을 결정하므로 triage_error 를 체크한다.
-        error_count = (
-            result["node_path"].count("triage_error")
-            + result["node_path"].count("router_error")
-        )
+        # router_error 는 1회만 기록된다 (무한 사이클 없음).
+        # intake 는 정상 분류(NEW+RETRIEVE)하고 router_node 에서 예외가 난다.
+        error_count = result["node_path"].count("router_error")
         assert error_count == 1, (
-            f"triage_error/router_error 가 1회 초과 기록됨: {result['node_path']}"
+            f"router_error 가 1회 초과 기록됨: {result['node_path']}"
         )
 
     async def test_retry_prep_node_increments_retry_count_and_clears_results(self):
@@ -1728,14 +1737,15 @@ class TestRunNonStreamingEmitNoop:
         rows = [
             {"service_id": "S1", "service_name": "수영장", "service_url": "https://x"}
         ]
-        triage, router = make_triage_router(
-            ActionType.RETRIEVE,
-            IntentType.SQL_SEARCH,
+        intake, router = make_intake_router(
+            turn_kind=TurnKind.NEW,
+            action=IntakeAction.RETRIEVE,
+            intent=IntentType.SQL_SEARCH,
             user_rationale="수영장 검색입니다.",
         )
         sql_agent, data_session = _sql_agent(rows)
         graph = AgentGraph(
-            triage=triage,
+            intake=intake,
             router=router,
             sql_agent=sql_agent,
             answer_agent=_answer_agent("수영장 안내입니다."),

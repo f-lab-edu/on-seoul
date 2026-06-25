@@ -1,11 +1,15 @@
-"""참조 해소 페이즈 — reference_resolution / rehydrate / describe 노드."""
+"""참조 경로 페이즈 — rehydrate / describe 노드 (DRILL·RELEVANCE).
+
+참조 바인딩(인덱스→service_id)은 intake 페이즈(agents/nodes/intake.py)가 담당한다.
+이 페이즈는 intake 가 바인딩한 target_service_ids 를 최신 원본으로 재-hydrate 하고
+describe 로 설명하는 단계만 책임진다(규칙 기반 reference_resolution 은 제거됨).
+"""
 
 import logging
 from typing import Any
 
 from agents import _emit
 from agents._ondata_gateway import OnDataReader, default_reader
-from agents._reference_resolution import resolve_reference
 from agents.answer_agent import AnswerAgent
 from schemas.state import AgentState
 
@@ -13,14 +17,13 @@ logger = logging.getLogger(__name__)
 
 
 class ReferenceNodes:
-    """참조 해소 페이즈 — reference_resolution / rehydrate / describe 노드.
+    """참조 경로 페이즈 — rehydrate / describe 노드.
 
     의존: answer(AnswerAgent.describe), ondata(OnDataReader — on_data 읽기 게이트웨이).
 
-    B3-2(선택적 주입): rehydrate 의 on_data 읽기를 `OnDataReader` 생성자 주입으로 받는다
-    (B3-1 RetrievalNodes 와 동일 패턴). 테스트는 가짜 OnDataReader 를 주입하거나
-    tool/세션 심볼(_hydrate_services/data_session_ctx)을 patch 해 격리한다. 기본값은
-    프로세스 공유 default_reader 라 프로덕션 동작은 불변이다.
+    B3-2(선택적 주입): rehydrate 의 on_data 읽기를 `OnDataReader` 생성자 주입으로 받는다.
+    테스트는 가짜 OnDataReader 를 주입하거나 tool/세션 심볼(_hydrate_services/
+    data_session_ctx)을 patch 해 격리한다. 기본값은 프로세스 공유 default_reader 다.
     """
 
     def __init__(
@@ -28,34 +31,6 @@ class ReferenceNodes:
     ) -> None:
         self._answer = answer
         self._ondata = ondata or default_reader
-
-    async def reference_resolution_node(self, state: AgentState) -> dict[str, Any]:
-        """참조 해소 게이트 — START 직후 선판정.
-
-        현재 message 가 직전 턴 결과 엔티티를 가리키는 "지시 참조"인지 규칙 기반으로
-        판정한다(LLM 미사용 — 결정적·저지연·무비용). prev_entities 가 비어 있으면
-        무조건 non-referential 이므로 기존 흐름과 100% 하위호환된다.
-
-        referential → target_service_ids 바인딩(서수/라벨/지시어, 다중 가능).
-                      route_after_reference 엣지가 search 경로를 우회한다.
-        non-referential → target_service_ids=None, router_node 로 진행(기존 흐름).
-        """
-        prev_entities = state.get("prev_entities") or []
-        target_ids = resolve_reference(state["message"], prev_entities)
-        if target_ids:
-            logger.info(
-                "reference.resolved room=%s targets=%s",
-                state.get("room_id"),
-                target_ids,
-            )
-            return {
-                "target_service_ids": target_ids,
-                "node_path": ["reference_resolution"],
-            }
-        return {
-            "target_service_ids": None,
-            "node_path": ["reference_resolution"],
-        }
 
     async def rehydrate_node(self, state: AgentState) -> dict[str, Any]:
         """참조 해소 경로 — target_service_ids 의 최신 원본을 재-hydrate.
@@ -115,13 +90,3 @@ class ReferenceNodes:
                 },
                 "node_path": ["describe_error"],
             }
-
-    def route_after_reference(self, state: AgentState) -> str:
-        """reference_resolution_node 직후 라우팅.
-
-        referential(target_service_ids 채워짐) → rehydrate_node(검색 우회).
-        non-referential → triage_node(기존 흐름).
-        """
-        if state.get("target_service_ids"):
-            return "rehydrate_node"
-        return "triage_node"
