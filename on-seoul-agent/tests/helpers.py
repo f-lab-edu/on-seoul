@@ -119,6 +119,8 @@ def make_agent_state(**overrides: Any) -> AgentState:
         prev_reasoning=None,
         prev_working_set=None,
         target_service_ids=None,
+        result_quality=None,
+        reservation_guide_shown=False,
         retry_count=0,
         retry_relaxed=False,
         relaxed_filters=None,

@@ -34,6 +34,18 @@ from schemas.state import AgentState, IntentType
 
 _ROLE = "당신은 서울시 공공서비스 예약 안내 챗봇입니다."
 
+# §2.5 공통 보이스 지침 — 카드형(SQL/VECTOR) system 프롬프트 상단 1회 고정.
+# P3 가 정형 꼬리말을 제거/조건화하므로 그 자리가 건조·사무적으로 들리지 않도록
+# 톤을 명시한다. intent별 _STRUCT_* 와 직교(무엇을 말할지 ⟂ 어떻게 말할지).
+_VOICE_GUIDE = """\
+# 대화 톤
+
+- 존대와 공감을 유지하며 친근하게 안내하세요. 사무적인 양식 편지처럼 들리지 않게 하세요.
+- 거절하거나 한계를 밝히는 상황(결과가 적거나, 특정 지역에 쏠려 있거나)에서도
+  먼저 도와드리려는 태도를 보이세요. "없습니다"라고 단정하기보다 "이렇게 도와드릴 수
+  있어요"로 이어가세요.
+- 같은 안내 문구를 매 답변 반복하지 말고, 맥락에 맞춰 자연스럽게 표현을 바꾸세요."""
+
 _OUTPUT_RULES = """\
 # 출력 규칙
 
@@ -330,6 +342,23 @@ _CLAUSE_REFINE_HINT = """\
 특정 자치구(예: 강남구, 마포구)나 요금 조건(무료/유료)을 함께 알려주시면 더 정확하게 찾아드릴 수 있어요.
 원하시는 지역이나 무료/유료 여부를 알려주시면 더 좁혀서 찾아드릴게요."""
 
+# 쏠림 자각 절(P3) — 결과가 한 지역에 쏠려 있을 때 _CLAUSE_REFINE_HINT 를 대체한다.
+# 사용자가 지역을 지정하지 않았는데 결과가 전부 한 구라면 "어느 구냐" 되묻는 것은
+# 모순(사례 161)이므로, "묻기"가 아니라 "결과를 자각한 제안"으로 마무리한다.
+# {skew_value} 는 _build_card_system 이 실제 지역명으로 치환한다.
+_CLAUSE_SKEW_OFFER = """\
+마무리는 결과가 특정 지역에 모여 있음을 자각한 제안으로 하세요.
+지금 안내한 시설들은 모두 {skew_value}에 있다는 점을 자연스럽게 짚은 뒤,
+다른 지역도 찾아드릴지 한 문장으로 부드럽게 제안하세요.
+사용자에게 어느 자치구를 원하는지 되묻지 마세요(이미 결과가 한 지역에 모여 있으므로
+"어느 구를 찾으세요?" 류의 되물음은 모순입니다)."""
+
+# 빈약(thin) 정직 캐비엇 절(P3) — 결과가 1~2건뿐일 때 솔직하게 알린다.
+_CLAUSE_THIN_CAVEAT = """\
+조건에 맞는 결과가 많지 않다는 점을 솔직하고 부드럽게 한 문장으로 안내하세요.
+부족함을 사과하듯 단정하지 말고, 조건을 넓히거나 다른 지역도 찾아볼 수 있다고
+도움을 이어가는 톤을 유지하세요."""
+
 # 필터 키 → 사용자 노출용 한국어 라벨. 완화 안내 문구를 동적으로 구성할 때 사용한다.
 _FILTER_LABELS: dict[str, str] = {
     "payment_type": "요금 조건",
@@ -395,36 +424,61 @@ def _build_card_system(
     *,
     retry_relaxed: bool = False,
     relaxed_filters: list[str] | None = None,
+    result_quality: dict | None = None,
+    reservation_guide_shown: bool = False,
 ) -> str:
     """카드형(SQL/VECTOR) intent의 시스템 프롬프트를 런타임에 조립한다.
 
+    §2.5 보이스 지침(_VOICE_GUIDE)을 상단 1회 고정하고, 조건부 꼬리말 절(_CLAUSE_*)을
+    결과 자각(P2 result_quality)·맥락(reservation_guide_shown)에 따라 조건화한다.
+
     조건부 절:
-    - _CLAUSE_RESERVATION_GUIDE: 결과 중 service_status="접수중" 시설이 있을 때만 추가.
-    - _CLAUSE_REFINE_HINT: 자치구가 아직 해소되지 않았을 때만 추가.
+    - _CLAUSE_RESERVATION_GUIDE: 결과 중 service_status="접수중" 시설이 있고,
+      직전 턴에 이미 안내하지 않았을 때(reservation_guide_shown=False)만 추가(P3 반복 억제).
+    - 지역 쏠림 자각 시(result_quality.skew_field=="area_name") _CLAUSE_REFINE_HINT 대신
+      _CLAUSE_SKEW_OFFER(skew_value 치환)로 치환 — "어느 구냐" 되묻기 → 자각한 제안.
+    - _CLAUSE_THIN_CAVEAT: result_quality.thin 이면 정직 캐비엇 추가. 단 완화
+      재시도(retry_relaxed)와 겹치면 완화 안내로 통합하고 thin 캐비엇은 생략(중복 방지).
+    - _CLAUSE_REFINE_HINT: 자치구 미해소 + 쏠림 자각 없을 때만 추가(현행 가드 유지).
 
     area_name 게이트:
         Router가 이미 해소한 state["filters"]["area_name"](현재 질문 또는 history
         병합)을 우선 확인한다. area_name이 채워져 있으면 follow-up("그 중 무료인 것만")
         에서도 refine hint를 생략하여 이미 지정한 자치구를 다시 묻지 않는다.
-        _has_district_in_message는 area_name 미해소 시의 보조 fallback이다
-        (원본 message에 비공식 표기가 있어도 area_name이 None일 수 있으므로).
+        _has_district_in_message는 area_name 미해소 시의 보조 fallback이다.
 
     Args:
         message: 사용자 원본 발화 (자치구 명시 여부 fallback 판단용).
         results: 정규화 이전 또는 이후 결과 목록 (service_status 키 접근).
         area_name: Router가 해소한 자치구명. 해소 실패 시 None.
+        result_quality: P2 자각 패스(B) 산출 플래그(쏠림·빈약) 또는 None(현행 조립).
+        reservation_guide_shown: 직전 턴에 통합회원 안내가 이미 나갔는지(P3 반복 억제).
 
     Returns:
         조립된 시스템 프롬프트 문자열.
     """
-    blocks = [_ROLE, _STRUCT_CARD_LIST]
-    if any(r.get("service_status") == "접수중" for r in results):
+    rq = result_quality or {}
+    is_area_skew = rq.get("skew_field") == "area_name"
+    is_thin = bool(rq.get("thin"))
+
+    blocks = [_ROLE, _VOICE_GUIDE, _STRUCT_CARD_LIST]
+    if (
+        not reservation_guide_shown
+        and any(r.get("service_status") == "접수중" for r in results)
+    ):
         blocks.append(_CLAUSE_RESERVATION_GUIDE)
     # 완화 재시도 결과(0건 후 조건 완화)이고 표시할 결과가 있으면 완화 안내 절을 추가한다.
     # 실제 드롭된 필터(relaxed_filters)를 사용자 라벨로 안내한다(M1-b 동적 구성).
-    if retry_relaxed and results:
+    relaxed_added = bool(retry_relaxed and results)
+    if relaxed_added:
         blocks.append(_relaxed_notice(relaxed_filters))
-    if not area_name and not _has_district_in_message(message):
+    # 빈약 캐비엇 — 완화 안내와 겹치면(둘 다 "조건을 좁혀보라" 취지) 생략해 중복/길이 관리.
+    if is_thin and results and not relaxed_added:
+        blocks.append(_CLAUSE_THIN_CAVEAT)
+    # 쏠림 자각 → SKEW_OFFER 치환, 아니면 자치구 미해소 시 기존 REFINE_HINT.
+    if is_area_skew:
+        blocks.append(_CLAUSE_SKEW_OFFER.format(skew_value=rq.get("skew_value") or ""))
+    elif not area_name and not _has_district_in_message(message):
         blocks.append(_CLAUSE_REFINE_HINT)
     blocks.append(_OUTPUT_RULES)
     return _compose(*blocks)
@@ -906,6 +960,10 @@ class AnswerAgent:
                     state["filters"].get("area_name"),
                     retry_relaxed=bool(state.get("retry_relaxed")),
                     relaxed_filters=state.get("relaxed_filters"),
+                    result_quality=state.get("result_quality"),
+                    reservation_guide_shown=bool(
+                        state.get("reservation_guide_shown")
+                    ),
                 )
 
             # 상세형/attribute_gap 은 평면 "외 N건" 꼬리표 지시를 주입하지 않는다

@@ -205,6 +205,14 @@ class AgentState(TypedDict):
     forced_intent: IntentType | None
     # MAP 0건 재시도 시 확장 반경(m). 없으면 기본 반경(1000m) 적용.
     retry_radius_m: int | None
+    # ── 결과 품질 자각 패스(P2-B, 평면) ──
+    # pre_answer_gate_node 가 RETRIEVE 경로에서 산출. answer 가 소비해 톤/제안 조정(P3).
+    # 쏠림/빈약 휴리스틱 결과(예: {"skew_field","skew_value","skew_ratio","thin"})
+    # 또는 점검할 게 없거나 실패 시 None(현행 조립 그대로, 완전 하위호환). 리듀서 불필요.
+    result_quality: "dict[str, Any] | None"
+    # 직전 assistant 발화에 통합회원 안내가 이미 나갔는지(상류 history 파싱 결과).
+    # answer 는 raw history 가 아니라 이 bool 만 소비한다(§2.3 책임 경계). True 면 생략.
+    reservation_guide_shown: bool
     # ── 오류/캐시 (평면) ──
     error: str | None  # 오류 메시지 (있을 경우)
     cache_hit: bool  # cache_check_node 결과 (기본값 False)

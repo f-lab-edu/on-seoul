@@ -183,6 +183,9 @@ async def _stream(
         prev_reasoning=ws_reasoning,
         prev_working_set=prev_working_set,
         target_service_ids=None,
+        # ── 결과 품질 자각 패스(P2-B) — pre_answer_gate_node 가 채운다 ──
+        result_quality=None,
+        reservation_guide_shown=False,
         # ── 재시도 제어 (평면) ──
         retry_count=0,
         retry_relaxed=False,

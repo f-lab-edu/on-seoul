@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from agents import _emit
+from agents._helpers import assess_result_quality, reservation_guide_already_shown
 from agents._ondata_gateway import OnDataReader, default_reader
 from agents._search_channel_utils import _to_hits
 from agents.analytics_agent import AnalyticsAgent
@@ -102,13 +103,49 @@ class RetrievalNodes:
         return {"rrf_merged_ids": merged_ids, "node_path": ["rrf_fusion_node"]}
 
     async def pre_answer_gate_node(self, state: AgentState) -> dict[str, Any]:
-        """C2 pre-answer 0건 게이트.
+        """C2 pre-answer 0건 게이트 + P2 결과 품질 자각 패스(B).
 
         hydration_node 직후 hydrated_services=[] 이면 answer_node를 미호출하고
-        retry_prep_node로 직행하도록 엣지 로직에서 판정한다.
-        이 노드 자체는 상태 변경 없이 node_path만 기록한다(엣지 분기는 별도 메서드).
+        retry_prep_node로 직행하도록 엣지 로직(route_pre_answer_gate)에서 판정한다.
+
+        P2 자각 패스(B): RETRIEVE(hydration 결과) 경로에서만 결과 성격(쏠림·빈약)을
+        경량 휴리스틱으로 점검해 answer 가 소비할 평면 슬롯 result_quality 를 산출한다.
+        재검색은 하지 않고(라우팅 불변, 전진 1회) answer 톤만 바꾼다. 통합회원 안내
+        반복 억제용 reservation_guide_shown(history 상류 파싱, answer 는 bool 만 소비)도
+        함께 적재한다. 점검 예외는 result_quality=None 으로 격리(best-effort).
+
+        attribute_gap(OUT_OF_SCOPE)·describe·MAP·ANALYTICS 는 자각 패스 비대상이라
+        result_quality 슬롯을 건드리지 않는다(None 유지).
         """
-        return {"node_path": ["pre_answer_gate"]}
+        result_quality: dict[str, Any] | None = None
+        reservation_shown = False
+        if self._is_retrieve_path(state):
+            try:
+                rows = state["hydration"].get("hydrated_services") or []
+                result_quality = assess_result_quality(
+                    rows, area_filter=state["filters"].get("area_name")
+                )
+                reservation_shown = reservation_guide_already_shown(
+                    state.get("history")
+                )
+            except Exception:
+                # best-effort: 점검 실패가 답변을 막지 않는다(현행 조립으로 폴백).
+                logger.exception("pre_answer_gate 결과 품질 점검 실패")
+                result_quality = None
+        return {
+            "result_quality": result_quality,
+            "reservation_guide_shown": reservation_shown,
+            "node_path": ["pre_answer_gate"],
+        }
+
+    @staticmethod
+    def _is_retrieve_path(state: AgentState) -> bool:
+        """자각 패스(B) 평가 대상 — 순수 RETRIEVE(hydration) 경로인지 판정한다.
+
+        attribute_gap(OUT_OF_SCOPE)·describe·MAP·ANALYTICS 는 비대상이다.
+        action=None 은 router fallback(검색 실행)이라 RETRIEVE 와 동일 취급한다.
+        """
+        return state["triage"].get("action") in (ActionType.RETRIEVE, None)
 
     def route_pre_answer_gate(self, state: AgentState) -> str:
         """C2 게이트 엣지: hydrated_services=[] 시 retry_prep, 그 외 answer_node.
