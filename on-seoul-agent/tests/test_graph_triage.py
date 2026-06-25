@@ -188,13 +188,14 @@ class TestTriageActionRouting:
         assert result["vector"]["results"] is not None
         assert result["output"]["answer"] is not None
 
-    async def test_out_of_scope_operational_detail_routes_like_attribute_gap(self):
-        """OUT_OF_SCOPE/operational_detail -> attribute_gap 과 동형(식별 검색 + 리다이렉트).
+    async def test_out_of_scope_operational_detail_routes_to_vector(self):
+        """OUT_OF_SCOPE/operational_detail -> 식별 검색(VECTOR) 경로(P5 승격).
 
         회귀(사례 162-163): intake 가 신설 oos_type=operational_detail(폭염·휴무·주차·우천)
-        을 산출해도 out_of_scope_node 가 attribute_gap/domain_outside 두 분기뿐이라
-        domain_outside 전면 거절로 새던 결함. P5 전까지 attribute_gap 과 동일 경로로
-        흘려 정직 리다이렉트(식별 검색 + 공식페이지 안내)에 도달해야 한다.
+        을 산출하면 domain_outside 전면 거절로 새지 않고 식별 검색(vector)을 실제로 돌린다.
+        P5: 검색 routing 은 attribute_gap 과 동일(is_gap_oos)하되 sub_intent 는
+        "operational_detail" 전용으로 분리되어 answer 가 발췌 실답변/폴백을 고른다.
+        (detail_excerpt 적재·발췌 답변 도달은 test_operational_detail_integration 이 커버.)
         """
         intake = make_intake(
             turn_kind=TurnKind.NEW,
@@ -256,10 +257,10 @@ class TestTriageActionRouting:
 
         # 도메인 거절(domain_outside)로 새지 않아야 한다 — 식별 검색이 실제로 돌아간다.
         assert "out_of_scope_domain_outside" not in result["node_path"]
-        assert "out_of_scope_attribute_gap" in result["node_path"]
+        assert "out_of_scope_operational_detail" in result["node_path"]
         assert result["vector"]["results"] is not None
-        # attribute_gap 동형 신호: vector_sub_intent 가 attribute_gap 으로 세팅된다.
-        assert result["plan"].get("vector_sub_intent") == "attribute_gap"
+        # P5 전용 신호: vector_sub_intent 가 operational_detail 로 세팅된다(answer 분기 신호).
+        assert result["plan"].get("vector_sub_intent") == "operational_detail"
         assert result["output"]["answer"] is not None
 
     async def test_explain_with_prev_reasoning(self):

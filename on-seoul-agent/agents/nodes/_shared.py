@@ -62,22 +62,24 @@ _FALLBACK_ANSWER = (
 # ---------------------------------------------------------------------------
 # OUT_OF_SCOPE 서브타입 동형 그룹 (식별 검색 + 정직 리다이렉트)
 # ---------------------------------------------------------------------------
-# attribute_gap 과 operational_detail 은 P5 전까지 동형이다 — 둘 다 시설 식별 검색을
-# 돌려 "운영 상세는 공식 페이지/바로가기에서 확인" 으로 정직하게 리다이렉트한다(부재
-# 단정 금지). domain_outside(진짜 범위 밖)만 전면 거절한다.
+# attribute_gap 과 operational_detail 은 *검색 routing* 이 동형이다 — 둘 다 시설 식별
+# 검색(vector)을 돌리고 0건 게이트·retry·종료를 공유한다. domain_outside(진짜 범위 밖)만
+# 전면 거절한다. 이 predicate 는 "식별 검색이 필요한가"를 묻는 단일 출처다.
 #
-# operational_detail 은 intake 병합으로 신설된 운영성 질문(폭염·휴무·주차·우천)이나
-# 소비처가 없어 domain_outside 거절로 새던 회귀(사례 162-163)를 막기 위해 attribute_gap
-# 과 같은 분기로 흘린다(out_of_scope_node/라우팅/0건 게이트/self-correction 모두 동형).
-#
-# P5 연계: P5 에서 operational_detail 은 detail_content 발췌 답변 경로로 분리된다 —
-# 그 전까지 attribute_gap interim 리다이렉트로 정직 처리한다(거짓 단정만 제거).
+# P5 승격(분기 지점): 검색은 동형이되 *답변 경로*는 갈린다. out_of_scope_node 가
+# operational_detail 에는 전용 vector_sub_intent="operational_detail" 을 세팅하고,
+# pre_answer prep 이 focal detail_content 를 발췌해 detail_excerpt 를 적재하면 answer 가
+# 운영-상세 발췌 실답변을 생성한다(사례 162-163 근본 해소). 발췌가 없으면(키워드 부재 등)
+# attribute_gap interim 리다이렉트로 정직 폴백한다. attribute_gap 자체는 현행 유지.
+# 따라서 검색 routing 분기(graph route/0건 게이트/retry)는 여전히 is_gap_oos 동형이고,
+# 답변 분기만 out_of_scope_type 원본으로 갈린다.
 _GAP_OOS_TYPES: frozenset[str] = frozenset({"attribute_gap", "operational_detail"})
 
 
 def is_gap_oos(oos_type: str | None) -> bool:
-    """식별 검색 + 정직 리다이렉트 동형 그룹(attribute_gap/operational_detail) 판정.
+    """식별 검색이 필요한 동형 그룹(attribute_gap/operational_detail) 판정.
 
-    domain_outside(진짜 범위 밖, 전면 거절)와 구분하는 단일 출처 predicate 다.
+    domain_outside(진짜 범위 밖, 전면 거절)와 구분하는 단일 출처 predicate 다. *검색
+    routing* 만 동형이며, 답변 경로는 P5 에서 out_of_scope_type 원본으로 분기한다.
     """
     return oos_type in _GAP_OOS_TYPES

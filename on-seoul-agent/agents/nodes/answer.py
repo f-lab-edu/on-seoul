@@ -113,29 +113,39 @@ class AnswerNodes:
             # 를 채운다).
             #
             # 결정 C: 정상 DETAIL("이 시설 자세히")과 동일 신호(identification)로
-            # 위장하지 않고 전용 vector_sub_intent="attribute_gap"을 전달한다. 검색
-            # 동작(식별 검색)은 동일하지만(vector_node/hydration 은 intent 만 보고
-            # 동작), AnswerAgent 는 이 값으로 갭 전용 분기를 선택해 물어본 속성을 무시한
-            # 채 예약 정보만 풀로 나열하던 결함(room 63)을 끊는다. triage user_rationale
-            # 은 state["triage"]에 보존되어 answer 단계가 시드로 읽는다.
+            # 위장하지 않고 전용 vector_sub_intent 를 전달한다. 검색 동작(식별 검색)은
+            # 동일하지만(vector_node/hydration 은 intent 만 보고 동작), AnswerAgent 는
+            # 이 값으로 전용 분기를 선택한다.
             #
-            # operational_detail(폭염·휴무·주차·우천)도 이 분기로 흘려 domain_outside
-            # 전면 거절(사례 162-163 회귀)을 막는다. P5 에서 operational_detail 은
-            # detail_content 발췌 답변 경로로 분리된다 — 그 전까지 attribute_gap interim
-            # 리다이렉트로 정직 처리(공식 페이지/바로가기 안내, 부재 단정 금지). out_of_scope_type
-            # 은 state["triage"] 에 원본 그대로 보존되어 P5 분기점이 살아 있다.
+            # P5 승격: operational_detail(폭염·휴무·주차·우천)은 식별 검색 경로(VECTOR)는
+            # attribute_gap 과 공유하되 sub_intent 를 "operational_detail" 로 분리한다 —
+            # pre_answer prep 이 적재한 detail_excerpt 가 있으면 answer 가 운영-상세 발췌
+            # 실답변을 생성하고(사례 162-163 근본 해소), 없으면 attribute_gap interim
+            # 리다이렉트로 정직 폴백한다. attribute_gap 자체는 현행 유지("attribute_gap").
+            # 검색 routing(vector/0건 게이트/retry/종료)은 여전히 is_gap_oos 동형.
+            sub_intent = (
+                "operational_detail"
+                if oos_type == "operational_detail"
+                else "attribute_gap"
+            )
+            breadcrumb = (
+                "out_of_scope_operational_detail"
+                if oos_type == "operational_detail"
+                else "out_of_scope_attribute_gap"
+            )
             logger.info(
-                "out_of_scope.gap room=%s oos=%s refined=%r",
+                "out_of_scope.gap room=%s oos=%s sub=%s refined=%r",
                 state.get("room_id"),
                 oos_type,
+                sub_intent,
                 (state["plan"].get("refined_query") or "")[:40],
             )
             return {
                 "plan": {
                     "intent": IntentType.VECTOR_SEARCH,
-                    "vector_sub_intent": "attribute_gap",
+                    "vector_sub_intent": sub_intent,
                 },
-                "node_path": ["out_of_scope_attribute_gap"],
+                "node_path": [breadcrumb],
             }
         # domain_outside: 즉시 거절
         rationale = state["triage"].get("user_rationale")

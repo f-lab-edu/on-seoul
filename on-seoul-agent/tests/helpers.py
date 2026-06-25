@@ -31,6 +31,7 @@ from agents.answer_agent import (
     _STRUCT_EXPLAIN,
     _STRUCT_FALLBACK,
     _STRUCT_MAP,
+    _STRUCT_OPERATIONAL_DETAIL,
     _STRUCT_RELEVANCE,
 )
 from agents.intake_agent import IntakeAgent
@@ -122,6 +123,7 @@ def make_agent_state(**overrides: Any) -> AgentState:
         target_service_ids=None,
         result_quality=None,
         reservation_guide_shown=False,
+        detail_excerpt=None,
         retry_count=0,
         retry_relaxed=False,
         relaxed_filters=None,
@@ -424,6 +426,9 @@ def make_answer_agent(
         ),
         "DETAIL": _compose(_ROLE, _STRUCT_DETAIL, _OUTPUT_RULES),
         "ATTRIBUTE_GAP": _compose(_ROLE, _STRUCT_ATTRIBUTE_GAP, _OUTPUT_RULES),
+        "OPERATIONAL_DETAIL": _compose(
+            _ROLE, _STRUCT_OPERATIONAL_DETAIL, _OUTPUT_RULES
+        ),
         "DESCRIBE": _compose(_ROLE, _STRUCT_DESCRIBE, _OUTPUT_RULES),
         "RELEVANCE": _compose(_ROLE, _STRUCT_RELEVANCE, _OUTPUT_RULES),
         "DESCRIBE_EMPTY": _compose(_ROLE, _STRUCT_DESCRIBE_EMPTY, _OUTPUT_RULES),

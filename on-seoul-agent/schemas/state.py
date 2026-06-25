@@ -213,6 +213,12 @@ class AgentState(TypedDict):
     # 직전 assistant 발화에 통합회원 안내가 이미 나갔는지(상류 history 파싱 결과).
     # answer 는 raw history 가 아니라 이 bool 만 소비한다(§2.3 책임 경계). True 면 생략.
     reservation_guide_shown: bool
+    # ── 운영-상세 발췌(P5, 평면) ──
+    # operational_detail turn 에서 pre_answer prep 이 focal detail_content 를 fetch +
+    # 발췌해 적재한다. answer 는 이 문자열만 소비한다(fetch·정제·발췌는 상류). 키워드
+    # 부재/raw 없음/길이<게이트 → None(= P4 attribute_gap interim 리다이렉트 폴백 신호).
+    # raw 블롭은 절대 싣지 않는다(focal 단건 발췌 완료 문자열만). 리듀서 불필요.
+    detail_excerpt: str | None
     # ── 오류/캐시 (평면) ──
     error: str | None  # 오류 메시지 (있을 경우)
     cache_hit: bool  # cache_check_node 결과 (기본값 False)

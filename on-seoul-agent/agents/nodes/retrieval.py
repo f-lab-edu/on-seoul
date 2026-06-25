@@ -6,6 +6,7 @@ from typing import Any
 from agents import _emit
 from agents._helpers import assess_result_quality, reservation_guide_already_shown
 from agents._ondata_gateway import OnDataReader, default_reader
+from agents.detail_excerpt import extract_operational_keywords, prepare_detail_excerpt
 from agents._search_channel_utils import _to_hits
 from agents.analytics_agent import AnalyticsAgent
 from agents.nodes._shared import is_gap_oos
@@ -117,6 +118,11 @@ class RetrievalNodes:
 
         attribute_gap(OUT_OF_SCOPE)·describe·MAP·ANALYTICS 는 자각 패스 비대상이라
         result_quality 슬롯을 건드리지 않는다(None 유지).
+
+        P5 운영-상세 prep: operational_detail turn 이면 focal 단건 detail_content 를
+        fetch + 발췌해 detail_excerpt 슬롯에 적재한다(없으면 None = attribute_gap interim
+        폴백 신호). fetch·정제·발췌는 상류(여기/tools/agents)가 담당하고 answer 는 소비만
+        한다(§2.3 책임 경계). 예외는 best-effort 격리(답변 막지 않음).
         """
         result_quality: dict[str, Any] | None = None
         reservation_shown = False
@@ -133,11 +139,38 @@ class RetrievalNodes:
                 # best-effort: 점검 실패가 답변을 막지 않는다(현행 조립으로 폴백).
                 logger.exception("pre_answer_gate 결과 품질 점검 실패")
                 result_quality = None
+
+        detail_excerpt = await self._prepare_operational_detail(state)
         return {
             "result_quality": result_quality,
             "reservation_guide_shown": reservation_shown,
+            "detail_excerpt": detail_excerpt,
             "node_path": ["pre_answer_gate"],
         }
+
+    async def _prepare_operational_detail(self, state: AgentState) -> str | None:
+        """operational_detail turn 의 focal detail_content fetch + 발췌(best-effort).
+
+        operational_detail 이 아니거나 focal 부재면 즉시 None(블롭 격리: 다른 경로는
+        detail_content 를 절대 fetch 하지 않는다). 키워드 부재/길이<게이트/예외 → None
+        (= attribute_gap interim 폴백 신호). raw 블롭은 발췌까지 끝낸 문자열로만 좁혀
+        반환하므로 카드/answer 에 원문이 실리지 않는다.
+        """
+        if state["plan"].get("vector_sub_intent") != "operational_detail":
+            return None
+        rows = state["hydration"].get("hydrated_services") or []
+        if not rows:
+            return None
+        focal_id = rows[0].get("service_id")
+        if not focal_id:
+            return None
+        try:
+            raw = await self._ondata.fetch_detail_content(focal_id)
+            keywords = extract_operational_keywords(state.get("message") or "")
+            return prepare_detail_excerpt(raw, keywords)
+        except Exception:
+            logger.exception("operational_detail 발췌 prep 실패 room=%s", state.get("room_id"))
+            return None
 
     @staticmethod
     def _is_retrieve_path(state: AgentState) -> bool:

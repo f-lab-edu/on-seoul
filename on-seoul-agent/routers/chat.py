@@ -186,6 +186,8 @@ async def _stream(
         # ── 결과 품질 자각 패스(P2-B) — pre_answer_gate_node 가 채운다 ──
         result_quality=None,
         reservation_guide_shown=False,
+        # ── 운영-상세 발췌(P5) — pre_answer_gate_node 가 operational_detail turn 에 채운다 ──
+        detail_excerpt=None,
         # ── 재시도 제어 (평면) ──
         retry_count=0,
         retry_relaxed=False,

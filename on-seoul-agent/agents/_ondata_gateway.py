@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from core.database import data_session_ctx
+from tools.fetch_detail_content import fetch_detail_content as _fetch_detail_content
 from tools.hydrate_services import hydrate_services as _hydrate_services
 from tools.map_search import map_search as _map_search
 
@@ -46,6 +47,15 @@ class OnDataReader:
         """service_id 목록을 최신 원본으로 hydrate (호출당 1회 acquire-use-release)."""
         async with data_session_ctx() as s:
             return await _hydrate_services(s, ids)
+
+    async def fetch_detail_content(self, service_id: str) -> str | None:
+        """focal service_id 단건 detail_content 원문 조회 (호출당 1회 acquire-use-release).
+
+        운영-상세(operational_detail) prep 전용. raw 블롭은 일반 hydration 과 분리해
+        focal 단건만 가져온다(블롭 격리). 발췌·정제는 호출 상류가 담당한다.
+        """
+        async with data_session_ctx() as s:
+            return await _fetch_detail_content(s, service_id)
 
     async def map_proximity(
         self, lat: float, lng: float, radius_m: int

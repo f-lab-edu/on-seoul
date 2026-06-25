@@ -156,7 +156,11 @@ class TestGapOosHomomorphismAdversarial:
         return AgentGraph(answer_agent=make_answer_agent())._nodes
 
     # ── 분기점 ①: out_of_scope_node (answer.py) ──
-    async def test_node_out_of_scope_operational_detail_emits_gap_signal(self):
+    # P5 승격: operational_detail 은 식별 검색 경로(VECTOR_SEARCH)는 attribute_gap 과
+    # 공유하되, sub_intent 는 전용("operational_detail")으로 분리한다 — answer 가
+    # detail_excerpt 발췌 실답변 경로를 고르게 한다. 검색 routing(vector/0건/retry/종료)은
+    # 여전히 is_gap_oos 동형(아래 분기점 ②~⑤).
+    async def test_node_out_of_scope_operational_detail_emits_op_detail_signal(self):
         nodes = self._nodes()
         state = _state(
             action=ActionType.OUT_OF_SCOPE,
@@ -164,10 +168,11 @@ class TestGapOosHomomorphismAdversarial:
             refined_query="마루공원 수영장 폭염철 이용안내",
         )
         update = await nodes.out_of_scope_node(state)
-        # attribute_gap 과 동일: 식별 검색 경로(VECTOR_SEARCH) + 갭 신호.
+        # 식별 검색 경로(VECTOR_SEARCH)는 attribute_gap 과 공유.
         assert update["plan"]["intent"] == IntentType.VECTOR_SEARCH
-        assert update["plan"]["vector_sub_intent"] == "attribute_gap"
-        assert "out_of_scope_attribute_gap" in update["node_path"]
+        # 전용 sub_intent — answer 가 운영-상세 발췌 경로를 선택하는 신호.
+        assert update["plan"]["vector_sub_intent"] == "operational_detail"
+        assert "out_of_scope_operational_detail" in update["node_path"]
         # domain_outside 즉시 거절 경로로 새지 않는다(거절 answer 미세팅).
         assert "output" not in update
 
@@ -220,7 +225,7 @@ class TestGapOosHomomorphismAdversarial:
             action=ActionType.OUT_OF_SCOPE,
             out_of_scope_type="operational_detail",
             intent=IntentType.VECTOR_SEARCH,
-            vector_sub_intent="attribute_gap",
+            vector_sub_intent="operational_detail",
             refined_query="마루공원 수영장 폭염철 이용안내",
             payment_type="무료",
             area_name="강남구",

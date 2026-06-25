@@ -82,8 +82,8 @@ def _out_of_scope_route(state: AgentState) -> str:
     domain_outside면 종단 체인.
 
     GraphNodes 메서드가 아닌 graph.py 모듈 수준 라우팅 함수다(상태만 읽는 순수 함수).
-    operational_detail 도 P5 전까지 attribute_gap 과 동형으로 식별 검색 경로를 탄다
-    (is_gap_oos 단일 출처).
+    operational_detail 도 attribute_gap 과 동일 식별 검색 경로(vector)를 탄다 — 검색
+    routing 은 is_gap_oos 동형이고, 답변 경로만 P5 에서 갈린다(answer_agent).
     """
     from agents.nodes._shared import is_gap_oos
 
@@ -116,7 +116,7 @@ def _build_graph(nodes: GraphNodes) -> Any:
            ├─ action=AMBIGUOUS     → ambiguous_node → 종단 체인
            └─ action=OUT_OF_SCOPE  → out_of_scope_node
                 ├─ domain_outside → 종단 체인
-                └─ attribute_gap / operational_detail(P5 전까지 동형)
+                └─ attribute_gap / operational_detail(검색 routing 동형, 답변 분기는 P5 분리)
                                   → vector_node → hydration_node → ...
     (EXPLAIN action 은 META turn_kind 로 승격되어 NEW 서브스위치에서 제외된다.)
 
