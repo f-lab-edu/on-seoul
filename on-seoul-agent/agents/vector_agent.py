@@ -152,6 +152,77 @@ async def _safe_bm25_search(session: AsyncSession, tokens: list[str]) -> list[di
         return []
 
 
+async def _run_channel(coro_fn):
+    """채널 1개를 글로벌 세마포어 + 독립 ai_session_ctx() 안에서 실행한다.
+
+    lifespan 이전(테스트·스크립트)에는 vector_global_sema가 None이므로
+    contextlib.nullcontext()로 대체한다.
+
+    세마포어/세션 획득 + 검색 전체를 try로 감싸 어떤 예외든 그 채널만
+    빈 리스트로 떨어뜨린다(옵션 b). _safe_* 래퍼는 검색 함수 내부 예외만
+    흡수하지만, 풀 고갈 시 ai_session_ctx() 세션 획득에서 발생하는
+    TimeoutError(QueuePool/asyncpg)는 _safe_* 바깥이므로 여기서 격리해야
+    gather(return_exceptions=False)로 전파돼 요청 전체 벡터 검색이
+    실패하거나 다른 채널이 orphan으로 남는 것을 막는다.
+    CancelledError는 Exception 비상속(3.8+)이라 정상 취소 전파는 막지 않는다.
+    """
+    sema_ctx = _concurrency.vector_global_sema or contextlib.nullcontext()
+    try:
+        async with sema_ctx:
+            async with ai_session_ctx() as session:
+                return await coro_fn(session)
+    except Exception:
+        logger.warning("채널 세션 획득/실행 실패 — 빈 결과로 대체", exc_info=True)
+        return []
+
+
+async def run_parallel_channels(
+    query_vector: list[float],
+    bm25_tokens: list[str],
+    *,
+    max_class_name: str | None = None,
+    area_name: str | None = None,
+    service_status: str | None = None,
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """4채널 retrieval 팬아웃을 채널별 독립 세션 + asyncio.gather로 병렬 실행한다.
+
+    임베딩·토크나이징은 호출자가 미리 수행해 주입한다(이 함수는 retrieval만 담당).
+    bm25_tokens가 비면 BM25 채널을 건너뛰고 d_rows=[]로 인덱스를 고정한다.
+
+    글로벌 세마포어(core.concurrency.vector_global_sema)로 동시 채널 수를 cap한다.
+    프로세스 글로벌 ai_session_ctx() 앱 엔진/풀을 사용한다.
+
+    Returns
+    -------
+    (a_rows, b_rows, c_rows, d_rows) — Track A/B/C/BM25 결과.
+    """
+    tasks = [
+        _run_channel(
+            lambda s: _safe_vector_search(
+                s,
+                query_vector,
+                row_kind="identity",
+                max_class_name=max_class_name,
+                area_name=area_name,
+                service_status=service_status,
+            )
+        ),
+        _run_channel(
+            lambda s: _safe_vector_search(s, query_vector, row_kind="summary")
+        ),
+        _run_channel(lambda s: _safe_question_search(s, query_vector)),
+    ]
+    if bm25_tokens:
+        tasks.append(_run_channel(lambda s: _safe_bm25_search(s, bm25_tokens)))
+
+    gathered = await asyncio.gather(*tasks)
+    a_rows: list[dict] = gathered[0]
+    b_rows: list[dict] = gathered[1]
+    c_rows: list[dict] = gathered[2]
+    d_rows: list[dict] = gathered[3] if bm25_tokens else []
+    return a_rows, b_rows, c_rows, d_rows
+
+
 class VectorAgent:
     """질의 정제 → 임베딩 → 4채널 병렬 검색 → 가중 RRF → hydration 에이전트.
 
@@ -210,66 +281,21 @@ class VectorAgent:
         tokens = await atokenize_query(refined.refined_query)
         bm25_tokens = [t for t in tokens if t not in _BM25_STOPWORDS]
 
-        # 4채널 병렬 실행.
+        # 4채널 병렬 실행 (run_parallel_channels 로 추출).
         # 채널마다 독립 ai_session_ctx()로 세션을 열어 asyncpg 동시 쿼리 제약을 우회한다.
         # bm25_tokens 없으면 채널 D를 태스크에 포함하지 않고 빈 결과로 인덱스를 고정한다.
-        # 결과 인덱스: results[0]=a_rows, results[1]=b_rows, results[2]=c_rows, results[3]=d_rows
         #
         # 글로벌 세마포어(core.concurrency.vector_global_sema) — 동시 채널 단일 가드.
         #   on_ai 풀(cap=50)이 고갈되지 않도록 프로세스 전체 동시 채널 수를 제한한다.
         #   단일 인스턴스 200 QPS 기준(config.py 산정): 200 QPS × 4채널 fan-out 잠재 쿼리를
         #   vector_global_concurrency(기본 40)로 캡해 풀(cap 50) 이내로 유지(persist/trace 여유 ~10).
-        #   모듈 속성(_concurrency.vector_global_sema)을 런타임에 읽어 lifespan 이후
-        #   init_global_sema()로 할당된 값을 정확히 참조한다.
-
-        async def _run_channel(coro_fn):
-            # lifespan 이전(테스트 환경)에는 vector_global_sema가 None이므로
-            # contextlib.nullcontext()로 대체하여 분기 중복을 제거한다.
-            #
-            # 세마포어/세션 획득 + 검색 전체를 try로 감싸 어떤 예외든 그 채널만
-            # 빈 리스트로 떨어뜨린다(옵션 b). _safe_* 래퍼는 검색 함수 내부 예외만
-            # 흡수하지만, 풀 고갈 시 ai_session_ctx() 세션 획득에서 발생하는
-            # TimeoutError(QueuePool/asyncpg)는 _safe_* 바깥이므로 여기서 격리해야
-            # gather(return_exceptions=False)로 전파돼 요청 전체 벡터 검색이
-            # 실패하거나 다른 채널이 orphan으로 남는 것을 막는다.
-            # CancelledError는 Exception 비상속(3.8+)이라 정상 취소 전파는 막지 않는다.
-            sema_ctx = _concurrency.vector_global_sema or contextlib.nullcontext()
-            try:
-                async with sema_ctx:
-                    async with ai_session_ctx() as session:
-                        return await coro_fn(session)
-            except Exception:
-                logger.warning(
-                    "채널 세션 획득/실행 실패 — 빈 결과로 대체", exc_info=True
-                )
-                return []
-
-        tasks = [
-            _run_channel(
-                lambda s: _safe_vector_search(
-                    s,
-                    query_vector,
-                    row_kind="identity",
-                    max_class_name=refined.max_class_name,
-                    area_name=refined.area_name,
-                    service_status=refined.service_status,
-                )
-            ),
-            _run_channel(
-                lambda s: _safe_vector_search(s, query_vector, row_kind="summary")
-            ),
-            _run_channel(lambda s: _safe_question_search(s, query_vector)),
-        ]
-        if bm25_tokens:
-            tasks.append(
-                _run_channel(lambda s: _safe_bm25_search(s, bm25_tokens))
-            )
-
-        gathered = await asyncio.gather(*tasks)
-        a_rows: list[dict] = gathered[0]
-        b_rows: list[dict] = gathered[1]
-        c_rows: list[dict] = gathered[2]
-        d_rows: list[dict] = gathered[3] if bm25_tokens else []
+        a_rows, b_rows, c_rows, d_rows = await run_parallel_channels(
+            query_vector,
+            bm25_tokens,
+            max_class_name=refined.max_class_name,
+            area_name=refined.area_name,
+            service_status=refined.service_status,
+        )
 
         if not bm25_tokens:
             logger.debug("유효 BM25 토큰 없음 — 벡터 단독 검색으로 진행")
