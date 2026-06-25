@@ -27,14 +27,32 @@ import re
 # 정제 마커 — "3. 상세내용"부터 끝까지(섹션4 포함). 임베딩 정제기와 달리 종료 마커를
 # 두지 않는다(§3.4: 운영 답변 상당량이 "4. 주의사항" 뒤에 있어 잘라내면 안 됨).
 _DETAIL_START_MARKER = "3. 상세내용"
-# 선두 보일러플레이트 마커(섹션1·2). 시작 마커가 없을 때 이 위치 이전을 떼어낸다.
-_BOILERPLATE_MARKERS = ("1. 필수", "2. 환불", "2. 취소")
 
 # hwpjson 블록 — 한글 문서 JSON 이 본문에 박혀있는 주석 블록(86건, 길이 outlier 주범).
 _HWPJSON_RE = re.compile(r"<!--\[data-hwpjson\].*?-->", re.DOTALL)
-_TAG_RE = re.compile(r"<[^>]+>")
+# 태그 strip — 비백트래킹 보강(보안): inner 클래스에서 `<` 도 제외하고 길이를 상한
+# (실 HTML 태그는 짧다). `>` 없는 bare `<` 무리에서 직전 `<[^>]+>` 가 매 `<` 마다
+# 문자열 끝까지 스캔(O(n²))하던 것을, `[^<>]` 가 다음 `<` 에서 즉시 실패시켜 막는다.
+# 길이 캡(_CLEAN_INPUT_CAP)이 1차 결정적 방어이고 이 보강은 defense-in-depth.
+_TAG_RE = re.compile(r"<[^<>]{0,2048}>")
 _WS_RE = re.compile(r"[ \t\r\f\v]+")
 _MULTI_NL_RE = re.compile(r"\n{2,}")
+
+# 입력 길이 캡(ReDoS 방어) — detail_content 는 서울 API 외부 원본(최대 641KB)이고 상류
+# 길이 캡이 없다. `<` 가 많고 `>` 가 없는 입력이면 _TAG_RE 가 O(n²) 백트래킹해 동기
+# 호출(retrieval._prepare_operational_detail)이 이벤트 루프를 9.5~45초 블록(DoS).
+# 결정적 방어로 hwpjson 제거 *후* 남은 텍스트를 64KB 로 절단한 뒤 태그 strip 한다.
+# 근거(OI-6 Q2): hwpjson 제거 후 p99≈45KB 라 64KB 캡은 섹션4 실내용을 보존한다(무손실).
+_CLEAN_INPUT_CAP = 64 * 1024
+
+# 경계 마커 breakout(프롬프트 인젝션) 중화 — detail_content 에 리터럴
+# `---EXCERPT_START/END---`(또는 일반 `---...---` 경계 런)가 있으면 answer system
+# 프롬프트의 데이터 구역(---EXCERPT_START---~---EXCERPT_END---)을 조기 종료하고
+# post-boundary 지시를 주입할 수 있다. 반환 전에 (1) fence 라벨 마커(선례:
+# agents/_intake_indexing._FENCE)와 (2) 일반 3+ 하이픈 경계 런을 평탄화한다. 본문의
+# 범위 대시(09-18시 등)는 하이픈 2개 이하라 보존된다.
+_FENCE_LABEL_RE = re.compile(r"-{2,}\s*\w+_(?:START|END)\s*-{2,}")
+_DASH_RUN_RE = re.compile(r"-{3,}")
 
 # 진짜 개인 휴대폰 번호(강사·담당자 연락처). rrn형은 오탐·이메일은 원천 마스킹이라 제외.
 _MOBILE_RE = re.compile(r"01[016-9][-\s.]?\d{3,4}[-\s.]?\d{4}")
@@ -84,14 +102,21 @@ _MIN_LEN = 20
 
 
 def _clean(raw: str) -> str:
-    """1~3단계: hwpjson 제거 → 태그 strip → 엔티티 디코드 → 공백 정규화.
+    """1~3단계: hwpjson 제거 → 길이 캡 → 태그 strip → 엔티티 디코드 → 공백 정규화.
 
     ※ 태그 strip 을 엔티티 디코드보다 *먼저* 한다(§4 의 명목 순서와 반대). 디코드를
     먼저 하면 escaped 컨텐츠(&lt;실내&gt;)가 태그 모양(<실내>)으로 변해 strip 에 잘려
     본문이 손실된다. 진짜 태그(<br>/<p>)는 literal 이라 먼저 제거되고, escaped 엔티티는
     디코드 후 보존된다.
+
+    ※ ReDoS 방어(보안): hwpjson 제거 *직후* 남은 텍스트를 _CLEAN_INPUT_CAP 으로 절단한
+    뒤 _TAG_RE 를 적용한다. detail_content 는 상류 길이 캡 없는 외부 원본(최대 641KB)이고
+    `>` 없는 `<` 무리에서 _TAG_RE 가 O(n²) 백트래킹하므로, 캡이 결정적 방어다. hwpjson
+    제거를 먼저 둬야 거대 hwpjson 블록이 캡 예산을 먹지 않고 섹션4 실내용이 보존된다.
     """
     text = _HWPJSON_RE.sub(" ", raw)
+    if len(text) > _CLEAN_INPUT_CAP:
+        text = text[:_CLEAN_INPUT_CAP]
     text = _TAG_RE.sub(" ", text)
     text = html.unescape(text)
     # 줄 단위 공백 축약 후 다중 줄바꿈을 단일 줄바꿈으로.
@@ -101,13 +126,25 @@ def _clean(raw: str) -> str:
 
 
 def _apply_boundary(text: str) -> str:
-    """4단계: "3. 상세내용"부터 끝까지. 마커 없으면 선두 보일러플레이트만 제거."""
+    """4단계: "3. 상세내용" 마커부터 끝까지(섹션4 포함). 마커 없으면 전체 사용."""
     start = text.find(_DETAIL_START_MARKER)
     if start != -1:
         return text[start + len(_DETAIL_START_MARKER) :].strip()
-    # 마커 없음(0.9%) — 선두 보일러플레이트 마커가 있으면 그 직후 섹션 경계까지 떼되,
-    # 보수적으로 가장 앞선 비-보일러플레이트 위치를 못 찾으면 전체 사용.
+    # 마커 없음(0.9%) — 시작 마커가 없는 평문 폴백이라 전체 본문을 그대로 사용한다
+    # (선두 보일러플레이트 제거는 시작 마커 경유로만 일어나며, 마커 없는 입력엔
+    # 신뢰할 섹션 경계가 없어 head-cut 으로 본문을 잃는 것보다 전체 사용이 안전).
     return text.strip()
+
+
+def _neutralize_boundaries(text: str) -> str:
+    """경계 마커 breakout 중화: fence 라벨 마커·3+ 하이픈 런을 공백으로 평탄화한다.
+
+    본문에 박힌 ---EXCERPT_START/END--- (또는 일반 ---...---)가 answer system 의 데이터
+    구역을 조기 종료해 post-boundary 지시를 주입하는 인젝션을 차단한다. 본문의 정상
+    범위 대시(09-18시)는 하이픈이 2개 이하라 영향받지 않는다.
+    """
+    text = _FENCE_LABEL_RE.sub(" ", text)
+    return _DASH_RUN_RE.sub(" ", text)
 
 
 def _find_spans(text: str, keywords: list[str]) -> list[int]:
@@ -192,7 +229,11 @@ def prepare_detail_excerpt(
 
     excerpt = _excerpt_windows(body, positions)
     excerpt = _mask_pii(excerpt)
-    excerpt = excerpt.strip()
+    # 인젝션 방어 — answer 마커 조립(answer_agent ---EXCERPT_START/END---)에 넘기기 전
+    # 본문에 박힌 경계 런을 중화해 데이터 구역 조기 종료(프롬프트 breakout)를 막는다.
+    excerpt = _neutralize_boundaries(excerpt)
+    # 중화로 생긴 연속 공백을 다시 단일 스페이스로 축약한 뒤 strip.
+    excerpt = _WS_RE.sub(" ", excerpt).strip()
     if len(excerpt) < _MIN_LEN:
         return None
     return excerpt
