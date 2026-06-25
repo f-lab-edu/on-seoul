@@ -78,11 +78,16 @@ from schemas.state import AgentState
 logger = logging.getLogger(__name__)
 
 def _out_of_scope_route(state: AgentState) -> str:
-    """out_of_scope_node 직후 — attribute_gap이면 vector_node, domain_outside면 종단 체인.
+    """out_of_scope_node 직후 — gap(attribute_gap/operational_detail)이면 vector_node,
+    domain_outside면 종단 체인.
 
     GraphNodes 메서드가 아닌 graph.py 모듈 수준 라우팅 함수다(상태만 읽는 순수 함수).
+    operational_detail 도 P5 전까지 attribute_gap 과 동형으로 식별 검색 경로를 탄다
+    (is_gap_oos 단일 출처).
     """
-    if state["triage"].get("out_of_scope_type") == "attribute_gap":
+    from agents.nodes._shared import is_gap_oos
+
+    if is_gap_oos(state["triage"].get("out_of_scope_type")):
         return "vector_node"
     return "search_persist_node"
 
@@ -95,10 +100,12 @@ def _out_of_scope_route(state: AgentState) -> str:
 def _build_graph(nodes: GraphNodes) -> Any:
     """StateGraph를 구성하고 컴파일한다. GraphNodes 바운드 메서드를 직접 등록한다.
 
-    그래프 구조:
-    START → reference_resolution_node
-      ├─ referential → rehydrate_node → describe_node → search_persist_node → trace_node
-      └─ non-referential → triage_node (action 결정)
+    그래프 구조 (입구 단일화: intake_node 가 reference_resolution + triage 를 흡수):
+    START → intake_node (route_intake: turn_kind 1차 분기 + NEW→action 서브스위치)
+      ├─ REFINE          → working_set_refine_node → router_node(forced_intent) → 검색 재진입
+      ├─ DRILL/RELEVANCE → rehydrate_node → describe_node → search_persist_node → trace_node
+      ├─ META            → explain_node → 종단 체인
+      └─ NEW → action 서브스위치
            │
            ├─ action=RETRIEVE     → router_node (검색 계획) → cache_check_node
            │                           → [sql/vector/map/analytics]
@@ -107,10 +114,11 @@ def _build_graph(nodes: GraphNodes) -> Any:
            │                                └─ 유건    → answer_node
            ├─ action=DIRECT_ANSWER → direct_answer_node → 종단 체인
            ├─ action=AMBIGUOUS     → ambiguous_node → 종단 체인
-           ├─ action=OUT_OF_SCOPE  → out_of_scope_node
-           │    ├─ domain_outside → 종단 체인
-           │    └─ attribute_gap → vector_node → hydration_node → ...
-           └─ action=EXPLAIN      → explain_node → 종단 체인
+           └─ action=OUT_OF_SCOPE  → out_of_scope_node
+                ├─ domain_outside → 종단 체인
+                └─ attribute_gap / operational_detail(P5 전까지 동형)
+                                  → vector_node → hydration_node → ...
+    (EXPLAIN action 은 META turn_kind 로 승격되어 NEW 서브스위치에서 제외된다.)
 
     secondary_intent 팬아웃(enable_secondary_intent=True):
       실제 배선(현재): cache_check miss → [sql_node, vector_node] 병렬
@@ -394,14 +402,15 @@ class AgentGraph:
         triage: TriageAgent | None = None,
         intake: Any = None,
     ) -> None:
-        # 책임 분리: TriageAgent(action 결정) + RouterAgent(검색 계획) 둘 다 노드에서 쓰인다.
-        #   - triage: action 결정 노드(triage_node)
-        #   - router: 검색 계획 노드(router_node, RETRIEVE 경로에서만 실행)
+        # 입구 단일화 후 action 결정은 intake_node(IntakeAgent)가 담당한다 — 별도
+        # triage_node 는 더 이상 그래프에 존재하지 않는다. TriageAgent 인자는 구
+        # 호출부와의 하위호환 plumbing 으로만 남으며 그래프 노드에 직접 배선되지 않는다.
+        #   - router: 검색 계획 노드(router_node, RETRIEVE/REFINE 경로에서만 실행)
         # `router` 인자가 TriageAgent 인스턴스이면 하위호환으로 triage 로 받아들인다.
         _triage = triage or (router if isinstance(router, TriageAgent) else None)
         _router = router if isinstance(router, RouterAgent) else None
         # 하위호환: RouterAgent 만 명시 주입(triage 미주입)된 경우 triage 를 기본 생성하지
-        # 않는다 — triage_node 가 RouterAgent fallback 분기로 action 을 결정한다.
+        # 않는다 — action 결정은 intake_node 가 단일 LLM 으로 수행한다.
         if _triage is None and _router is None:
             _triage = TriageAgent()
         if _triage is not None and _router is None:
@@ -463,9 +472,9 @@ class AgentGraph:
             ("decision", DecisionEvent dict)            — 판단 근거 (조건부)
             ("result", AgentState)                      — 최종 완료 상태
 
-        emit 위치(노드 측, agents/nodes.py)와 타이밍:
+        emit 위치(노드 측, agents/nodes/)와 타이밍:
             graph 시작 전(여기)  → routing  (노드 진입 전이라 writer 못 씀)
-            triage_node          → 비-RETRIEVE면 decision(routes=[]) + answering
+            intake_node          → 검색 스킵 경로면 decision(routes=[]) + answering
             router_node          → RETRIEVE면 decision(routes) + searching/answering
             rehydrate_node       → answering (참조 해소 경로)
             retry_prep_node      → re_searching (+ progress 가드 리셋)

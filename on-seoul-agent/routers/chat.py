@@ -177,7 +177,7 @@ async def _stream(
         history=[h.model_dump() for h in request.history],
         # ── carryover 입력 (평면) ──
         # 결과 엔티티 carryover + 참조 해소. 미전송 시 빈 배열/None →
-        # reference_resolution_node 가 non-referential 로 처리(기존 흐름 보존).
+        # intake_node 가 NEW(비참조)로 처리(기존 흐름 보존).
         prev_entities=ws_entities,
         prev_intent=ws_intent,
         prev_reasoning=ws_reasoning,

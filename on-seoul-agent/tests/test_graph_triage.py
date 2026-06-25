@@ -188,6 +188,80 @@ class TestTriageActionRouting:
         assert result["vector"]["results"] is not None
         assert result["output"]["answer"] is not None
 
+    async def test_out_of_scope_operational_detail_routes_like_attribute_gap(self):
+        """OUT_OF_SCOPE/operational_detail -> attribute_gap 과 동형(식별 검색 + 리다이렉트).
+
+        회귀(사례 162-163): intake 가 신설 oos_type=operational_detail(폭염·휴무·주차·우천)
+        을 산출해도 out_of_scope_node 가 attribute_gap/domain_outside 두 분기뿐이라
+        domain_outside 전면 거절로 새던 결함. P5 전까지 attribute_gap 과 동일 경로로
+        흘려 정직 리다이렉트(식별 검색 + 공식페이지 안내)에 도달해야 한다.
+        """
+        intake = make_intake(
+            turn_kind=TurnKind.NEW,
+            action=IntakeAction.OUT_OF_SCOPE,
+            oos_type="operational_detail",
+        )
+        vrows = [
+            {
+                "service_id": "V001",
+                "service_name": "마루공원 수영장",
+                "similarity": 0.9,
+            }
+        ]
+        hydrated = [
+            {
+                "service_id": "V001",
+                "service_name": "마루공원 수영장",
+                "service_url": "https://example.com",
+            }
+        ]
+
+        with (
+            patch("agents.vector_agent.vector_search", AsyncMock(return_value=vrows)),
+            patch("agents.vector_agent.question_search", AsyncMock(return_value=[])),
+            patch("agents.vector_agent.bm25_search", AsyncMock(return_value=[])),
+            patch(
+                "agents.hydration_node.hydrate_services",
+                AsyncMock(return_value=hydrated),
+            ),
+        ):
+            from agents.vector_agent import VectorAgent, _RefinedQuery
+
+            vector_agent = VectorAgent.__new__(VectorAgent)
+            refine_chain = MagicMock()
+            refine_chain.ainvoke = AsyncMock(
+                return_value=_RefinedQuery(
+                    refined_query="마루공원 수영장",
+                    max_class_name=None,
+                    area_name=None,
+                    service_status=None,
+                )
+            )
+            vector_agent._refine_chain = refine_chain
+            embeddings = MagicMock()
+            embeddings.aembed_query = AsyncMock(return_value=[0.1] * 3)
+            vector_agent._embeddings = embeddings
+
+            graph = AgentGraph(
+                intake=intake,
+                vector_agent=vector_agent,
+                answer_agent=_answer_agent("공식 페이지에서 확인하세요."),
+            )
+            result = await run_graph(
+                graph,
+                _state(message="마루공원 수영장 폭염철 이용안내"),
+                data_session=MagicMock(),
+                ai_session=make_ai_session(),
+            )
+
+        # 도메인 거절(domain_outside)로 새지 않아야 한다 — 식별 검색이 실제로 돌아간다.
+        assert "out_of_scope_domain_outside" not in result["node_path"]
+        assert "out_of_scope_attribute_gap" in result["node_path"]
+        assert result["vector"]["results"] is not None
+        # attribute_gap 동형 신호: vector_sub_intent 가 attribute_gap 으로 세팅된다.
+        assert result["plan"].get("vector_sub_intent") == "attribute_gap"
+        assert result["output"]["answer"] is not None
+
     async def test_explain_with_prev_reasoning(self):
         """META turn_kind + prev_reasoning -> explain LLM 재서술(S2) 답변 생성."""
         intake = make_intake(

@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from agents.answer_agent import _CLARIFY_FALLBACK, AnswerAgent
-from agents.nodes._shared import _FALLBACK_ANSWER
+from agents.nodes._shared import _FALLBACK_ANSWER, is_gap_oos
 from schemas.state import AgentState, IntentType
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ class AnswerNodes:
 
         기존 FALLBACK 안내문을 대체한다.
         반환 dict에 intent=FALLBACK을 명시적으로 세팅하여 AnswerAgent가 FALLBACK
-        분기(대화형 프롬프트)를 타도록 보장한다. triage_node는 action만 채우고 intent를
+        분기(대화형 프롬프트)를 타도록 보장한다. intake_node는 action만 채우고 intent를
         세팅하지 않으므로, 여기서 보장해야 DIRECT_ANSWER 직접 진입과 EXPLAIN 폴백
         (explain_node가 prev_reasoning 없을 때 이 노드로 위임) 두 경로 모두 카드형
         페르소나 오적용 없이 일관되게 FALLBACK 답변을 생성한다.
@@ -101,14 +101,16 @@ class AnswerNodes:
         """OUT_OF_SCOPE action — 서브타입 분기.
 
         domain_outside: 즉시 거절 메시지, 검색 없음, END로.
-        attribute_gap: refined_query + vector_sub_intent=attribute_gap으로
-                       vector_node → answer 경로. 데이터-성격 갭 프레이밍, 환각 금지.
+        attribute_gap / operational_detail: refined_query + vector_sub_intent=
+            attribute_gap 으로 vector_node → answer 경로. 데이터-성격 갭 프레이밍,
+            환각 금지. 두 서브타입은 P5 전까지 동형이다(아래 is_gap_oos).
         """
         oos_type = state["triage"].get("out_of_scope_type")
-        if oos_type == "attribute_gap":
-            # attribute_gap은 시설 식별 검색이 필요하므로 vector_node로 넘긴다.
-            # intent=VECTOR_SEARCH를 명시해야 HydrationNode가 올바르게 hydrate한다.
-            # (HydrationNode는 intent==VECTOR_SEARCH를 체크해 hydrated_services를 채운다.)
+        if is_gap_oos(oos_type):
+            # attribute_gap / operational_detail 은 시설 식별 검색이 필요하므로 vector_node
+            # 로 넘긴다. intent=VECTOR_SEARCH를 명시해야 HydrationNode가 올바르게
+            # hydrate한다(HydrationNode는 intent==VECTOR_SEARCH를 체크해 hydrated_services
+            # 를 채운다).
             #
             # 결정 C: 정상 DETAIL("이 시설 자세히")과 동일 신호(identification)로
             # 위장하지 않고 전용 vector_sub_intent="attribute_gap"을 전달한다. 검색
@@ -116,9 +118,16 @@ class AnswerNodes:
             # 동작), AnswerAgent 는 이 값으로 갭 전용 분기를 선택해 물어본 속성을 무시한
             # 채 예약 정보만 풀로 나열하던 결함(room 63)을 끊는다. triage user_rationale
             # 은 state["triage"]에 보존되어 answer 단계가 시드로 읽는다.
+            #
+            # operational_detail(폭염·휴무·주차·우천)도 이 분기로 흘려 domain_outside
+            # 전면 거절(사례 162-163 회귀)을 막는다. P5 에서 operational_detail 은
+            # detail_content 발췌 답변 경로로 분리된다 — 그 전까지 attribute_gap interim
+            # 리다이렉트로 정직 처리(공식 페이지/바로가기 안내, 부재 단정 금지). out_of_scope_type
+            # 은 state["triage"] 에 원본 그대로 보존되어 P5 분기점이 살아 있다.
             logger.info(
-                "out_of_scope.attribute_gap room=%s refined=%r",
+                "out_of_scope.gap room=%s oos=%s refined=%r",
                 state.get("room_id"),
+                oos_type,
                 (state["plan"].get("refined_query") or "")[:40],
             )
             return {

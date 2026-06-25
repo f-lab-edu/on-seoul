@@ -57,3 +57,27 @@ def sanitize_user_rationale(text: str | None) -> str | None:
 _FALLBACK_ANSWER = (
     "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 )
+
+
+# ---------------------------------------------------------------------------
+# OUT_OF_SCOPE 서브타입 동형 그룹 (식별 검색 + 정직 리다이렉트)
+# ---------------------------------------------------------------------------
+# attribute_gap 과 operational_detail 은 P5 전까지 동형이다 — 둘 다 시설 식별 검색을
+# 돌려 "운영 상세는 공식 페이지/바로가기에서 확인" 으로 정직하게 리다이렉트한다(부재
+# 단정 금지). domain_outside(진짜 범위 밖)만 전면 거절한다.
+#
+# operational_detail 은 intake 병합으로 신설된 운영성 질문(폭염·휴무·주차·우천)이나
+# 소비처가 없어 domain_outside 거절로 새던 회귀(사례 162-163)를 막기 위해 attribute_gap
+# 과 같은 분기로 흘린다(out_of_scope_node/라우팅/0건 게이트/self-correction 모두 동형).
+#
+# P5 연계: P5 에서 operational_detail 은 detail_content 발췌 답변 경로로 분리된다 —
+# 그 전까지 attribute_gap interim 리다이렉트로 정직 처리한다(거짓 단정만 제거).
+_GAP_OOS_TYPES: frozenset[str] = frozenset({"attribute_gap", "operational_detail"})
+
+
+def is_gap_oos(oos_type: str | None) -> bool:
+    """식별 검색 + 정직 리다이렉트 동형 그룹(attribute_gap/operational_detail) 판정.
+
+    domain_outside(진짜 범위 밖, 전면 거절)와 구분하는 단일 출처 predicate 다.
+    """
+    return oos_type in _GAP_OOS_TYPES

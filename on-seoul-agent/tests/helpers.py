@@ -31,6 +31,7 @@ from agents.answer_agent import (
     _STRUCT_EXPLAIN,
     _STRUCT_FALLBACK,
     _STRUCT_MAP,
+    _STRUCT_RELEVANCE,
 )
 from agents.intake_agent import IntakeAgent
 from agents.router_agent import RouterAgent, _IntentOutput
@@ -424,6 +425,7 @@ def make_answer_agent(
         "DETAIL": _compose(_ROLE, _STRUCT_DETAIL, _OUTPUT_RULES),
         "ATTRIBUTE_GAP": _compose(_ROLE, _STRUCT_ATTRIBUTE_GAP, _OUTPUT_RULES),
         "DESCRIBE": _compose(_ROLE, _STRUCT_DESCRIBE, _OUTPUT_RULES),
+        "RELEVANCE": _compose(_ROLE, _STRUCT_RELEVANCE, _OUTPUT_RULES),
         "DESCRIBE_EMPTY": _compose(_ROLE, _STRUCT_DESCRIBE_EMPTY, _OUTPUT_RULES),
         "CLARIFY": _compose(_ROLE, _STRUCT_CLARIFY, _FALLBACK_GUARDRAILS),
         "EXPLAIN": _compose(_ROLE, _STRUCT_EXPLAIN, _FALLBACK_GUARDRAILS),

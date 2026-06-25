@@ -8,6 +8,7 @@ from agents._helpers import assess_result_quality, reservation_guide_already_sho
 from agents._ondata_gateway import OnDataReader, default_reader
 from agents._search_channel_utils import _to_hits
 from agents.analytics_agent import AnalyticsAgent
+from agents.nodes._shared import is_gap_oos
 from agents.hydration_node import HydrationNode
 from agents.sql_agent import SqlAgent
 from agents.vector_agent import VectorAgent
@@ -150,17 +151,18 @@ class RetrievalNodes:
     def route_pre_answer_gate(self, state: AgentState) -> str:
         """C2 게이트 엣지: hydrated_services=[] 시 retry_prep, 그 외 answer_node.
 
-        M1-a: attribute_gap(OUT_OF_SCOPE)은 vector 검색을 실제 실행하므로 RETRIEVE 와
-        동일한 0건 처리 대상이다. 그 외 비-RETRIEVE action 은 게이트 통과(직접 answer).
+        M1-a: gap(attribute_gap/operational_detail, OUT_OF_SCOPE)은 vector 검색을 실제
+        실행하므로 RETRIEVE 와 동일한 0건 처리 대상이다. 그 외 비-RETRIEVE action 은
+        게이트 통과(직접 answer).
         """
         action = state["triage"].get("action")
         oos_type = state["triage"].get("out_of_scope_type")
-        # action=None 은 route_by_action 의 else→router_node fallback(검색 실행)과
+        # action=None 은 route_intake 의 else→router_node fallback(검색 실행)과
         # 대칭이라 RETRIEVE 와 동일 취급한다. 입구에서 검색을 돌려놓고 이 게이트만
         # 건너뛰면 빈 컨텍스트로 answer_node 에 진입하므로 None 도 검색 경로로 본다.
-        # attribute_gap 은 검색 경로라 0건 체크에 포함한다(중첩 경로).
+        # gap(attribute_gap/operational_detail)은 검색 경로라 0건 체크에 포함한다(중첩 경로).
         is_search_path = action in (ActionType.RETRIEVE, None) or (
-            action == ActionType.OUT_OF_SCOPE and oos_type == "attribute_gap"
+            action == ActionType.OUT_OF_SCOPE and is_gap_oos(oos_type)
         )
         if not is_search_path:
             return "answer_node"

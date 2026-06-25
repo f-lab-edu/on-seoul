@@ -196,10 +196,16 @@ class IntakeNodes:
             merged_filters,
             forced.value if forced else None,
         )
+        # 관측 breadcrumb — REFINE 인데 base 가 없는(prev_working_set 공백) 경우 머지
+        # 결과가 신규 제약만 남아 사실상 NEW 동작이다. turn_kind=REFINE 으로 분류됐으나
+        # carryover 할 직전 레시피가 없었음을 trace 에 남긴다(no_base — degrade 자각).
+        breadcrumbs = ["working_set_refine"]
+        if not filters_base:
+            breadcrumbs.append("working_set_refine:no_base")
         # re_searching 경계는 아니지만 검색 단계 진입이므로 searching emit 은 router_node
         # 가 RETRIEVE decision 과 함께 흘린다(여기선 가드만 세팅하지 않음).
         update: dict[str, Any] = {
-            "node_path": ["working_set_refine"],
+            "node_path": breadcrumbs,
         }
         if merged_filters:
             update["filters"] = merged_filters

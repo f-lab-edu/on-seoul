@@ -5,6 +5,7 @@ from typing import Any
 
 from agents import _redis_gateway
 from agents._helpers import emit_progress
+from agents.nodes._shared import is_gap_oos
 from schemas.search import RESET_CHANNELS
 from schemas.state import ActionType, AgentState, IntentType
 
@@ -132,7 +133,7 @@ class CorrectionNodes:
         #   · 0건을 유발한 필터만 드롭(max_class_name 유지)하고 relaxed_filters 에 기록한다.
         # 종료 안전성: 2회차는 answer_node 도달 후 self_correction_edge ⓪
         # (action==OUT_OF_SCOPE → end_normal) 로 즉시 종료되어 무한루프 없음.
-        if action == ActionType.OUT_OF_SCOPE and oos_type == "attribute_gap":
+        if action == ActionType.OUT_OF_SCOPE and is_gap_oos(oos_type):
             dropped = [
                 f for f in _ATTRIBUTE_GAP_DROP_ORDER if state["filters"].get(f)
             ]

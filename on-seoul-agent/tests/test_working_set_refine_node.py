@@ -98,7 +98,35 @@ class TestWorkingSetRefine:
         update = await _node(router).working_set_refine_node(state)
         assert update["filters"] == {"payment_type": "무료"}
         assert "forced_intent" not in update
-        assert update["node_path"] == ["working_set_refine"]
+        # base 가 없으므로(prev_working_set=None) no_base breadcrumb 가 남는다.
+        assert update["node_path"] == ["working_set_refine", "working_set_refine:no_base"]
+
+    async def test_no_base_breadcrumb_when_prev_working_set_empty(self):
+        """REFINE 인데 base 필터가 없으면 no_base breadcrumb 가 trace 에 남는다(관측).
+
+        prev_working_set 공백(base 없음)이면 머지 결과가 신규 제약만 남아 사실상
+        NEW 동작이다. turn_kind=REFINE 분류였음에도 carryover 베이스가 없었음을
+        node_path 에 기록해 degrade 를 자각 가능하게 한다.
+        """
+        router = make_router(IntentType.SQL_SEARCH)  # 신규 제약도 없음
+        from tests.helpers import make_agent_state
+
+        state = make_agent_state(message="그것들", prev_working_set={})
+        update = await _node(router).working_set_refine_node(state)
+        assert "working_set_refine:no_base" in update["node_path"]
+
+    async def test_no_no_base_breadcrumb_when_base_present(self):
+        """base 필터가 있으면 no_base breadcrumb 는 남지 않는다."""
+        router = make_router(IntentType.SQL_SEARCH, payment_type="무료")
+        ws = {
+            "intent": IntentType.SQL_SEARCH,
+            "applied_filters": {"area_name": "강남구"},
+        }
+        from tests.helpers import make_agent_state
+
+        state = make_agent_state(message="그 중 무료만", prev_working_set=ws)
+        update = await _node(router).working_set_refine_node(state)
+        assert "working_set_refine:no_base" not in update["node_path"]
 
     async def test_no_new_constraints_keeps_base_only(self):
         """이번 발화에서 신규 제약이 없으면 base 필터만 흐른다(no-op 머지)."""
