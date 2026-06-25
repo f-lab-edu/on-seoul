@@ -51,7 +51,20 @@ _CLEAN_INPUT_CAP = 64 * 1024
 # post-boundary 지시를 주입할 수 있다. 반환 전에 (1) fence 라벨 마커(선례:
 # agents/_intake_indexing._FENCE)와 (2) 일반 3+ 하이픈 경계 런을 평탄화한다. 본문의
 # 범위 대시(09-18시 등)는 하이픈 2개 이하라 보존된다.
-_FENCE_LABEL_RE = re.compile(r"-{2,}\s*\w+_(?:START|END)\s*-{2,}")
+#
+# 이중 안전장치(SHOULD-FIX 하드닝): 실 펜스는 바이트-정확이라 변형은 진짜 breakout
+# 으로 기능하진 않지만(저위험), 외부입력→LLM 프롬프트 보안 경로라 변형까지 막는다.
+#   (a) 라벨 토큰을 대소문자 무시(re.I)로 잡아 라벨 자체(EXCERPT_END 등)를 제거한다.
+#   (b) 라벨을 둘러싼 대시·공백 섞인 런(`- - - EXCERPT_END - - -`, `--- excerpt_end ---`)
+#       까지 한 매치로 흡수해 펜스 모양 잔여물을 남기지 않는다.
+# 과도중화 방지: `\w+_(?:START|END)` 라벨 패턴에 한정한다. 막연한 `start`/`end` 영어
+# 단어는 `_(START|END)` 형태가 아니라 매칭되지 않고, 가격 `1,000-2,000원`·시간 `09-18시`
+# 의 하이픈 2개 이하 런은 _DASH_RUN_RE(3+) 와 라벨 인접 런 어디에도 걸리지 않는다.
+_DASH_SPACE_RUN = r"(?:[-\s]*-[-\s]*)?"  # 대시 1개 이상 + 공백 섞임. 없어도 됨.
+_FENCE_LABEL_RE = re.compile(
+    rf"{_DASH_SPACE_RUN}\b\w*_(?:START|END)\b{_DASH_SPACE_RUN}",
+    re.IGNORECASE,
+)
 _DASH_RUN_RE = re.compile(r"-{3,}")
 
 # 진짜 개인 휴대폰 번호(강사·담당자 연락처). rrn형은 오탐·이메일은 원천 마스킹이라 제외.
