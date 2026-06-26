@@ -5,13 +5,16 @@ pg_search 0.23.4 환경의 검증된 제약 (EXPLAIN ANALYZE 실측 갱신)
 - ✅ 리터럴 `col @@@ '테니스장'` (인라인)
 - ✅ `paradedb.score(id)` SELECT 및 `ORDER BY paradedb.score(id) DESC`.
   과거 docstring 은 service_name 컬럼에서 "깨진다"고 명시했으나, ParadeDB 0.23.4
-  실측 결과 service_name·metadata 두 컬럼 모두에서 동작한다. EXPLAIN ANALYZE 상
-  `Scores: true` + `idx_service_embeddings_bm25` Custom Scan 적중을 확인했고,
-  지연은 토큰당 ~30ms → ~31-35ms 로 사실상 동등(테니스장 421건: 30.6→34.8ms).
-  과거에 보고된 ~263ms 슬로우다운은 이 환경에서 재현되지 않았다.
+  실측 결과 service_name 컬럼에서 동작한다. EXPLAIN ANALYZE 상 `Scores: true` +
+  `idx_service_embeddings_bm25` Custom Scan 적중을 확인했고, 지연은 토큰당 ~30ms 다
+  (테니스장 421건: 29.7ms). 과거에 보고된 ~263ms 슬로우다운은 재현되지 않았다.
 - ❌ Bind 파라미터 `col @@@ $1`
 - ❌ `paradedb.boolean(...)` / `paradedb.parse(...)` API 호출
-- ❌ 서로 다른 컬럼 결합 (`service_name @@@ ... OR metadata @@@ ...`)
+- ❌ `metadata @@@ '평문토큰'` — metadata 는 bm25 인덱스에 json_fields 로 선언되어
+  평문 토큰이 전 토큰에서 0건 매칭한다(라이브 EXPLAIN 실측). field-qualified
+  (`metadata @@@ 'extracted.summary:토큰'`)만 매칭하나, 봉인 평가셋에서 semantic
+  recall 을 떨어뜨려(0.800→0.700, summary 텍스트 IDF 오염) 채택하지 않는다.
+  → BM25 검색 대상은 service_name 단일 컬럼 (_BM25_COLUMNS 주석 참조).
 - ⚠️ `WHERE {col} @@@ '...'` 에는 **반드시 `AND row_kind = 'identity'`** 를 붙인다.
   bm25 인덱스가 `WHERE row_kind = 'identity'` partial 인덱스라, 이 조건이 없으면
   planner 가 partial 인덱스를 후보에서 제외해 Parallel Seq Scan(토큰당 ~350ms)으로
@@ -73,7 +76,15 @@ _BM25_RESERVED: frozenset[str] = frozenset({"AND", "OR", "NOT", "TO", "IN"})
 _BM25_INLINE_SAFE: re.Pattern[str] = re.compile(r"[^가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9]")
 
 # 검색 대상 컬럼 — 코드 하드코딩, 외부 입력 받지 않음.
-_BM25_COLUMNS: tuple[str, ...] = ("service_name", "metadata")
+# metadata 컬럼은 의도적으로 제외한다. bm25 인덱스가 metadata 를 json_fields 로
+# 선언해(idx_service_embeddings_bm25), 평문 토큰 `metadata @@@ '테니스장'` 은 전 토큰에서
+# 0건 매칭한다(라이브 EXPLAIN 실측). field-qualified(`metadata @@@ 'extracted.summary:테니스장'`)
+# 만 매칭하는데, 봉인 평가셋 측정 결과 그 방향은 semantic recall@10 을 0.800→0.700 으로
+# 떨어뜨렸다(extracted.summary 텍스트의 도메인 공통어가 RRF 를 오염 — DDL 이 summary 를
+# BM25 색인에서 제외한 IDF 오염 회피 논리와 동일). metadata 채널 제거 시 recall 동등
+# (R@1 0.571 / R@5·10 0.857 / MRR 0.663 / identification 1.0 유지) + bm25 지연 절반
+# (mean 413ms→197ms). 따라서 service_name 단일 채널만 유지한다.
+_BM25_COLUMNS: tuple[str, ...] = ("service_name",)
 
 
 def _sanitize_tokens(tokens: list[str]) -> list[str]:
@@ -154,8 +165,8 @@ async def _search_one(
     # 바꾸지 않는다. ParadeDB가 row_kind를 인덱스 필드로 갖지 않아 @@@ 문법 안에는
     # 넣을 수 없고(boolean/term API 거부), partial 인덱스 predicate 매칭으로 해소된다.
     # ORDER BY paradedb.score(id) DESC: BM25 relevance 순으로 정렬해 LIMIT 컷을
-    # 결정적·고관련도 우선으로 만든다 (ParadeDB 0.23.4 service_name·metadata 양 컬럼에서
-    # 동작, idx_service_embeddings_bm25 Custom Scan 적중 — EXPLAIN ANALYZE 확인).
+    # 결정적·고관련도 우선으로 만든다 (ParadeDB 0.23.4 service_name 컬럼에서 동작,
+    # idx_service_embeddings_bm25 Custom Scan 적중 — EXPLAIN ANALYZE 확인).
     # service_id ASC 는 점수 동률 시 결정적 tie-break.
     # ROW_NUMBER 는 동일 ORDER BY 윈도우로 1-based relevance rank 를 부여한다.
     sql = text(f"""
@@ -212,10 +223,12 @@ async def bm25_search(
     *,
     limit: int = BM25_LIMIT,
 ) -> list[dict]:
-    """ParadeDB BM25 전문 검색 — service_name + metadata 두 컬럼 머지.
+    """ParadeDB BM25 전문 검색 — service_name 컬럼 (토큰별 머지).
 
-    pg_search 0.23.4 제약으로 단일 SQL 안에서 두 컬럼을 결합할 수 없어
-    컬럼별로 독립 실행하고 service_id 기준 MAX(bm25_score) 로 머지한다.
+    검색 대상은 service_name 단일 컬럼이다. metadata 컬럼은 json_fields 색인이라
+    평문 토큰이 매칭되지 않고, field-qualified 방향은 recall 을 떨어뜨려 제외했다
+    (_BM25_COLUMNS 주석 참조). 토큰별로 독립 실행하고 service_id 기준
+    MAX(bm25_score) 로 머지한다.
 
     Parameters
     ----------
@@ -245,7 +258,7 @@ async def bm25_search(
 
     # 각 (컬럼, 토큰) 조합을 단일 token 쿼리로 실행 후 머지.
     # asyncpg 단일 세션 제약으로 순차 실행 (vector_agent.py 와 동일 패턴).
-    # 토큰 상한 덕분에 최대 C × T = 2 × 8 = 16 쿼리로 제한.
+    # 토큰 상한 덕분에 최대 C × T = 1 × 8 = 8 쿼리로 제한.
     all_rows: list[list[dict]] = []
     for column in _BM25_COLUMNS:
         for token in safe:

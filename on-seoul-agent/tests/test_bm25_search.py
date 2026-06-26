@@ -5,7 +5,9 @@ Mock DB 세션으로 BM25 쿼리 변환, bind 파라미터, 머지 동작을 검
 
 테스트 구조:
 - build_bm25_query: 토큰 sanitize/OR 결합 단위 함수
-- bm25_search: 두 컬럼(service_name, metadata) 개별 호출 후 머지 동작
+- bm25_search: service_name 단일 컬럼 토큰별 호출 후 머지 동작.
+  metadata 컬럼은 json_fields 색인이라 평문 토큰이 0건 매칭하고, field-qualified
+  방향은 봉인 평가셋에서 recall 을 떨어뜨려 _BM25_COLUMNS 에서 제외했다.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -16,8 +18,9 @@ from tools.bm25_search import BM25_LIMIT, bm25_search, build_bm25_query
 def _make_session(*responses: list[dict]) -> MagicMock:
     """fake AsyncSession — execute 호출마다 responses 순서대로 row 리스트를 반환한다.
 
-    bm25_search 가 두 컬럼을 순차 호출하므로 호출 횟수만큼 응답을 미리 준비한다.
-    응답이 1개만 주어지면 모든 호출에 동일하게 반환된다.
+    bm25_search 가 service_name 단일 컬럼을 토큰별로 순차 호출하므로 (토큰 수만큼)
+    호출 횟수만큼 응답을 미리 준비한다. 응답이 1개만 주어지면 모든 호출에 동일하게
+    반환된다.
     """
 
     def _result_for(rows: list[dict]) -> MagicMock:
@@ -42,11 +45,13 @@ def _make_session(*responses: list[dict]) -> MagicMock:
 
 # ParadeDB가 BM25 relevance 순으로 결과를 반환하면 ROW_NUMBER 로 rank 부여.
 # bm25_score 는 Python 사이드에서 1.0/rank 로 산출됨.
-_SAMPLE_ROWS_SN = [
+# 단일 컬럼(service_name) 구조에서 머지는 토큰별 결과 합집합으로 일어난다.
+# 두 토큰의 결과를 모델링한다 (토큰1 → _SAMPLE_ROWS_T1, 토큰2 → _SAMPLE_ROWS_T2).
+_SAMPLE_ROWS_T1 = [
     {"service_id": "S001", "service_name": "테니스장1", "bm25_rank": 1},
     {"service_id": "S002", "service_name": "테니스장2", "bm25_rank": 2},
 ]
-_SAMPLE_ROWS_MD = [
+_SAMPLE_ROWS_T2 = [
     {"service_id": "S002", "service_name": "테니스장2", "bm25_rank": 1},
     {"service_id": "S003", "service_name": "수영장1", "bm25_rank": 2},
 ]
@@ -146,26 +151,26 @@ class TestBm25SearchEmptyQueryGuard:
 
 
 class TestBm25SearchBasic:
-    async def test_single_token_executes_two_queries(self):
-        """단일 토큰 × 2 컬럼 = 2회 execute."""
-        session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
+    async def test_single_token_executes_one_query(self):
+        """단일 토큰 × 1 컬럼(service_name) = 1회 execute."""
+        session = _make_session(_SAMPLE_ROWS_T1)
         await bm25_search(["테니스"], session)
+        assert session.execute.call_count == 1
+
+    async def test_two_tokens_execute_two_queries(self):
+        """2 토큰 × 1 컬럼(service_name) = 2회 execute."""
+        session = _make_session([], [])
+        await bm25_search(["테니스", "예약"], session)
         assert session.execute.call_count == 2
 
-    async def test_two_tokens_execute_four_queries(self):
-        """2 토큰 × 2 컬럼 = 4회 execute."""
-        session = _make_session([], [], [], [])
-        await bm25_search(["테니스", "예약"], session)
-        assert session.execute.call_count == 4
-
     async def test_returns_list_of_dicts(self):
-        session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
+        session = _make_session(_SAMPLE_ROWS_T1)
         result = await bm25_search(["테니스"], session)
         assert isinstance(result, list)
         assert all(isinstance(r, dict) for r in result)
 
     async def test_result_has_required_keys(self):
-        session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
+        session = _make_session(_SAMPLE_ROWS_T1)
         result = await bm25_search(["테니스"], session)
         for row in result:
             assert "service_id" in row
@@ -173,7 +178,7 @@ class TestBm25SearchBasic:
             assert "bm25_score" in row
 
     async def test_empty_results_in_all_queries(self):
-        session = _make_session([], [])
+        session = _make_session([])
         result = await bm25_search(["없는키워드"], session)
         assert result == []
 
@@ -184,43 +189,48 @@ class TestBm25SearchBasic:
 
 
 class TestBm25SearchMerge:
-    async def test_duplicate_service_id_takes_max_score(self):
-        """두 컬럼 모두에 매칭된 service_id 는 최대 점수(=최소 rank)가 채택된다.
+    """단일 컬럼(service_name)에서 토큰별 결과를 머지하는 동작 검증.
 
-        S002: SN rank=2 (score 0.5), MD rank=1 (score 1.0) → MD 의 1.0 채택.
+    두 토큰의 결과(_SAMPLE_ROWS_T1 / _SAMPLE_ROWS_T2)를 합집합·MAX score 로 머지한다.
+    """
+
+    async def test_duplicate_service_id_takes_max_score(self):
+        """두 토큰 모두에 매칭된 service_id 는 최대 점수(=최소 rank)가 채택된다.
+
+        S002: 토큰1 rank=2 (score 0.5), 토큰2 rank=1 (score 1.0) → 1.0 채택.
         """
-        session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
-        result = await bm25_search(["테니스"], session)
+        session = _make_session(_SAMPLE_ROWS_T1, _SAMPLE_ROWS_T2)
+        result = await bm25_search(["테니스", "예약"], session)
         s002 = next(r for r in result if r["service_id"] == "S002")
         assert s002["bm25_score"] == 1.0
 
     async def test_results_sorted_by_score_desc(self):
-        session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
-        result = await bm25_search(["테니스"], session)
+        session = _make_session(_SAMPLE_ROWS_T1, _SAMPLE_ROWS_T2)
+        result = await bm25_search(["테니스", "예약"], session)
         scores = [r["bm25_score"] for r in result]
         assert scores == sorted(scores, reverse=True)
 
-    async def test_union_of_service_ids_from_both_columns(self):
-        """두 컬럼 결과의 합집합이 반환된다."""
-        session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
-        result = await bm25_search(["테니스"], session)
+    async def test_union_of_service_ids_from_both_tokens(self):
+        """두 토큰 결과의 합집합이 반환된다."""
+        session = _make_session(_SAMPLE_ROWS_T1, _SAMPLE_ROWS_T2)
+        result = await bm25_search(["테니스", "예약"], session)
         ids = {r["service_id"] for r in result}
-        # SN 측 S001, S002 + MD 측 S002, S003
+        # 토큰1 측 S001, S002 + 토큰2 측 S002, S003
         assert ids == {"S001", "S002", "S003"}
 
     async def test_limit_applied_to_merged_result(self):
-        session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
-        result = await bm25_search(["테니스"], session, limit=2)
+        session = _make_session(_SAMPLE_ROWS_T1, _SAMPLE_ROWS_T2)
+        result = await bm25_search(["테니스", "예약"], session, limit=2)
         assert len(result) == 2
 
     async def test_bm25_score_derived_from_rank(self):
         """bm25_score 는 1.0/rank 로 산출된다 (rank=1 → score=1.0)."""
-        session = _make_session(_SAMPLE_ROWS_SN, _SAMPLE_ROWS_MD)
-        result = await bm25_search(["테니스"], session)
-        # S001 은 SN 단독, rank=1 → score=1.0
+        session = _make_session(_SAMPLE_ROWS_T1, _SAMPLE_ROWS_T2)
+        result = await bm25_search(["테니스", "예약"], session)
+        # S001 은 토큰1 단독, rank=1 → score=1.0
         s001 = next(r for r in result if r["service_id"] == "S001")
         assert s001["bm25_score"] == 1.0
-        # S003 은 MD 단독, rank=2 → score=0.5
+        # S003 은 토큰2 단독, rank=2 → score=0.5
         s003 = next(r for r in result if r["service_id"] == "S003")
         assert s003["bm25_score"] == 0.5
 
@@ -308,7 +318,11 @@ class TestBm25SearchSqlSafety:
         assert all("@@@" in str(s) for s in captured)
 
     async def test_columns_hardcoded_in_sql(self):
-        """검색 컬럼명은 SQL 템플릿에 하드코딩되어 외부 입력의 영향을 받지 않는다."""
+        """검색 컬럼은 service_name 단일 컬럼으로 SQL 템플릿에 하드코딩된다.
+
+        metadata 컬럼은 json_fields 색인이라 평문 토큰이 매칭되지 않아 제외했다.
+        SQL 에 metadata @@@ 가 나타나지 않는지 회귀 가드.
+        """
         captured: list = []
 
         async def _capture(stmt, params=None):
@@ -322,10 +336,9 @@ class TestBm25SearchSqlSafety:
         session.execute = AsyncMock(side_effect=_capture)
 
         await bm25_search(["검색어"], session)
-        # 두 번의 호출 중 하나는 service_name, 하나는 metadata 를 SQL에 포함
         joined = " ".join(captured)
         assert "service_name @@@" in joined
-        assert "metadata @@@" in joined
+        assert "metadata @@@" not in joined
 
     async def test_all_sql_meta_chars_stripped(self):
         """SQL meta 문자가 인라인 부분에 일체 포함되지 않는다 (enum 검증)."""
@@ -348,10 +361,9 @@ class TestBm25SearchSqlSafety:
                     # SQL 메타 문자가 토큰 인라인 단계에서 잔류하지 않는지
                     # (SQL 템플릿 자체의 single quote 는 토큰을 감싸는 ' ' 뿐)
                     if meta == "'":
-                        # ' 는 토큰을 감싸는 용도이므로 2개 이상은 비정상
-                        assert (
-                            stmt.count("'") <= 4
-                        )  # service_name '...', metadata '...'
+                        # single quote 는 토큰을 감싸는 'token' 2개 +
+                        # row_kind = 'identity' predicate 2개 = 4개만 정상.
+                        assert stmt.count("'") <= 4
                     else:
                         assert meta not in stmt
 
@@ -380,8 +392,8 @@ class TestBm25SearchPartialIndexPredicate:
         session.execute = AsyncMock(side_effect=_capture)
 
         await bm25_search(["테니스", "예약"], session)
-        # 2 토큰 × 2 컬럼 = 4 쿼리, 모두에 predicate 포함.
-        assert len(captured) == 4
+        # 2 토큰 × 1 컬럼(service_name) = 2 쿼리, 모두에 predicate 포함.
+        assert len(captured) == 2
         for sql in captured:
             normalized = " ".join(sql.split())
             assert "row_kind = 'identity'" in normalized, (
@@ -533,13 +545,13 @@ class TestBm25SearchGuards:
             assert "LIMIT 1" in str(call[0][0])
 
     async def test_max_tokens_cap_applied(self):
-        """토큰 9개 입력 시 상한 8개로 잘려 16쿼리(2컬럼×8토큰)만 실행."""
-        session = _make_session(*[[] for _ in range(16)])
+        """토큰 9개 입력 시 상한 8개로 잘려 8쿼리(1컬럼×8토큰)만 실행."""
+        session = _make_session(*[[] for _ in range(8)])
         # 9 토큰 — 8개로 잘림
         tokens = [f"토큰{i}" for i in range(9)]
         await bm25_search(tokens, session)
-        # 컬럼 2 × 토큰 8 = 16 쿼리
-        assert session.execute.call_count == 16
+        # 컬럼 1(service_name) × 토큰 8 = 8 쿼리
+        assert session.execute.call_count == 8
 
     async def test_long_token_truncated(self):
         """64자 초과 토큰은 잘려서 인라인된다."""
@@ -554,14 +566,14 @@ class TestBm25SearchGuards:
 
     async def test_deterministic_tie_break_by_service_id(self):
         """점수 동률 시 service_id 오름차순으로 정렬된다 (결정적 tie-break)."""
-        # 두 컬럼 모두에서 rank=1 인 결과 → score=1.0 동률
-        sn = [
+        # 두 토큰 모두에서 rank=1 인 결과 → score=1.0 동률
+        t1 = [
             {"service_id": "S_B", "service_name": "B", "bm25_rank": 1},
         ]
-        md = [
+        t2 = [
             {"service_id": "S_A", "service_name": "A", "bm25_rank": 1},
         ]
-        session = _make_session(sn, md)
-        result = await bm25_search(["테니스"], session)
+        session = _make_session(t1, t2)
+        result = await bm25_search(["테니스", "예약"], session)
         # 동률(1.0) 두 개 → service_id 오름차순
         assert [r["service_id"] for r in result] == ["S_A", "S_B"]
