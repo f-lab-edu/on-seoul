@@ -141,7 +141,7 @@ async def sql_search(
         SELECT {_RESULT_COLUMNS}
         FROM public_service_reservations
         WHERE {where}
-        ORDER BY receipt_start_dt DESC NULLS LAST
+        ORDER BY receipt_start_dt DESC NULLS LAST, service_id ASC
         LIMIT :top_k
     """)
 

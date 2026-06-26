@@ -328,6 +328,118 @@ class TestSqlSearchDateFilters:
         assert bind["receipt_date_to"] == date(2026, 5, 31)
 
 
+class TestSqlSearchOrderStability:
+    """receipt_start_dt 동률 시 service_id ASC 2차 정렬로 결정적 순서 보장."""
+
+    async def test_order_by_includes_service_id_tiebreaker(self):
+        """ORDER BY 절에 service_id ASC 2차 정렬 키가 포함된다."""
+        executed_sqls: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.keys.return_value = []
+            m.fetchall.return_value = []
+            return m
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await sql_search(session)
+
+        sql_text = executed_sqls[0]
+        assert "receipt_start_dt DESC NULLS LAST" in sql_text
+        # 동률 그룹 내부를 결정적으로 정렬하는 2차 키
+        assert "service_id ASC" in sql_text
+        # 최신순 우선(1차 키) → service_id(2차 키) 순서를 보장
+        assert sql_text.index("receipt_start_dt DESC") < sql_text.index(
+            "service_id ASC"
+        )
+
+    async def test_primary_sort_intent_preserved(self):
+        """1차 정렬 의도(최신순 DESC)가 service_id 추가로 깨지지 않는다."""
+        executed_sqls: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.keys.return_value = []
+            m.fetchall.return_value = []
+            return m
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await sql_search(session)
+
+        order_clause = executed_sqls[0].split("ORDER BY", 1)[1]
+        # 1차 키는 여전히 receipt_start_dt DESC (날짜 경계에서만 날짜가 바뀜)
+        assert order_clause.strip().startswith("receipt_start_dt DESC")
+        # service_id 는 ASC (동률 그룹 내부에서만 순서 결정)
+        assert "service_id DESC" not in order_clause
+
+    async def test_service_id_is_strictly_secondary_key(self):
+        """service_id 는 정확히 2차 키 — 1차 키 뒤 첫 번째이자 유일한 콤마 키.
+
+        2차 키가 실수로 1차로 승격되면 최신순 의도가 깨진다. ORDER BY 절을
+        콤마로 분해해 [primary, secondary] 정확히 2개이며 순서가 맞는지 단언한다.
+        """
+        executed_sqls: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.keys.return_value = []
+            m.fetchall.return_value = []
+            return m
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await sql_search(session)
+
+        # "ORDER BY <clause> LIMIT ..." 에서 clause만 추출
+        order_clause = executed_sqls[0].split("ORDER BY", 1)[1].split("LIMIT", 1)[0]
+        keys = [k.strip() for k in order_clause.split(",")]
+        assert len(keys) == 2, f"정렬 키는 정확히 2개여야 한다: {keys}"
+        assert keys[0] == "receipt_start_dt DESC NULLS LAST"
+        assert keys[1] == "service_id ASC"
+
+    async def test_tied_rows_returned_in_service_id_order(self):
+        """동률(receipt_start_dt 동일) 입력에서 반환 순서가 보존된다(값 수준).
+
+        DB가 (receipt_start_dt DESC, service_id ASC)로 정렬해 넘긴 행 순서를
+        sql_search 가 재배열·드롭 없이 그대로 반환하는지 단언한다. DB 정렬 보장
+        자체는 SQL 문자열 + 실DB 검증의 몫이며, 본 테스트는 도구의 순서 보존
+        (passthrough)을 고정한다.
+        """
+        # 동일 receipt_start_dt, service_id 오름차순으로 이미 정렬된 DB 결과를 모사
+        tied_rows = [
+            {
+                "service_id": "S001",
+                "service_name": "가 시설",
+                "receipt_start_dt": date(2026, 6, 1),
+            },
+            {
+                "service_id": "S002",
+                "service_name": "나 시설",
+                "receipt_start_dt": date(2026, 6, 1),
+            },
+            {
+                "service_id": "S003",
+                "service_name": "다 시설",
+                "receipt_start_dt": date(2026, 6, 1),
+            },
+        ]
+        session = _make_session(tied_rows)
+
+        result = await sql_search(session)
+
+        assert [r["service_id"] for r in result] == ["S001", "S002", "S003"]
+        # 모든 행이 동률(같은 receipt_start_dt)임을 명시 — 순서를 가르는 건 service_id뿐
+        assert {r["receipt_start_dt"] for r in result} == {date(2026, 6, 1)}
+
+
 class TestSqlSearchSqlInjection:
     async def test_malicious_value_not_in_sql_text(self):
         """SQL Injection 방지: 악성 값이 SQL 문자열에 직접 삽입되지 않는다."""
