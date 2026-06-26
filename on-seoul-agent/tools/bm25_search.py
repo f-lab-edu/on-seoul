@@ -1,10 +1,15 @@
-"""BM25 Search Tool — ParadeDB BM25 전문 검색 (인라인 토큰 + score 함수 회피).
+"""BM25 Search Tool — ParadeDB BM25 전문 검색 (인라인 토큰 + relevance 정렬).
 
-pg_search 0.23.4 환경의 검증된 제약
-------------------------------------
-- ✅ 리터럴 `col @@@ '테니스장'` (인라인) + ORDER BY 없이 LIMIT
+pg_search 0.23.4 환경의 검증된 제약 (EXPLAIN ANALYZE 실측 갱신)
+--------------------------------------------------------------
+- ✅ 리터럴 `col @@@ '테니스장'` (인라인)
+- ✅ `paradedb.score(id)` SELECT 및 `ORDER BY paradedb.score(id) DESC`.
+  과거 docstring 은 service_name 컬럼에서 "깨진다"고 명시했으나, ParadeDB 0.23.4
+  실측 결과 service_name·metadata 두 컬럼 모두에서 동작한다. EXPLAIN ANALYZE 상
+  `Scores: true` + `idx_service_embeddings_bm25` Custom Scan 적중을 확인했고,
+  지연은 토큰당 ~30ms → ~31-35ms 로 사실상 동등(테니스장 421건: 30.6→34.8ms).
+  과거에 보고된 ~263ms 슬로우다운은 이 환경에서 재현되지 않았다.
 - ❌ Bind 파라미터 `col @@@ $1`
-- ❌ `paradedb.score(id)` SELECT 또는 ORDER BY 사용 (service_name 컬럼에서 깨짐)
 - ❌ `paradedb.boolean(...)` / `paradedb.parse(...)` API 호출
 - ❌ 서로 다른 컬럼 결합 (`service_name @@@ ... OR metadata @@@ ...`)
 - ⚠️ `WHERE {col} @@@ '...'` 에는 **반드시 `AND row_kind = 'identity'`** 를 붙인다.
@@ -14,10 +19,14 @@ pg_search 0.23.4 환경의 검증된 제약
   인덱스 필드가 아니라 @@@ 문법 안에 넣을 수 없고, partial 인덱스 predicate 매칭으로
   해소한다. 결과 동등(인덱스가 identity row만 색인 → @@@ 는 이미 identity만 매칭).
 
-→ 전략: **인라인 토큰 + score 함수 미사용 + ROW_NUMBER 로 rank 부여**
-   ParadeDB 가 BM25 자연 순서로 결과를 반환하므로 SELECT 에 ROW_NUMBER 만
-   추가하면 BM25 rank 를 얻을 수 있다. RRF 는 rank 만 필요하므로 충분.
-   호환성: bm25_score = 1.0 / rank 로 환산하여 다운스트림 코드 무변경.
+→ 전략: **인라인 토큰 + `ORDER BY paradedb.score(id) DESC` 로 relevance top-N 보장**
+   ORDER BY 가 없으면 LIMIT 50 이 잘라내는 50건이 물리 스캔 순서(Seq vs Custom Scan)
+   에 따라 달라져 비결정적이었다(테니스장 421건에서 relevance top-50 중 29건 누락 관측).
+   `ORDER BY paradedb.score(id) DESC, service_id ASC` 로 (1) relevance top-N 정확성과
+   (2) 점수 동률 시 service_id 결정적 tie-break 를 동시에 확보한다.
+   rank 는 정렬된 결과에 `ROW_NUMBER() OVER (ORDER BY paradedb.score(id) DESC,
+   service_id ASC)` 로 부여 → bm25_score = 1.0 / rank 환산. RRF 는 rank 만 사용하므로
+   relevance 순 rank 와 정합적이고 다운스트림 코드는 무변경.
 
 SQL Injection 방지 (인라인 안전성)
 ----------------------------------
@@ -111,13 +120,15 @@ async def _search_one(
 ) -> list[dict]:
     """단일 (컬럼, 토큰) 조합 BM25 검색.
 
-    ParadeDB 0.23.4 가 asyncpg prepared statement 의 `@@@ $N` 형태와
-    `paradedb.score(id)` 함수 (service_name 컬럼 대상) 를 지원하지 않는다.
+    ParadeDB 0.23.4 가 asyncpg prepared statement 의 `@@@ $N` 형태를 지원하지 않으므로
+    토큰을 SQL 에 직접 인라인한다 (no bind).
 
-    회피 전략:
-    - 토큰을 SQL 에 직접 인라인 (no bind).
-    - `paradedb.score` 미사용. ParadeDB 가 BM25 relevance 순으로 결과를 반환하므로
-      `ROW_NUMBER() OVER ()` 로 rank 를 부여하고 `bm25_score = 1.0 / rank` 로 환산.
+    relevance top-N 전략:
+    - `ORDER BY paradedb.score(id) DESC, service_id ASC` 로 BM25 relevance 순 정렬.
+      ORDER BY 가 없으면 LIMIT 컷이 물리 스캔 순서를 따라 비결정적이 되고, 매칭 > LIMIT
+      인 고빈도 토큰에서 relevance 상위 행이 누락된다(실측: 테니스장 421건에서 29건 누락).
+    - 정렬된 결과에 `ROW_NUMBER() OVER (... 동일 ORDER BY ...)` 로 1-based rank 부여 후
+      `bm25_score = 1.0 / rank` 로 환산. RRF 는 rank 만 사용하므로 정합적·다운스트림 무변경.
 
     안전성 가드 (defense-in-depth):
     - 빈 token → 빈 결과 반환 (`WHERE col @@@ ''` 발급 방지).
@@ -137,25 +148,33 @@ async def _search_one(
     # (idx_service_embeddings_bm25 ... WHERE row_kind = 'identity') predicate 와
     # 정렬하기 위한 필수 조건이다. 누락 시 planner 가 partial 인덱스를 후보에서
     # 제외해 Parallel Seq Scan(토큰당 ~350ms)으로 떨어진다. 이 조건이 들어가면
-    # ParadeDB Custom Scan(idx_service_embeddings_bm25)을 타 토큰당 ~30ms.
+    # ParadeDB Custom Scan(idx_service_embeddings_bm25)을 타고 토큰당 ~30ms로 떨어진다.
     # 결과 동등: bm25 인덱스가 identity row만 색인하므로 `@@@` 는 이미 identity
     # row만 매칭한다(EXPLAIN으로 확인). 따라서 이 조건은 성능만 개선하고 결과를
     # 바꾸지 않는다. ParadeDB가 row_kind를 인덱스 필드로 갖지 않아 @@@ 문법 안에는
     # 넣을 수 없고(boolean/term API 거부), partial 인덱스 predicate 매칭으로 해소된다.
+    # ORDER BY paradedb.score(id) DESC: BM25 relevance 순으로 정렬해 LIMIT 컷을
+    # 결정적·고관련도 우선으로 만든다 (ParadeDB 0.23.4 service_name·metadata 양 컬럼에서
+    # 동작, idx_service_embeddings_bm25 Custom Scan 적중 — EXPLAIN ANALYZE 확인).
+    # service_id ASC 는 점수 동률 시 결정적 tie-break.
+    # ROW_NUMBER 는 동일 ORDER BY 윈도우로 1-based relevance rank 를 부여한다.
     sql = text(f"""
         SELECT
             service_id,
             service_name,
-            ROW_NUMBER() OVER () AS bm25_rank
+            ROW_NUMBER() OVER (
+                ORDER BY paradedb.score(id) DESC, service_id ASC
+            ) AS bm25_rank
         FROM service_embeddings
         WHERE {column} @@@ '{token}'
           AND row_kind = 'identity'
+        ORDER BY paradedb.score(id) DESC, service_id ASC
         LIMIT {limit_int}
     """)
     result = await session.execute(sql)
     keys = result.keys()
     rows = [dict(zip(keys, row)) for row in result.fetchall()]
-    # ROW_NUMBER() returns int; convert to bm25_score for downstream RRF compatibility.
+    # ROW_NUMBER() 는 int 를 반환 — 다운스트림 RRF 호환을 위해 bm25_score 로 환산.
     for r in rows:
         rank = int(r["bm25_rank"])
         r["bm25_score"] = 1.0 / rank if rank > 0 else 0.0

@@ -10,8 +10,6 @@ Mock DB 세션으로 BM25 쿼리 변환, bind 파라미터, 머지 동작을 검
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from tools.bm25_search import BM25_LIMIT, bm25_search, build_bm25_query
 
 
@@ -413,27 +411,43 @@ class TestBm25SearchPartialIndexPredicate:
             assert rk_pos > op_pos, "row_kind 조건이 @@@ 뒤 AND 절에 와야 함"
 
 
-class TestBm25SearchOrderingDefect:
-    """알려진 latent 결함 — BM25 토큰 쿼리에 relevance ORDER BY 가 없어
-    `ROW_NUMBER() OVER ()` 가 물리 스캔 순서를 rank 로 사용한다.
+class TestBm25SearchRelevanceOrdering:
+    """relevance ORDER BY 회귀 가드 — BM25 토큰 쿼리가 `paradedb.score(id)` 기준
+    relevance 순으로 정렬되어 LIMIT 컷이 결정적·고관련도 우선이 되는지 검증한다.
 
-    매칭 <= LIMIT 토큰은 LIMIT 컷이 발생하지 않아 결과가 결정적이지만,
-    매칭 > LIMIT 인 고빈도 토큰(예: 테니스장 421건 > LIMIT 50)에서는 스캔 순서
-    (Seq vs ParadeDB Custom Scan)에 따라 잘려나가는 50건이 달라져 BM25 채널 rank 가
-    변한다. 이는 Fix 2 가 만든 것이 아니라 ORDER BY 부재로 원래 존재하던 버그이며,
-    Fix 2(Custom Scan 적중)로 가시화됐을 뿐이다.
-
-    아래 xfail 은 "쿼리에 BM25 relevance ORDER BY 가 존재한다"를 기대값으로 고정한다.
-    근본 수정(예: paradedb.score 정렬 또는 안정적 tie-break ORDER BY 도입) 시
-    이 테스트가 xpass 로 바뀌어 결함 해소를 알린다.
+    과거 결함: ORDER BY 부재로 `ROW_NUMBER() OVER ()` 가 물리 스캔 순서를 rank 로
+    사용해, 매칭 > LIMIT 인 고빈도 토큰(예: 테니스장 421건 > LIMIT 50)에서 잘려나가는
+    50건이 스캔 경로(Seq vs ParadeDB Custom Scan)에 따라 달라졌다(라이브 실측:
+    relevance top-50 중 29건 누락). 이 테스트군이 그 회귀를 고정한다.
     """
 
-    @pytest.mark.xfail(
-        reason="latent 결함: BM25 토큰 쿼리에 relevance ORDER BY 가 없어 "
-        "고빈도 토큰의 LIMIT 컷이 비결정적이다 (별도 이슈, 머지 비블로킹).",
-        strict=True,
-    )
     async def test_query_has_relevance_order_by(self):
+        """모든 토큰×컬럼 쿼리에 `ORDER BY paradedb.score(id) DESC` 가 포함된다."""
+        captured: list[str] = []
+
+        async def _capture(stmt, params=None):
+            captured.append(str(stmt))
+            mr = MagicMock()
+            mr.keys.return_value = ["service_id", "service_name", "bm25_rank"]
+            mr.fetchall.return_value = []
+            return mr
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await bm25_search(["테니스"], session)
+        assert captured, "쿼리가 실행되지 않았다"
+        for sql in captured:
+            normalized = " ".join(sql.split()).upper()
+            assert "ORDER BY" in normalized, (
+                "LIMIT 컷이 결정적이려면 relevance/안정 ORDER BY 가 필요하다"
+            )
+            assert "PARADEDB.SCORE(ID) DESC" in normalized, (
+                "relevance top-N 보장을 위해 paradedb.score(id) DESC 정렬이 필요하다"
+            )
+
+    async def test_order_by_has_deterministic_tie_break(self):
+        """점수 동률 시 결정적 정렬을 위해 service_id ASC tie-break 가 ORDER BY 에 포함된다."""
         captured: list[str] = []
 
         async def _capture(stmt, params=None):
@@ -449,9 +463,57 @@ class TestBm25SearchOrderingDefect:
         await bm25_search(["테니스"], session)
         for sql in captured:
             normalized = " ".join(sql.split()).upper()
-            assert "ORDER BY" in normalized, (
-                "LIMIT 컷이 결정적이려면 relevance/안정 ORDER BY 가 필요하다"
+            # score DESC 뒤에 service_id ASC tie-break 가 와야 함
+            assert "PARADEDB.SCORE(ID) DESC, SERVICE_ID ASC" in normalized, (
+                "점수 동률 결정성을 위해 service_id ASC tie-break 가 필요하다"
             )
+
+    async def test_order_by_appears_in_both_window_and_outer_clause(self):
+        """ROW_NUMBER 윈도우와 외부 LIMIT 절 모두 동일 relevance ORDER BY 를 사용한다.
+
+        rank(윈도우 정렬)와 실제 반환 순서(외부 LIMIT 정렬)가 일치해야 rank 가
+        relevance 순서를 정확히 반영한다.
+        """
+        captured: list[str] = []
+
+        async def _capture(stmt, params=None):
+            captured.append(str(stmt))
+            mr = MagicMock()
+            mr.keys.return_value = ["service_id", "service_name", "bm25_rank"]
+            mr.fetchall.return_value = []
+            return mr
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await bm25_search(["테니스"], session)
+        for sql in captured:
+            normalized = " ".join(sql.split()).upper()
+            # "PARADEDB.SCORE(ID) DESC, SERVICE_ID ASC" 가 2회 (윈도우 + 외부) 등장
+            assert normalized.count("PARADEDB.SCORE(ID) DESC, SERVICE_ID ASC") == 2, (
+                "ROW_NUMBER 윈도우와 외부 ORDER BY 가 동일 정렬을 써야 rank 가 정합적이다"
+            )
+
+    async def test_repeated_calls_produce_identical_sql(self):
+        """동일 입력 반복 시 동일 SQL 이 생성된다 (쿼리 빌더 결정성)."""
+        captured: list[str] = []
+
+        async def _capture(stmt, params=None):
+            captured.append(str(stmt))
+            mr = MagicMock()
+            mr.keys.return_value = ["service_id", "service_name", "bm25_rank"]
+            mr.fetchall.return_value = []
+            return mr
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await bm25_search(["테니스", "예약"], session)
+        first_batch = list(captured)
+        captured.clear()
+        await bm25_search(["테니스", "예약"], session)
+        second_batch = list(captured)
+        assert first_batch == second_batch, "동일 입력은 동일 SQL 을 생성해야 한다"
 
 
 class TestBm25SearchGuards:
