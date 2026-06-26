@@ -105,6 +105,10 @@ def _setup_instrumentors(app: FastAPI) -> None:
     # SSE(/chat/stream) StreamingResponse 는 ASGI http.response.body 이벤트를
     # 스트리밍하며, FastAPIInstrumentor 는 응답을 버퍼링하지 않고 send 이벤트를
     # 패스스루로 계측하므로 스트리밍을 깨지 않는다.
+    # NOTE: 단, StreamingResponse 의 제너레이터 바디는 서버 span 활성 컨텍스트 밖에서
+    #   실행되므로, /chat/stream 의 에이전트 작업 span 을 서버 span 하위로 잇기 위해
+    #   routers/chat.py 가 서버 컨텍스트를 캡처해 제너레이터에 수동 재부착한다
+    #   (chat_stream → _stream(parent_ctx) → otel_context.attach + chat_stream.workflow span).
     FastAPIInstrumentor.instrument_app(app)
     HTTPXClientInstrumentor().instrument()
     RedisInstrumentor().instrument()

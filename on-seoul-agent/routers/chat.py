@@ -21,6 +21,8 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
+from opentelemetry import context as otel_context
+from opentelemetry import trace
 
 from agents.graph import AgentGraph
 from core.exceptions import RateLimitException
@@ -29,6 +31,9 @@ from schemas.chat import ChatRequest
 from schemas.state import AgentState
 
 logger = logging.getLogger(__name__)
+
+# 모듈 tracer — OTel 비활성 시 no-op tracer 를 반환한다.
+_tracer = trace.get_tracer(__name__)
 
 router = APIRouter()
 
@@ -151,9 +156,19 @@ def _emit_working_set(result: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _stream(
-    request: ChatRequest, graph: AgentGraph
+    request: ChatRequest,
+    graph: AgentGraph,
+    parent_ctx: otel_context.Context | None = None,
 ) -> AsyncGenerator[bytes, None]:
-    """워크플로우를 실행하고 SSE 프레임을 yield한다."""
+    """워크플로우를 실행하고 SSE 프레임을 yield한다.
+
+    OTel 트레이스 연결: StreamingResponse 의 제너레이터 바디는 서버 span 활성
+    시점(핸들러)이 아니라 ASGI 응답 스트리밍 단계에서 실행되므로, 핸들러가
+    캡처해 넘긴 parent_ctx 를 여기서 attach 해 서버 span 컨텍스트를 재부착한다.
+    이렇게 해야 graph.stream() 내부 httpx/SQLAlchemy span 이 /chat/stream 서버
+    span 하위(같은 trace)로 연결된다. parent_ctx=None 이거나 OTel 비활성 시
+    attach/detach/start_as_current_span 은 모두 no-op 이라 동작은 불변이다.
+    """
     logger.info(
         "chat.request room=%s msg_id=%d msg=%r",
         request.room_id,
@@ -217,55 +232,62 @@ async def _stream(
         emit={},
     )
 
+    # 핸들러에서 캡처한 서버 span 컨텍스트를 제너레이터 실행 컨텍스트에 재부착한다.
+    # parent_ctx=None 이거나 OTel 비활성이면 attach 는 no-op token 을 반환한다.
+    token = otel_context.attach(parent_ctx) if parent_ctx is not None else None
     try:
         # 제안 0-6: DB 노드가 세션을 노드 내부에서 acquire-use-release 하므로 여기서
         # 세션 스코프를 잡지 않는다. answer LLM 스트리밍 동안 커넥션을 점유하지 않는다.
-        async for event_type, data in graph.stream(state):
-            if event_type == "progress":
-                yield sse_frame("progress", data)
+        with _tracer.start_as_current_span("chat_stream.workflow") as _span:
+            # SigNoz 트레이스 필터링용 식별자(PII 아님). 비활성 시 NonRecordingSpan no-op.
+            _span.set_attribute("chat.room_id", request.room_id)
+            _span.set_attribute("chat.message_id", request.message_id)
+            async for event_type, data in graph.stream(state):
+                if event_type == "progress":
+                    yield sse_frame("progress", data)
 
-            elif event_type == "decision":
-                yield sse_frame("decision", data)
+                elif event_type == "decision":
+                    yield sse_frame("decision", data)
 
-            elif event_type == "sources_update":
-                yield sse_frame("sources_update", data)
+                elif event_type == "sources_update":
+                    yield sse_frame("sources_update", data)
 
-            elif event_type == "result":
-                result = data
-                plan = result.get("plan") or {}
-                output = result.get("output") or {}
-                intent = plan.get("intent")
-                payload = {
-                    "message_id": result["message_id"],
-                    "answer": output.get("answer") or "",
-                    "intent": intent.value if intent is not None else None,
-                    "title": output.get("title"),
-                    "cache_hit": bool(result.get("cache_hit")),
-                    "service_cards": output.get("service_cards") or [],
-                    # P1-2/P1-4: 다음 턴 carryover 용 워킹셋(effective 필터 포함).
-                    "prev_working_set": _emit_working_set(result),
-                }
-                if result.get("error"):
-                    logger.error(
-                        "chat.workflow_error room=%s intent=%s error=%s",
-                        result.get("room_id"),
-                        intent,
-                        result["error"],
-                    )
-                    payload["error"] = "서비스 처리 중 오류가 발생했습니다."
-                    # 에러 시 부분 결과 카드는 노출하지 않는다 —
-                    # 에러 메시지 + 정상 카드 조합으로 인한 UI 혼란 방지.
-                    payload["service_cards"] = []
-                    yield sse_frame("workflow_error", payload)
-                else:
-                    logger.info(
-                        "chat.final room=%s intent=%s cache_hit=%s answer_len=%d",
-                        result.get("room_id"),
-                        intent.value if intent is not None else None,
-                        payload["cache_hit"],
-                        len(payload["answer"]),
-                    )
-                    yield sse_frame("final", payload)
+                elif event_type == "result":
+                    result = data
+                    plan = result.get("plan") or {}
+                    output = result.get("output") or {}
+                    intent = plan.get("intent")
+                    payload = {
+                        "message_id": result["message_id"],
+                        "answer": output.get("answer") or "",
+                        "intent": intent.value if intent is not None else None,
+                        "title": output.get("title"),
+                        "cache_hit": bool(result.get("cache_hit")),
+                        "service_cards": output.get("service_cards") or [],
+                        # P1-2/P1-4: 다음 턴 carryover 용 워킹셋(effective 필터 포함).
+                        "prev_working_set": _emit_working_set(result),
+                    }
+                    if result.get("error"):
+                        logger.error(
+                            "chat.workflow_error room=%s intent=%s error=%s",
+                            result.get("room_id"),
+                            intent,
+                            result["error"],
+                        )
+                        payload["error"] = "서비스 처리 중 오류가 발생했습니다."
+                        # 에러 시 부분 결과 카드는 노출하지 않는다 —
+                        # 에러 메시지 + 정상 카드 조합으로 인한 UI 혼란 방지.
+                        payload["service_cards"] = []
+                        yield sse_frame("workflow_error", payload)
+                    else:
+                        logger.info(
+                            "chat.final room=%s intent=%s cache_hit=%s answer_len=%d",
+                            result.get("room_id"),
+                            intent.value if intent is not None else None,
+                            payload["cache_hit"],
+                            len(payload["answer"]),
+                        )
+                        yield sse_frame("final", payload)
 
     except RateLimitException:
         logger.warning(
@@ -284,14 +306,22 @@ async def _stream(
             {"message": "서비스 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."},
         )
         return
+    finally:
+        # attach 한 컨텍스트는 항상 해제한다(정상/예외/조기 return 무관).
+        if token is not None:
+            otel_context.detach(token)
 
 
 @router.post("/stream")
 async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingResponse:
     """사용자 메시지를 받아 에이전트 워크플로우를 실행하고 SSE로 응답한다."""
     graph = _resolve_graph(http_request)
+    # 핸들러(FastAPIInstrumentor 서버 span 활성 시점)에서 현재 OTel 컨텍스트를
+    # 캡처해 제너레이터로 전파한다. 제너레이터 바디는 별도 실행 컨텍스트라 여기서
+    # 캡처하지 않으면 내부 span 이 부모 없이 별도 trace 로 떨어진다.
+    parent_ctx = otel_context.get_current()
     return StreamingResponse(
-        _stream(request, graph),
+        _stream(request, graph, parent_ctx),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
