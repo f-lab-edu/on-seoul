@@ -72,20 +72,25 @@ class TestFuse:
 # ---------------------------------------------------------------------------
 
 
-def _qr(query, seq_ids, par_ids):
-    return cp._QualityRow(query=query, seq_ids=seq_ids, par_ids=par_ids)
+def _qr(query, seq_ids, par_ids, union_ids=None):
+    return cp._QualityRow(
+        query=query,
+        seq_ids=seq_ids,
+        par_ids=par_ids,
+        union_ids=union_ids if union_ids is not None else list(seq_ids),
+    )
 
 
 class TestQualityAggregate:
     def test_empty_rows_zero(self):
-        recall, mrr = cp._quality_aggregate([], {}, use_seq=True)
+        recall, mrr = cp._quality_aggregate([], {}, path="seq")
         assert mrr == 0.0
         assert recall == {1: 0.0, 5: 0.0, 10: 0.0}
 
     def test_perfect_recall_and_mrr(self):
         rows = [_qr("q1", ["S1", "S9"], ["S1", "S9"])]
         correct = {"q1": {"S1"}}
-        recall, mrr = cp._quality_aggregate(rows, correct, use_seq=True)
+        recall, mrr = cp._quality_aggregate(rows, correct, path="seq")
         assert recall[1] == 1.0
         assert recall[5] == 1.0
         assert recall[10] == 1.0
@@ -94,18 +99,20 @@ class TestQualityAggregate:
     def test_recall_at_1_miss_but_at_5_hit(self):
         rows = [_qr("q1", ["X", "Y", "S1"], ["X", "Y", "S1"])]
         correct = {"q1": {"S1"}}
-        recall, mrr = cp._quality_aggregate(rows, correct, use_seq=True)
+        recall, mrr = cp._quality_aggregate(rows, correct, path="seq")
         assert recall[1] == 0.0
         assert recall[5] == 1.0
         assert mrr == pytest.approx(1.0 / 3)
 
-    def test_use_seq_vs_par_selects_correct_list(self):
-        rows = [_qr("q1", ["S1"], ["X"])]
+    def test_path_selects_correct_list(self):
+        rows = [_qr("q1", ["S1"], ["X"], ["Y"])]
         correct = {"q1": {"S1"}}
-        seq_recall, seq_mrr = cp._quality_aggregate(rows, correct, use_seq=True)
-        par_recall, par_mrr = cp._quality_aggregate(rows, correct, use_seq=False)
+        seq_recall, seq_mrr = cp._quality_aggregate(rows, correct, path="seq")
+        par_recall, par_mrr = cp._quality_aggregate(rows, correct, path="par")
+        union_recall, union_mrr = cp._quality_aggregate(rows, correct, path="union")
         assert seq_recall[1] == 1.0 and seq_mrr == 1.0
         assert par_recall[1] == 0.0 and par_mrr == 0.0
+        assert union_recall[1] == 0.0 and union_mrr == 0.0
 
     def test_average_across_queries(self):
         rows = [
@@ -113,13 +120,13 @@ class TestQualityAggregate:
             _qr("q2", ["X"], ["X"]),  # miss
         ]
         correct = {"q1": {"S1"}, "q2": {"S2"}}
-        recall, mrr = cp._quality_aggregate(rows, correct, use_seq=True)
+        recall, mrr = cp._quality_aggregate(rows, correct, path="seq")
         assert recall[1] == 0.5
         assert mrr == 0.5
 
     def test_missing_correct_ids_treated_as_empty(self):
         rows = [_qr("q1", ["S1"], ["S1"])]
-        recall, mrr = cp._quality_aggregate(rows, {}, use_seq=True)
+        recall, mrr = cp._quality_aggregate(rows, {}, path="seq")
         assert recall[1] == 0.0
         assert mrr == 0.0
 
@@ -133,13 +140,16 @@ def _args(reps=5):
     return argparse.Namespace(reps=reps, output="x.json", limit=None, sema_cap=None)
 
 
-def _timing(query, seq_med, par_med):
+def _timing(query, seq_med, par_med, union_med=None):
+    um = union_med if union_med is not None else par_med
     return cp._QueryTiming(
         query=query,
         seq_median_ms=seq_med,
         par_median_ms=par_med,
+        union_median_ms=um,
         seq_samples_ms=[seq_med],
         par_samples_ms=[par_med],
+        union_samples_ms=[um],
     )
 
 
@@ -188,7 +198,7 @@ class TestBuildResult:
             quality_rows=[_qr("q1", ["S1"], ["S1"])],
             correct_by_query={"q1": {"S1"}},
         )
-        assert res["latency"]["speedup"] == 4.0
+        assert res["latency"]["speedup_par"] == 4.0
         assert res["latency"]["seq_median_ms"] == 20.0
         assert res["latency"]["par_median_ms"] == 5.0
 
@@ -202,7 +212,7 @@ class TestBuildResult:
             quality_rows=[_qr("q1", ["S1"], ["S1"])],
             correct_by_query={"q1": {"S1"}},
         )
-        assert res["latency"]["speedup"] == 0.0
+        assert res["latency"]["speedup_par"] == 0.0
 
     def test_recall_and_mrr_delta_zero_when_identical(self):
         # 동등성 검증: 순차/병렬 결과가 같으면 delta는 모두 0이어야 한다.
@@ -220,8 +230,10 @@ class TestBuildResult:
             correct_by_query={"q1": {"S1"}, "q2": {"S2"}},
         )
         for k in (1, 5, 10):
-            assert res["quality"]["recall_delta"][f"recall@{k}"] == 0.0
-        assert res["quality"]["mrr_delta"] == 0.0
+            assert res["quality"]["recall_delta_par"][f"recall@{k}"] == 0.0
+            assert res["quality"]["recall_delta_union"][f"recall@{k}"] == 0.0
+        assert res["quality"]["mrr_delta_par"] == 0.0
+        assert res["quality"]["mrr_delta_union"] == 0.0
 
     def test_metadata_fields_present(self):
         res = cp._build_result(
@@ -262,15 +274,16 @@ def _prepared():
 
 class TestMeasureQueryFairness:
     @pytest.mark.asyncio
-    async def test_warmup_discarded_and_swap_order(self, monkeypatch):
-        """워밍업 1회씩 폐기 + 반복별 순서 swap을 호출 순서로 검증한다.
+    async def test_warmup_discarded_and_rotated_order(self, monkeypatch):
+        """워밍업 1회씩 폐기 + 반복별 3경로 순환(rotation)을 호출 순서로 검증한다.
 
-        reps=2 기준 기대 호출 순서:
-          warmup: seq, par
-          i=0 (짝수): seq, par
-          i=1 (홀수): par, seq
-        -> 전체 호출열: [seq,par, seq,par, par,seq]
-        샘플 수는 seq/par 각각 reps(=2)건이어야 한다(워밍업 제외).
+        reps=3 기준 기대 호출 순서:
+          warmup: seq, par, union (1회씩 폐기)
+          i=0 (0회전): seq, par, union
+          i=1 (1회전): par, union, seq
+          i=2 (2회전): union, seq, par
+        -> 측정 호출열: [seq,par,union, par,union,seq, union,seq,par]
+        샘플 수는 각 경로 reps(=3)건이어야 한다(워밍업 제외).
         """
         calls: list[str] = []
 
@@ -282,15 +295,28 @@ class TestMeasureQueryFairness:
             calls.append("par")
             return ["S1"]
 
+        async def fake_union(pq):
+            calls.append("union")
+            return ["S1"]
+
         monkeypatch.setattr(cp, "_retrieve_sequential", fake_seq)
         monkeypatch.setattr(cp, "_retrieve_parallel", fake_par)
+        monkeypatch.setattr(cp, "_retrieve_union", fake_union)
 
-        timing = await cp._measure_query(_prepared(), reps=2)
+        timing = await cp._measure_query(_prepared(), reps=3)
 
-        assert calls == ["seq", "par", "seq", "par", "par", "seq"]
+        warmup = calls[:3]
+        measured = calls[3:]
+        assert sorted(warmup) == ["par", "seq", "union"]  # 워밍업 1회씩
+        assert measured == [
+            "seq", "par", "union",
+            "par", "union", "seq",
+            "union", "seq", "par",
+        ]
         # 워밍업 호출은 샘플에 포함되지 않는다 -> 각 reps건.
-        assert len(timing.seq_samples_ms) == 2
-        assert len(timing.par_samples_ms) == 2
+        assert len(timing.seq_samples_ms) == 3
+        assert len(timing.par_samples_ms) == 3
+        assert len(timing.union_samples_ms) == 3
 
     @pytest.mark.asyncio
     async def test_samples_routed_to_correct_list_regardless_of_order(
@@ -304,11 +330,176 @@ class TestMeasureQueryFairness:
         async def fake_par(pq):
             return ["S1"]
 
+        async def fake_union(pq):
+            return ["S1"]
+
         monkeypatch.setattr(cp, "_retrieve_sequential", fake_seq)
         monkeypatch.setattr(cp, "_retrieve_parallel", fake_par)
+        monkeypatch.setattr(cp, "_retrieve_union", fake_union)
 
         timing = await cp._measure_query(_prepared(), reps=3)
         assert len(timing.seq_samples_ms) == 3
         assert len(timing.par_samples_ms) == 3
+        assert len(timing.union_samples_ms) == 3
         assert timing.seq_median_ms >= 0.0
         assert timing.par_median_ms >= 0.0
+        assert timing.union_median_ms >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# 안 B(UNION ALL) 순수 헬퍼 — 채널 라벨 분류 / BM25 min-rank 머지 / _fuse 결합
+# ---------------------------------------------------------------------------
+
+
+def _urow(channel, rank, service_id):
+    return {"channel": channel, "rank": rank, "service_id": service_id}
+
+
+class TestClassifyUnionRows:
+    def test_groups_by_channel_and_sorts_by_rank(self):
+        rows = [
+            _urow("track_a", 2, "S2"),
+            _urow("track_a", 1, "S1"),
+            _urow("track_b", 1, "S9"),
+        ]
+        out = cp._classify_union_rows(rows)
+        assert out["track_a"] == ["S1", "S2"]  # rank 정렬
+        assert out["track_b"] == ["S9"]
+
+    def test_bm25_branches_kept_separate(self):
+        rows = [
+            _urow("bm25::service_name::0", 1, "S1"),
+            _urow("bm25::metadata::0", 1, "S2"),
+        ]
+        out = cp._classify_union_rows(rows)
+        assert out["bm25::service_name::0"] == ["S1"]
+        assert out["bm25::metadata::0"] == ["S2"]
+
+    def test_empty_rows_empty_dict(self):
+        assert cp._classify_union_rows([]) == {}
+
+
+class TestMergeUnionBm25:
+    def test_min_rank_across_branches(self):
+        # S1: service_name rank2, metadata rank1 -> min 1
+        # S2: service_name rank1 -> min 1; tie-break service_id ASC
+        union = {
+            "bm25::service_name::0": ["S2", "S1"],  # S2 rank1, S1 rank2
+            "bm25::metadata::0": ["S1"],  # S1 rank1
+            "track_a": ["X"],  # 무시(bm25:: 아님)
+        }
+        merged = cp._merge_union_bm25(union)
+        # S1 min-rank=1, S2 min-rank=1 -> (rank, sid) 정렬 -> S1, S2
+        assert merged == ["S1", "S2"]
+
+    def test_ignores_non_bm25_channels(self):
+        union = {"track_a": ["A"], "track_b": ["B"]}
+        assert cp._merge_union_bm25(union) == []
+
+
+class TestFuseUnion:
+    def test_fuse_union_matches_fuse_with_merged_bm25(self):
+        # union 분류 결과 -> _fuse 와 동일 결합이어야 한다.
+        union = {
+            "track_a": ["S1", "S2"],
+            "track_b": ["S1", "S3"],
+            "track_c": [],
+            "bm25::service_name::0": ["S4"],
+        }
+        ids = cp._fuse_union(union, weights=None)
+        # 기존 _fuse 에 (a, b, c, merged_bm25) 를 직접 넣은 것과 동일해야 한다.
+        a = [{"service_id": s} for s in ["S1", "S2"]]
+        b = [{"service_id": s} for s in ["S1", "S3"]]
+        c: list[dict] = []
+        d = [{"service_id": s} for s in cp._merge_union_bm25(union)]
+        assert ids == cp._fuse(a, b, c, d, weights=None)
+        assert ids[0] == "S1"
+
+
+# ---------------------------------------------------------------------------
+# 3-way _build_result — seq/par/union 지연·품질·집합 일치
+# ---------------------------------------------------------------------------
+
+
+def _qr3(query, seq_ids, par_ids, union_ids):
+    return cp._QualityRow(
+        query=query, seq_ids=seq_ids, par_ids=par_ids, union_ids=union_ids
+    )
+
+
+def _timing3(query, seq_med, par_med, union_med):
+    return cp._QueryTiming(
+        query=query,
+        seq_median_ms=seq_med,
+        par_median_ms=par_med,
+        union_median_ms=union_med,
+        seq_samples_ms=[seq_med],
+        par_samples_ms=[par_med],
+        union_samples_ms=[union_med],
+    )
+
+
+class TestBuildResult3Way:
+    def test_speedups_seq_over_par_and_union(self):
+        res = cp._build_result(
+            args=_args(),
+            sema_cap=4,
+            weights=None,
+            holdout_path="h.tsv",
+            timings=[_timing3("q1", 20.0, 5.0, 4.0)],
+            quality_rows=[_qr3("q1", ["S1"], ["S1"], ["S1"])],
+            correct_by_query={"q1": {"S1"}},
+        )
+        lat = res["latency"]
+        assert lat["seq_median_ms"] == 20.0
+        assert lat["par_median_ms"] == 5.0
+        assert lat["union_median_ms"] == 4.0
+        assert lat["speedup_par"] == 4.0  # 20/5
+        assert lat["speedup_union"] == 5.0  # 20/4
+
+    def test_three_way_set_equivalence_all_match(self):
+        rows = [_qr3("q1", ["S1", "S2"], ["S2", "S1"], ["S1", "S2"])]
+        res = cp._build_result(
+            args=_args(),
+            sema_cap=4,
+            weights=None,
+            holdout_path="h.tsv",
+            timings=[_timing3("q1", 10.0, 5.0, 4.0)],
+            quality_rows=rows,
+            correct_by_query={"q1": {"S1"}},
+        )
+        assert res["set_equivalence"]["match"] == 1
+        assert res["set_equivalence"]["mismatch"] == 0
+
+    def test_three_way_set_equivalence_mismatch_records_all_three(self):
+        rows = [_qr3("q1", ["S1"], ["S1"], ["S3"])]
+        res = cp._build_result(
+            args=_args(),
+            sema_cap=4,
+            weights=None,
+            holdout_path="h.tsv",
+            timings=[_timing3("q1", 10.0, 5.0, 4.0)],
+            quality_rows=rows,
+            correct_by_query={"q1": {"S1"}},
+        )
+        assert res["set_equivalence"]["mismatch"] == 1
+        ex = res["set_equivalence"]["mismatch_examples"][0]
+        assert ex["seq_ids"] == ["S1"]
+        assert ex["par_ids"] == ["S1"]
+        assert ex["union_ids"] == ["S3"]
+
+    def test_quality_has_three_paths(self):
+        rows = [_qr3("q1", ["S1"], ["S1"], ["S1"])]
+        res = cp._build_result(
+            args=_args(),
+            sema_cap=4,
+            weights=None,
+            holdout_path="h.tsv",
+            timings=[_timing3("q1", 10.0, 5.0, 4.0)],
+            quality_rows=rows,
+            correct_by_query={"q1": {"S1"}},
+        )
+        q = res["quality"]
+        assert q["sequential"]["recall@1"] == 1.0
+        assert q["parallel"]["recall@1"] == 1.0
+        assert q["union"]["recall@1"] == 1.0

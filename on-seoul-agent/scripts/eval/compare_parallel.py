@@ -1,11 +1,18 @@
-"""병렬 검색 도입 전(순차) vs 후(병렬) retrieval 구간 비교.
+# ruff: noqa: E402
+"""순차 vs 병렬(현행) vs 안 B(UNION ALL) retrieval 구간 3-way 비교.
 
-VectorAgent.search()의 4채널 retrieval(채널 팬아웃 + RRF 결합)을 두 방식으로
+VectorAgent.search()의 4채널 retrieval(채널 팬아웃 + RRF 결합)을 세 방식으로
 실행해 **retrieval 구간 지연**과 **검색 품질 동등성**을 비교한다.
 
-- 순차(before): 4채널(Track A/B/C/BM25)을 단일 ai_session에서 순차 await.
-- 병렬(after) : 채널별 독립 ai_session_ctx()를 열어 asyncio.gather로 동시 실행
+- 순차(seq)  : 4채널(Track A/B/C/BM25)을 단일 ai_session에서 순차 await.
+- 병렬(par)  : 채널별 독립 ai_session_ctx()를 열어 asyncio.gather로 동시 실행
   (운영 VectorAgent와 동일한 agents.vector_agent.run_parallel_channels 경로).
+- 안 B(union): 4채널을 단일 UNION ALL 통합문으로 묶어 1 I/O 로 실행(측정용 후보).
+  scripts/eval/validate_union_query.build_union_sql 의 통합문을 그대로 사용하며,
+  이는 커밋된 Fix 1(벡터 min_similarity outer + SET LOCAL ef_search)·Fix 2(BM25
+  row_kind='identity') 쿼리 형태와 동형이라 채널 쿼리는 같고 I/O 구조만 다른
+  공정 비교가 된다. SQL 안에서 RRF 는 하지 않고 채널별 rank 만 SQL 로 얻은 뒤
+  BM25 는 _merge_union_bm25(min-rank)로 머지, 4채널을 앱의 동일 _fuse 로 결합한다.
 
 측정 범위 (엄격히 한정)
 ----------------------
@@ -62,6 +69,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT))
 
+from sqlalchemy import text
+
 from agents.router_agent import RouterAgent
 from agents.vector_agent import (
     _BM25_STOPWORDS,
@@ -78,6 +87,10 @@ from core.database import ai_session_ctx
 from core.rrf import reciprocal_rank_fusion
 from llm.client import get_chat_model, get_embeddings
 from scripts.eval.run_recall import _AT_K, EvalRow, _compute_metrics, load_holdout
+from scripts.eval.validate_union_query import (
+    _merge_union_bm25,
+    build_union_sql,
+)
 from tools.tokenizer import atokenize_query
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
@@ -113,8 +126,10 @@ class _QueryTiming:
     query: str
     seq_median_ms: float
     par_median_ms: float
+    union_median_ms: float
     seq_samples_ms: list[float] = field(default_factory=list)
     par_samples_ms: list[float] = field(default_factory=list)
+    union_samples_ms: list[float] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +224,71 @@ async def _retrieve_parallel(pq: _PreparedQuery) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 안 B 경로 (UNION ALL 통합문, 1 I/O) — validate_union_query 통합문 재사용.
+# SQL 은 채널별 rank 만, RRF 결합은 앱(_fuse)에서.
+# ---------------------------------------------------------------------------
+
+
+def _classify_union_rows(rows: list[dict]) -> dict[str, list[str]]:
+    """통합문 (channel, rank, service_id) 행을 channel별 rank-정렬 리스트로 분류.
+
+    벡터 트랙(track_a/b/c)과 BM25 (컬럼,토큰) 브랜치(bm25::col::idx)를 그대로
+    라벨 단위로 모은다. BM25 머지는 _merge_union_bm25 가 별도로 수행한다.
+    """
+    by_channel: dict[str, list[tuple[int, str]]] = {}
+    for r in rows:
+        by_channel.setdefault(r["channel"], []).append(
+            (int(r["rank"]), r["service_id"])
+        )
+    out: dict[str, list[str]] = {}
+    for ch, pairs in by_channel.items():
+        pairs.sort(key=lambda p: p[0])
+        out[ch] = [sid for _, sid in pairs]
+    return out
+
+
+def _fuse_union(union: dict[str, list[str]], weights: dict[str, float] | None) -> list[str]:
+    """통합문 분류 결과를 4채널로 환원해 기존 _fuse 와 동일하게 RRF 결합.
+
+    BM25 (컬럼,토큰) 브랜치를 _merge_union_bm25 로 service_id 별 min-rank 머지해
+    단일 bm25 채널로 만든 뒤, track_a/b/c + bm25 를 _fuse 에 그대로 전달한다.
+    """
+    a_rows = [{"service_id": s} for s in union.get("track_a", [])]
+    b_rows = [{"service_id": s} for s in union.get("track_b", [])]
+    c_rows = [{"service_id": s} for s in union.get("track_c", [])]
+    d_rows = [{"service_id": s} for s in _merge_union_bm25(union)]
+    return _fuse(a_rows, b_rows, c_rows, d_rows, weights)
+
+
+async def _retrieve_union(pq: _PreparedQuery) -> list[str]:
+    """단일 세션에서 SET LOCAL ef_search + UNION ALL 통합문 1회 실행 후 RRF 결합."""
+    sql, bind = build_union_sql(
+        include_bm25=bool(pq.bm25_tokens),
+        bm25_terms=pq.bm25_tokens,
+        max_class_name=pq.max_class_name,
+        area_name=pq.area_name,
+        service_status=pq.service_status,
+    )
+    bind["query_vector"] = str(pq.query_vector)
+
+    async with ai_session_ctx() as session:
+        try:
+            # Fix 1 동형: 통합문 실행 직전 SET LOCAL ef_search 발급.
+            await session.execute(
+                text(f"SET LOCAL hnsw.ef_search = {int(settings.hnsw_ef_search)}")
+            )
+            result = await session.execute(text(sql), bind)
+            keys = result.keys()
+            rows = [dict(zip(keys, row)) for row in result.fetchall()]
+        except Exception:
+            await session.rollback()
+            rows = []
+
+    union = _classify_union_rows(rows)
+    return _fuse_union(union, pq.weights)
+
+
+# ---------------------------------------------------------------------------
 # 질의 사전 계산 — refine/classify·임베딩·토크나이징은 질의당 1회(타이밍 제외).
 # ---------------------------------------------------------------------------
 
@@ -260,31 +340,39 @@ async def _prepare_query(
 
 
 async def _measure_query(pq: _PreparedQuery, *, reps: int) -> _QueryTiming:
-    """질의 1건의 retrieval 구간을 순차/병렬 각각 reps회 측정.
+    """질의 1건의 retrieval 구간을 seq/par/union 각각 reps회 측정.
 
-    - 워밍업: 순차/병렬 1회씩 실행해 버린다(page cache 편향 제거).
-    - 교대: 반복 i가 짝수면 순차→병렬, 홀수면 병렬→순차 순서로 실행한다.
+    - 워밍업: 세 경로 1회씩 실행해 버린다(page cache 편향 제거).
+    - 순서 교대: 반복 i마다 세 경로 실행 순서를 i칸 회전(rotation)시켜
+      특정 경로가 항상 첫/끝에 오는 편향을 제거한다.
     """
-    # 워밍업 (둘 다 1회 버림)
-    await _retrieve_sequential(pq)
-    await _retrieve_parallel(pq)
+    # 측정 함수를 경로명으로 디스패치(monkeypatch 가능하도록 모듈 전역 참조).
+    fns = {
+        "seq": _retrieve_sequential,
+        "par": _retrieve_parallel,
+        "union": _retrieve_union,
+    }
+    base_order = ("seq", "par", "union")
 
-    seq_samples: list[float] = []
-    par_samples: list[float] = []
+    # 워밍업 (세 경로 1회씩 버림)
+    for name in base_order:
+        await fns[name](pq)
+
+    samples: dict[str, list[float]] = {"seq": [], "par": [], "union": []}
     for i in range(reps):
-        if i % 2 == 0:
-            seq_samples.append(await _time_retrieval(_retrieve_sequential, pq))
-            par_samples.append(await _time_retrieval(_retrieve_parallel, pq))
-        else:
-            par_samples.append(await _time_retrieval(_retrieve_parallel, pq))
-            seq_samples.append(await _time_retrieval(_retrieve_sequential, pq))
+        # i칸 회전: i=0 -> (seq,par,union), i=1 -> (par,union,seq), ...
+        order = base_order[i % 3 :] + base_order[: i % 3]
+        for name in order:
+            samples[name].append(await _time_retrieval(fns[name], pq))
 
     return _QueryTiming(
         query=pq.row.query,
-        seq_median_ms=statistics.median(seq_samples),
-        par_median_ms=statistics.median(par_samples),
-        seq_samples_ms=[round(x, 3) for x in seq_samples],
-        par_samples_ms=[round(x, 3) for x in par_samples],
+        seq_median_ms=statistics.median(samples["seq"]),
+        par_median_ms=statistics.median(samples["par"]),
+        union_median_ms=statistics.median(samples["union"]),
+        seq_samples_ms=[round(x, 3) for x in samples["seq"]],
+        par_samples_ms=[round(x, 3) for x in samples["par"]],
+        union_samples_ms=[round(x, 3) for x in samples["union"]],
     )
 
 
@@ -305,6 +393,7 @@ class _QualityRow:
     query: str
     seq_ids: list[str]
     par_ids: list[str]
+    union_ids: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -315,38 +404,51 @@ class _QualityRow:
 def _print_report(result: dict) -> None:
     print(f"\n{'=' * 64}")
     print(
-        f"병렬 검색 전/후 retrieval 비교  |  질의 {result['total_queries']}건, "
+        f"retrieval 3-way 비교 (순차/병렬/안 B)  |  질의 {result['total_queries']}건, "
         f"reps={result['reps']}, sema_cap={result['sema_cap']}"
     )
     print(f"{'=' * 64}")
 
     lat = result["latency"]
     print("\n[retrieval 구간 지연] (질의별 중앙값들의 집계, ms)")
-    print(f"  순차 median : {lat['seq_median_ms']:.2f}")
-    print(f"  병렬 median : {lat['par_median_ms']:.2f}")
-    print(f"  speedup     : {lat['speedup']:.2f}x  (순차/병렬)")
-    print(f"  순차 p50/p95: {lat['seq_p50_ms']:.2f} / {lat['seq_p95_ms']:.2f}")
-    print(f"  병렬 p50/p95: {lat['par_p50_ms']:.2f} / {lat['par_p95_ms']:.2f}")
+    print(f"  순차  median : {lat['seq_median_ms']:.2f}")
+    print(f"  병렬  median : {lat['par_median_ms']:.2f}")
+    print(f"  안 B  median : {lat['union_median_ms']:.2f}")
+    print(f"  speedup 병렬 : {lat['speedup_par']:.2f}x  (순차/병렬)")
+    print(f"  speedup 안 B : {lat['speedup_union']:.2f}x  (순차/안 B)")
+    print(f"  순차 p50/p95 : {lat['seq_p50_ms']:.2f} / {lat['seq_p95_ms']:.2f}")
+    print(f"  병렬 p50/p95 : {lat['par_p50_ms']:.2f} / {lat['par_p95_ms']:.2f}")
+    print(f"  안 B p50/p95 : {lat['union_p50_ms']:.2f} / {lat['union_p95_ms']:.2f}")
 
     q = result["quality"]
-    print("\n[품질 동등성] (순차 vs 병렬 — 동일해야 정상)")
+    print("\n[품질 동등성] (순차 vs 병렬 vs 안 B — 셋 다 동일해야 정상)")
     for k in _AT_K:
         sk = q["sequential"][f"recall@{k}"]
         pk = q["parallel"][f"recall@{k}"]
-        print(f"  recall@{k:<2}: 순차 {sk:.4f} | 병렬 {pk:.4f} | delta {pk - sk:+.4f}")
+        uk = q["union"][f"recall@{k}"]
+        print(
+            f"  recall@{k:<2}: 순차 {sk:.4f} | 병렬 {pk:.4f} | 안 B {uk:.4f}"
+            f"  (Δpar {pk - sk:+.4f} / Δunion {uk - sk:+.4f})"
+        )
+    sm, pm, um = (
+        q["sequential"]["mrr"],
+        q["parallel"]["mrr"],
+        q["union"]["mrr"],
+    )
     print(
-        f"  MRR    : 순차 {q['sequential']['mrr']:.4f} | "
-        f"병렬 {q['parallel']['mrr']:.4f} | delta {q['parallel']['mrr'] - q['sequential']['mrr']:+.4f}"
+        f"  MRR    : 순차 {sm:.4f} | 병렬 {pm:.4f} | 안 B {um:.4f}"
+        f"  (Δpar {pm - sm:+.4f} / Δunion {um - sm:+.4f})"
     )
 
     s = result["set_equivalence"]
-    print("\n[top-k 결과 집합 일치]")
+    print("\n[top-k 결과 집합 일치] (세 경로 동일 여부)")
     print(f"  완전 일치 : {s['match']}건")
     print(f"  불일치    : {s['mismatch']}건")
     for ex in s["mismatch_examples"][:10]:
         print(f"    - {ex['query'][:50]}")
-        print(f"        순차: {ex['seq_ids']}")
-        print(f"        병렬: {ex['par_ids']}")
+        print(f"        순차 : {ex['seq_ids']}")
+        print(f"        병렬 : {ex['par_ids']}")
+        print(f"        안 B : {ex['union_ids']}")
 
     print(f"\n{'=' * 64}\n")
 
@@ -402,11 +504,17 @@ async def _run(args: argparse.Namespace) -> None:
                 row, embedder=embedder, router=router, weights=weights
             )
             timings.append(await _measure_query(pq, reps=args.reps))
-            # 품질: 순차/병렬 결과 ID 각각 1회 산출(타이밍 외부).
+            # 품질: seq/par/union 결과 ID 각각 1회 산출(타이밍 외부).
             seq_ids = await _retrieve_sequential(pq)
             par_ids = await _retrieve_parallel(pq)
+            union_ids = await _retrieve_union(pq)
             quality_rows.append(
-                _QualityRow(query=row.query, seq_ids=seq_ids, par_ids=par_ids)
+                _QualityRow(
+                    query=row.query,
+                    seq_ids=seq_ids,
+                    par_ids=par_ids,
+                    union_ids=union_ids,
+                )
             )
             correct_by_query[row.query] = set(row.correct_ids)
         print()
@@ -444,31 +552,39 @@ def _build_result(
     quality_rows: list[_QualityRow],
     correct_by_query: dict[str, set[str]],
 ) -> dict:
-    """콘솔/JSON 리포트용 결과 dict 구성."""
+    """콘솔/JSON 리포트용 결과 dict 구성(seq/par/union 3-way)."""
     seq_medians = [t.seq_median_ms for t in timings]
     par_medians = [t.par_median_ms for t in timings]
+    union_medians = [t.union_median_ms for t in timings]
 
     seq_overall = statistics.median(seq_medians) if seq_medians else 0.0
     par_overall = statistics.median(par_medians) if par_medians else 0.0
-    speedup = (seq_overall / par_overall) if par_overall else 0.0
+    union_overall = statistics.median(union_medians) if union_medians else 0.0
+    speedup_par = (seq_overall / par_overall) if par_overall else 0.0
+    speedup_union = (seq_overall / union_overall) if union_overall else 0.0
 
-    # 품질: recall@k·MRR을 순차/병렬 각각 집계.
-    seq_recall, seq_mrr = _quality_aggregate(
-        quality_rows, correct_by_query, use_seq=True
-    )
-    par_recall, par_mrr = _quality_aggregate(
-        quality_rows, correct_by_query, use_seq=False
+    # 품질: recall@k·MRR을 seq/par/union 각각 집계.
+    seq_recall, seq_mrr = _quality_aggregate(quality_rows, correct_by_query, path="seq")
+    par_recall, par_mrr = _quality_aggregate(quality_rows, correct_by_query, path="par")
+    union_recall, union_mrr = _quality_aggregate(
+        quality_rows, correct_by_query, path="union"
     )
 
-    # top-k 집합 일치 여부.
+    # top-k 집합 일치 여부 — 세 경로 모두 동일해야 정상.
     match = 0
     mismatch_examples: list[dict] = []
     for qr in quality_rows:
-        if set(qr.seq_ids) == set(qr.par_ids):
+        sets = [set(qr.seq_ids), set(qr.par_ids), set(qr.union_ids)]
+        if sets[0] == sets[1] == sets[2]:
             match += 1
         else:
             mismatch_examples.append(
-                {"query": qr.query, "seq_ids": qr.seq_ids, "par_ids": qr.par_ids}
+                {
+                    "query": qr.query,
+                    "seq_ids": qr.seq_ids,
+                    "par_ids": qr.par_ids,
+                    "union_ids": qr.union_ids,
+                }
             )
     mismatch = len(mismatch_examples)
 
@@ -484,11 +600,15 @@ def _build_result(
             "unit": "ms",
             "seq_median_ms": round(seq_overall, 3),
             "par_median_ms": round(par_overall, 3),
-            "speedup": round(speedup, 3),
+            "union_median_ms": round(union_overall, 3),
+            "speedup_par": round(speedup_par, 3),
+            "speedup_union": round(speedup_union, 3),
             "seq_p50_ms": round(_pct(seq_medians, 50), 3),
             "seq_p95_ms": round(_pct(seq_medians, 95), 3),
             "par_p50_ms": round(_pct(par_medians, 50), 3),
             "par_p95_ms": round(_pct(par_medians, 95), 3),
+            "union_p50_ms": round(_pct(union_medians, 50), 3),
+            "union_p95_ms": round(_pct(union_medians, 95), 3),
         },
         "quality": {
             "sequential": {
@@ -499,10 +619,18 @@ def _build_result(
                 **{f"recall@{k}": round(par_recall[k], 4) for k in _AT_K},
                 "mrr": round(par_mrr, 4),
             },
-            "recall_delta": {
+            "union": {
+                **{f"recall@{k}": round(union_recall[k], 4) for k in _AT_K},
+                "mrr": round(union_mrr, 4),
+            },
+            "recall_delta_par": {
                 f"recall@{k}": round(par_recall[k] - seq_recall[k], 4) for k in _AT_K
             },
-            "mrr_delta": round(par_mrr - seq_mrr, 4),
+            "recall_delta_union": {
+                f"recall@{k}": round(union_recall[k] - seq_recall[k], 4) for k in _AT_K
+            },
+            "mrr_delta_par": round(par_mrr - seq_mrr, 4),
+            "mrr_delta_union": round(union_mrr - seq_mrr, 4),
         },
         "set_equivalence": {
             "match": match,
@@ -514,8 +642,10 @@ def _build_result(
                 "query": t.query,
                 "seq_median_ms": round(t.seq_median_ms, 3),
                 "par_median_ms": round(t.par_median_ms, 3),
+                "union_median_ms": round(t.union_median_ms, 3),
                 "seq_samples_ms": t.seq_samples_ms,
                 "par_samples_ms": t.par_samples_ms,
+                "union_samples_ms": t.union_samples_ms,
             }
             for t in timings
         ],
@@ -534,16 +664,17 @@ def _quality_aggregate(
     rows: list[_QualityRow],
     correct_by_query: dict[str, set[str]],
     *,
-    use_seq: bool,
+    path: str,
 ) -> tuple[dict[int, float], float]:
-    """순차/병렬 결과에 대한 평균 recall@k·MRR 집계(run_recall._compute_metrics 재사용)."""
+    """seq/par/union 경로별 평균 recall@k·MRR 집계(run_recall._compute_metrics 재사용)."""
     n = len(rows)
     if n == 0:
         return {k: 0.0 for k in _AT_K}, 0.0
+    attr = {"seq": "seq_ids", "par": "par_ids", "union": "union_ids"}[path]
     recall_sum = {k: 0.0 for k in _AT_K}
     rr_sum = 0.0
     for qr in rows:
-        ids = qr.seq_ids if use_seq else qr.par_ids
+        ids = getattr(qr, attr)
         recall_at, rr = _compute_metrics(ids, correct_by_query.get(qr.query, set()))
         for k in _AT_K:
             recall_sum[k] += recall_at.get(k, 0.0)
@@ -562,7 +693,7 @@ def _pct(values: list[float], pct: float) -> float:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="병렬 검색 전(순차)/후(병렬) retrieval 구간 비교",
+        description="retrieval 3-way 비교 (순차/병렬/안 B UNION ALL)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
