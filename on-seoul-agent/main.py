@@ -37,10 +37,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     vector_global_sema를 이벤트 루프 시작 이후 초기화하여 Python 3.10+ 경고를 방지한다.
     """
-    # OTel 인프라 계측 — otel_enabled=False(기본)이거나 endpoint 미설정 시 no-op.
-    # 기존 커스텀 트레이싱(chat_agent_traces)과 병행한다.
-    setup_telemetry(app)
-
     # Langfuse LLM 계측 — langfuse_enabled=False(기본)이거나 키 미설정 시 no-op.
     # OTel(인프라 계측)과 별개 파이프라인으로 공존하며, 그래프 config 의 callbacks 로
     # LLM I/O·토큰·비용을 관측한다 (core/langfuse_client.py).
@@ -123,6 +119,19 @@ class _CatchAllMiddleware:
 
 app.add_middleware(_CatchAllMiddleware)
 app.add_middleware(ProcessTimeMiddleware)
+
+# OTel 인프라 계측 — otel_enabled=False(기본)이거나 endpoint 미설정 시 no-op.
+# 기존 커스텀 트레이싱(chat_agent_traces)과 병행한다.
+#
+# lifespan 이 아니라 모듈 레벨(서빙 시작 전)에서 호출한다.
+# 핵심 제약: FastAPIInstrumentor.instrument_app 은 Starlette 가 ASGI 미들웨어 스택을
+# 빌드·캐시하기 *전*에 실행돼야 한다. instrument_app 은 add_middleware 가 아니라
+# build_middleware_stack 을 패치해 ServerErrorMiddleware 바로 안쪽에 OTel 미들웨어를
+# 주입하므로(=add_middleware 호출 순서와 무관하게 두 커스텀 미들웨어보다 바깥),
+# 위치만 맞으면 서버 span 이 전체 요청을 감싸고 traceparent 를 가장 먼저 추출한다.
+# lifespan 본문에서 호출하면 스택이 이미 빌드된 뒤라 패치가 반영되지 않아 서버 span
+# 자체가 생성되지 않는다(첫 호출=lifespan 스코프에서 스택이 빌드되기 때문).
+setup_telemetry(app)
 
 # ---------------------------------------------------------------------------
 # 라우터 등록
