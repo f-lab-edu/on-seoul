@@ -10,6 +10,8 @@ Mock DB 세션으로 BM25 쿼리 변환, bind 파라미터, 머지 동작을 검
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from tools.bm25_search import BM25_LIMIT, bm25_search, build_bm25_query
 
 
@@ -19,6 +21,7 @@ def _make_session(*responses: list[dict]) -> MagicMock:
     bm25_search 가 두 컬럼을 순차 호출하므로 호출 횟수만큼 응답을 미리 준비한다.
     응답이 1개만 주어지면 모든 호출에 동일하게 반환된다.
     """
+
     def _result_for(rows: list[dict]) -> MagicMock:
         mr = MagicMock()
         if rows:
@@ -329,12 +332,12 @@ class TestBm25SearchSqlSafety:
     async def test_all_sql_meta_chars_stripped(self):
         """SQL meta 문자가 인라인 부분에 일체 포함되지 않는다 (enum 검증)."""
         raw_inputs = [
-            "O'Brien",                # single quote
-            "수영; --",                # comment / semicolon
-            "수영 OR 1=1",             # space + reserved word
-            "/* comment */수영",       # block comment
-            "수영\n장",                # newline
-            "수영\\장",                # backslash
+            "O'Brien",  # single quote
+            "수영; --",  # comment / semicolon
+            "수영 OR 1=1",  # space + reserved word
+            "/* comment */수영",  # block comment
+            "수영\n장",  # newline
+            "수영\\장",  # backslash
         ]
         session = _make_session([])
         for raw in raw_inputs:
@@ -348,9 +351,107 @@ class TestBm25SearchSqlSafety:
                     # (SQL 템플릿 자체의 single quote 는 토큰을 감싸는 ' ' 뿐)
                     if meta == "'":
                         # ' 는 토큰을 감싸는 용도이므로 2개 이상은 비정상
-                        assert stmt.count("'") <= 4  # service_name '...', metadata '...'
+                        assert (
+                            stmt.count("'") <= 4
+                        )  # service_name '...', metadata '...'
                     else:
                         assert meta not in stmt
+
+
+class TestBm25SearchPartialIndexPredicate:
+    """Fix 2 회귀 가드 — partial bm25 인덱스(WHERE row_kind='identity') 적중을 위한
+    `AND row_kind = 'identity'` predicate 가 모든 토큰·컬럼 쿼리에 포함되는지 검증한다.
+
+    이 조건이 누락되면 planner 가 partial 인덱스를 후보에서 제외해 Parallel Seq Scan
+    으로 떨어진다(성능 ~9배 저하). 결과 동등성과 무관한 순수 성능 회귀이므로 단위
+    테스트로 고정한다.
+    """
+
+    async def test_row_kind_identity_predicate_in_every_query(self):
+        """모든 토큰×컬럼 쿼리에 AND row_kind = 'identity' 가 포함된다."""
+        captured: list[str] = []
+
+        async def _capture(stmt, params=None):
+            captured.append(str(stmt))
+            mr = MagicMock()
+            mr.keys.return_value = ["service_id", "service_name", "bm25_rank"]
+            mr.fetchall.return_value = []
+            return mr
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await bm25_search(["테니스", "예약"], session)
+        # 2 토큰 × 2 컬럼 = 4 쿼리, 모두에 predicate 포함.
+        assert len(captured) == 4
+        for sql in captured:
+            normalized = " ".join(sql.split())
+            assert "row_kind = 'identity'" in normalized, (
+                "partial bm25 인덱스 적중을 위한 row_kind predicate 누락"
+            )
+
+    async def test_row_kind_predicate_anded_after_bm25_operator(self):
+        """row_kind 조건이 @@@ 매칭 뒤에 AND 로 결합된다 (인덱스 predicate 정렬)."""
+        captured: list[str] = []
+
+        async def _capture(stmt, params=None):
+            captured.append(str(stmt))
+            mr = MagicMock()
+            mr.keys.return_value = ["service_id", "service_name", "bm25_rank"]
+            mr.fetchall.return_value = []
+            return mr
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await bm25_search(["수영"], session)
+        for sql in captured:
+            normalized = " ".join(sql.split())
+            op_pos = normalized.find("@@@")
+            rk_pos = normalized.find("row_kind = 'identity'")
+            assert op_pos != -1 and rk_pos != -1
+            assert rk_pos > op_pos, "row_kind 조건이 @@@ 뒤 AND 절에 와야 함"
+
+
+class TestBm25SearchOrderingDefect:
+    """알려진 latent 결함 — BM25 토큰 쿼리에 relevance ORDER BY 가 없어
+    `ROW_NUMBER() OVER ()` 가 물리 스캔 순서를 rank 로 사용한다.
+
+    매칭 <= LIMIT 토큰은 LIMIT 컷이 발생하지 않아 결과가 결정적이지만,
+    매칭 > LIMIT 인 고빈도 토큰(예: 테니스장 421건 > LIMIT 50)에서는 스캔 순서
+    (Seq vs ParadeDB Custom Scan)에 따라 잘려나가는 50건이 달라져 BM25 채널 rank 가
+    변한다. 이는 Fix 2 가 만든 것이 아니라 ORDER BY 부재로 원래 존재하던 버그이며,
+    Fix 2(Custom Scan 적중)로 가시화됐을 뿐이다.
+
+    아래 xfail 은 "쿼리에 BM25 relevance ORDER BY 가 존재한다"를 기대값으로 고정한다.
+    근본 수정(예: paradedb.score 정렬 또는 안정적 tie-break ORDER BY 도입) 시
+    이 테스트가 xpass 로 바뀌어 결함 해소를 알린다.
+    """
+
+    @pytest.mark.xfail(
+        reason="latent 결함: BM25 토큰 쿼리에 relevance ORDER BY 가 없어 "
+        "고빈도 토큰의 LIMIT 컷이 비결정적이다 (별도 이슈, 머지 비블로킹).",
+        strict=True,
+    )
+    async def test_query_has_relevance_order_by(self):
+        captured: list[str] = []
+
+        async def _capture(stmt, params=None):
+            captured.append(str(stmt))
+            mr = MagicMock()
+            mr.keys.return_value = ["service_id", "service_name", "bm25_rank"]
+            mr.fetchall.return_value = []
+            return mr
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await bm25_search(["테니스"], session)
+        for sql in captured:
+            normalized = " ".join(sql.split()).upper()
+            assert "ORDER BY" in normalized, (
+                "LIMIT 컷이 결정적이려면 relevance/안정 ORDER BY 가 필요하다"
+            )
 
 
 class TestBm25SearchGuards:

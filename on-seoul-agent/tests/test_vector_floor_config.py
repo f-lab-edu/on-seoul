@@ -113,17 +113,23 @@ def _patch_all_searches(
 
     return _Ctx()
 
+
 _SAMPLE_VECTOR = [0.1, 0.2, 0.3]
 _QUESTION_KEYS = ["service_id", "embedding_text", "intent_label", "similarity"]
 _RRF_KEYS = ["service_id", "embedding_text", "metadata", "similarity"]
 
 
 def _capture_session(keys: list[str]) -> tuple[MagicMock, list[dict]]:
-    """bind 파라미터를 캡처하는 fake AsyncSession."""
+    """메인 쿼리의 bind 파라미터만 캡처하는 fake AsyncSession.
+
+    vector_search 는 본 쿼리 전에 'SET LOCAL hnsw.ef_search ...' 를 실행하므로
+    SET 문은 제외하고 DML 의 bind 만 남긴다.
+    """
     binds: list[dict] = []
 
     async def _capture_execute(stmt, params=None):
-        binds.append(params or {})
+        if not str(stmt).lstrip().upper().startswith("SET "):
+            binds.append(params or {})
         mock_result = MagicMock()
         mock_result.keys.return_value = keys
         mock_result.fetchall.return_value = []

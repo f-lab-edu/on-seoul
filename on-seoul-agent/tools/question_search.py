@@ -63,6 +63,9 @@ async def question_search(
         "top_k": top_k,
     }
 
+    # min_similarity 는 outer 필터로 둔다. inner DISTINCT ON 서브쿼리에 두면
+    # planner 가 HNSW ANN 을 포기하고 Seq Scan 으로 떨어진다(EXPLAIN 실증).
+    # DISTINCT ON dedup 순서·정렬은 그대로 보존하고, threshold 만 ranked 출력에서 거른다.
     sql = text("""
         SELECT * FROM (
             SELECT DISTINCT ON (service_id)
@@ -72,9 +75,9 @@ async def question_search(
                 1 - (embedding <=> CAST(:query_vector AS vector)) AS similarity
             FROM service_embeddings
             WHERE row_kind = 'question'
-              AND 1 - (embedding <=> CAST(:query_vector AS vector)) >= :min_similarity
             ORDER BY service_id, embedding <=> CAST(:query_vector AS vector)
         ) ranked
+        WHERE ranked.similarity >= :min_similarity
         ORDER BY similarity DESC
         LIMIT :top_k
     """)

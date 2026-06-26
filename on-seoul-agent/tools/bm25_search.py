@@ -7,6 +7,12 @@ pg_search 0.23.4 환경의 검증된 제약
 - ❌ `paradedb.score(id)` SELECT 또는 ORDER BY 사용 (service_name 컬럼에서 깨짐)
 - ❌ `paradedb.boolean(...)` / `paradedb.parse(...)` API 호출
 - ❌ 서로 다른 컬럼 결합 (`service_name @@@ ... OR metadata @@@ ...`)
+- ⚠️ `WHERE {col} @@@ '...'` 에는 **반드시 `AND row_kind = 'identity'`** 를 붙인다.
+  bm25 인덱스가 `WHERE row_kind = 'identity'` partial 인덱스라, 이 조건이 없으면
+  planner 가 partial 인덱스를 후보에서 제외해 Parallel Seq Scan(토큰당 ~350ms)으로
+  떨어진다. 조건을 붙이면 ParadeDB Custom Scan(토큰당 ~30ms). row_kind 는 pg_search
+  인덱스 필드가 아니라 @@@ 문법 안에 넣을 수 없고, partial 인덱스 predicate 매칭으로
+  해소한다. 결과 동등(인덱스가 identity row만 색인 → @@@ 는 이미 identity만 매칭).
 
 → 전략: **인라인 토큰 + score 함수 미사용 + ROW_NUMBER 로 rank 부여**
    ParadeDB 가 BM25 자연 순서로 결과를 반환하므로 SELECT 에 ROW_NUMBER 만
@@ -55,9 +61,7 @@ _BM25_RESERVED: frozenset[str] = frozenset({"AND", "OR", "NOT", "TO", "IN"})
 # Strict 화이트리스트 — SQL 인라인 안전 문자.
 # 한글(가-힣, ㄱ-ㅎ, ㅏ-ㅣ) + ASCII alphanumeric. 그 외 모두 제거.
 # single quote / semicolon / 공백 등 SQL meta 문자 일체 거부.
-_BM25_INLINE_SAFE: re.Pattern[str] = re.compile(
-    r"[^가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9]"
-)
+_BM25_INLINE_SAFE: re.Pattern[str] = re.compile(r"[^가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9]")
 
 # 검색 대상 컬럼 — 코드 하드코딩, 외부 입력 받지 않음.
 _BM25_COLUMNS: tuple[str, ...] = ("service_name", "metadata")
@@ -129,6 +133,15 @@ async def _search_one(
     if not token:
         return []
     limit_int = max(1, int(limit))
+    # `AND row_kind = 'identity'` 는 partial bm25 인덱스
+    # (idx_service_embeddings_bm25 ... WHERE row_kind = 'identity') predicate 와
+    # 정렬하기 위한 필수 조건이다. 누락 시 planner 가 partial 인덱스를 후보에서
+    # 제외해 Parallel Seq Scan(토큰당 ~350ms)으로 떨어진다. 이 조건이 들어가면
+    # ParadeDB Custom Scan(idx_service_embeddings_bm25)을 타 토큰당 ~30ms.
+    # 결과 동등: bm25 인덱스가 identity row만 색인하므로 `@@@` 는 이미 identity
+    # row만 매칭한다(EXPLAIN으로 확인). 따라서 이 조건은 성능만 개선하고 결과를
+    # 바꾸지 않는다. ParadeDB가 row_kind를 인덱스 필드로 갖지 않아 @@@ 문법 안에는
+    # 넣을 수 없고(boolean/term API 거부), partial 인덱스 predicate 매칭으로 해소된다.
     sql = text(f"""
         SELECT
             service_id,
@@ -136,6 +149,7 @@ async def _search_one(
             ROW_NUMBER() OVER () AS bm25_rank
         FROM service_embeddings
         WHERE {column} @@@ '{token}'
+          AND row_kind = 'identity'
         LIMIT {limit_int}
     """)
     result = await session.execute(sql)

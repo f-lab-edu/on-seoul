@@ -43,7 +43,9 @@ class Settings(BaseSettings):
     #     각자 LLM 을 실행한다. 보유자는 답변 *완료* 시점에 캐시를 쓰고 락을 DEL 하므로
     #     (스트리밍), waiter 는 보유자 답변 생성시간만큼 폴해야 hit 한다.
     # 불변식: poll_window(10s) < lock_ttl(30s) — 락이 살아있는 동안만 폴한다.
-    answer_cache_lock_ttl: int = 30  # worst-case 답변 + 쓰기 + 마진. 변경 시 위 불변식 확인.
+    answer_cache_lock_ttl: int = (
+        30  # worst-case 답변 + 쓰기 + 마진. 변경 시 위 불변식 확인.
+    )
     # waiter 재시도: retries × interval 초 동안 캐시 키를 주기 재조회.
     # 20 × 0.5 = 10s: config 가 명시한 최대 답변 시간(~10s)을 커버해 꼬리 herd 까지 방어.
     # 폴은 CacheCheckNode(검색 이전 단계)에서 일어나 DB 세션을 점유하지 않으므로
@@ -156,6 +158,13 @@ class Settings(BaseSettings):
     rrf_scan_k_per_track: int = 50
     rrf_top_k_final: int = 10
     vector_track_top_k: int = 10
+
+    # HNSW ANN 후보 탐색 폭. min_similarity 를 outer 필터로 옮겨 HNSW Index Scan 을
+    # 타게 한 뒤, 후보 LIMIT(scan_k) 만큼 실제로 채우려면 ef_search >= scan_k 여야 한다.
+    # ef_search < scan_k 이면 ANN 이 scan_k 개를 못 채워 truncated/빈 결과가 나와
+    # recall 이 하락한다(ef_search=40 < scan_k=50 에서 실측 18/20 불일치). scan_k 의
+    # 2배 헤드룸을 둬 exact KNN 과 동일한 결과를 보장한다(ef_search=100 에서 0/20 불일치).
+    hnsw_ef_search: int = 100
 
     # 트랙별 코사인 유사도 하한 — 3트랙 공통 0.65 uniform.
     # 하한 0.55/0.60/0.65/0.70 스윕에서 0.65가 정점(역U자), 0.70 급락,

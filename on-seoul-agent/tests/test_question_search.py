@@ -3,13 +3,18 @@
 Mock DB 세션으로 SQL 실행 경로와 bind 파라미터를 검증한다.
 실제 DB 및 OpenAI/Gemini API에 접근하지 않는다.
 
-쿼리 구조 (DISTINCT ON 패턴):
-    SELECT DISTINCT ON (service_id) ...
-    FROM service_embeddings
-    WHERE row_kind = 'question'
-      AND 1 - (embedding <=> :query_vector) >= :min_similarity
-    ORDER BY service_id, embedding <=> :query_vector
+쿼리 구조 (DISTINCT ON 패턴 + outer min_similarity 필터):
+    SELECT * FROM (
+        SELECT DISTINCT ON (service_id) ...
+        FROM service_embeddings
+        WHERE row_kind = 'question'
+        ORDER BY service_id, embedding <=> :query_vector
+    ) ranked
+    WHERE ranked.similarity >= :min_similarity
+    ORDER BY similarity DESC
     LIMIT :top_k
+
+min_similarity 는 HNSW ANN 회피를 막기 위해 inner WHERE 가 아닌 outer 필터로 둔다.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -140,7 +145,12 @@ class TestQuestionSearch:
         result = await question_search(session, _SAMPLE_VECTOR)
         assert len(result) == 2
         for row in result:
-            assert set(row.keys()) == {"service_id", "embedding_text", "intent_label", "similarity"}
+            assert set(row.keys()) == {
+                "service_id",
+                "embedding_text",
+                "intent_label",
+                "similarity",
+            }
 
     async def test_results_ordered_by_similarity_desc(self):
         """DB가 similarity 내림차순으로 정렬된 결과를 반환하면 그대로 유지된다.
@@ -150,9 +160,24 @@ class TestQuestionSearch:
         Mock은 이미 정렬된 rows를 반환하도록 설정한다.
         """
         rows_sorted = [
-            {"service_id": "S002", "embedding_text": "b", "intent_label": "detail", "similarity": 0.9},
-            {"service_id": "S003", "embedding_text": "c", "intent_label": "detail", "similarity": 0.8},
-            {"service_id": "S001", "embedding_text": "a", "intent_label": "detail", "similarity": 0.7},
+            {
+                "service_id": "S002",
+                "embedding_text": "b",
+                "intent_label": "detail",
+                "similarity": 0.9,
+            },
+            {
+                "service_id": "S003",
+                "embedding_text": "c",
+                "intent_label": "detail",
+                "similarity": 0.8,
+            },
+            {
+                "service_id": "S001",
+                "embedding_text": "a",
+                "intent_label": "detail",
+                "similarity": 0.7,
+            },
         ]
         session = _make_session(rows_sorted)
         result = await question_search(session, _SAMPLE_VECTOR)

@@ -314,16 +314,22 @@ LIMIT :top_k;
 
 ### BM25 검색 (identity partial index)
 
+pg_search 0.23.4 제약으로 bind 파라미터(`@@@ $N`), `paradedb.score`, 컬럼 OR 결합을 쓸 수 없다. 컬럼별·토큰별로 인라인 토큰 쿼리를 독립 실행하고 `ROW_NUMBER()`로 rank를 부여한 뒤 service_id 기준 MAX score로 머지한다(`tools/bm25_search.py`).
+
 ```sql
--- BM25 인덱스는 WHERE row_kind='identity' partial index
+-- 컬럼당·토큰당 1쿼리. {column} ∈ {service_name, metadata}, {token}은 sanitize된 인라인 토큰.
+-- AND row_kind = 'identity' 는 필수: bm25 인덱스가 WHERE row_kind='identity' partial 인덱스라
+-- 이 조건이 없으면 planner가 partial 인덱스를 후보에서 제외해 Parallel Seq Scan(토큰당 ~350ms)으로
+-- 떨어진다. 조건을 붙이면 ParadeDB Custom Scan(idx_service_embeddings_bm25)을 타 토큰당 ~30ms.
+-- row_kind는 pg_search 인덱스 필드가 아니라 @@@ 문법 안에 넣을 수 없고, partial predicate 매칭으로 해소한다.
+-- 결과 동등: 인덱스가 identity row만 색인하므로 @@@ 는 조건 유무와 무관하게 identity row만 매칭한다.
 SELECT
     service_id,
     service_name,
-    paradedb.score(id) AS bm25_score
+    ROW_NUMBER() OVER () AS bm25_rank   -- bm25_score = 1.0 / rank 로 환산
 FROM service_embeddings
-WHERE (service_name @@@ :bm25_query OR metadata @@@ :bm25_query)
+WHERE {column} @@@ '{token}'
   AND row_kind = 'identity'
-ORDER BY paradedb.score(id) DESC
 LIMIT 50;
 ```
 

@@ -31,13 +31,19 @@ def _make_session(rows: list[dict]) -> MagicMock:
 
 
 def _capture_session() -> tuple[MagicMock, list[str], list[dict]]:
-    """SQL 텍스트와 bind 파라미터를 캡처하는 세션을 반환한다."""
+    """메인 SELECT 의 SQL 텍스트·bind 만 캡처하는 세션을 반환한다.
+
+    vector_search 는 본 쿼리 전에 'SET LOCAL hnsw.ef_search ...' 를 1회 실행한다.
+    SET 문은 분석 대상이 아니므로 필터링해 메인 쿼리만 texts/binds 에 남긴다.
+    """
     executed_sql_texts: list[str] = []
     executed_bind_params: list[dict] = []
 
     async def _capture_execute(stmt, params=None):
-        executed_sql_texts.append(str(stmt))
-        executed_bind_params.append(params or {})
+        sql = str(stmt)
+        if not sql.lstrip().upper().startswith("SET "):
+            executed_sql_texts.append(sql)
+            executed_bind_params.append(params or {})
         mock_result = MagicMock()
         mock_result.keys.return_value = _RRF_KEYS
         mock_result.fetchall.return_value = []
@@ -162,8 +168,13 @@ class TestVectorSearchQueryStructure:
         await vector_search(session, _SAMPLE_VECTOR)
         assert "scan_k" in texts[0]
 
-    async def test_min_similarity_inside_subquery(self):
-        """min_similarity 조건이 서브쿼리(candidates) 내부에 있다."""
+    async def test_min_similarity_outside_subquery(self):
+        """min_similarity 조건이 서브쿼리(candidates) 외부 outer 필터에 있다.
+
+        inner WHERE 에 두면 planner 가 HNSW ANN 을 포기하고 Seq Scan 으로 떨어진다.
+        outer 로 옮겨 scan_k 후보를 ANN 으로 뽑은 뒤 threshold 를 거른다.
+        scan_k >= top_k 이므로 recall 동등.
+        """
         session, texts, _ = _capture_session()
         await vector_search(session, _SAMPLE_VECTOR)
         sql = texts[0]
@@ -171,15 +182,42 @@ class TestVectorSearchQueryStructure:
         min_similarity_pos = sql.find("min_similarity")
         assert candidates_pos != -1, "candidates 별칭이 SQL에 없음"
         assert min_similarity_pos != -1, "min_similarity가 SQL에 없음"
-        assert min_similarity_pos < candidates_pos, (
-            "min_similarity 조건이 서브쿼리 외부에 있음"
+        assert min_similarity_pos > candidates_pos, (
+            "min_similarity 조건이 서브쿼리 내부에 있음 (HNSW 회피 안티패턴)"
         )
+        # outer 필터로 항상 포함되어야 한다 (post_filter 유무와 무관).
+        assert "candidates.similarity >= :min_similarity" in sql
 
     async def test_no_distinct_on(self):
         """Phase RRF에서는 DISTINCT ON이 없다 (트랙별 독립 쿼리이므로 불필요)."""
         session, texts, _ = _capture_session()
         await vector_search(session, _SAMPLE_VECTOR)
         assert "DISTINCT ON" not in texts[0]
+
+    async def test_sets_hnsw_ef_search_to_at_least_scan_k(self):
+        """본 쿼리 전에 SET LOCAL hnsw.ef_search 를 scan_k 이상으로 설정한다.
+
+        ef_search < scan_k 이면 HNSW 가 scan_k 후보를 못 채워 recall 이 하락한다.
+        """
+        executed: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed.append(str(stmt))
+            mock_result = MagicMock()
+            mock_result.keys.return_value = _RRF_KEYS
+            mock_result.fetchall.return_value = []
+            return mock_result
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+        await vector_search(session, _SAMPLE_VECTOR)
+
+        set_stmts = [s for s in executed if s.lstrip().upper().startswith("SET ")]
+        assert len(set_stmts) == 1, "SET LOCAL hnsw.ef_search 가 1회 실행돼야 함"
+        assert "hnsw.ef_search" in set_stmts[0]
+        assert "LOCAL" in set_stmts[0].upper(), "트랜잭션 범위 SET LOCAL 이어야 함"
+        assert str(settings.hnsw_ef_search) in set_stmts[0]
+        assert settings.hnsw_ef_search >= settings.rrf_scan_k_per_track
 
 
 class TestPostFilterStructure:

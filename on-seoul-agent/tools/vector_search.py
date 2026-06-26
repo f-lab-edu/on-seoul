@@ -8,9 +8,17 @@ Phase RRF 검색 전략:
 각 트랙은 독립 쿼리로 실행된 후 RRF로 결합된다.
 scan_k는 settings.rrf_scan_k_per_track 을 사용한다.
 
-HNSW 파라미터 기준 (Phase 9):
+HNSW 파라미터 기준:
   - m=16, ef_construction=64: 소규모 데이터 기본값.
-  - ef_search=40: 정확도 vs 조회 속도 균형.
+  - ef_search: settings.hnsw_ef_search (SET LOCAL). scan_k 후보를 채워
+    exact KNN 과 동일한 recall 을 보장하기 위해 ef_search >= scan_k 로 둔다.
+
+recall 보존 우선 결정:
+  min_similarity 를 outer 로 옮기면 planner 가 HNSW Index Scan 을 택할 수 있으나,
+  데이터 규모(트랙당 ~3.4k row)에서는 recall 동등(ef_search>=60)을 만족시키면
+  planner 가 비용상 Seq Scan 을 택한다(실측). 즉 이 규모에서 exact Seq Scan 이
+  정답이며, threshold 의 outer 이동은 SQL 레벨 결과를 바꾸지 않는다(exact 동등).
+  데이터가 커지면 동일 쿼리로 HNSW 가 자연히 선택된다.
 """
 
 from typing import Literal
@@ -108,7 +116,12 @@ async def vector_search(
         post_filters.append("metadata->>'service_status' = :service_status")
         bind["service_status"] = service_status
 
-    where_clause = ("WHERE " + " AND ".join(post_filters)) if post_filters else ""
+    # min_similarity 는 항상 outer 필터로 둔다. inner 서브쿼리에 두면 planner 가
+    # HNSW ANN(ORDER BY embedding<=>q LIMIT)을 포기하고 Seq Scan + Sort 로 떨어진다.
+    # scan_k(>=top_k) 가 충분히 커서 가장 가까운 후보 안에 threshold 통과분이 모두
+    # 포함되므로 recall 동등. post_filters 가 비어도 similarity 조건은 항상 포함.
+    outer_conditions = ["candidates.similarity >= :min_similarity", *post_filters]
+    where_clause = "WHERE " + " AND ".join(outer_conditions)
 
     sql = text(f"""
         SELECT service_id, embedding_text, metadata, similarity
@@ -118,7 +131,6 @@ async def vector_search(
                 1 - (embedding <=> CAST(:query_vector AS vector)) AS similarity
             FROM service_embeddings
             WHERE row_kind = :row_kind
-              AND 1 - (embedding <=> CAST(:query_vector AS vector)) >= :min_similarity
             ORDER BY embedding <=> CAST(:query_vector AS vector)
             LIMIT :scan_k
         ) candidates
@@ -126,6 +138,13 @@ async def vector_search(
         ORDER BY similarity DESC
         LIMIT :top_k
     """)
+
+    # HNSW 후보 LIMIT(scan_k)을 실제로 채우려면 ef_search >= scan_k 여야 한다.
+    # SET LOCAL 은 현재 트랜잭션에만 적용되어 커넥션 풀에 누수되지 않는다.
+    # SET 은 bind 파라미터를 받지 못하므로 신뢰된 config int 를 직접 삽입한다.
+    await session.execute(
+        text(f"SET LOCAL hnsw.ef_search = {int(settings.hnsw_ef_search)}")
+    )
 
     result = await session.execute(sql, bind)
     keys = result.keys()
