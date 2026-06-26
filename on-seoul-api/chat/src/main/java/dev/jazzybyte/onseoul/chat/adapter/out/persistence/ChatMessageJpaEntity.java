@@ -48,6 +48,12 @@ public class ChatMessageJpaEntity {
     @Column(name = "decision")
     private String decision;
 
+    // ASSISTANT 메시지의 prev_working_set(opaque JSON 봉투). USER는 null. raw JSON text passthrough.
+    // Spring은 해석하지 않고 통째로 저장했다가 다음 턴 carryover로 verbatim 회신한다. 구 메시지/첫 턴은 null.
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "working_set")
+    private String workingSet;
+
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
@@ -58,7 +64,7 @@ public class ChatMessageJpaEntity {
 
     public ChatMessage toDomain() {
         return new ChatMessage(id, roomId, seq, ChatMessageRole.valueOf(role), content,
-                serviceCards, intent, decision, createdAt);
+                serviceCards, intent, decision, workingSet, createdAt);
     }
 
     public static ChatMessageJpaEntity fromDomain(ChatMessage message) {
@@ -71,6 +77,7 @@ public class ChatMessageJpaEntity {
         entity.serviceCards = message.getServiceCards();
         entity.intent = message.getIntent();
         entity.decision = message.getDecision();
+        entity.workingSet = message.getWorkingSet();
         entity.createdAt = message.getCreatedAt();
         return entity;
     }

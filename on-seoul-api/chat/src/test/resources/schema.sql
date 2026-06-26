@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     service_cards JSON,
     intent      VARCHAR(20),
     decision    JSON,
+    working_set JSON,
     created_at  TIMESTAMP WITH TIME ZONE NOT NULL
 );
 

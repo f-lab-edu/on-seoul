@@ -236,6 +236,65 @@ class ChatPersistenceAdapterTest {
         assertThat(loaded.get(0).getDecision()).isNull();
     }
 
+    // ── working_set round-trip (carryover 봉투) ───────────────────
+
+    @Test
+    @DisplayName("working_set — ASSISTANT 메시지의 prev_working_set 봉투를 저장 후 로드 시 동일 JSON으로 복원된다(opaque 통째)")
+    void workingSet_assistantRoundTrip_restoresSameJson() {
+        ChatRoom room = adapter.save(ChatRoom.create(68L, "working_set 라운드트립"));
+        Long seq = adapter.nextSeq();
+        String workingSetJson = "{\"entities\":[{\"service_id\":\"S1\",\"label\":\"강남 음악회 🎵\"}],"
+                + "\"intent\":\"SQL_SEARCH\",\"reasoning\":\"직전 검색\",\"refined_query\":\"강남구 문화행사\","
+                + "\"applied_filters\":{\"area\":\"강남구\"},\"relaxed\":false,\"relaxed_filters\":[]}";
+
+        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.ASSISTANT,
+                "강남구 안내", null, "SQL_SEARCH", null, workingSetJson));
+
+        List<ChatMessage> loaded = adapter.findByRoomIdOrderBySeqAsc(room.getId());
+
+        assertThat(loaded).hasSize(1);
+        String restored = loaded.get(0).getWorkingSet();
+        assertThat(restored).isNotNull();
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        try {
+            // 의미적으로 동일한 JSON 트리여야 한다(이스케이프 문자열이 아니라 객체로 복원).
+            assertThat(om.readTree(restored)).isEqualTo(om.readTree(workingSetJson));
+            assertThat(om.readTree(restored).isObject()).isTrue();
+            assertThat(om.readTree(restored).get("intent").asText()).isEqualTo("SQL_SEARCH");
+            assertThat(om.readTree(restored).get("entities").get(0).get("label").asText())
+                    .isEqualTo("강남 음악회 🎵");
+        } catch (Exception e) {
+            throw new AssertionError("working_set 복원 JSON 파싱 실패: " + restored, e);
+        }
+    }
+
+    @Test
+    @DisplayName("working_set — USER 메시지는 working_set이 null로 유지된다")
+    void workingSet_userMessage_remainsNull() {
+        ChatRoom room = adapter.save(ChatRoom.create(69L, "USER working_set null"));
+        Long seq = adapter.nextSeq();
+
+        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.USER, "질문"));
+
+        List<ChatMessage> loaded = adapter.findByRoomIdOrderBySeqAsc(room.getId());
+        assertThat(loaded).hasSize(1);
+        assertThat(loaded.get(0).getWorkingSet()).isNull();
+    }
+
+    @Test
+    @DisplayName("working_set — working_set 미동반 ASSISTANT 메시지(null)는 null로 유지된다(하위호환)")
+    void workingSet_assistantWithoutWorkingSet_remainsNull() {
+        ChatRoom room = adapter.save(ChatRoom.create(70L, "ASSISTANT working_set null"));
+        Long seq = adapter.nextSeq();
+
+        adapter.save(ChatMessage.create(room.getId(), seq, ChatMessageRole.ASSISTANT,
+                "답변", null, "SQL_SEARCH", null, null));
+
+        List<ChatMessage> loaded = adapter.findByRoomIdOrderBySeqAsc(room.getId());
+        assertThat(loaded).hasSize(1);
+        assertThat(loaded.get(0).getWorkingSet()).isNull();
+    }
+
     // ── findActiveByIdAndUserId ───────────────────────────────────
 
     @Test

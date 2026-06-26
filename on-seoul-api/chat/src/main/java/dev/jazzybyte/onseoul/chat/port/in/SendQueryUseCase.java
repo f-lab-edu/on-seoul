@@ -23,13 +23,17 @@ public interface SendQueryUseCase {
      *                         다음 턴 carryover(prev_intent)로 사용한다. 검증 없이 그대로 저장된다.
      * @param decisionJson     AI decision 이벤트의 payload(opaque JSON). decision 미수신이면 null.
      *                         user_rationale을 다음 턴 carryover(prev_reasoning)로 추출한다. 그대로 저장된다.
+     * @param workingSetJson   AI final 이벤트의 prev_working_set 봉투(opaque JSON). 미동반이면 null.
+     *                         Spring은 해석하지 않고 통째로 저장했다가 다음 턴 carryover(prev_working_set)로
+     *                         verbatim 회신한다.
      */
-    void saveAnswer(long roomId, String answer, String serviceCardsJson, String intent, String decisionJson);
+    void saveAnswer(long roomId, String answer, String serviceCardsJson, String intent, String decisionJson,
+                    String workingSetJson);
 
     /**
      * @param created   이번 질의로 새 ChatRoom이 생성되었으면 true, 기존 방이면 false.
      * @param history   현재 질문을 제외한 직전 N턴(과거 → 최신). 맥락이 없으면 빈 리스트.
-     * @param carryover 직전 assistant 메시지에서 추출한 멀티턴 참조 해소 맥락. 없으면 {@link Carryover#empty()}.
+     * @param carryover 직전 assistant 메시지에서 추출한 멀티턴 carryover(working_set 봉투). 없으면 {@link Carryover#empty()}.
      */
     record PrepareResult(long roomId, long messageId, boolean created, List<ChatTurn> history, Carryover carryover) {}
 }

@@ -22,21 +22,33 @@ public class ChatMessage {
      * 다음 턴 carryover(prev_reasoning)로 추출하는 데 사용한다(JSON 해석은 adapter 책임 — 도메인은 opaque).
      */
     private String decision;
+    /**
+     * AI final 이벤트의 prev_working_set(opaque JSON 봉투). ASSISTANT만 보유, USER는 null.
+     * Spring은 해석하지 않고 통째로 저장했다가 다음 턴 carryover(prev_working_set)로 verbatim 회신한다.
+     * 구 메시지/첫 턴/미동반이면 null(하위호환 — None 수용).
+     */
+    private String workingSet;
     private OffsetDateTime createdAt;
 
     public ChatMessage(Long id, Long roomId, Long seq, ChatMessageRole role,
                        String content, OffsetDateTime createdAt) {
-        this(id, roomId, seq, role, content, null, null, null, createdAt);
+        this(id, roomId, seq, role, content, null, null, null, null, createdAt);
     }
 
     public ChatMessage(Long id, Long roomId, Long seq, ChatMessageRole role,
                        String content, String serviceCards, String intent, OffsetDateTime createdAt) {
-        this(id, roomId, seq, role, content, serviceCards, intent, null, createdAt);
+        this(id, roomId, seq, role, content, serviceCards, intent, null, null, createdAt);
     }
 
     public ChatMessage(Long id, Long roomId, Long seq, ChatMessageRole role,
                        String content, String serviceCards, String intent, String decision,
                        OffsetDateTime createdAt) {
+        this(id, roomId, seq, role, content, serviceCards, intent, decision, null, createdAt);
+    }
+
+    public ChatMessage(Long id, Long roomId, Long seq, ChatMessageRole role,
+                       String content, String serviceCards, String intent, String decision,
+                       String workingSet, OffsetDateTime createdAt) {
         this.id = id;
         this.roomId = roomId;
         this.seq = seq;
@@ -45,23 +57,31 @@ public class ChatMessage {
         this.serviceCards = serviceCards;
         this.intent = intent;
         this.decision = decision;
+        this.workingSet = workingSet;
         this.createdAt = createdAt;
     }
 
-    /** 카드/intent/decision 없는 메시지(USER 등) 생성. serviceCards/intent/decision은 null. */
+    /** 카드/intent/decision/working_set 없는 메시지(USER 등) 생성. 모두 null. */
     public static ChatMessage create(Long roomId, Long seq, ChatMessageRole role, String content) {
-        return create(roomId, seq, role, content, null, null, null);
+        return create(roomId, seq, role, content, null, null, null, null);
     }
 
-    /** ASSISTANT 메시지를 service_cards(opaque JSON)·intent와 함께 생성. decision은 null. */
+    /** ASSISTANT 메시지를 service_cards(opaque JSON)·intent와 함께 생성. decision/working_set은 null. */
     public static ChatMessage create(Long roomId, Long seq, ChatMessageRole role,
                                      String content, String serviceCards, String intent) {
-        return create(roomId, seq, role, content, serviceCards, intent, null);
+        return create(roomId, seq, role, content, serviceCards, intent, null, null);
     }
 
-    /** ASSISTANT 메시지를 service_cards·intent·decision(각각 없으면 null)과 함께 생성. */
+    /** ASSISTANT 메시지를 service_cards·intent·decision(각각 없으면 null)과 함께 생성. working_set은 null. */
     public static ChatMessage create(Long roomId, Long seq, ChatMessageRole role,
                                      String content, String serviceCards, String intent, String decision) {
+        return create(roomId, seq, role, content, serviceCards, intent, decision, null);
+    }
+
+    /** ASSISTANT 메시지를 service_cards·intent·decision·working_set(각각 없으면 null)과 함께 생성. */
+    public static ChatMessage create(Long roomId, Long seq, ChatMessageRole role,
+                                     String content, String serviceCards, String intent, String decision,
+                                     String workingSet) {
         ChatMessage msg = new ChatMessage();
         msg.roomId = roomId;
         msg.seq = seq;
@@ -70,6 +90,7 @@ public class ChatMessage {
         msg.serviceCards = serviceCards;
         msg.intent = intent;
         msg.decision = decision;
+        msg.workingSet = workingSet;
         msg.createdAt = OffsetDateTime.now();
         return msg;
     }

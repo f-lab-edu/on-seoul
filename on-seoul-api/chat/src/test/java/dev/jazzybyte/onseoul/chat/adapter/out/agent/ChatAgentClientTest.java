@@ -3,7 +3,6 @@ package dev.jazzybyte.onseoul.chat.adapter.out.agent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.jazzybyte.onseoul.chat.domain.Carryover;
-import dev.jazzybyte.onseoul.chat.domain.PrevEntity;
 import dev.jazzybyte.onseoul.chat.port.out.AiStreamEvent;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
@@ -427,8 +426,8 @@ class ChatAgentClientTest {
     }
 
     @Test
-    @DisplayName("stream() - carryover가 비어 있으면 prev_entities는 빈 배열로, prev_intent/prev_reasoning은 null이라 생략된다")
-    void stream_emptyCarryover_prevEntitiesEmptyArrayAndNullsOmitted() throws Exception {
+    @DisplayName("stream() - carryover.workingSet이 null이면 prev_working_set은 직렬화에서 생략된다(@JsonInclude(NON_NULL), AI 현행 동작 폴백)")
+    void stream_emptyCarryover_prevWorkingSetOmitted() throws Exception {
         mockWebServer.enqueue(new MockResponse()
                 .setHeader("Content-Type", "text/event-stream")
                 .setBody("data: ok\n\n")
@@ -440,24 +439,25 @@ class ChatAgentClientTest {
         RecordedRequest recorded = mockWebServer.takeRequest();
         JsonNode json = new ObjectMapper().readTree(recorded.getBody().readUtf8());
 
-        assertThat(json.get("prev_entities").isArray()).isTrue();
-        assertThat(json.get("prev_entities")).isEmpty();
-        // @JsonInclude(NON_NULL): null prev_intent/prev_reasoning은 직렬화에서 생략(AI가 optional 수용)
+        assertThat(json.has("prev_working_set")).isFalse();
+        // 평면 carryover 필드는 nested 전면 전환으로 더 이상 전송하지 않는다.
+        assertThat(json.has("prev_entities")).isFalse();
         assertThat(json.has("prev_intent")).isFalse();
         assertThat(json.has("prev_reasoning")).isFalse();
     }
 
     @Test
-    @DisplayName("stream() - prev_entities는 {service_id, label} snake_case로 순서 그대로 직렬화되고 prev_intent가 포함된다")
-    void stream_carryover_serializedAsPrevEntitiesAndPrevIntent() throws Exception {
+    @DisplayName("stream() - carryover.workingSet 봉투가 prev_working_set 객체로 verbatim 직렬화된다(nested 전면 전환)")
+    void stream_carryover_serializedAsNestedPrevWorkingSet() throws Exception {
         mockWebServer.enqueue(new MockResponse()
                 .setHeader("Content-Type", "text/event-stream")
                 .setBody("data: ok\n\n")
                 .setResponseCode(200));
 
-        Carryover carryover = new Carryover(List.of(
-                new PrevEntity("S1", "강남 음악회 🎵"),
-                new PrevEntity("S2", "")), "SQL_SEARCH", null);
+        String workingSet = "{\"entities\":[{\"service_id\":\"S1\",\"label\":\"강남 음악회 🎵\"}],"
+                + "\"intent\":\"SQL_SEARCH\",\"reasoning\":\"직전 검색\",\"refined_query\":\"강남구 문화행사\","
+                + "\"applied_filters\":{\"area\":\"강남구\"},\"relaxed\":false,\"relaxed_filters\":[]}";
+        Carryover carryover = new Carryover(workingSet);
 
         adapter.stream("그 중 첫 번째", 5L, 7L, null, null, java.util.List.of(), carryover)
                 .collectList().block();
@@ -465,16 +465,37 @@ class ChatAgentClientTest {
         RecordedRequest recorded = mockWebServer.takeRequest();
         JsonNode json = new ObjectMapper().readTree(recorded.getBody().readUtf8());
 
-        JsonNode entities = json.get("prev_entities");
-        assertThat(entities.isArray()).isTrue();
-        assertThat(entities).hasSize(2);
-        assertThat(entities.get(0).get("service_id").asText()).isEqualTo("S1");
-        assertThat(entities.get(0).get("label").asText()).isEqualTo("강남 음악회 🎵");
-        assertThat(entities.get(1).get("service_id").asText()).isEqualTo("S2");
-        assertThat(entities.get(1).get("label").asText()).isEmpty();
-        assertThat(json.get("prev_intent").asText()).isEqualTo("SQL_SEARCH");
-        // prev_reasoning은 null이므로 생략
+        // 단일 nested 객체로 회신되며, 봉투 내부 구조는 변형 없이 보존된다.
+        JsonNode ws = json.get("prev_working_set");
+        assertThat(ws).isNotNull();
+        assertThat(ws.isObject()).isTrue();
+        assertThat(ws.get("intent").asText()).isEqualTo("SQL_SEARCH");
+        assertThat(ws.get("refined_query").asText()).isEqualTo("강남구 문화행사");
+        assertThat(ws.get("entities").get(0).get("service_id").asText()).isEqualTo("S1");
+        assertThat(ws.get("entities").get(0).get("label").asText()).isEqualTo("강남 음악회 🎵");
+        assertThat(ws.get("applied_filters").get("area").asText()).isEqualTo("강남구");
+        assertThat(ws.get("relaxed").asBoolean()).isFalse();
+        // 평면 carryover 필드는 더 이상 전송하지 않는다.
+        assertThat(json.has("prev_entities")).isFalse();
+        assertThat(json.has("prev_intent")).isFalse();
         assertThat(json.has("prev_reasoning")).isFalse();
+    }
+
+    @Test
+    @DisplayName("stream() - carryover.workingSet이 깨진 JSON이면 prev_working_set을 생략한다(파싱 실패 폴백)")
+    void stream_malformedWorkingSet_prevWorkingSetOmitted() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: ok\n\n")
+                .setResponseCode(200));
+
+        adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), new Carryover("{broken json"))
+                .collectList().block();
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        JsonNode json = new ObjectMapper().readTree(recorded.getBody().readUtf8());
+
+        assertThat(json.has("prev_working_set")).isFalse();
     }
 
     // ── decision 이벤트 (AI triage 라우팅 결정) ──────────────────────
@@ -571,21 +592,61 @@ class ChatAgentClientTest {
         assertThat(events).noneMatch(AiStreamEvent::isDecision);
     }
 
+    // ── final 이벤트의 prev_working_set 캡처 ──────────────────────────
+
     @Test
-    @DisplayName("stream() - 직전 턴 prev_reasoning이 채워지면 요청 본문에 prev_reasoning이 포함된다")
-    void stream_prevReasoning_includedInRequestBody() throws Exception {
+    @DisplayName("stream() - final 이벤트의 prev_working_set 객체가 finalWorkingSet으로 opaque 캡처된다(다음 턴 carryover용)")
+    void stream_finalEvent_capturesPrevWorkingSet() throws Exception {
+        String finalData = "{\"message_id\":84,\"answer\":\"강남구 안내\",\"intent\":\"SQL_SEARCH\","
+                + "\"prev_working_set\":{\"entities\":[{\"service_id\":\"S1\",\"label\":\"강남 음악회 🎵\"}],"
+                + "\"intent\":\"SQL_SEARCH\",\"refined_query\":\"강남구 문화행사\",\"relaxed\":false}}";
         mockWebServer.enqueue(new MockResponse()
                 .setHeader("Content-Type", "text/event-stream")
-                .setBody("data: ok\n\n")
+                .setBody("data: " + finalData + "\n\n")
                 .setResponseCode(200));
 
-        Carryover carryover = new Carryover(java.util.List.of(), "VECTOR_SEARCH", "직전 turn은 검색이 필요했습니다");
+        AiStreamEvent fin = adapter.stream("강남구 문화행사", 1L, 84L, null, null, java.util.List.of(),
+                Carryover.empty()).blockLast();
 
-        adapter.stream("후속", 5L, 7L, null, null, java.util.List.of(), carryover).collectList().block();
+        assertThat(fin.isFinal()).isTrue();
+        String ws = fin.finalWorkingSet();
+        assertThat(ws).isNotNull();
+        // 봉투는 opaque로 캡처되며 내부 구조는 변형 없이 보존된다.
+        JsonNode parsed = new ObjectMapper().readTree(ws);
+        assertThat(parsed.isObject()).isTrue();
+        assertThat(parsed.get("intent").asText()).isEqualTo("SQL_SEARCH");
+        assertThat(parsed.get("refined_query").asText()).isEqualTo("강남구 문화행사");
+        assertThat(parsed.get("entities").get(0).get("label").asText()).isEqualTo("강남 음악회 🎵");
+    }
 
-        RecordedRequest recorded = mockWebServer.takeRequest();
-        JsonNode json = new ObjectMapper().readTree(recorded.getBody().readUtf8());
-        assertThat(json.get("prev_reasoning").asText()).isEqualTo("직전 turn은 검색이 필요했습니다");
+    @Test
+    @DisplayName("stream() - final 이벤트에 prev_working_set 키가 없으면 finalWorkingSet은 null(하위호환)")
+    void stream_finalWithoutPrevWorkingSetKey_nullWorkingSet() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"message_id\":1,\"answer\":\"답변\",\"intent\":\"SQL_SEARCH\"}\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(),
+                Carryover.empty()).blockLast();
+
+        assertThat(fin.isFinal()).isTrue();
+        assertThat(fin.finalWorkingSet()).isNull();
+    }
+
+    @Test
+    @DisplayName("stream() - final 이벤트의 prev_working_set이 명시적 null이면 finalWorkingSet은 null")
+    void stream_finalWithNullPrevWorkingSet_nullWorkingSet() {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"message_id\":1,\"answer\":\"답변\",\"prev_working_set\":null}\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(),
+                Carryover.empty()).blockLast();
+
+        assertThat(fin.isFinal()).isTrue();
+        assertThat(fin.finalWorkingSet()).isNull();
     }
 
     @Test

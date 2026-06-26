@@ -5,7 +5,6 @@ import dev.jazzybyte.onseoul.chat.domain.ChatMessage;
 import dev.jazzybyte.onseoul.chat.domain.ChatMessageRole;
 import dev.jazzybyte.onseoul.chat.domain.ChatRoom;
 import dev.jazzybyte.onseoul.chat.domain.ChatTurn;
-import dev.jazzybyte.onseoul.chat.domain.PrevEntity;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryCommand;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryUseCase;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryUseCase.PrepareResult;
@@ -13,7 +12,6 @@ import dev.jazzybyte.onseoul.chat.port.out.LoadChatMessagePort;
 import dev.jazzybyte.onseoul.chat.port.out.LoadChatRoomPort;
 import dev.jazzybyte.onseoul.chat.port.out.SaveChatMessagePort;
 import dev.jazzybyte.onseoul.chat.port.out.SaveChatRoomPort;
-import dev.jazzybyte.onseoul.chat.port.out.ServiceCardParserPort;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
 import lombok.RequiredArgsConstructor;
@@ -29,14 +27,11 @@ import java.util.List;
 public class SendQueryService implements SendQueryUseCase {
 
     private static final int TITLE_MAX_LENGTH = 50;
-    /** carryover prev_entities 최대 건수(초과 시 앞쪽 유지). */
-    private static final int MAX_PREV_ENTITIES = 10;
 
     private final SaveChatRoomPort saveChatRoomPort;
     private final LoadChatRoomPort loadChatRoomPort;
     private final SaveChatMessagePort saveChatMessagePort;
     private final LoadChatMessagePort loadChatMessagePort;
-    private final ServiceCardParserPort serviceCardParserPort;
     private final ChatHistoryProperties historyProperties;
 
     @Override
@@ -78,11 +73,11 @@ public class SendQueryService implements SendQueryUseCase {
     }
 
     /**
-     * 직전(가장 최신) ASSISTANT 메시지에서 carryover를 조립한다.
-     * service_cards(opaque JSON)는 adapter(ServiceCardParserPort)가 [{service_id, label}]로 파싱한다(최대 10건).
-     * prev_intent는 그 메시지의 intent(없으면 null). prev_reasoning은 그 메시지 decision의 user_rationale을
-     * adapter가 추출한 값(decision 미수신/추출 실패면 null — 하위호환).
-     * 직전 ASSISTANT가 없거나 파싱 실패면 빈 carryover로 폴백한다.
+     * 직전(가장 최신) ASSISTANT 메시지에서 carryover를 조립한다(nested 전면 전환).
+     * 그 메시지의 working_set(opaque JSON 봉투)을 통째로 회신용 carryover에 싣는다 — Spring은 해석하지 않는다.
+     * working_set이 null(구 메시지/첫 턴)이거나 직전 ASSISTANT가 없으면 빈 carryover로 폴백한다(prev_working_set
+     * null → AI 현행 동작으로 폴백, 하위호환). 평면 carryover(prev_entities/prev_intent/prev_reasoning)는 이
+     * nested 봉투로 흡수되어 별도로 재파생하지 않는다.
      */
     private Carryover buildCarryover(List<ChatMessage> recent) {
         try {
@@ -95,10 +90,7 @@ public class SendQueryService implements SendQueryUseCase {
             if (lastAssistant == null) {
                 return Carryover.empty();
             }
-            List<PrevEntity> prevEntities =
-                    serviceCardParserPort.parsePrevEntities(lastAssistant.getServiceCards(), MAX_PREV_ENTITIES);
-            String prevReasoning = serviceCardParserPort.parseUserRationale(lastAssistant.getDecision());
-            return new Carryover(prevEntities, lastAssistant.getIntent(), prevReasoning);
+            return new Carryover(lastAssistant.getWorkingSet());
         } catch (Exception e) {
             log.warn("[Chat] carryover 조립 실패 - 빈 carryover로 폴백", e);
             return Carryover.empty();
@@ -107,7 +99,8 @@ public class SendQueryService implements SendQueryUseCase {
 
     @Override
     @Transactional
-    public void saveAnswer(long roomId, String answer, String serviceCardsJson, String intent, String decisionJson) {
+    public void saveAnswer(long roomId, String answer, String serviceCardsJson, String intent, String decisionJson,
+                           String workingSetJson) {
         // 멱등 가드: 직전 USER 메시지 이후 ASSISTANT가 이미 있으면(= 마지막 메시지가 ASSISTANT) 저장 생략.
         // 재시도/중복 요청/모든-종료-경로-저장이 겹쳐도 같은 턴에 ASSISTANT가 중복 INSERT되지 않게 한다.
         if (lastMessageIsAssistant(roomId)) {
@@ -116,7 +109,7 @@ public class SendQueryService implements SendQueryUseCase {
         }
         Long seq = saveChatMessagePort.nextSeq();
         ChatMessage assistantMessage = ChatMessage.create(
-                roomId, seq, ChatMessageRole.ASSISTANT, answer, serviceCardsJson, intent, decisionJson);
+                roomId, seq, ChatMessageRole.ASSISTANT, answer, serviceCardsJson, intent, decisionJson, workingSetJson);
         saveChatMessagePort.save(assistantMessage);
     }
 
