@@ -1014,6 +1014,49 @@ class TestAnswerAgentDescribe:
         assert "service_open_start_dt" not in card
         assert "service_open_end_dt" not in card
 
+    async def test_describe_passes_attribute_question_and_payment_type(self):
+        # DRILL 속성질문("무료야?") 경로: describe 가 사용자 질문(message)과
+        # payment_type 값을 LLM 컨텍스트로 전달해 속성에 답할 수 있게 한다.
+        # (다중 항목 — 영등포 풋살 3변형 모두 유료 — 일관 답변 시나리오.)
+        from tests.helpers import make_answer_agent
+        from agents.answer_agent import _STRUCT_DESCRIBE
+
+        agent = make_answer_agent("세 곳 모두 유료입니다.")
+        state = make_agent_state(
+            message="영등포공원 풋살경기장은 무료야?",
+            target_service_ids=["F1", "F2", "F3"],
+            hydrated_services=[
+                {
+                    "service_id": "F1",
+                    "service_name": "영등포공원 풋살경기장(토,일,공휴일 주간)",
+                    "payment_type": "유료",
+                    "service_url": "https://x1",
+                },
+                {
+                    "service_id": "F2",
+                    "service_name": "영등포공원 풋살경기장(평일 야간)",
+                    "payment_type": "유료",
+                    "service_url": "https://x2",
+                },
+                {
+                    "service_id": "F3",
+                    "service_name": "영등포공원 풋살경기장(평일 주간)",
+                    "payment_type": "유료",
+                    "service_url": "https://x3",
+                },
+            ],
+        )
+        result = await agent.describe(state)
+        call = agent._answer_chain.ainvoke.call_args[0][0]
+        # 설명형 프롬프트가 속성 답변 지침을 담고, 사용자 질문이 그대로 전달된다.
+        assert _STRUCT_DESCRIBE[:30] in call["system"]
+        assert "payment_type 값을 그대로 안내" in call["system"]
+        assert call["message"] == "영등포공원 풋살경기장은 무료야?"
+        # payment_type 값이 LLM 컨텍스트(results_json)에 실려 속성에 답할 근거가 된다.
+        assert "유료" in call["results_json"]
+        assert result["answer"] == "세 곳 모두 유료입니다."
+        assert len(result["service_cards"]) == 3
+
 
 class TestAnswerAgentClarify:
     """AMBIGUOUS 명확화 — clarify() 단위 테스트.
