@@ -404,31 +404,37 @@ class _QualityRow:
 def _print_report(result: dict) -> None:
     print(f"\n{'=' * 64}")
     print(
-        f"retrieval 3-way 비교 (순차/병렬/안 B)  |  질의 {result['total_queries']}건, "
+        f"retrieval 3-way 비교 (순차 쿼리 / 병렬 쿼리 / 단일 쿼리)  |  "
+        f"질의 {result['total_queries']}건, "
         f"reps={result['reps']}, sema_cap={result['sema_cap']}"
     )
     print(f"{'=' * 64}")
 
+    print("\n# 처리 방식 설명")
+    print("순차 쿼리: 4개 채널을 한 세션에서 직렬로 하나씩 호출")
+    print("병렬 쿼리: 4개 채널을 독립 세션으로 동시 호출 (asyncio.gather)")
+    print("단일 쿼리: 4개 채널을 UNION ALL 한 문장으로 묶어 1회 호출")
+
     lat = result["latency"]
     print("\n[retrieval 구간 지연] (질의별 중앙값들의 집계, ms)")
-    print(f"  순차  median : {lat['seq_median_ms']:.2f}")
-    print(f"  병렬  median : {lat['par_median_ms']:.2f}")
-    print(f"  안 B  median : {lat['union_median_ms']:.2f}")
-    print(f"  speedup 병렬 : {lat['speedup_par']:.2f}x  (순차/병렬)")
-    print(f"  speedup 안 B : {lat['speedup_union']:.2f}x  (순차/안 B)")
+    print(f"  순차 median  : {lat['seq_median_ms']:.2f}")
+    print(f"  병렬 median  : {lat['par_median_ms']:.2f}")
+    print(f"  단일 median  : {lat['union_median_ms']:.2f}")
+    print(f"  speedup 병렬 : {lat['speedup_par']:.2f}x  (순차 / 병렬)")
+    print(f"  speedup 단일 : {lat['speedup_union']:.2f}x  (순차 / 단일)")
     print(f"  순차 p50/p95 : {lat['seq_p50_ms']:.2f} / {lat['seq_p95_ms']:.2f}")
     print(f"  병렬 p50/p95 : {lat['par_p50_ms']:.2f} / {lat['par_p95_ms']:.2f}")
-    print(f"  안 B p50/p95 : {lat['union_p50_ms']:.2f} / {lat['union_p95_ms']:.2f}")
+    print(f"  단일 p50/p95 : {lat['union_p50_ms']:.2f} / {lat['union_p95_ms']:.2f}")
 
     q = result["quality"]
-    print("\n[품질 동등성] (순차 vs 병렬 vs 안 B — 셋 다 동일해야 정상)")
+    print("\n[품질 동등성] (순차 vs 병렬 vs 단일 — 셋 다 동일해야 정상)")
     for k in _AT_K:
         sk = q["sequential"][f"recall@{k}"]
         pk = q["parallel"][f"recall@{k}"]
         uk = q["union"][f"recall@{k}"]
         print(
-            f"  recall@{k:<2}: 순차 {sk:.4f} | 병렬 {pk:.4f} | 안 B {uk:.4f}"
-            f"  (Δpar {pk - sk:+.4f} / Δunion {uk - sk:+.4f})"
+            f"  recall@{k:<2}: 순차 {sk:.4f} | 병렬 {pk:.4f} | 단일 {uk:.4f}"
+            f"  (Δ병렬 {pk - sk:+.4f} / Δ단일 {uk - sk:+.4f})"
         )
     sm, pm, um = (
         q["sequential"]["mrr"],
@@ -436,8 +442,8 @@ def _print_report(result: dict) -> None:
         q["union"]["mrr"],
     )
     print(
-        f"  MRR    : 순차 {sm:.4f} | 병렬 {pm:.4f} | 안 B {um:.4f}"
-        f"  (Δpar {pm - sm:+.4f} / Δunion {um - sm:+.4f})"
+        f"  MRR    : 순차 {sm:.4f} | 병렬 {pm:.4f} | 단일 {um:.4f}"
+        f"  (Δ병렬 {pm - sm:+.4f} / Δ단일 {um - sm:+.4f})"
     )
 
     s = result["set_equivalence"]
@@ -448,7 +454,7 @@ def _print_report(result: dict) -> None:
         print(f"    - {ex['query'][:50]}")
         print(f"        순차 : {ex['seq_ids']}")
         print(f"        병렬 : {ex['par_ids']}")
-        print(f"        안 B : {ex['union_ids']}")
+        print(f"        단일 : {ex['union_ids']}")
 
     print(f"\n{'=' * 64}\n")
 
