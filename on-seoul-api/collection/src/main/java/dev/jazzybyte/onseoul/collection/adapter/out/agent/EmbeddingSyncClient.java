@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.collection.adapter.out.agent;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.jazzybyte.onseoul.collection.port.out.EmbeddingSyncPort;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
@@ -25,6 +26,8 @@ import java.util.List;
 @Component
 class EmbeddingSyncClient implements EmbeddingSyncPort {
 
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
     private final WebClient webClient;
     private final EmbeddingSyncProperties properties;
 
@@ -45,10 +48,21 @@ class EmbeddingSyncClient implements EmbeddingSyncPort {
         Span.current().setAttribute("embedding.upsert_count", upsert.size());
         Span.current().setAttribute("embedding.delete_count", delete.size());
 
+        EmbeddingSyncRequest aiRequest = new EmbeddingSyncRequest(upsert, delete);
+        // [임시 개발 진단] AI 서비스로 보내는 요청 본문 전체(upsert/delete service_id 목록)를 DEBUG로 기록한다. 안정화 후 제거할 것.
+        if (log.isDebugEnabled()) {
+            try {
+                log.debug("[EmbeddingSync] AI 요청 payload(upsert={}, delete={}): {}",
+                        upsert.size(), delete.size(), OBJECT_MAPPER.writeValueAsString(aiRequest));
+            } catch (Exception e) {
+                log.debug("[EmbeddingSync] AI 요청 payload 직렬화 실패: {}", e.getMessage());
+            }
+        }
+
         EmbeddingSyncResponse response = webClient.post()
                 .uri("/embeddings/services/sync")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(new EmbeddingSyncRequest(upsert, delete))
+                .bodyValue(aiRequest)
                 .retrieve()
                 .bodyToMono(EmbeddingSyncResponse.class)
                 .timeout(Duration.ofSeconds(properties.embeddingSyncTimeoutSeconds()))
