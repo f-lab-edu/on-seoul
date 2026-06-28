@@ -8,6 +8,7 @@
 
 SSE 이벤트:
     event: progress       — 워크플로우 진행 단계 안내 (routing / searching / answering)
+    event: title          — 첫 턴 대화 제목 (generate_title_node 독립 emit, payload type:"title")
     event: final          — 워크플로우 정상 완료 (cache_hit 플래그 포함)
     event: workflow_error — 워크플로우 내부 에러 (fallback 답변 포함)
     event: error          — 세션/DB 레벨 예외
@@ -28,7 +29,7 @@ from agents.graph import AgentGraph
 from core.exceptions import RateLimitException
 from core.redis import get_redis
 from schemas.chat import ChatRequest
-from schemas.state import AgentState
+from schemas.state import AgentState, IntentType
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,16 @@ def _build_prev_working_set(request: ChatRequest) -> dict[str, Any] | None:
 
 _WS_FILTER_KEYS = ("max_class_name", "area_name", "service_status", "payment_type")
 
+# 실제 검색 레시피를 산출하는 intent — FALLBACK 은 대화형 분기 신호일 뿐 제외한다(버그 D).
+_SEARCH_INTENTS = frozenset(
+    {
+        IntentType.SQL_SEARCH,
+        IntentType.VECTOR_SEARCH,
+        IntentType.MAP,
+        IntentType.ANALYTICS,
+    }
+)
+
 
 def _emit_working_set(result: dict[str, Any]) -> dict[str, Any]:
     """result(최종 AgentState) → 다음 턴 carryover 용 prev_working_set (P1-2/P1-4).
@@ -129,12 +140,60 @@ def _emit_working_set(result: dict[str, Any]) -> dict[str, Any]:
     완화 드롭이 머지로 반영된 *effective(완화 후)* 필터다(요청 필터가 아님, P1-4).
     entities 는 노출된 service_cards 의 (service_id, label) 정체성만 담는다(레시피·정체성
     운반, 결과 스냅샷 아님).
+
+    버그 D carry-forward: 이번 턴이 *새 검색 레시피를 만들지 않은* 비검색/무결과
+    턴(META/EXPLAIN, 결과 없는 DIRECT_ANSWER/AMBIGUOUS/domain_outside)이면, 빈 워킹셋을
+    내보내 직전 레시피를 덮지 않고 들어온 prev_working_set 을 그대로 carry-forward 한다.
+    Spring opaque 패스스루는 last-message 를 저장·회신하므로, 비검색 턴이 직전 레시피를
+    다시 emit 해야 후속(REFINE 등)이 올바른 base 를 받는다.
+
+    판정 기준(silent 추정 금지): 이번 턴이 *새 레시피·결과를 산출했는가* —
+    plan.intent 가 *실제 검색 의도*(SQL_SEARCH/VECTOR_SEARCH/MAP/ANALYTICS)이거나
+    output.service_cards(새 노출 카드)가 있으면 "검색·결과 턴"으로 보고 result 기반
+    생성(현행). 둘 다 없으면 "레시피 미생성 턴"으로 보고 carry-forward. 이 신호는 노드
+    산출에서 직접 관측되며(explain/domain_outside 은 output.answer 만, RETRIEVE/REFINE 은
+    검색 intent+cards, DRILL/RELEVANCE 은 cards), turn_kind 열거에 의존하지 않아 미래
+    turn_kind 추가에도 안전하다.
+
+    FALLBACK 보정(버그 D): direct_answer_node(answer.py:48)는 dict_merge 채널에
+    plan.intent=FALLBACK 을 기록한다(EXPLAIN→direct_answer 폴백, answer.py:174 동일).
+    FALLBACK 은 실제 검색 의도가 아니라 대화형 답변 분기 신호일 뿐이므로 *레시피로 치지
+    않는다*. intent is not None 만으로 판정하면 결과 없는 DIRECT_ANSWER/EXPLAIN폴백 턴이
+    '레시피 생성'으로 오인돼 직전 워킹셋을 빈 값으로 덮는다(버그 D 증상). _SEARCH_INTENTS
+    멤버십으로 한정해 이를 차단한다.
+
+    하위호환: prev_working_set 이 없으면(첫 턴/구 클라이언트) carry 대상이 없으므로
+    기존(빈/현행) 동작을 그대로 반환한다.
     """
     plan = result.get("plan") or {}
     filters = result.get("filters") or {}
     output = result.get("output") or {}
     intent = plan.get("intent")
     cards = output.get("service_cards") or []
+
+    # 레시피 미생성 턴(비검색·무결과) + 들어온 직전 워킹셋 있음 → carry-forward.
+    prev = result.get("prev_working_set")
+    # FALLBACK(대화형 분기) 은 레시피로 치지 않는다 — 실제 검색 intent 일 때만 인정.
+    # IntentType 은 str Enum 이라 enum/문자열 양쪽 모두 frozenset 멤버십이 성립한다.
+    produced_recipe = intent in _SEARCH_INTENTS or bool(cards)
+    if not produced_recipe and prev:
+        # entities 도 함께 carry — 비검색 턴은 새 카드가 없으므로 직전 entities 유지
+        # (빈 배열로 덮지 않음). intent 는 그래프에 들어올 때 IntentType 일 수 있어
+        # SSE 직렬화(default=str) 일관성을 위해 .value 로 정규화한다.
+        prev_intent = prev.get("intent")
+        prev_intent_str = (
+            prev_intent.value if hasattr(prev_intent, "value") else prev_intent
+        )
+        return {
+            "entities": list(prev.get("entities") or []),
+            "intent": prev_intent_str,
+            "reasoning": prev.get("reasoning"),
+            "refined_query": prev.get("refined_query"),
+            "applied_filters": dict(prev.get("applied_filters") or {}),
+            "relaxed": bool(prev.get("relaxed")),
+            "relaxed_filters": list(prev.get("relaxed_filters") or []),
+        }
+
     entities = [
         {
             "service_id": str(c.get("service_id")),
@@ -249,6 +308,9 @@ async def _stream(
                 elif event_type == "decision":
                     yield sse_frame("decision", data)
 
+                elif event_type == "title":
+                    yield sse_frame("title", data)
+
                 elif event_type == "sources_update":
                     yield sse_frame("sources_update", data)
 
@@ -261,7 +323,6 @@ async def _stream(
                         "message_id": result["message_id"],
                         "answer": output.get("answer") or "",
                         "intent": intent.value if intent is not None else None,
-                        "title": output.get("title"),
                         "cache_hit": bool(result.get("cache_hit")),
                         "service_cards": output.get("service_cards") or [],
                         # P1-2/P1-4: 다음 턴 carryover 용 워킹셋(effective 필터 포함).
