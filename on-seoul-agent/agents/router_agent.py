@@ -18,6 +18,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, field_validator
 
+from agents._intake_indexing import neutralize_fence
 from llm.client import get_chat_model
 from llm.prompts.router import ROUTER_FEW_SHOT, ROUTER_SYSTEM
 from schemas.state import IntentType
@@ -172,18 +173,20 @@ def build_context_block(history: list[dict[str, str]] | None) -> str:
     비어 있으면 빈 문자열을 반환하여 섹션 자체를 생략한다(토큰 절약).
 
     프롬프트 인젝션 표면: history.content(사용자·어시스턴트 발화)는 외부 입력이며
-    escape 없이 system prompt에 삽입된다. 다만 이 블록은 Router/Triage 분류에만 쓰이고
-    with_structured_output으로 고정 스키마만 추출하므로, content가 임의 지시를 담아도
-    자유 실행으로 이어지지 않는다.
-    (content는 HistoryTurn max_length=1000 + API 서비스 10메시지 윈도우로 제한.)
-    향후 출력에 자유 텍스트 필드를 넓힐 경우 이 가정을 재검토할 것.
+    escape 없이 system prompt에 삽입된다. 이 블록의 소비자는 Router/Triage(intake)의
+    structured output뿐 아니라 clarify/explain 같은 자유 텍스트 답변 생성
+    노드까지 포함하므로, content가 임의 지시를 담으면 경계를 탈출해 주입으로 이어질 수
+    있다. 따라서 각 turn content의 fence 마커(---..._START---/---..._END---)를
+    neutralize_fence로 중화해 위조 경계 마커를 무력화한다. 일반 대시·하이픈은 보존된다.
+    (content는 HistoryTurn max_length=1000 + API 서비스 10메시지 윈도우로 길이도 제한.)
     """
     if not history:
         return ""
     lines = []
     for turn in history:
         role_label = "사용자" if turn["role"] == "user" else "어시스턴트"
-        lines.append(f"- [{role_label}] {turn['content']}")
+        content = neutralize_fence(turn["content"])
+        lines.append(f"- [{role_label}] {content}")
     turns_text = "\n".join(lines)
     return (
         "이전 대화 이력 (과거 → 최신). 후속 질의는 직전 발화의 "

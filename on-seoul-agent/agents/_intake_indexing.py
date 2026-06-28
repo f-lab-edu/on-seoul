@@ -19,9 +19,21 @@ _ENUM_CAP = 10
 _LABEL_CAP = 120
 # 임의 공백류(개행·탭 포함) → 단일 스페이스 평탄화 패턴.
 _WS = re.compile(r"\s+")
-# fence 마커류(---..._START---/---..._END---) 무력화 패턴 — 라벨이 fence 를 조기
+# fence 마커류(---..._START---/---..._END---) 무력화 패턴 — 외부 입력이 fence 를 조기
 # 탈출해 시스템 지시를 위장하지 못하게 한다(prev_reasoning fence 와 동등 수준).
+# single source of truth: 라벨/history content 양쪽이 이 패턴 하나만 공유한다.
 _FENCE = re.compile(r"-{2,}\s*\w+_(?:START|END)\s*-{2,}")
+
+
+def neutralize_fence(text: str) -> str:
+    """fence 마커 토큰(---..._START---/---..._END---)만 스페이스로 치환한다.
+
+    외부 입력(라벨·history content)이 위조 fence 로 경계 블록을 조기 탈출해 시스템
+    지시를 위장하는 것을 막는 공유 헬퍼. _FENCE 패턴이 `\\w+_(?:START|END)` 형태만
+    매칭하므로 일반 대시·하이픈("지하철-2호선", "A--B")은 보존된다. 공백 평탄화·길이
+    캡은 호출부 정책(라벨 vs content)이 달라 여기서 적용하지 않는다.
+    """
+    return _FENCE.sub(" ", text)
 
 
 def _sanitize_label(label: str) -> str:
@@ -32,7 +44,7 @@ def _sanitize_label(label: str) -> str:
     토큰 제거 → (2) 공백류(개행 포함) 평탄화 → (3) 길이 상한 절단한다. service_id
     위조는 인덱스 계약으로 이미 차단되므로 여기선 표시 텍스트만 무력화한다.
     """
-    cleaned = _FENCE.sub(" ", label)
+    cleaned = neutralize_fence(label)
     cleaned = _WS.sub(" ", cleaned).strip()
     if len(cleaned) > _LABEL_CAP:
         cleaned = cleaned[:_LABEL_CAP].rstrip()
