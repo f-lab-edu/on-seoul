@@ -3,7 +3,7 @@
 START 에서 intake_node 와 병렬 분기(fan-out)해 자기 일만 하고 END 로 간다.
 공유 state(output/title)에 쓰지 않는다 → fire-and-emit only(reducer/조인 불필요).
 
-게이트: state["title_needed"](첫 턴, message_id==1) True 일 때만 동작.
+게이트: state["title_needed"](API 서비스가 산출한 첫 턴 플래그) True 일 때만 동작.
 입력: state["message"] 만 사용(intake/검색/refined_query 무의존).
 
 별도 SSE 이벤트 payload:

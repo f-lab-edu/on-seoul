@@ -77,6 +77,10 @@ class ChatRequest(BaseModel):
     message: str = Field(
         min_length=1, max_length=2000
     )  # 사용자 채팅 입력. on-seoul-api가 릴레이한다.
+    # 첫 턴(새 방) 여부. 방 생성/첫 턴 여부는 API 서비스가 알므로 산출해 실어 보낸다.
+    # message_id 는 전역 PK 라 첫 턴이어도 1 이 아니므로 추측하지 않고 이 플래그를 신뢰한다.
+    # 미전송/구 클라이언트 시 False → 제목 미생성(안전·하위호환).
+    title_needed: bool = False
     # 지도 검색(MAP intent)용 사용자 위치. 미전송 시 MAP을 FALLBACK으로 대체한다.
     # 범위 제한: 범위 외 값은 ll_to_earth()에서 DB 오류를 유발하므로 422로 차단한다.
     lat: float | None = Field(default=None, ge=-90.0, le=90.0)  # 위도 (latitude)

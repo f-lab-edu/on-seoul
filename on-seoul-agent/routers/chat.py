@@ -2,7 +2,7 @@
 
 흐름:
     ChatRequest 수신
-    → AgentState 구성 (title_needed = message_id == 1, history 주입)
+    → AgentState 구성 (title_needed = request.title_needed, history 주입)
     → AgentGraph.stream() 단계별 실행 (LangGraph StateGraph)
     → SSE StreamingResponse 반환
 
@@ -245,7 +245,7 @@ async def _stream(
         room_id=request.room_id,
         message_id=request.message_id,
         message=request.message,
-        title_needed=(request.message_id == 1),
+        title_needed=request.title_needed,
         user_lat=request.lat,
         user_lng=request.lng,
         history=[h.model_dump() for h in request.history],

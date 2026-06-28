@@ -136,11 +136,67 @@ class TestChatStreamRouter:
         assert data["answer"] == "강남구 수영장 목록입니다."
         assert data["intent"] == "SQL_SEARCH"
 
-    async def test_first_message_sets_title_needed(
+    async def test_title_needed_true_propagated_from_request(
         self, client: AsyncClient, mock_graph
     ):
-        """message_id=1이면 title_needed=True로 워크플로우가 호출된다."""
-        final_state = _make_final_state(message_id=1, title_needed=True)
+        """요청의 title_needed=true → AgentState.title_needed=True. message_id 무관."""
+        # message_id 는 전역 PK 라 첫 턴이어도 1 이 아니다(234). 플래그만으로 게이트됨을 단언.
+        final_state = _make_final_state(message_id=234, title_needed=True)
+        captured: list[AgentState] = []
+
+        async def _capturing_stream(state, **kwargs):
+            captured.append(state)
+            yield "progress", {"step": "routing", "message": "..."}
+            yield "result", final_state
+
+        mock_graph.stream = _capturing_stream
+
+        with nullcontext():
+            await client.post(
+                "/chat/stream",
+                json={
+                    "room_id": 1,
+                    "message_id": 234,
+                    "message": "수영장 알려줘",
+                    "title_needed": True,
+                },
+            )
+
+        assert captured[0]["title_needed"] is True
+
+    async def test_title_needed_false_when_request_flag_false(
+        self, client: AsyncClient, mock_graph
+    ):
+        """요청의 title_needed=false → AgentState.title_needed=False. message_id 무관."""
+        # message_id=1 이어도 플래그가 false 면 제목 미생성(추측 제거).
+        final_state = _make_final_state(message_id=1, title_needed=False)
+        captured: list[AgentState] = []
+
+        async def _capturing_stream(state, **kwargs):
+            captured.append(state)
+            yield "progress", {"step": "routing", "message": "..."}
+            yield "result", final_state
+
+        mock_graph.stream = _capturing_stream
+
+        with nullcontext():
+            await client.post(
+                "/chat/stream",
+                json={
+                    "room_id": 1,
+                    "message_id": 1,
+                    "message": "수영장 알려줘",
+                    "title_needed": False,
+                },
+            )
+
+        assert captured[0]["title_needed"] is False
+
+    async def test_title_needed_defaults_false_when_omitted(
+        self, client: AsyncClient, mock_graph
+    ):
+        """title_needed 미전송(구 클라이언트) → False 기본값(하위호환)."""
+        final_state = _make_final_state(message_id=1, title_needed=False)
         captured: list[AgentState] = []
 
         async def _capturing_stream(state, **kwargs):
@@ -154,28 +210,6 @@ class TestChatStreamRouter:
             await client.post(
                 "/chat/stream",
                 json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
-            )
-
-        assert captured[0]["title_needed"] is True
-
-    async def test_non_first_message_sets_title_needed_false(
-        self, client: AsyncClient, mock_graph
-    ):
-        """message_id != 1이면 title_needed=False로 워크플로우가 호출된다."""
-        final_state = _make_final_state(message_id=5, title_needed=False)
-        captured: list[AgentState] = []
-
-        async def _capturing_stream(state, **kwargs):
-            captured.append(state)
-            yield "progress", {"step": "routing", "message": "..."}
-            yield "result", final_state
-
-        mock_graph.stream = _capturing_stream
-
-        with nullcontext():
-            await client.post(
-                "/chat/stream",
-                json={"room_id": 1, "message_id": 5, "message": "수영장 알려줘"},
             )
 
         assert captured[0]["title_needed"] is False
