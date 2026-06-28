@@ -22,13 +22,39 @@ ANALYTICS     - 개수·분포·종류 등 집계·요약 정보를 원함 ("몇
                 → 개별 시설 목록이 아니라 통계/카운트가 목적
                 예) "테니스장은 어디 자치구에 많아?", "접수중인 서비스는 카테고리별 몇 개야?",
                     "체육시설에는 어떤 세부 유형이 있어?", "강남구에는 어떤 종류의 서비스들이 있어?"
-VECTOR_SEARCH - 키워드·의미 기반 유사도 검색 (정형 조건이 약하거나 활동·맥락 표현)
+VECTOR_SEARCH - 키워드·의미 기반 유사도 검색 (정형 조건이 약하거나 활동·맥락·지명 표현)
                 예) "아이랑 체험할 수 있는 곳", "조용한 운동 시설"
                     "테니스장 어떻게 예약해?", "수영장 신청 방법" (예약·이용 절차 문의 포함)
+                    "남산 한국숲정원 알아?", "남산에 어떤 서비스 있어?" (지명/키워드 기반 식별·열거)
 MAP           - 지도·위치·반경·근처 시설 탐색
                 예) "내 주변 500m 이내 체육관", "지도로 보여줘"
-FALLBACK      - 챗봇 기능·서비스 범위 밖의 일반 대화 (인사, 날씨 등)
+FALLBACK      - 지명·시설·서비스 훅이 전혀 없는 **순수 잡담**에만 한정한다
+                (인사, 감사, 날씨, 일반상식 등). 예) "안녕", "고마워", "오늘 날씨 어때?"
                 서울 공공서비스 예약과 관련된 질문이면 FALLBACK으로 분류 금지.
+
+# FALLBACK 오라우팅 금지 — 지명/키워드가 있으면 무조건 검색
+
+지명·장소·시설·활동 등 검색 훅이 메시지에 하나라도 있으면 "알아?/있어?/뭐 있어?"라는
+프레이밍이어도 **절대 FALLBACK으로 보내지 말고** VECTOR_SEARCH로 라우팅한다.
+(예: "남산 한국숲정원 알아?" → 일반지식이 아니라 서울 공공서비스 식별 질의로 본다.)
+refined_query에 그 지명/키워드를 반영한다. 데이터에 실제로 없는 장소라도
+검색 후 0건 경로(정직한 "못 찾음")로 가는 것이 옳고, FALLBACK 잡담으로 가서는 안 된다.
+FALLBACK은 훅이 전무한 순수 잡담일 때만 선택한다.
+
+# 열거(목록) vs 집계(ANALYTICS) 경계 — 반드시 구분
+
+reasoning에서 먼저 "열거(개별 목록)를 원하는가, 집계(개수/분포/종류)를 원하는가"를 판별하라.
+
+  목록 검색(SQL_SEARCH/VECTOR_SEARCH): "어떤 서비스가 있어/뭐 있어/알려줘/보여줘/찾아줘/추천해"
+    → 개별 항목을 **열거**해 달라는 요청.
+    · 자치구·카테고리·상태 등 정형 조건이 뚜렷하면 → SQL_SEARCH
+    · 지명·키워드 위주면 → VECTOR_SEARCH
+    예: "남산에 어떤 서비스 있어?"는 지명("남산") 위주 열거 → VECTOR_SEARCH (목록)
+  ANALYTICS: "몇 개야/어디에 많아/어떤 **종류/유형/카테고리**가 있어/분포가 어때"
+    → 개별 목록이 아니라 개수·분포·종류 **집계**가 목적.
+    예: "체육시설에는 어떤 종류의 서비스 있어?" → ANALYTICS (유형 집계)
+
+핵심 대조: "어떤 서비스 있어"(열거) = 목록 검색 ↔ "어떤 종류의 서비스 있어"(유형) = ANALYTICS.
 
 SQL_SEARCH vs ANALYTICS 구분 기준:
   SQL_SEARCH: "조건에 맞는 시설을 알려줘/보여줘/찾아줘" (개별 목록 열거가 목적)
@@ -123,7 +149,7 @@ intent가 VECTOR_SEARCH가 아니면 null.
 
 
 # ---------------------------------------------------------------------------
-# Few-shot 예시 — 10개로 CoT 패턴·enum 매핑·ANALYTICS 경계를 모두 시연
+# Few-shot 예시 — CoT 패턴·enum 매핑·ANALYTICS 경계·지명 라우팅을 모두 시연
 #   1. SQL_SEARCH + enum 매핑 ("문화행사"→"문화체험")
 #   2. VECTOR/identification (필터 없음, 고유명사)
 #   3. VECTOR/semantic (필터 없음, 의미 기반)
@@ -296,6 +322,36 @@ ROUTER_FEW_SHOT_EXAMPLES = [
             ' "max_class_name": "체육시설", "area_name": "마포구",'
             ' "service_status": null, "payment_type": null,'
             ' "vector_sub_intent": "identification", "secondary_intent": "VECTOR_SEARCH"}'
+        ),
+    },
+    {
+        # 14. 지명 "알아?" 프레이밍 (케이스1a) — 일반지식이 아니라 지명 기반 식별 검색.
+        #     검색 훅(지명 '남산 한국숲정원')이 있으므로 FALLBACK 금지, VECTOR_SEARCH.
+        "message": "남산 한국숲정원 알아?",
+        "output": (
+            '{"reasoning": "\'알아?\' 프레이밍이지만 지명/시설명(남산 한국숲정원)이라는'
+            " 검색 훅이 있으므로 일반상식 잡담(FALLBACK)이 아니라 지명 기반 식별 검색."
+            " VECTOR_SEARCH/identification. 데이터에 없으면 0건 안내로 가면 되고 FALLBACK 금지.\","
+            ' "intent": "VECTOR_SEARCH",'
+            ' "refined_query": "남산 한국숲정원",'
+            ' "max_class_name": null, "area_name": null,'
+            ' "service_status": null, "payment_type": null,'
+            ' "vector_sub_intent": "identification"}'
+        ),
+    },
+    {
+        # 15. 지명 열거 (케이스1b) — "어떤 서비스 있어"는 개별 목록 열거 요청.
+        #     집계(종류/개수)가 아니므로 ANALYTICS 아님. 지명(남산) 위주이므로 VECTOR 목록.
+        "message": "남산에 어떤 서비스 있어?",
+        "output": (
+            '{"reasoning": "\'어떤 서비스 있어\'는 개별 항목 열거(목록) 요청이므로 집계'
+            "(ANALYTICS)가 아님. 정형 조건은 없고 지명(남산) 위주이므로 VECTOR_SEARCH 목록 검색."
+            " refined_query에 지명을 반영.\","
+            ' "intent": "VECTOR_SEARCH",'
+            ' "refined_query": "남산 관련 서비스",'
+            ' "max_class_name": null, "area_name": null,'
+            ' "service_status": null, "payment_type": null,'
+            ' "vector_sub_intent": "identification"}'
         ),
     },
 ]
