@@ -159,18 +159,25 @@ class AnswerNodes:
         }
 
     async def explain_node(self, state: AgentState) -> dict[str, Any]:
-        """EXPLAIN action — prev_reasoning을 LLM으로 사용자 친화 재서술(S2).
+        """EXPLAIN action — API 가 실어준 맥락 전부로 직전 판단 근거를 설명한다(S2, 원칙 §0).
 
-        prev_reasoning 없으면 direct_answer_node로 폴백.
+        explain() 이 history/entities/prev_reasoning 을 모두 소비하므로, 셋 중 하나라도
+        있으면 설명이 가능하다. 폴백 조건을 "맥락이 전혀 없을 때"로 둬, 과도하게
+        direct_answer 로 빠지지 않게 한다(이전엔 prev_reasoning 없으면 무조건 폴백).
         LLM 예외 시 기존 "일시적인 오류" 폴백 유지.
         """
-        prev_reasoning = state.get("prev_reasoning")
-        if not prev_reasoning:
+        ws = state.get("prev_working_set") or {}
+        has_context = bool(
+            (ws.get("reasoning") or state.get("prev_reasoning"))
+            or state.get("history")
+            or (ws.get("entities") or state.get("prev_entities"))
+        )
+        if not has_context:
             logger.info(
-                "explain_node.fallback room=%s (no prev_reasoning)",
+                "explain_node.fallback room=%s (no context)",
                 state.get("room_id"),
             )
-            # prev_reasoning 없으면 직접 답변 경로로 폴백
+            # 맥락이 전혀 없으면 설명할 근거가 없으므로 직접 답변 경로로 폴백
             return await self.direct_answer_node(state)
 
         try:

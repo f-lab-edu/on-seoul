@@ -58,8 +58,10 @@ class TestExplainNoResultsGuard:
         # EXPLAIN 정적 프롬프트가 실리고, no-results 가드 문구가 포함된다.
         assert _STRUCT_EXPLAIN[:30] in call["system"]
         assert "못 찾" in call["system"] or "찾지 못" in call["system"]
-        # 직전 근거는 경계 마커로 감싸 전달(회귀 가드).
-        assert "---REASONING_START---" in call["message"]
+        # 실제 사용자 질문은 human message 자리에 전달된다(원칙 §0).
+        assert call["message"] == "왜 그렇게 판단했어?"
+        # 직전 근거는 보조 맥락으로 system 에 경계 마커로 감싸 전달(회귀 가드).
+        assert "---REASONING_START---" in call["system"]
 
 
 class TestDescribeRelevanceVariant:
