@@ -252,13 +252,15 @@ SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬
 
 `AgentGraph.run(state)` 한 번 호출로 intake → 분기 → (검색 또는 직접 답변) → answer → self-correction → 종단 체인 적재가 끝난다. `AgentGraph.stream(state)`은 같은 실행을 `(event_type, data)` 튜플 스트림(`progress` / `decision` / `sources_update` / `result`)으로 흘려보내 SSE 릴레이에 쓴다. DB 세션은 인자로 받지 않고 각 노드가 실행 시점에 풀에서 잡고 즉시 반납한다(acquire-use-release). 각 에이전트는 생성자 주입으로 교체할 수 있어 테스트에서 Mock으로 대체한다.
 
-설계의 핵심은 세 가지다.
+설계의 핵심은 네 가지다.
 
 **상태와 제어의 분리** — 노드는 `AgentState`를 읽어 부분 업데이트 dict를 반환할 뿐, 다음 노드를 직접 지목하지 않는다. 전이는 그래프 빌드 시점에 무조건 엣지와 조건부 엣지로 선언되고, 조건부 엣지의 분기 함수는 state만 읽는 순수 함수다. "어디로 갈지"를 결정하는 신호(`turn_kind`, `action`, `intent`, `cache_hit`, `hydrated_services` 등)는 모두 앞선 노드가 state에 써 둔 값이다. 분기를 코드가 아니라 데이터로 다루므로 경로를 추적, 테스트하기 쉽다. 조건부 엣지는 수신 분기(`route_intake`), 캐시 적중(`post_cache_check`), 범위 밖 처리(`_out_of_scope_route`), 0건 게이트(`route_pre_answer_gate`), 자기 교정(`self_correction_edge`) 다섯 곳에서 state 신호만 읽어 다음 노드를 정한다. 그중 `route_intake`는 `turn_kind` 1차 분기와 `NEW`의 `action` 2차 분기를 한 함수가 모두 처리하는 단일 수신 라우터다.
 
 **자기 교정(Self-Correction)** — 검색이 0건이거나 답변이 비면 한 번만 다시 시도한다. 단순히 조건을 푸는 게 아니라 방향을 바꾼다 — 정형 검색(SQL)이 비면 의미 검색(VECTOR)으로 강제 전환하고, 지도 검색이 비면 반경을 넓히는 식이다. 빈 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 0건을 감지하면 답변 생성 전에 곧장 재시도로 보낸다(0건 게이트, `route_pre_answer_gate`). 무한 루프는 재시도 1회 캡(`retry_count`)과 `recursion_limit=50`으로 막는다. **왜 하필 1회인가**: 0회면 SQL→VECTOR 전환, 반경 확장 같은 방향 전환의 복구 기회를 통째로 잃고, 2회 이상이면 검색, LLM 호출이 누적되어 지연과 비용이 커지는 데 비해 추가 복구율은 미미하다. 빈 결과의 대부분이 한 번의 방향 전환으로 해소된다고 보고, 복구 가능성과 응답 지연 사이에서 1회를 택했다. 재시도는 intake를 거치지 않고 `router_node`로 재진입한다(action은 이미 RETRIEVE로 확정). intent별 재시도 동작은 `retry_prep_node`가 분기한다 — SQL은 VECTOR로 강제 전환, ANALYTICS는 가장 제약이 큰 필터 1개를 드롭, MAP은 반경을 넓히고, `attribute_gap`/`operational_detail` 검색은 0건을 유발한 필터를 완화한다. self-correction은 RETRIEVE 경로 전용이라 비-RETRIEVE action(DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE의 domain_outside)은 평가에서 제외된다.
 
 **결과 품질 자각(전진 패스)** — 재시도가 0건만 다룬다면, "결과는 있지만 빈약하거나 한쪽으로 쏠려 있는" 경우는 자기 교정 대상이 아니다. 이를 위해 `pre_answer_gate_node`가 0건 판정과 함께 RETRIEVE 결과의 성격을 경량 휴리스틱으로 점검한다 — 결과가 1~2건이면 빈약(thin), 결과가 충분한데도(3건 이상) 자치구 한 곳에 임계 이상 몰려 있으면 쏠림(skew)으로 보고 `result_quality` 슬롯에 적재한다. 이는 **재검색을 트리거하지 않는다**(라우팅 불변, 전진 1회). Answer Agent가 이 신호를 읽어 답변의 톤과 후속 제안만 조정한다(예: "결과가 많지 않습니다", "대부분 OO구에 있습니다"). 점검이 실패해도 `result_quality=None`으로 격리되어 답변을 막지 않는다(best-effort). 같은 노드가 운영-상세 turn이면 `detail_excerpt`도 함께 준비한다(위 3-8).
+
+**맥락 활용** — 멀티턴 후속 질문(직전 결과를 가리키거나 직전 판단을 묻는 등)은 API 서비스가 실어 준 맥락에 의존한다. AI는 무상태이므로 대화 이력(history), 직전 워킹셋(`prev_working_set`: 직전 결과 시설, 정제 질의, 적용 필터, 판단 근거), 직전 결과 정체성(`prev_entities`)을 요청으로 받는다. 맥락이 필요한 답변/분류 생성 노드는 이 맥락을 선별 없이 전부 활용한다 — 예컨대 설명형(EXPLAIN)은 직전 근거 한 줄만이 아니라 실제 사용자 질문, 대화 이력, 직전 결과를 함께 본다. 대화 이력을 몇 턴 실을지 같은 맥락의 양은 API 서비스가 정하고, AI는 받은 만큼 쓴다(스스로 잘라내지 않는다). 다만 이 원칙은 대화를 이해해 답이나 분류를 생성하는 노드에 적용하며, 새 제약만 뽑아내는 결정적 추출 단계는 오히려 직전 발화에 좁게 한정해 엉뚱한 맥락이 섞이지 않게 한다. 외부에서 들어온 맥락 텍스트는 경계 마커로 감싸 데이터로만 취급하고 지시로 실행하지 않는다.
 
 ---
 
