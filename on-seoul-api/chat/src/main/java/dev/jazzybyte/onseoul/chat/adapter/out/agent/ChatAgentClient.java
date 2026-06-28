@@ -60,6 +60,16 @@ public class ChatAgentClient implements AiServiceStreamPort {
         // PII 보호: 질문/대화 content 평문은 로깅하지 않고 식별자와 건수만 INFO로 남긴다.
         log.info("[Chat] 스트림 요청 to AI 서비스 - roomId={}, messageId={}, historySize={}, prevWorkingSet={}",
                 roomId, messageId, turns.size(), prevWorkingSet != null);
+        // [임시 개발 진단] AI 서비스로 보내는 요청 본문 전체(question·history content·prev_working_set 포함)를
+        // DEBUG로 기록한다. 사용자 질문 평문이 포함되므로 개발 환경 한정이며, 안정화 후 제거할 것.
+        if (log.isDebugEnabled()) {
+            try {
+                log.debug("[Chat] AI 요청 payload(roomId={}, messageId={}): {}",
+                        roomId, messageId, OBJECT_MAPPER.writeValueAsString(body));
+            } catch (Exception e) {
+                log.debug("[Chat] AI 요청 payload 직렬화 실패: {}", e.getMessage());
+            }
+        }
 
         // 스트림 수신 이벤트를 기록할 span 참조를 클로저로 캡처(구독 스레드 전환 시 컨텍스트 유실 방지).
         // 주의: 재시도(retry/repeat) 미도입 전제. 재구독이 생기면 seq가 누적되어 span event가 중복되므로
