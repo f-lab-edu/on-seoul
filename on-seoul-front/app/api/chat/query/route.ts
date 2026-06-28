@@ -55,6 +55,8 @@ export async function POST(req: NextRequest) {
   }
 
   const cookie = req.headers.get("cookie") ?? "";
+  // 값이 아닌 '존재 여부'만 본다(토큰 노출 금지, A.3). 401 진단에 쓴다.
+  const hasAccessCookie = /(?:^|;\s*)access_token=/.test(cookie);
 
   // req.signal — 클라이언트가 disconnect 하면 upstream fetch도 함께 취소된다.
   const upstream = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat/query`, {
@@ -77,11 +79,19 @@ export async function POST(req: NextRequest) {
   if (upstream === null) return new Response(null, { status: 499 });
 
   if (upstream.status === 401) {
+    // 클라이언트(useChatStream)가 refresh 후 재시도한다. 쿠키 존재 여부를 같이 남겨,
+    // '만료'(cookie present)와 '전송 실패'(cookie MISSING: SameSite/도메인)를 구분한다.
+    console.warn(
+      `[chat/query] upstream 401 (access_token cookie: ${hasAccessCookie ? "present" : "MISSING"})`,
+    );
     return new Response("Unauthorized", { status: 401 });
   }
 
   if (!upstream.ok || !upstream.body) {
     // 백엔드 4xx(429 동시성)/5xx/타임아웃 — SSE error 이벤트 1건 emit 후 스트림 종료 (절대규칙 B.4).
+    // 429 등 4xx는 기대 가능한 조건이라 warn, 5xx만 error로 남겨 로그 노이즈를 줄인다.
+    if (upstream.status >= 500) console.error(`[chat/query] upstream ${upstream.status}`);
+    else console.warn(`[chat/query] upstream ${upstream.status}`);
     return new Response(sseErrorStream(upstreamErrorMessage(upstream.status)), {
       headers: {
         "Content-Type": "text/event-stream",

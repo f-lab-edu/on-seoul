@@ -45,8 +45,11 @@ let refreshInFlight: Promise<void> | null = null;
 /**
  * 동시에 발생한 401들이 refresh를 1회만 호출하도록 single-flight로 묶는다.
  * refresh 자체가 401이면 즉시 logout 이벤트 발행 + 에러 throw.
+ *
+ * SSE 경로(useChatStream)도 이 함수를 직접 호출해 같은 single-flight에 합류한다 —
+ * REST 401과 SSE 401이 동시에 와도 refresh는 정확히 1회만 나간다.
  */
-function refreshOnce(): Promise<void> {
+export function refreshOnce(): Promise<void> {
   if (refreshInFlight) return refreshInFlight;
 
   refreshInFlight = (async () => {

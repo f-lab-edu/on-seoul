@@ -6,6 +6,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { __resetApiClientForTests, AUTH_LOGOUT_EVENT } from "@/lib/api-client";
+
 import { useChatStream } from "./useChatStream";
 
 /** name 없는 data 이벤트들 (step/final/workflow_error). */
@@ -55,6 +57,7 @@ function pendingStream(): {
 
 beforeEach(() => {
   process.env.NEXT_PUBLIC_API_BASE_URL = "https://api.test.local";
+  __resetApiClientForTests();
 });
 
 afterEach(() => {
@@ -115,6 +118,39 @@ describe("useChatStream", () => {
       expect(result.current.state.phase).toBe("done");
     });
     expect(onInit).toHaveBeenCalledWith({ roomId: 42, created: true });
+  });
+
+  it("title 이벤트(payload type)로 onTitle 콜백이 호출되고 진행으로 흡수되지 않는다", async () => {
+    const frames = [
+      `event:init\ndata:${JSON.stringify({ room_id: 7, created: true })}`,
+      // name 없는 data + payload type=title (이름 비의존 식별 검증)
+      `data:${JSON.stringify({ type: "title", room_id: 7, title: "도봉구 시설 안내", message_id: 9, query: "도봉구 시설" })}`,
+      `data:${JSON.stringify({ message_id: 9, answer: "답변", intent: null, cache_hit: false, service_cards: [] })}`,
+    ];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(rawFrames(frames), { status: 200 })),
+    );
+
+    const onTitle = vi.fn();
+    const { result } = renderHook(() => useChatStream({ onTitle }));
+    await act(async () => {
+      await result.current.send({ question: "hi" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.phase).toBe("done");
+    });
+    expect(onTitle).toHaveBeenCalledWith({
+      roomId: 7,
+      title: "도봉구 시설 안내",
+      messageId: 9,
+      query: "도봉구 시설",
+    });
+    // title은 trace(진행)로 새지 않는다.
+    if (result.current.state.phase !== "done") throw new Error("expected done");
+    expect(result.current.state.trace).toEqual([]);
   });
 
   it("init로 roomId를 받은 뒤 retry는 같은 방으로 재전송된다(방 중복 생성 방지)", async () => {
@@ -222,6 +258,112 @@ describe("useChatStream", () => {
     });
 
     expect(receivedSignal?.aborted).toBe(true);
+  });
+
+  it("SSE 401 시 refresh 1회 후 같은 요청을 재시도해 done으로 이어진다", async () => {
+    let chatCalls = 0;
+    let refreshCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/auth/token/refresh")) {
+          refreshCalls += 1;
+          return new Response(null, { status: 204 });
+        }
+        chatCalls += 1;
+        if (chatCalls === 1) return new Response("Unauthorized", { status: 401 });
+        return new Response(
+          dataFrames([
+            JSON.stringify({
+              message_id: 1,
+              answer: "복구됨",
+              intent: null,
+              cache_hit: false,
+              service_cards: [],
+            }),
+          ]),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const { result } = renderHook(() => useChatStream());
+    await act(async () => {
+      await result.current.send({ question: "hi" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.phase).toBe("done");
+    });
+    expect(refreshCalls).toBe(1);
+    expect(chatCalls).toBe(2);
+    if (result.current.state.phase !== "done") throw new Error("expected done");
+    expect(result.current.state.content).toBe("복구됨");
+  });
+
+  it("SSE 401 후 refresh도 401이면 error로 전환되고 auth:logout이 발행된다(재시도 없음)", async () => {
+    let chatCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/auth/token/refresh")) {
+          return new Response(null, { status: 401 });
+        }
+        chatCalls += 1;
+        return new Response("Unauthorized", { status: 401 });
+      }),
+    );
+
+    const onLogout = vi.fn();
+    window.addEventListener(AUTH_LOGOUT_EVENT, onLogout);
+    try {
+      const { result } = renderHook(() => useChatStream());
+      await act(async () => {
+        await result.current.send({ question: "hi" });
+      });
+
+      await waitFor(() => {
+        expect(result.current.state.phase).toBe("error");
+      });
+      // refresh 실패 시 채팅 요청은 1회만(재시도 안 함).
+      expect(chatCalls).toBe(1);
+      // refreshOnce가 로그아웃을 발행한다.
+      expect(onLogout).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(AUTH_LOGOUT_EVENT, onLogout);
+    }
+  });
+
+  it("refresh(204) 후에도 재시도가 401이면 로그아웃 처리된다", async () => {
+    let chatCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/auth/token/refresh")) {
+          return new Response(null, { status: 204 });
+        }
+        chatCalls += 1;
+        return new Response("Unauthorized", { status: 401 });
+      }),
+    );
+
+    const onLogout = vi.fn();
+    window.addEventListener(AUTH_LOGOUT_EVENT, onLogout);
+    try {
+      const { result } = renderHook(() => useChatStream());
+      await act(async () => {
+        await result.current.send({ question: "hi" });
+      });
+
+      await waitFor(() => {
+        expect(result.current.state.phase).toBe("error");
+      });
+      // 최초 + 재시도 = 2회. refresh는 성공했지만 그래도 401이라 로그아웃.
+      expect(chatCalls).toBe(2);
+      expect(onLogout).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(AUTH_LOGOUT_EVENT, onLogout);
+    }
   });
 
   it("HTTP 500 응답 시 phase가 'error'로 전환된다", async () => {
