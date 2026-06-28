@@ -27,7 +27,6 @@ from agents.answer_agent import (
     _FALLBACK_GUARDRAILS,
     _STRUCT_CARD_LIST,
     _STRUCT_FALLBACK,
-    _TitleOutput,
 )
 from agents.graph import AgentGraph
 from agents.nodes import GraphNodes
@@ -61,8 +60,6 @@ def _real_answer_agent_with_fake_llm() -> AnswerAgent:
     # LLM만 fake로 대체 — 분기 로직(_static_prompts/_build_card_system)은 그대로.
     agent._answer_chain = MagicMock()
     agent._answer_chain.ainvoke = AsyncMock(return_value="안녕하세요! 무엇을 도와드릴까요?")
-    agent._title_chain = MagicMock()
-    agent._title_chain.ainvoke = AsyncMock(return_value=_TitleOutput(title="인사"))
     return agent
 
 

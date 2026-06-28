@@ -140,9 +140,7 @@ class TestChatStreamRouter:
         self, client: AsyncClient, mock_graph
     ):
         """message_id=1이면 title_needed=True로 워크플로우가 호출된다."""
-        final_state = _make_final_state(
-            message_id=1, title="수영장 조회", title_needed=True
-        )
+        final_state = _make_final_state(message_id=1, title_needed=True)
         captured: list[AgentState] = []
 
         async def _capturing_stream(state, **kwargs):
@@ -164,7 +162,7 @@ class TestChatStreamRouter:
         self, client: AsyncClient, mock_graph
     ):
         """message_id != 1이면 title_needed=False로 워크플로우가 호출된다."""
-        final_state = _make_final_state(message_id=5, title=None, title_needed=False)
+        final_state = _make_final_state(message_id=5, title_needed=False)
         captured: list[AgentState] = []
 
         async def _capturing_stream(state, **kwargs):
@@ -384,13 +382,9 @@ class TestChatStreamRouter:
         )
         assert "LLM 타임아웃 발생" not in events[0]["data"]["message"]
 
-    async def test_final_event_includes_title_when_title_needed(
-        self, client: AsyncClient, mock_graph
-    ):
-        """message_id=1 요청의 final 이벤트에 title 필드가 채워진다."""
-        final_state = _make_final_state(
-            message_id=1, title="수영장 문의", title_needed=True
-        )
+    async def test_final_event_has_no_title(self, client: AsyncClient, mock_graph):
+        """제목은 별도 title 이벤트로 분리됐다 — final payload 에 title 키가 없다."""
+        final_state = _make_final_state(message_id=1, title_needed=True)
         mock_graph.stream = _make_stream(final_state)
 
         with nullcontext():
@@ -401,11 +395,41 @@ class TestChatStreamRouter:
 
         events = _parse_sse_events(response.content)
         final_events = [e for e in events if e["event"] == "final"]
-        assert final_events[0]["data"]["title"] == "수영장 문의"
+        assert "title" not in final_events[0]["data"]
 
-    # final payload title=None(비-first message) 는 title 존재 케이스와 동일한
-    # SSE title passthrough 의 값만 다른 순열이라 축소했다(title_needed 파생은
-    # test_non_first_message_sets_title_needed_false 가 별도 커버).
+    async def test_title_event_relayed_to_sse(self, client: AsyncClient, mock_graph):
+        """graph.stream 이 yield 한 title 이벤트가 SSE 프레임으로 릴레이된다."""
+        final_state = _make_final_state(message_id=1, title_needed=True)
+
+        async def _gen(state, **kwargs):
+            yield "progress", {"step": "routing", "message": "..."}
+            yield (
+                "title",
+                {
+                    "type": "title",
+                    "room_id": 1,
+                    "title": "수영장 문의",
+                    "message_id": 1,
+                    "query": "수영장 알려줘",
+                },
+            )
+            yield "result", final_state
+
+        mock_graph.stream = _gen
+
+        with nullcontext():
+            response = await client.post(
+                "/chat/stream",
+                json={"room_id": 1, "message_id": 1, "message": "수영장 알려줘"},
+            )
+
+        events = _parse_sse_events(response.content)
+        title_events = [e for e in events if e["event"] == "title"]
+        assert len(title_events) == 1
+        data = title_events[0]["data"]
+        assert data["type"] == "title"
+        assert data["title"] == "수영장 문의"
+        assert data["query"] == "수영장 알려줘"
 
     async def test_missing_required_field_returns_422(self, client: AsyncClient):
         """필수 필드 누락(message 없음) → 422 반환.
@@ -651,13 +675,12 @@ class TestServiceCardsInFinalPayload:
     ):
         """회귀: service_cards 추가 후에도 기존 final payload 키가 모두 유지된다.
 
-        message_id / answer / intent / title / cache_hit 5개 키가 모두 그대로
-        존재해야 한다. service_cards 도입으로 인한 누락 회귀를 방지한다.
+        message_id / answer / intent / cache_hit 키가 모두 그대로 존재해야 한다.
+        (title 은 별도 title 이벤트로 분리되어 final payload 에서 제외됐다.)
         """
         cards = [{"service_id": "S1", "service_name": "수영장"}]
         final_state = _make_final_state(
             service_cards=cards,
-            title="수영장 안내",
             cache_hit=False,
         )
         mock_graph.stream = _make_stream(final_state)
@@ -675,12 +698,11 @@ class TestServiceCardsInFinalPayload:
             "message_id",
             "answer",
             "intent",
-            "title",
             "cache_hit",
             "service_cards",
         }
         assert expected_keys.issubset(set(data.keys()))
-        assert data["title"] == "수영장 안내"
+        assert "title" not in data
         assert data["cache_hit"] is False
         assert data["intent"] == IntentType.SQL_SEARCH.value
         assert data["answer"] == "강남구 수영장 목록입니다."

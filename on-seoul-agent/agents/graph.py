@@ -136,6 +136,8 @@ def _build_graph(nodes: GraphNodes) -> Any:
     # ── 노드 등록 (GraphNodes 바운드 메서드 직접 등록) ──
     # 입구 단일화: reference_resolution + triage → intake_node(단일 LLM 분류).
     builder.add_node("intake_node", nodes.intake_node)
+    # 제목 생성: START 에서 intake 와 병렬 분기하는 독립 노드(fire-and-emit, END 직행).
+    builder.add_node("generate_title_node", nodes.generate_title_node)
     builder.add_node("working_set_refine_node", nodes.working_set_refine_node)
     builder.add_node("rehydrate_node", nodes.rehydrate_node)
     builder.add_node("describe_node", nodes.describe_node)
@@ -162,6 +164,11 @@ def _build_graph(nodes: GraphNodes) -> Any:
 
     # ── START → intake_node (입구 단일화) ──
     builder.add_edge(START, "intake_node")
+    # ── START → generate_title_node (병렬 분기, fire-and-emit) ──
+    # 공유 state 에 쓰지 않고 자기 일만 하고 END 로 간다. 캐시 히트=즉시,
+    # 미스=짧은 1콜로 critical path 가 아니다(그래프 완료를 지연시키지 않음).
+    builder.add_edge(START, "generate_title_node")
+    builder.add_edge("generate_title_node", END)
     # route_intake: turn_kind 1차 분기 + NEW→action 서브스위치.
     #   REFINE → working_set_refine_node (머지 필터 재검색)
     #   DRILL/RELEVANCE → rehydrate_node → describe_node (검색 스킵)
@@ -280,6 +287,7 @@ def _build_graph(nodes: GraphNodes) -> Any:
 _StreamEvent = (
     tuple[Literal["progress"], dict[str, str]]
     | tuple[Literal["decision"], dict[str, Any]]
+    | tuple[Literal["title"], dict[str, Any]]
     | tuple[Literal["sources_update"], dict[str, Any]]
     | tuple[Literal["result"], AgentState]
 )
@@ -617,6 +625,19 @@ class AgentGraph:
                             routes=chunk["routes"],
                             user_rationale=chunk["user_rationale"],
                         ).model_dump(),
+                    )
+                elif evt == "title":
+                    # generate_title_node 가 보낸 별도 title 페이로드. payload 의
+                    # type:"title" 식별자를 포함해 그대로 SSE 로 전달한다(_evt 키만 제거).
+                    yield (
+                        "title",
+                        {
+                            "type": chunk["type"],
+                            "room_id": chunk["room_id"],
+                            "title": chunk["title"],
+                            "message_id": chunk["message_id"],
+                            "query": chunk["query"],
+                        },
                     )
 
             # 완료 후 root span 갱신: output=최종 답변 + §4.5.1 metadata (best-effort).

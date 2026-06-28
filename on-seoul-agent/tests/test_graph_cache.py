@@ -340,8 +340,6 @@ class TestGraphRouting:
         answer_agent = AnswerAgent.__new__(AnswerAgent)
         answer_agent._answer_chain = MagicMock()
         answer_agent._answer_chain.ainvoke = AsyncMock()
-        answer_agent._title_chain = MagicMock()
-        answer_agent._title_chain.ainvoke = AsyncMock()
 
         envelope = {
             "payload": {

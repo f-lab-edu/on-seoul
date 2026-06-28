@@ -10,7 +10,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agents.answer_agent import AnswerAgent, _TitleOutput
+from agents.answer_agent import AnswerAgent
 from agents.graph import AgentGraph
 from agents.nodes import (
     GraphNodes,
@@ -479,9 +479,6 @@ class TestSelfCorrectionCycle:
             ]
         )
         agent._answer_chain = answer_chain
-        title_chain = MagicMock()
-        title_chain.ainvoke = AsyncMock(return_value=_TitleOutput(title="수영장 안내"))
-        agent._title_chain = title_chain
 
         graph = AgentGraph(
             router=_router(IntentType.SQL_SEARCH),
@@ -508,9 +505,6 @@ class TestSelfCorrectionCycle:
         # 두 번 모두 빈 답변 반환 — 두 번째는 trace로 진행해야 한다
         answer_chain.ainvoke = AsyncMock(return_value="")
         agent._answer_chain = answer_chain
-        title_chain = MagicMock()
-        title_chain.ainvoke = AsyncMock(return_value=_TitleOutput(title=""))
-        agent._title_chain = title_chain
 
         graph = AgentGraph(
             router=_router(IntentType.SQL_SEARCH),
@@ -657,10 +651,13 @@ class TestAgentStateContract:
         assert result["output"]["answer"] is not None
         assert len(result["output"]["answer"]) > 0
 
-    async def test_title_generated_when_title_needed(self):
-        """title_needed=True이면 title이 채워진다."""
+    async def test_answer_path_does_not_set_title(self):
+        """제목 생성은 generate_title_node 로 분리됐다 — answer 경로는 title 미설정.
+
+        (title 이벤트 emit 회귀는 test_generate_title_node.py 가 커버한다.)
+        """
         _, data_session = _sql_agent([])
-        answer_agent = _answer_agent(title="수영장 조회")
+        answer_agent = _answer_agent()
 
         graph = AgentGraph(
             router=_router(IntentType.FALLBACK),
@@ -673,8 +670,7 @@ class TestAgentStateContract:
             ai_session=_ai_session(),
         )
 
-        assert result["output"]["title"] == "수영장 조회"
-        answer_agent._title_chain.ainvoke.assert_called_once()
+        assert "title" not in result["output"]
 
 
 # ---------------------------------------------------------------------------
