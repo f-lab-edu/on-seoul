@@ -49,7 +49,7 @@ class ChatStreamServiceTest {
     void streamAndSave_relaysAllRawData() {
         SendQueryCommand command = new SendQueryCommand(1L, null, "서울 문화행사 알려줘", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(10L, 1L, true, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("서울 문화행사 알려줘", 10L, 1L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("서울 문화행사 알려줘", 10L, 1L, null, null, List.of(), Carryover.empty(), true))
                 .thenReturn(Flux.just(
                         AiStreamEvent.relay("{\"step\":\"routing\"}"),
                         AiStreamEvent.finalEvent("{\"message_id\":84,\"answer\":\"안녕하세요\"}", "안녕하세요")));
@@ -68,7 +68,7 @@ class ChatStreamServiceTest {
         String reSearching = "{\"step\":\"re_searching\",\"message\":\"다른 방식으로 다시 검색하고 있습니다...\"}";
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "강남구 문화행사", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(
                         AiStreamEvent.relay(reSearching),
                         AiStreamEvent.finalEvent("{\"answer\":\"강남구 안내\"}", "강남구 안내")));
@@ -88,7 +88,7 @@ class ChatStreamServiceTest {
         String answering = "{\"step\":\"answering\",\"message\":\"답변을 생성하고 있습니다...\"}";
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "강남구 문화행사", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(
                         AiStreamEvent.relay(routing),
                         AiStreamEvent.relay(searching),
@@ -115,7 +115,7 @@ class ChatStreamServiceTest {
     void streamAndSave_newRoom_createdTrue() {
         SendQueryCommand command = new SendQueryCommand(1L, null, "새 질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream(any(), anyLong(), anyLong(), any(), any(), any(), any()))
+        when(aiServiceStreamPort.stream(any(), anyLong(), anyLong(), any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(Flux.empty());
 
         StreamResult result = service.streamAndSave(command);
@@ -129,7 +129,7 @@ class ChatStreamServiceTest {
     void streamAndSave_existingRoom_createdFalse() {
         SendQueryCommand command = new SendQueryCommand(1L, 7L, "이어 질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(7L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream(any(), anyLong(), anyLong(), any(), any(), any(), any()))
+        when(aiServiceStreamPort.stream(any(), anyLong(), anyLong(), any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(Flux.empty());
 
         StreamResult result = service.streamAndSave(command);
@@ -143,7 +143,7 @@ class ChatStreamServiceTest {
     void streamAndSave_savesOnlyFinalAnswer() {
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "오늘 날씨는?", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("오늘 날씨는?", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("오늘 날씨는?", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(
                         AiStreamEvent.relay("{\"step\":\"routing\"}"),
                         AiStreamEvent.relay("{\"step\":\"answering\"}"),
@@ -163,7 +163,7 @@ class ChatStreamServiceTest {
         String cardsJson = "[{\"service_id\":\"S1\",\"name\":\"강남 음악회\"}]";
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "강남구 문화행사", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(
                         AiStreamEvent.relay("{\"step\":\"routing\"}"),
                         AiStreamEvent.finalEvent("{\"answer\":\"강남구 안내\"}", "강남구 안내", cardsJson)));
@@ -181,7 +181,7 @@ class ChatStreamServiceTest {
     void streamAndSave_noFinal_savesEmptyAnswerNullCards() {
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.relay("{\"step\":\"routing\"}")));
 
         StepVerifier.create(service.streamAndSave(command).tokens())
@@ -197,7 +197,7 @@ class ChatStreamServiceTest {
     void streamAndSave_prepare_calledWithCommand() {
         SendQueryCommand command = new SendQueryCommand(2L, null, "체육시설 예약 방법", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(99L, 3L, true, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("체육시설 예약 방법", 99L, 3L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("체육시설 예약 방법", 99L, 3L, null, null, List.of(), Carryover.empty(), true))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"안내드리겠습니다\"}", "안내드리겠습니다")));
 
         StepVerifier.create(service.streamAndSave(command).tokens())
@@ -205,7 +205,7 @@ class ChatStreamServiceTest {
                 .verifyComplete();
 
         verify(sendQueryUseCase).prepare(command);
-        verify(aiServiceStreamPort).stream("체육시설 예약 방법", 99L, 3L, null, null, List.of(), Carryover.empty());
+        verify(aiServiceStreamPort).stream("체육시설 예약 방법", 99L, 3L, null, null, List.of(), Carryover.empty(), true);
     }
 
     @Test
@@ -213,7 +213,7 @@ class ChatStreamServiceTest {
     void streamAndSave_saveAnswerFails_streamStillCompletes() {
         SendQueryCommand command = new SendQueryCommand(1L, 7L, "진료 예약 안내", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(7L, 4L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("진료 예약 안내", 7L, 4L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("진료 예약 안내", 7L, 4L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"진료안내\"}", "진료안내")));
         doThrow(new RuntimeException("DB 저장 실패"))
                 .when(sendQueryUseCase).saveAnswer(anyLong(), anyString(), any(), any(), any(), any());
@@ -231,7 +231,7 @@ class ChatStreamServiceTest {
     void streamAndSave_noFinal_saveAnswerCalledWithEmptyString() {
         SendQueryCommand command = new SendQueryCommand(1L, 3L, "존재하지 않는 서비스", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(3L, 5L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("존재하지 않는 서비스", 3L, 5L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("존재하지 않는 서비스", 3L, 5L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.empty());
 
         StepVerifier.create(service.streamAndSave(command).tokens())
@@ -246,7 +246,7 @@ class ChatStreamServiceTest {
     void streamAndSave_finalWithEmptyAnswer_savesEmptyString() {
         SendQueryCommand command = new SendQueryCommand(1L, 3L, "근처 시설 지도", 37.5, 127.0);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(3L, 5L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("근처 시설 지도", 3L, 5L, 37.5, 127.0, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("근처 시설 지도", 3L, 5L, 37.5, 127.0, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"\",\"intent\":\"MAP\"}", "")));
 
         StepVerifier.create(service.streamAndSave(command).tokens())
@@ -263,7 +263,7 @@ class ChatStreamServiceTest {
         SendQueryCommand command = new SendQueryCommand(1L, 3L, "오류 유발 질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(3L, 5L, false, List.of(), Carryover.empty()));
         // 어댑터는 workflow_error(answer+error 동반)를 relay 전용으로 변환한다 → final 부재.
-        when(aiServiceStreamPort.stream("오류 유발 질문", 3L, 5L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("오류 유발 질문", 3L, 5L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(
                         AiStreamEvent.relay("{\"step\":\"routing\"}"),
                         AiStreamEvent.relay("{\"answer\":\"폴백 답변\",\"error\":\"처리 중 오류\"}")));
@@ -286,7 +286,7 @@ class ChatStreamServiceTest {
         SendQueryCommand command = new SendQueryCommand(1L, 3L, "지도만", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(3L, 5L, false, List.of(), Carryover.empty()));
         // 어댑터 계약상 answer=null은 finalEvent에서 빈 문자열로 정규화된다.
-        when(aiServiceStreamPort.stream("지도만", 3L, 5L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("지도만", 3L, 5L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":null,\"intent\":\"MAP\"}", null)));
 
         StepVerifier.create(service.streamAndSave(command).tokens())
@@ -318,14 +318,14 @@ class ChatStreamServiceTest {
                 new ChatTurn("user", "강남구 문화행사 알려줘"),
                 new ChatTurn("assistant", "강남구 문화행사 5건을 안내합니다."));
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 7L, false, history, Carryover.empty()));
-        when(aiServiceStreamPort.stream("그 중 무료인 것만", 5L, 7L, null, null, history, Carryover.empty()))
+        when(aiServiceStreamPort.stream("그 중 무료인 것만", 5L, 7L, null, null, history, Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"무료 행사 안내\"}", "무료 행사 안내")));
 
         StepVerifier.create(service.streamAndSave(command).tokens())
                 .expectNextCount(1)
                 .verifyComplete();
 
-        verify(aiServiceStreamPort).stream("그 중 무료인 것만", 5L, 7L, null, null, history, Carryover.empty());
+        verify(aiServiceStreamPort).stream("그 중 무료인 것만", 5L, 7L, null, null, history, Carryover.empty(), false);
     }
 
     @Test
@@ -334,7 +334,7 @@ class ChatStreamServiceTest {
         String cardsJson = "[{\"service_id\":\"S1\",\"service_name\":\"강남 음악회\"}]";
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "강남구 문화행사", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(
                         AiStreamEvent.relay("{\"step\":\"routing\"}"),
                         AiStreamEvent.finalEvent("{\"answer\":\"강남구 안내\"}", "강남구 안내", cardsJson, "SQL_SEARCH")));
@@ -355,7 +355,7 @@ class ChatStreamServiceTest {
                 + "\"user_rationale\":\"검색 필요\",\"sources\":[]}";
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "강남구 문화행사", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(
                         AiStreamEvent.decisionEvent(decisionJson, decisionJson),
                         AiStreamEvent.relay("{\"step\":\"searching\"}"),
@@ -377,7 +377,7 @@ class ChatStreamServiceTest {
     void streamAndSave_noDecision_passesNullDecision() {
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답", null, "SQL_SEARCH")));
 
         StepVerifier.create(service.streamAndSave(command).tokens())
@@ -394,7 +394,7 @@ class ChatStreamServiceTest {
                 + "\"user_rationale\":\"설명 요청\",\"sources\":[]}";
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(
                         AiStreamEvent.decisionEvent(decisionJson, decisionJson),
                         AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답", null, "FALLBACK")));
@@ -410,7 +410,7 @@ class ChatStreamServiceTest {
     void streamAndSave_finalWithoutIntent_passesNullIntent() {
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
 
         StepVerifier.create(service.streamAndSave(command).tokens())
@@ -428,7 +428,7 @@ class ChatStreamServiceTest {
         Carryover carryover = new Carryover(
                 "{\"entities\":[{\"service_id\":\"S1\",\"label\":\"강남 음악회\"}],\"intent\":\"SQL_SEARCH\"}");
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 7L, false, List.of(), carryover));
-        when(aiServiceStreamPort.stream("그 중 첫 번째", 5L, 7L, null, null, List.of(), carryover))
+        when(aiServiceStreamPort.stream("그 중 첫 번째", 5L, 7L, null, null, List.of(), carryover, false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"안내\"}", "안내")));
 
         StepVerifier.create(service.streamAndSave(command).tokens())
@@ -436,7 +436,7 @@ class ChatStreamServiceTest {
                 .verifyComplete();
 
         // prepare가 조립한 carryover가 변형 없이 stream 인자로 흘러가야 한다.
-        verify(aiServiceStreamPort).stream("그 중 첫 번째", 5L, 7L, null, null, List.of(), carryover);
+        verify(aiServiceStreamPort).stream("그 중 첫 번째", 5L, 7L, null, null, List.of(), carryover, false);
     }
 
     @Test
@@ -446,7 +446,7 @@ class ChatStreamServiceTest {
                 + "\"intent\":\"SQL_SEARCH\",\"refined_query\":\"강남구 문화행사\",\"relaxed\":false}";
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "강남구 문화행사", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(
                         AiStreamEvent.relay("{\"step\":\"routing\"}"),
                         AiStreamEvent.finalEvent("{\"answer\":\"강남구 안내\"}", "강남구 안내", null, "SQL_SEARCH", workingSet)));
@@ -470,7 +470,7 @@ class ChatStreamServiceTest {
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "강남구 문화행사", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
         // decision은 final보다 먼저 도착하는 별개 이벤트 — 둘 다 캡처되어 doFinally 저장에 함께 실려야 한다.
-        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("강남구 문화행사", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(
                         AiStreamEvent.decisionEvent(decisionJson, decisionJson),
                         AiStreamEvent.finalEvent("{\"answer\":\"강남구 안내\"}", "강남구 안내", null, "SQL_SEARCH", workingSet)));
@@ -488,7 +488,7 @@ class ChatStreamServiceTest {
         String cardsJson = "[{\"service_id\":\"S1\",\"service_name\":\"행사\"}]";
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답", cardsJson, "VECTOR_SEARCH")));
 
         // relay(tokens) 미구독 = 클라 즉시 끊김. 저장 구독은 살아서 intent까지 저장해야 한다.
@@ -504,7 +504,7 @@ class ChatStreamServiceTest {
     void streamAndSave_titleEvent_persistsByPreparedRoomId() {
         SendQueryCommand command = new SendQueryCommand(1L, null, "강남구 문화행사", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("강남구 문화행사", 42L, 1L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("강남구 문화행사", 42L, 1L, null, null, List.of(), Carryover.empty(), true))
                 .thenReturn(Flux.just(
                         AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"강남구 문화행사 안내\"}", "강남구 문화행사 안내"),
                         AiStreamEvent.finalEvent("{\"answer\":\"안내드립니다\"}", "안내드립니다")));
@@ -522,7 +522,7 @@ class ChatStreamServiceTest {
         SendQueryCommand command = new SendQueryCommand(1L, null, "질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
         // payload엔 room_id=999가 들어 있지만 titleEvent는 title 문자열만 담는다 — 구조적으로 캡처 불가.
-        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty(), true))
                 .thenReturn(Flux.just(
                         AiStreamEvent.titleEvent("{\"type\":\"title\",\"room_id\":999,\"title\":\"제목\"}", "제목"),
                         AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
@@ -540,7 +540,7 @@ class ChatStreamServiceTest {
     void streamAndSave_noTitleEvent_doesNotUpdateTitle() {
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
 
         StepVerifier.create(service.streamAndSave(command).tokens())
@@ -556,7 +556,7 @@ class ChatStreamServiceTest {
     void streamAndSave_relayNeverSubscribed_titleStillPersisted() {
         SendQueryCommand command = new SendQueryCommand(1L, null, "질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty(), true))
                 .thenReturn(Flux.just(
                         AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"생성 제목\"}", "생성 제목"),
                         AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
@@ -572,7 +572,7 @@ class ChatStreamServiceTest {
     void streamAndSave_titleUpdateFails_saveAnswerIndependentAndCompletes() {
         SendQueryCommand command = new SendQueryCommand(1L, null, "질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty(), true))
                 .thenReturn(Flux.just(
                         AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"제목\"}", "제목"),
                         AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
@@ -594,7 +594,7 @@ class ChatStreamServiceTest {
         SendQueryCommand command = new SendQueryCommand(1L, null, "강남구 문화행사", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
         // title이 final 뒤에 도착하는 시퀀스 — AtomicReference 캡처는 순서에 무관해야 한다.
-        when(aiServiceStreamPort.stream("강남구 문화행사", 42L, 1L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("강남구 문화행사", 42L, 1L, null, null, List.of(), Carryover.empty(), true))
                 .thenReturn(Flux.just(
                         AiStreamEvent.finalEvent("{\"answer\":\"안내드립니다\"}", "안내드립니다"),
                         AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"늦게 온 제목\"}", "늦게 온 제목")));
@@ -615,7 +615,7 @@ class ChatStreamServiceTest {
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
         // title 이벤트 2회 도착(재발행/재시도 시뮬레이션). 캡처는 AtomicReference이므로 마지막 값이 남고,
         // doFinally의 영속 호출은 정확히 1회. 중복 덮어쓰기 방지는 UpdateRoomTitleService의 멱등 가드 책임.
-        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty(), true))
                 .thenReturn(Flux.just(
                         AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"첫 제목\"}", "첫 제목"),
                         AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"둘째 제목\"}", "둘째 제목"),
@@ -638,7 +638,7 @@ class ChatStreamServiceTest {
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "오늘 행사", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
         // 토큰이 천천히 도착하는 스트림. relay는 첫 토큰 후 취소되지만 저장은 끝까지 가야 한다.
-        when(aiServiceStreamPort.stream("오늘 행사", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("오늘 행사", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.concat(
                         Flux.just(AiStreamEvent.relay("{\"step\":\"routing\"}")),
                         Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"행사 안내\"}", "행사 안내"))
@@ -665,7 +665,7 @@ class ChatStreamServiceTest {
         Flux<AiStreamEvent> upstream = Flux.just(
                         AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답"))
                 .doOnSubscribe(s -> subscribeCount.incrementAndGet());
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty())).thenReturn(upstream);
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false)).thenReturn(upstream);
 
         StreamResult result = service.streamAndSave(command);
         StepVerifier.create(result.tokens()).expectNextCount(1).verifyComplete();
@@ -680,7 +680,7 @@ class ChatStreamServiceTest {
     void streamAndSave_relayNeverSubscribed_saveStillRuns() {
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
 
         // result.tokens()를 구독하지 않는다(클라가 즉시 끊긴 상황)
@@ -698,7 +698,7 @@ class ChatStreamServiceTest {
         // never-complete 업스트림으로 permit을 잡아둔다.
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.never());
 
         service.streamAndSave(cmd);
@@ -718,7 +718,7 @@ class ChatStreamServiceTest {
 
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
 
         StepVerifier.create(svc.streamAndSave(cmd).tokens()).expectNextCount(1).verifyComplete();
@@ -746,7 +746,7 @@ class ChatStreamServiceTest {
 
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.error(new RuntimeException("AI 다운")));
 
         StepVerifier.create(svc.streamAndSave(cmd).tokens())
@@ -775,7 +775,7 @@ class ChatStreamServiceTest {
     void streamAndSave_upstreamError_savesEmptyString() {
         SendQueryCommand cmd = new SendQueryCommand(1L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.concat(
                         Flux.just(AiStreamEvent.relay("{\"step\":\"routing\"}")),
                         Flux.error(new RuntimeException("스트림 중단"))));
@@ -798,7 +798,7 @@ class ChatStreamServiceTest {
 
         SendQueryCommand cmd = new SendQueryCommand(1L, 5L, "느린 질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("느린 질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("느린 질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.concat(
                         Flux.just(AiStreamEvent.relay("{\"step\":\"routing\"}")),
                         Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"늦은 답\"}", "늦은 답"))
@@ -823,7 +823,7 @@ class ChatStreamServiceTest {
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "느린 질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
         // 영원히 final이 안 오는 스트림 → backgroundTimeout(1s)으로만 종료된다.
-        when(aiServiceStreamPort.stream("느린 질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("느린 질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.never());
 
         svc.streamAndSave(cmd); // relay 미구독(클라 즉시 끊김). 저장 구독은 살아서 1s 뒤 timeout.
@@ -845,7 +845,7 @@ class ChatStreamServiceTest {
         when(sendQueryUseCase.prepare(cmd))
                 .thenThrow(new RuntimeException("ChatRoom 생성 실패"))   // 1번째: 실패
                 .thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty())); // 2번째: 성공
-        when(aiServiceStreamPort.stream(any(), anyLong(), anyLong(), any(), any(), any(), any()))
+        when(aiServiceStreamPort.stream(any(), anyLong(), anyLong(), any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
 
         // 1번째: prepare가 throw → launch에서 catch → permit.close() → 호출자에 전파
@@ -865,7 +865,7 @@ class ChatStreamServiceTest {
 
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty())).thenReturn(Flux.never());
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false)).thenReturn(Flux.never());
 
         svc.streamAndSave(cmd); // perUser=1 점유
 
@@ -874,7 +874,7 @@ class ChatStreamServiceTest {
 
         // prepare/stream은 1번째 호출분 1회씩만.
         verify(sendQueryUseCase, times(1)).prepare(cmd);
-        verify(aiServiceStreamPort, times(1)).stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty());
+        verify(aiServiceStreamPort, times(1)).stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false);
     }
 
     @Test
@@ -885,7 +885,7 @@ class ChatStreamServiceTest {
         // 이는 spring-backend가 명시한 수용된 한계이며, per-user cap(기본 2)이 동시 진입 폭을 좁힌다.
         SendQueryCommand cmd = new SendQueryCommand(1L, 5L, "같은 질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("같은 질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("같은 질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
 
         // per-user cap=2 → 같은 사용자가 동시에 최대 2건. 그 이상은 429로 막혀 폭이 제한된다.
@@ -903,7 +903,7 @@ class ChatStreamServiceTest {
     void streamAndSave_lateRelaySubscriber_receivesAllBufferedTokens() {
         SendQueryCommand command = new SendQueryCommand(1L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
-        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty(), false))
                 .thenReturn(Flux.just(
                         AiStreamEvent.relay("{\"step\":\"routing\"}"),
                         AiStreamEvent.relay("{\"step\":\"answering\"}"),
@@ -920,5 +920,38 @@ class ChatStreamServiceTest {
                 .expectNext("{\"step\":\"answering\"}")
                 .expectNext("{\"answer\":\"완성 답\"}")
                 .verifyComplete();
+    }
+
+    // ── title_needed (신규 방 첫 턴 제목 생성 트리거) 산출·전달 ────────────────────
+
+    @Test
+    @DisplayName("title_needed — 신규 방 첫 턴(prepared.created=true)이면 stream에 titleNeeded=true가 전달된다")
+    void streamAndSave_newRoom_passesTitleNeededTrue() {
+        SendQueryCommand command = new SendQueryCommand(1L, null, "강남구 문화행사", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
+        when(aiServiceStreamPort.stream("강남구 문화행사", 42L, 1L, null, null, List.of(), Carryover.empty(), true))
+                .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"안내\"}", "안내")));
+
+        StepVerifier.create(service.streamAndSave(command).tokens())
+                .expectNextCount(1)
+                .verifyComplete();
+
+        // 산출 위치는 application(prepare가 roomId 부재로 created 산출) — 서비스는 created를 그대로 titleNeeded로 전달.
+        verify(aiServiceStreamPort).stream("강남구 문화행사", 42L, 1L, null, null, List.of(), Carryover.empty(), true);
+    }
+
+    @Test
+    @DisplayName("title_needed — 기존 방 후속(prepared.created=false)이면 stream에 titleNeeded=false가 전달된다")
+    void streamAndSave_existingRoom_passesTitleNeededFalse() {
+        SendQueryCommand command = new SendQueryCommand(1L, 7L, "이어 질문", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(7L, 2L, false, List.of(), Carryover.empty()));
+        when(aiServiceStreamPort.stream("이어 질문", 7L, 2L, null, null, List.of(), Carryover.empty(), false))
+                .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
+
+        StepVerifier.create(service.streamAndSave(command).tokens())
+                .expectNextCount(1)
+                .verifyComplete();
+
+        verify(aiServiceStreamPort).stream("이어 질문", 7L, 2L, null, null, List.of(), Carryover.empty(), false);
     }
 }

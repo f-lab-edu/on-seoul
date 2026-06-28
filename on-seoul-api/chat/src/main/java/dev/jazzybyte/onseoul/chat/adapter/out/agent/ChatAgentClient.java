@@ -42,7 +42,7 @@ public class ChatAgentClient implements AiServiceStreamPort {
     @Override
     @WithSpan("ai.chat.stream")
     public Flux<AiStreamEvent> stream(String question, long roomId, long messageId, Double lat, Double lng,
-                                      List<ChatTurn> history, Carryover carryover) {
+                                      List<ChatTurn> history, Carryover carryover, boolean titleNeeded) {
         // 진입 span(@WithSpan으로 생성됨)에 식별 속성 부여. PII 보호: question 평문은 넣지 않는다.
         Span span = Span.current();
         span.setAttribute("chat.room_id", roomId);
@@ -56,10 +56,11 @@ public class ChatAgentClient implements AiServiceStreamPort {
         // working_set이 null(구 메시지/첫 턴)이면 prev_working_set을 싣지 않는다(AI 현행 동작 폴백 — 하위호환).
         JsonNode prevWorkingSet = parseWorkingSet(safeCarryover.workingSet());
         span.setAttribute("chat.history_size", turns.size());
-        AiChatRequest body = new AiChatRequest(roomId, messageId, question, lat, lng, turns, prevWorkingSet);
+        span.setAttribute("chat.title_needed", titleNeeded);
+        AiChatRequest body = new AiChatRequest(roomId, messageId, question, lat, lng, turns, prevWorkingSet, titleNeeded);
         // PII 보호: 질문/대화 content 평문은 로깅하지 않고 식별자와 건수만 INFO로 남긴다.
-        log.info("[Chat] 스트림 요청 to AI 서비스 - roomId={}, messageId={}, historySize={}, prevWorkingSet={}",
-                roomId, messageId, turns.size(), prevWorkingSet != null);
+        log.info("[Chat] 스트림 요청 to AI 서비스 - roomId={}, messageId={}, historySize={}, prevWorkingSet={}, titleNeeded={}",
+                roomId, messageId, turns.size(), prevWorkingSet != null, titleNeeded);
         // [임시 개발 진단] AI 서비스로 보내는 요청 본문 전체(question·history content·prev_working_set 포함)를
         // DEBUG로 기록한다. 사용자 질문 평문이 포함되므로 개발 환경 한정이며, 안정화 후 제거할 것.
         if (log.isDebugEnabled()) {

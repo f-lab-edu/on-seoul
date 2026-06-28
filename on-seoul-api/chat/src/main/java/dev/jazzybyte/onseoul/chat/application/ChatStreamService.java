@@ -98,9 +98,12 @@ public class ChatStreamService implements QueryAndStreamUseCase {
         Sinks.Many<String> relaySink = Sinks.many().replay().all();
 
         // (a) 저장 구독 — 업스트림의 유일한 직접 소비자. 클라 끊김과 무관하게 살아 있다.
+        // title_needed = 새 대화방 생성 첫 턴 여부. prepare()가 roomId 부재(=신규 생성)로 산출한
+        // prepared.created()를 그대로 전달한다(application 계층에서 산출, 어댑터는 직렬화만 담당).
         aiServiceStreamPort.stream(
                         command.question(), prepared.roomId(), prepared.messageId(),
-                        command.lat(), command.lng(), prepared.history(), prepared.carryover())
+                        command.lat(), command.lng(), prepared.history(), prepared.carryover(),
+                        prepared.created())
                 .publishOn(Schedulers.boundedElastic())   // 직렬 실행 보장(Netty 이벤트 루프 이탈)
                 .timeout(backgroundTimeout)                 // 백그라운드 상한(클라 끊김 무관)
                 .doOnNext(event -> {

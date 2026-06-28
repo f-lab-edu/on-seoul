@@ -50,7 +50,7 @@ class ChatAgentClientTest {
                 .setBody("data: 안녕\n\ndata: 하세요\n\n")
                 .setResponseCode(200));
 
-        List<AiStreamEvent> events = adapter.stream("서울 문화행사 알려줘", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        List<AiStreamEvent> events = adapter.stream("서울 문화행사 알려줘", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .collectList()
                 .block();
 
@@ -66,7 +66,7 @@ class ChatAgentClientTest {
                 .setBody("{\"error\": \"Internal Server Error\"}"));
 
         assertThatThrownBy(() ->
-                adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty()).collectList().block()
+                adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false).collectList().block()
         )
                 .isInstanceOf(OnSeoulApiException.class)
                 .satisfies(ex -> assertThat(((OnSeoulApiException) ex).getErrorCode())
@@ -79,7 +79,7 @@ class ChatAgentClientTest {
         mockWebServer.shutdown();
 
         assertThatThrownBy(() ->
-                adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty()).collectList().block()
+                adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false).collectList().block()
         )
                 .isInstanceOf(OnSeoulApiException.class)
                 .satisfies(ex -> assertThat(((OnSeoulApiException) ex).getErrorCode())
@@ -94,7 +94,7 @@ class ChatAgentClientTest {
                 .setBody(": keep-alive\n\ndata: 토큰\n\n")
                 .setResponseCode(200));
 
-        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .collectList()
                 .block();
 
@@ -109,7 +109,7 @@ class ChatAgentClientTest {
                 .setBody("data: ok\n\n")
                 .setResponseCode(200));
 
-        adapter.stream("서울 문화행사", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty()).collectList().block();
+        adapter.stream("서울 문화행사", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false).collectList().block();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         String body = recorded.getBody().readUtf8();
@@ -130,7 +130,7 @@ class ChatAgentClientTest {
                 .setBody("data: ok\n\n")
                 .setResponseCode(200));
 
-        adapter.stream("근처 체육시설", 2L, 20L, 37.5665, 126.9780, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty()).collectList().block();
+        adapter.stream("근처 체육시설", 2L, 20L, 37.5665, 126.9780, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false).collectList().block();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         String body = recorded.getBody().readUtf8();
@@ -157,7 +157,7 @@ class ChatAgentClientTest {
                 new dev.jazzybyte.onseoul.chat.domain.ChatTurn("user", "강남구 문화행사 알려줘"),
                 new dev.jazzybyte.onseoul.chat.domain.ChatTurn("assistant", "강남구 문화행사 5건을 안내합니다."));
 
-        adapter.stream("그 중 무료인 것만", 5L, 7L, null, null, history, dev.jazzybyte.onseoul.chat.domain.Carryover.empty()).collectList().block();
+        adapter.stream("그 중 무료인 것만", 5L, 7L, null, null, history, dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false).collectList().block();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         JsonNode json = new ObjectMapper().readTree(recorded.getBody().readUtf8());
@@ -178,7 +178,7 @@ class ChatAgentClientTest {
                 .setBody("data: ok\n\n")
                 .setResponseCode(200));
 
-        adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty()).collectList().block();
+        adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false).collectList().block();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         JsonNode json = new ObjectMapper().readTree(recorded.getBody().readUtf8());
@@ -196,7 +196,7 @@ class ChatAgentClientTest {
                         + "data: {\"message_id\":84,\"answer\":\"강남구 문화행사 안내\",\"intent\":\"SQL_SEARCH\"}\n\n")
                 .setResponseCode(200));
 
-        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .collectList()
                 .block();
 
@@ -219,7 +219,7 @@ class ChatAgentClientTest {
                 .setBody("event: progress\ndata: " + progressData + "\n\n")
                 .setResponseCode(200));
 
-        List<AiStreamEvent> events = adapter.stream("강남구 문화행사", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        List<AiStreamEvent> events = adapter.stream("강남구 문화행사", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .collectList()
                 .block();
 
@@ -247,7 +247,7 @@ class ChatAgentClientTest {
                 .setBody(body)
                 .setResponseCode(200));
 
-        List<AiStreamEvent> events = adapter.stream("강남구 문화행사", 1L, 84L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        List<AiStreamEvent> events = adapter.stream("강남구 문화행사", 1L, 84L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .collectList()
                 .block();
 
@@ -272,7 +272,7 @@ class ChatAgentClientTest {
                 .setBody("data: {\"answer\":\"폴백 답변\",\"error\":\"처리 중 오류\"}\n\n")
                 .setResponseCode(200));
 
-        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .collectList()
                 .block();
 
@@ -289,7 +289,7 @@ class ChatAgentClientTest {
                 .setBody("data: {\"message_id\":1,\"answer\":null,\"intent\":\"MAP\"}\n\n")
                 .setResponseCode(200));
 
-        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        List<AiStreamEvent> events = adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .collectList()
                 .block();
 
@@ -311,7 +311,7 @@ class ChatAgentClientTest {
                 .setBody("data: " + finalData + "\n\n")
                 .setResponseCode(200));
 
-        List<AiStreamEvent> events = adapter.stream("강남구 문화행사", 1L, 84L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        List<AiStreamEvent> events = adapter.stream("강남구 문화행사", 1L, 84L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .collectList()
                 .block();
 
@@ -341,7 +341,7 @@ class ChatAgentClientTest {
                 .setBody("data: {\"message_id\":1,\"answer\":\"답변\",\"intent\":\"SQL_SEARCH\"}\n\n")
                 .setResponseCode(200));
 
-        AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .blockLast();
 
         assertThat(fin.isFinal()).isTrue();
@@ -356,7 +356,7 @@ class ChatAgentClientTest {
                 .setBody("data: {\"message_id\":1,\"answer\":\"답변\",\"service_cards\":null}\n\n")
                 .setResponseCode(200));
 
-        AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .blockLast();
 
         assertThat(fin.isFinal()).isTrue();
@@ -371,7 +371,7 @@ class ChatAgentClientTest {
                 .setBody("data: {\"message_id\":1,\"answer\":\"답변\",\"service_cards\":[]}\n\n")
                 .setResponseCode(200));
 
-        AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .blockLast();
 
         assertThat(fin.isFinal()).isTrue();
@@ -387,7 +387,7 @@ class ChatAgentClientTest {
                         + "\"service_cards\":[{\"service_id\":\"S1\"}]}\n\n")
                 .setResponseCode(200));
 
-        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty())
+        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false)
                 .blockLast();
 
         assertThat(ev.isFinal()).isFalse();
@@ -404,7 +404,7 @@ class ChatAgentClientTest {
                 .setResponseCode(200));
 
         AiStreamEvent fin = adapter.stream("질문", 1L, 84L, null, null, java.util.List.of(),
-                Carryover.empty()).blockLast();
+                Carryover.empty(), false).blockLast();
 
         assertThat(fin.isFinal()).isTrue();
         assertThat(fin.finalIntent()).isEqualTo("SQL_SEARCH");
@@ -419,7 +419,7 @@ class ChatAgentClientTest {
                 .setResponseCode(200));
 
         AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(),
-                Carryover.empty()).blockLast();
+                Carryover.empty(), false).blockLast();
 
         assertThat(fin.isFinal()).isTrue();
         assertThat(fin.finalIntent()).isNull();
@@ -433,7 +433,7 @@ class ChatAgentClientTest {
                 .setBody("data: ok\n\n")
                 .setResponseCode(200));
 
-        adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), Carryover.empty())
+        adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), Carryover.empty(), false)
                 .collectList().block();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
@@ -459,7 +459,7 @@ class ChatAgentClientTest {
                 + "\"applied_filters\":{\"area\":\"강남구\"},\"relaxed\":false,\"relaxed_filters\":[]}";
         Carryover carryover = new Carryover(workingSet);
 
-        adapter.stream("그 중 첫 번째", 5L, 7L, null, null, java.util.List.of(), carryover)
+        adapter.stream("그 중 첫 번째", 5L, 7L, null, null, java.util.List.of(), carryover, false)
                 .collectList().block();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
@@ -489,7 +489,7 @@ class ChatAgentClientTest {
                 .setBody("data: ok\n\n")
                 .setResponseCode(200));
 
-        adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), new Carryover("{broken json"))
+        adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), new Carryover("{broken json"), false)
                 .collectList().block();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
@@ -512,7 +512,7 @@ class ChatAgentClientTest {
                 .setResponseCode(200));
 
         List<AiStreamEvent> events = adapter.stream("강남구 문화행사", 1L, 84L, null, null,
-                java.util.List.of(), Carryover.empty()).collectList().block();
+                java.util.List.of(), Carryover.empty(), false).collectList().block();
 
         assertThat(events).hasSize(2);
         AiStreamEvent decision = events.get(0);
@@ -539,7 +539,7 @@ class ChatAgentClientTest {
                 .setBody("event: decision\ndata: " + decisionData + "\n\n")
                 .setResponseCode(200));
 
-        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), Carryover.empty())
+        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), Carryover.empty(), false)
                 .blockLast();
 
         assertThat(ev.isDecision()).isTrue();
@@ -554,7 +554,7 @@ class ChatAgentClientTest {
                 .setBody("data: {\"event\":\"decision\",\"answer\":\"답\",\"intent\":\"SQL_SEARCH\"}\n\n")
                 .setResponseCode(200));
 
-        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), Carryover.empty())
+        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), Carryover.empty(), false)
                 .blockLast();
 
         assertThat(ev.isFinal()).isTrue();
@@ -569,7 +569,7 @@ class ChatAgentClientTest {
                 .setBody("event: progress\ndata: {\"step\":\"routing\",\"message\":\"분석 중\"}\n\n")
                 .setResponseCode(200));
 
-        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), Carryover.empty())
+        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(), Carryover.empty(), false)
                 .blockLast();
 
         assertThat(ev.isDecision()).isFalse();
@@ -587,7 +587,7 @@ class ChatAgentClientTest {
                 .setResponseCode(200));
 
         List<AiStreamEvent> events = adapter.stream("질문", 1L, 1L, null, null,
-                java.util.List.of(), Carryover.empty()).collectList().block();
+                java.util.List.of(), Carryover.empty(), false).collectList().block();
 
         assertThat(events).noneMatch(AiStreamEvent::isDecision);
     }
@@ -606,7 +606,7 @@ class ChatAgentClientTest {
                 .setResponseCode(200));
 
         AiStreamEvent fin = adapter.stream("강남구 문화행사", 1L, 84L, null, null, java.util.List.of(),
-                Carryover.empty()).blockLast();
+                Carryover.empty(), false).blockLast();
 
         assertThat(fin.isFinal()).isTrue();
         String ws = fin.finalWorkingSet();
@@ -628,7 +628,7 @@ class ChatAgentClientTest {
                 .setResponseCode(200));
 
         AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(),
-                Carryover.empty()).blockLast();
+                Carryover.empty(), false).blockLast();
 
         assertThat(fin.isFinal()).isTrue();
         assertThat(fin.finalWorkingSet()).isNull();
@@ -643,7 +643,7 @@ class ChatAgentClientTest {
                 .setResponseCode(200));
 
         AiStreamEvent fin = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(),
-                Carryover.empty()).blockLast();
+                Carryover.empty(), false).blockLast();
 
         assertThat(fin.isFinal()).isTrue();
         assertThat(fin.finalWorkingSet()).isNull();
@@ -662,7 +662,7 @@ class ChatAgentClientTest {
                 .setResponseCode(200));
 
         AiStreamEvent ev = adapter.stream("강남구 문화행사", 42L, 84L, null, null, java.util.List.of(),
-                Carryover.empty()).blockLast();
+                Carryover.empty(), false).blockLast();
 
         assertThat(ev.isTitle()).isTrue();
         assertThat(ev.isFinal()).isFalse();
@@ -683,7 +683,7 @@ class ChatAgentClientTest {
                 .setResponseCode(200));
 
         AiStreamEvent ev = adapter.stream("질문", 42L, 84L, null, null, java.util.List.of(),
-                Carryover.empty()).blockLast();
+                Carryover.empty(), false).blockLast();
 
         assertThat(ev.isTitle()).isFalse();
         assertThat(ev.title()).isNull();
@@ -700,7 +700,7 @@ class ChatAgentClientTest {
                 .setResponseCode(200));
 
         AiStreamEvent ev = adapter.stream("질문", 42L, 84L, null, null, java.util.List.of(),
-                Carryover.empty()).blockLast();
+                Carryover.empty(), false).blockLast();
 
         assertThat(ev.isTitle()).isFalse();
         assertThat(ev.raw()).isEqualTo(titleData);
@@ -716,7 +716,7 @@ class ChatAgentClientTest {
                 .setResponseCode(200));
 
         AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(),
-                Carryover.empty()).blockLast();
+                Carryover.empty(), false).blockLast();
 
         assertThat(ev.isTitle()).isFalse();
         assertThat(ev.isFinal()).isFalse();
@@ -731,12 +731,52 @@ class ChatAgentClientTest {
                 .setBody("data: ok\n\n")
                 .setResponseCode(200));
 
-        adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty()).collectList().block();
+        adapter.stream("질문", 1L, 10L, null, null, java.util.List.of(), dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false).collectList().block();
 
         RecordedRequest recorded = mockWebServer.takeRequest();
         assertThat(recorded.getMethod()).isEqualTo("POST");
         assertThat(recorded.getPath()).isEqualTo("/chat/stream");
         assertThat(recorded.getHeader("Content-Type")).contains("application/json");
         assertThat(recorded.getHeader("Accept")).contains("text/event-stream");
+    }
+
+    // ── title_needed (신규 방 첫 턴 제목 생성 트리거) ──────────────────────
+
+    @Test
+    @DisplayName("stream() - titleNeeded=true면 요청 본문에 title_needed=true가 직렬화된다(신규 방 첫 턴)")
+    void stream_titleNeededTrue_serializedAsTrue() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: ok\n\n")
+                .setResponseCode(200));
+
+        adapter.stream("서울 문화행사", 1L, 10L, null, null, java.util.List.of(),
+                dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), true).collectList().block();
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        JsonNode json = new ObjectMapper().readTree(recorded.getBody().readUtf8());
+
+        assertThat(json.has("title_needed")).isTrue();
+        assertThat(json.get("title_needed").isBoolean()).isTrue();
+        assertThat(json.get("title_needed").asBoolean()).isTrue();
+    }
+
+    @Test
+    @DisplayName("stream() - titleNeeded=false면 요청 본문에 title_needed=false가 명시 직렬화된다(기존 방 후속)")
+    void stream_titleNeededFalse_serializedAsFalse() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: ok\n\n")
+                .setResponseCode(200));
+
+        adapter.stream("후속 질문", 1L, 11L, null, null, java.util.List.of(),
+                dev.jazzybyte.onseoul.chat.domain.Carryover.empty(), false).collectList().block();
+
+        RecordedRequest recorded = mockWebServer.takeRequest();
+        JsonNode json = new ObjectMapper().readTree(recorded.getBody().readUtf8());
+
+        // primitive boolean이므로 @JsonInclude(NON_NULL)와 무관하게 항상 명시 전송된다.
+        assertThat(json.has("title_needed")).isTrue();
+        assertThat(json.get("title_needed").asBoolean()).isFalse();
     }
 }
