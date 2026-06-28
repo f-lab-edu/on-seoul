@@ -23,12 +23,16 @@ package dev.jazzybyte.onseoul.chat.port.out;
  * @param finalWorkingSet   final 이벤트의 prev_working_set 객체(opaque JSON 봉투). 키 부재/null/final 아님이면
  *                          null. Spring은 해석하지 않고 통째로 저장했다가 다음 턴 carryover(prev_working_set)로
  *                          verbatim 회신한다.
+ * @param title             title 이벤트({@code "type":"title"})에서 추출한 AI 생성 방 제목. title 이벤트가
+ *                          아니거나 빈 제목이면 null. 신규 방 첫 턴에만 도착할 수 있으며(미수신 가능, fail-open),
+ *                          저장 시 prepared.roomId 기준으로만 영속한다. payload의 room_id/message_id/query는
+ *                          캡처하지 않는다(소유자 검증된 roomId만 신뢰).
  */
 public record AiStreamEvent(String raw, String finalAnswer, String finalServiceCards, String finalIntent,
-                            String decisionJson, String finalWorkingSet) {
+                            String decisionJson, String finalWorkingSet, String title) {
 
     public static AiStreamEvent relay(String raw) {
-        return new AiStreamEvent(raw, null, null, null, null, null);
+        return new AiStreamEvent(raw, null, null, null, null, null, null);
     }
 
     public static AiStreamEvent finalEvent(String raw, String answer) {
@@ -45,12 +49,17 @@ public record AiStreamEvent(String raw, String finalAnswer, String finalServiceC
 
     public static AiStreamEvent finalEvent(String raw, String answer, String serviceCardsJson, String intent,
                                            String workingSetJson) {
-        return new AiStreamEvent(raw, answer == null ? "" : answer, serviceCardsJson, intent, null, workingSetJson);
+        return new AiStreamEvent(raw, answer == null ? "" : answer, serviceCardsJson, intent, null, workingSetJson, null);
     }
 
     /** decision 이벤트. raw는 그대로 relay하고, decisionJson을 캡처해 final과 함께 저장한다. */
     public static AiStreamEvent decisionEvent(String raw, String decisionJson) {
-        return new AiStreamEvent(raw, null, null, null, decisionJson, null);
+        return new AiStreamEvent(raw, null, null, null, decisionJson, null, null);
+    }
+
+    /** title 이벤트. raw는 그대로 relay하고, title 문자열만 캡처해 prepared.roomId 기준으로 영속한다. */
+    public static AiStreamEvent titleEvent(String raw, String title) {
+        return new AiStreamEvent(raw, null, null, null, null, null, title);
     }
 
     public boolean isFinal() {
@@ -59,5 +68,9 @@ public record AiStreamEvent(String raw, String finalAnswer, String finalServiceC
 
     public boolean isDecision() {
         return decisionJson != null;
+    }
+
+    public boolean isTitle() {
+        return title != null;
     }
 }

@@ -5,6 +5,7 @@ import dev.jazzybyte.onseoul.chat.port.in.QueryAndStreamUseCase;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryCommand;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryUseCase;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryUseCase.PrepareResult;
+import dev.jazzybyte.onseoul.chat.port.in.UpdateRoomTitleUseCase;
 import dev.jazzybyte.onseoul.chat.port.out.AiServiceStreamPort;
 import dev.jazzybyte.onseoul.chat.port.out.AiStreamEvent;
 import lombok.extern.slf4j.Slf4j;
@@ -46,14 +47,17 @@ public class ChatStreamService implements QueryAndStreamUseCase {
     private final SendQueryUseCase sendQueryUseCase;
     private final AiServiceStreamPort aiServiceStreamPort;
     private final ChatConcurrencyGuard concurrencyGuard;
+    private final UpdateRoomTitleUseCase updateRoomTitleUseCase;
     private final Duration backgroundTimeout;
 
     public ChatStreamService(SendQueryUseCase sendQueryUseCase,
                              AiServiceStreamPort aiServiceStreamPort,
-                             ChatConcurrencyGuard concurrencyGuard) {
+                             ChatConcurrencyGuard concurrencyGuard,
+                             UpdateRoomTitleUseCase updateRoomTitleUseCase) {
         this.sendQueryUseCase = sendQueryUseCase;
         this.aiServiceStreamPort = aiServiceStreamPort;
         this.concurrencyGuard = concurrencyGuard;
+        this.updateRoomTitleUseCase = updateRoomTitleUseCase;
         this.backgroundTimeout = concurrencyGuard.backgroundTimeout();
     }
 
@@ -86,6 +90,9 @@ public class ChatStreamService implements QueryAndStreamUseCase {
         // final 이벤트의 prev_working_set 봉투(opaque JSON) 보관. 미동반이면 null로 남고 그대로 null 저장.
         // 다음 턴 carryover(prev_working_set)로 verbatim 회신하기 위해 disconnect 내성 저장 경로로 전달한다.
         AtomicReference<String> finalWorkingSet = new AtomicReference<>(null);
+        // title 이벤트의 AI 생성 방 제목 보관. final과 별개로(순서 무관) 도착하며, 신규 방 첫 턴에만 올 수 있다.
+        // 미수신이면 null로 남고 그 경우 제목을 갱신하지 않는다. prepared.roomId 기준으로만 영속한다.
+        AtomicReference<String> title = new AtomicReference<>(null);
 
         // relay fan-out 채널. replay().all(): 저장 구독이 즉시 시작해도 클라가 처음부터 토큰을 받도록 버퍼·재생한다.
         Sinks.Many<String> relaySink = Sinks.many().replay().all();
@@ -107,6 +114,10 @@ public class ChatStreamService implements QueryAndStreamUseCase {
                     if (event.isDecision()) {
                         decisionJson.set(event.decisionJson());
                     }
+                    // title도 final과 별개로(순서 무관) 도착한다 — 캡처해뒀다가 doFinally에서 영속한다.
+                    if (event.isTitle()) {
+                        title.set(event.title());
+                    }
                     // relay는 best-effort: 구독자가 없거나 버퍼가 차도 저장 흐름은 막지 않는다.
                     relaySink.tryEmitNext(event.raw());
                 })
@@ -126,6 +137,17 @@ public class ChatStreamService implements QueryAndStreamUseCase {
                         log.debug("[Chat] 응답 저장 완료 - roomId={}, signal={}", prepared.roomId(), signal);
                     } catch (Exception e) {
                         log.error("[Chat] ASSISTANT 응답 저장 실패 - roomId={}, signal={}",
+                                prepared.roomId(), signal, e);
+                    }
+                    // 제목 영속은 답변 저장과 독립(각자 best-effort). 영속 roomId는 반드시 소유자 검증된
+                    // prepared.roomId() — payload room_id는 신뢰하지 않는다(AiStreamEvent가 담지도 않음).
+                    try {
+                        String t = title.get();
+                        if (t != null) {
+                            updateRoomTitleUseCase.updateRoomTitle(prepared.roomId(), t);
+                        }
+                    } catch (Exception e) {
+                        log.error("[Chat] 방 제목 갱신 실패 - roomId={}, signal={}",
                                 prepared.roomId(), signal, e);
                     } finally {
                         permit.close();   // 정상/에러/타임아웃/취소 모두에서 정확히 1회 해제

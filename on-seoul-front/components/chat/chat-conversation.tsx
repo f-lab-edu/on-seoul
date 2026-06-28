@@ -1,12 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 
 import { ChatInput } from "@/components/chat/chat-input";
 import { MessageList, type DisplayMessage } from "@/components/chat/message-list";
 import { WelcomeMessage } from "@/components/chat/welcome-message";
 import { Button } from "@/components/ui/button";
 import { useChatStream } from "@/hooks/useChatStream";
+import { CHAT_ROOMS_KEY } from "@/hooks/useChatRooms";
+import { chatHistoryKey } from "@/hooks/useChatHistory";
+import type { ChatHistoryResponse, RoomListResponse } from "@/types/chat-history";
 
 interface ChatConversationProps {
   /** 기존 방이면 roomId. 새 대화(/chat)면 undefined. */
@@ -26,6 +30,9 @@ interface ChatConversationProps {
  */
 export function ChatConversation({ roomId, initialMessages, welcome }: ChatConversationProps) {
   const currentRoomIdRef = useRef<number | undefined>(roomId);
+  const qc = useQueryClient();
+  // 새 대화에서 title 이벤트로 받은 생성 제목(라이브 헤더 표시용). 기존 방은 RoomDetail이 헤더를 가진다.
+  const [liveTitle, setLiveTitle] = useState<string | null>(null);
 
   const { state, send, cancel, retry } = useChatStream({
     onInit: ({ roomId: rid, created }) => {
@@ -34,6 +41,25 @@ export function ChatConversation({ roomId, initialMessages, welcome }: ChatConve
       if (created && roomId === undefined && typeof window !== "undefined") {
         window.history.replaceState(window.history.state, "", `/chat/${rid}`);
       }
+    },
+    onTitle: ({ roomId: rid, title }) => {
+      setLiveTitle(title);
+      // 목록 캐시: 해당 방이 이미 캐시에 있으면 제목만 갱신(없으면 no-op — 다음 조회 시 서버값).
+      qc.setQueryData<InfiniteData<RoomListResponse>>(CHAT_ROOMS_KEY, (prev) =>
+        prev
+          ? {
+              ...prev,
+              pages: prev.pages.map((p) => ({
+                ...p,
+                rooms: p.rooms.map((r) => (r.roomId === rid ? { ...r, title } : r)),
+              })),
+            }
+          : prev,
+      );
+      // 이력 캐시: 해당 방 캐시가 있으면 제목 갱신.
+      qc.setQueryData<ChatHistoryResponse>(chatHistoryKey(rid), (prev) =>
+        prev ? { ...prev, title } : prev,
+      );
     },
   });
 
@@ -73,6 +99,13 @@ export function ChatConversation({ roomId, initialMessages, welcome }: ChatConve
 
   return (
     <>
+      {/* 새 대화 한정 라이브 제목 헤더. 기존 방(roomId 지정)은 RoomDetail이 자체 헤더를 가진다. */}
+      {roomId === undefined && liveTitle && (
+        <div className="flex items-center border-b border-border px-4 py-2">
+          <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{liveTitle}</h2>
+        </div>
+      )}
+
       <section className="flex-1 overflow-y-auto px-4 py-4">
         {showWelcome && <WelcomeMessage onQuestion={handleSubmit} />}
         <MessageList messages={messages} streamState={state} />

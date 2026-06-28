@@ -31,10 +31,10 @@ type SseFinalEvent = {
   message_id: number;
   answer: string;            // 자연어 답변 (도입문 + 시설명 목록 + 마무리 안내, 카드 상세 미포함)
   intent: "SQL_SEARCH" | "VECTOR_SEARCH" | "MAP" | "FALLBACK" | null;
-  title: string | null;      // 첫 메시지일 때만 채워짐
   cache_hit: boolean;        // 캐시 히트 여부 (UI 표시는 자유)
-  service_cards: ServiceCard[];  // 신규 — 항상 배열, 빈 결과면 []
+  service_cards: ServiceCard[];  // 항상 배열, 빈 결과면 []
 };
+// 주의: title은 final에서 제거되어 별도 `title` 이벤트로 분리됨(chat-sse-event-catalog.md §3-1).
 ```
 
 - `service_cards` 는 **`null` 이 절대 오지 않는다**. 결과 없음 / AnswerAgent 미실행 / 구버전 캐시 envelope 모두 백엔드 응답 직렬화 단계에서 `[]` 로 정규화된다.

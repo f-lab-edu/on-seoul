@@ -60,6 +60,16 @@ public class ChatAgentClient implements AiServiceStreamPort {
         // PII 보호: 질문/대화 content 평문은 로깅하지 않고 식별자와 건수만 INFO로 남긴다.
         log.info("[Chat] 스트림 요청 to AI 서비스 - roomId={}, messageId={}, historySize={}, prevWorkingSet={}",
                 roomId, messageId, turns.size(), prevWorkingSet != null);
+        // [임시 개발 진단] AI 서비스로 보내는 요청 본문 전체(question·history content·prev_working_set 포함)를
+        // DEBUG로 기록한다. 사용자 질문 평문이 포함되므로 개발 환경 한정이며, 안정화 후 제거할 것.
+        if (log.isDebugEnabled()) {
+            try {
+                log.debug("[Chat] AI 요청 payload(roomId={}, messageId={}): {}",
+                        roomId, messageId, OBJECT_MAPPER.writeValueAsString(body));
+            } catch (Exception e) {
+                log.debug("[Chat] AI 요청 payload 직렬화 실패: {}", e.getMessage());
+            }
+        }
 
         // 스트림 수신 이벤트를 기록할 span 참조를 클로저로 캡처(구독 스레드 전환 시 컨텍스트 유실 방지).
         // 주의: 재시도(retry/repeat) 미도입 전제. 재구독이 생기면 seq가 누적되어 span event가 중복되므로
@@ -117,7 +127,13 @@ public class ChatAgentClient implements AiServiceStreamPort {
      * decision payload(action/routes/user_rationale/sources) 전체를 opaque로 캡처해 final과 함께 저장한다.
      * triage가 LLM 분류한 턴에만 1회 도착할 수 있고(미수신 가능, 하위호환), final보다 먼저 온다.
      *
-     * <p>원본 data는 final/decision/progress 어떤 이벤트든 그대로 프론트로 relay된다.
+     * <p>title 식별: data가 JSON 객체이고 {@code "type":"title"}일 때. AI 서비스가 신규 방 첫 턴에 생성한
+     * 방 제목을 별개 이벤트로 발행한다. SSE 이벤트 이름이 아니라 payload의 {@code type}으로 식별한다.
+     * {@code title} 값이 부재/null/blank면 title 이벤트로 만들지 않고 relay로 폴백한다(빈 제목으로 50자
+     * 폴백 제목을 덮어쓰지 않기 위한 방어). 유효하면 title 문자열만 캡처한다 — payload의 room_id/message_id/
+     * query는 신뢰하지 않으므로 캡처하지 않는다(영속은 소유자 검증된 prepared.roomId 기준).
+     *
+     * <p>원본 data는 final/decision/title/progress 어떤 이벤트든 그대로 프론트로 relay된다.
      */
     private AiStreamEvent toStreamEvent(ServerSentEvent<String> sse) {
         String data = sse.data();
@@ -146,6 +162,13 @@ public class ChatAgentClient implements AiServiceStreamPort {
                 // decision payload 전체를 opaque로 캡처(action/routes/user_rationale/sources). raw도 그대로 relay.
                 return AiStreamEvent.decisionEvent(data, data);
             }
+            if (isTitleEvent(node)) {
+                JsonNode t = node.get("title");
+                // 빈/부재 제목은 title 이벤트로 만들지 않고 relay 폴백(50자 폴백 제목 보호).
+                if (t != null && !t.isNull() && !t.asText().isBlank()) {
+                    return AiStreamEvent.titleEvent(data, t.asText());
+                }
+            }
         } catch (Exception e) {
             // JSON이 아니거나 파싱 실패 — relay 전용 이벤트로 취급(프론트 스트림에는 영향 없음).
             log.debug("[Chat] SSE data를 JSON으로 파싱하지 못해 relay 전용으로 처리합니다.");
@@ -157,5 +180,14 @@ public class ChatAgentClient implements AiServiceStreamPort {
     private static boolean isDecisionEvent(JsonNode node) {
         JsonNode eventNode = node.get("event");
         return eventNode != null && !eventNode.isNull() && "decision".equals(eventNode.asText());
+    }
+
+    /**
+     * payload의 {@code "type"} 필드가 "title"이면 title 이벤트로 식별한다(isDecisionEvent와 대칭).
+     * blank title → relay 폴백 판단은 호출부가 담당한다 — 여기서는 type 판별만 한다.
+     */
+    private static boolean isTitleEvent(JsonNode node) {
+        JsonNode typeNode = node.get("type");
+        return node.isObject() && typeNode != null && !typeNode.isNull() && "title".equals(typeNode.asText());
     }
 }

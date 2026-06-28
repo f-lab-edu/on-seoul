@@ -43,15 +43,26 @@ export type SseInitEvent = { type: "init"; room_id: number; created: boolean };
 /** AI 서비스 진행 메시지(name 없는 data, `step` 키 보유). */
 export type SseProgressEvent = { step: string; message: string };
 
-/** 정상 종료 — `answer` 있고 `error` 없음. */
+/** 정상 종료 — `answer` 있고 `error` 없음. (title은 별도 `title` 이벤트로 분리됨) */
 export type SseFinalEvent = {
   type: "final";
   message_id: number;
   answer: string;
   intent: AgentIntent;
-  title: string | null;
   cache_hit: boolean;
   service_cards: ServiceCard[];
+};
+
+/**
+ * 대화 제목 이벤트 — 신규 방 첫 턴에만 발행. `final`과 순서 무관하게(먼저/나중) 도착하며,
+ * 제목 생성 실패 시 아예 오지 않을 수 있다(fail-open). `init` 이후 도착이 보장된다.
+ */
+export type SseTitleEvent = {
+  type: "title";
+  room_id: number;
+  title: string;
+  message_id: number;
+  query: string;
 };
 
 /** 워크플로우 오류 — `answer`와 `error`를 함께 가진 종료 이벤트(이력 저장 제외). */
@@ -70,6 +81,7 @@ export type SseErrorEvent = { type: "error"; message: string };
 export type SseEvent =
   | SseInitEvent
   | SseProgressEvent
+  | SseTitleEvent
   | SseFinalEvent
   | SseWorkflowErrorEvent
   | SseErrorEvent;
