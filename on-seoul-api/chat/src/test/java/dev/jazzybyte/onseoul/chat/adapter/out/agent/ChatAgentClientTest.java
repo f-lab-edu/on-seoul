@@ -649,6 +649,80 @@ class ChatAgentClientTest {
         assertThat(fin.finalWorkingSet()).isNull();
     }
 
+    // ── title 이벤트 (AI 생성 방 제목) ──────────────────────────────────
+
+    @Test
+    @DisplayName("stream() - type:title payload는 title 이벤트로 인식되고 title 문자열만 캡처된다(room_id/message_id/query 미캡처)")
+    void stream_titleEvent_capturesTitleOnly() {
+        String titleData = "{\"type\":\"title\",\"room_id\":42,\"title\":\"강남구 문화행사 안내 🎵\","
+                + "\"message_id\":84,\"query\":\"강남구 문화행사\"}";
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: " + titleData + "\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent ev = adapter.stream("강남구 문화행사", 42L, 84L, null, null, java.util.List.of(),
+                Carryover.empty()).blockLast();
+
+        assertThat(ev.isTitle()).isTrue();
+        assertThat(ev.isFinal()).isFalse();
+        assertThat(ev.isDecision()).isFalse();
+        // title 문자열만 담는다 — room_id/message_id/query는 AiStreamEvent에 존재하지 않는다(구조적 보장).
+        assertThat(ev.title()).isEqualTo("강남구 문화행사 안내 🎵");
+        // 원본 data는 그대로 relay된다.
+        assertThat(ev.raw()).isEqualTo(titleData);
+    }
+
+    @Test
+    @DisplayName("stream() - title이 blank인 type:title payload는 title 이벤트로 만들지 않고 relay 폴백한다(50자 폴백 보호)")
+    void stream_titleEvent_blankTitle_fallsBackToRelay() {
+        String titleData = "{\"type\":\"title\",\"room_id\":42,\"title\":\"   \"}";
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: " + titleData + "\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent ev = adapter.stream("질문", 42L, 84L, null, null, java.util.List.of(),
+                Carryover.empty()).blockLast();
+
+        assertThat(ev.isTitle()).isFalse();
+        assertThat(ev.title()).isNull();
+        assertThat(ev.raw()).isEqualTo(titleData);
+    }
+
+    @Test
+    @DisplayName("stream() - title 키가 없는 type:title payload는 relay 폴백한다")
+    void stream_titleEvent_missingTitleKey_fallsBackToRelay() {
+        String titleData = "{\"type\":\"title\",\"room_id\":42}";
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: " + titleData + "\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent ev = adapter.stream("질문", 42L, 84L, null, null, java.util.List.of(),
+                Carryover.empty()).blockLast();
+
+        assertThat(ev.isTitle()).isFalse();
+        assertThat(ev.raw()).isEqualTo(titleData);
+    }
+
+    @Test
+    @DisplayName("stream() - type 키가 없는 progress payload는 title로 인식되지 않고 relay된다(하위호환)")
+    void stream_noTypeKey_notTitle() {
+        String progressData = "{\"step\":\"routing\",\"message\":\"분석 중\"}";
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: " + progressData + "\n\n")
+                .setResponseCode(200));
+
+        AiStreamEvent ev = adapter.stream("질문", 1L, 1L, null, null, java.util.List.of(),
+                Carryover.empty()).blockLast();
+
+        assertThat(ev.isTitle()).isFalse();
+        assertThat(ev.isFinal()).isFalse();
+        assertThat(ev.raw()).isEqualTo(progressData);
+    }
+
     @Test
     @DisplayName("stream() - 요청이 /chat/stream 경로로 POST 전송된다")
     void stream_requestSentToCorrectPath() throws Exception {

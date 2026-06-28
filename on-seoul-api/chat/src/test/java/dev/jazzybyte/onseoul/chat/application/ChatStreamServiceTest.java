@@ -6,6 +6,7 @@ import dev.jazzybyte.onseoul.chat.port.in.QueryAndStreamUseCase.StreamResult;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryCommand;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryUseCase;
 import dev.jazzybyte.onseoul.chat.port.in.SendQueryUseCase.PrepareResult;
+import dev.jazzybyte.onseoul.chat.port.in.UpdateRoomTitleUseCase;
 import dev.jazzybyte.onseoul.chat.port.out.AiServiceStreamPort;
 import dev.jazzybyte.onseoul.chat.port.out.AiStreamEvent;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
@@ -32,6 +33,7 @@ class ChatStreamServiceTest {
 
     @Mock private SendQueryUseCase sendQueryUseCase;
     @Mock private AiServiceStreamPort aiServiceStreamPort;
+    @Mock private UpdateRoomTitleUseCase updateRoomTitleUseCase;
 
     private ChatStreamService service;
     private ChatConcurrencyGuard guard;
@@ -39,7 +41,7 @@ class ChatStreamServiceTest {
     @BeforeEach
     void setUp() {
         guard = new ChatConcurrencyGuard(new ChatConcurrencyProperties(2, 50, 5));
-        service = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, guard);
+        service = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, guard, updateRoomTitleUseCase);
     }
 
     @Test
@@ -495,6 +497,139 @@ class ChatStreamServiceTest {
         verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", cardsJson, "VECTOR_SEARCH", (String) null, (String) null);
     }
 
+    // ── title 이벤트(AI 생성 방 제목 영속) ───────────────────────────────────
+
+    @Test
+    @DisplayName("title — title 이벤트가 캡처되어 prepared.roomId() 기준으로 updateRoomTitle이 호출된다 (a)")
+    void streamAndSave_titleEvent_persistsByPreparedRoomId() {
+        SendQueryCommand command = new SendQueryCommand(1L, null, "강남구 문화행사", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
+        when(aiServiceStreamPort.stream("강남구 문화행사", 42L, 1L, null, null, List.of(), Carryover.empty()))
+                .thenReturn(Flux.just(
+                        AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"강남구 문화행사 안내\"}", "강남구 문화행사 안내"),
+                        AiStreamEvent.finalEvent("{\"answer\":\"안내드립니다\"}", "안내드립니다")));
+
+        StepVerifier.create(service.streamAndSave(command).tokens())
+                .expectNextCount(2)
+                .verifyComplete();
+
+        verify(updateRoomTitleUseCase, timeout(2000)).updateRoomTitle(42L, "강남구 문화행사 안내");
+    }
+
+    @Test
+    @DisplayName("title — payload room_id가 prepared.roomId와 달라도 AiStreamEvent가 room_id를 담지 않으므로 prepared 기준으로만 영속한다 (e)")
+    void streamAndSave_titleEvent_usesPreparedRoomIdNotPayloadRoomId() {
+        SendQueryCommand command = new SendQueryCommand(1L, null, "질문", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
+        // payload엔 room_id=999가 들어 있지만 titleEvent는 title 문자열만 담는다 — 구조적으로 캡처 불가.
+        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty()))
+                .thenReturn(Flux.just(
+                        AiStreamEvent.titleEvent("{\"type\":\"title\",\"room_id\":999,\"title\":\"제목\"}", "제목"),
+                        AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
+
+        StepVerifier.create(service.streamAndSave(command).tokens())
+                .expectNextCount(2)
+                .verifyComplete();
+
+        verify(updateRoomTitleUseCase, timeout(2000)).updateRoomTitle(42L, "제목");
+        verify(updateRoomTitleUseCase, never()).updateRoomTitle(eq(999L), any());
+    }
+
+    @Test
+    @DisplayName("title — title 이벤트 미수신이면 updateRoomTitle을 호출하지 않고 정상 종료한다 (d)")
+    void streamAndSave_noTitleEvent_doesNotUpdateTitle() {
+        SendQueryCommand command = new SendQueryCommand(1L, 5L, "질문", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
+        when(aiServiceStreamPort.stream("질문", 5L, 2L, null, null, List.of(), Carryover.empty()))
+                .thenReturn(Flux.just(AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
+
+        StepVerifier.create(service.streamAndSave(command).tokens())
+                .expectNextCount(1)
+                .verifyComplete();
+
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(5L, "답", null, (String) null, (String) null, (String) null);
+        verify(updateRoomTitleUseCase, never()).updateRoomTitle(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("title — 클라 끊김(relay 미구독)에도 백그라운드가 title을 prepared.roomId 기준으로 영속한다 (c)")
+    void streamAndSave_relayNeverSubscribed_titleStillPersisted() {
+        SendQueryCommand command = new SendQueryCommand(1L, null, "질문", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
+        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty()))
+                .thenReturn(Flux.just(
+                        AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"생성 제목\"}", "생성 제목"),
+                        AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
+
+        // result.tokens()를 구독하지 않는다(클라 즉시 끊김). 저장 구독은 살아서 title을 영속해야 한다.
+        service.streamAndSave(command);
+
+        verify(updateRoomTitleUseCase, timeout(2000)).updateRoomTitle(42L, "생성 제목");
+    }
+
+    @Test
+    @DisplayName("title — updateRoomTitle 예외 발생 시에도 saveAnswer는 독립적으로 수행되고 토큰 Flux는 정상 complete된다")
+    void streamAndSave_titleUpdateFails_saveAnswerIndependentAndCompletes() {
+        SendQueryCommand command = new SendQueryCommand(1L, null, "질문", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
+        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty()))
+                .thenReturn(Flux.just(
+                        AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"제목\"}", "제목"),
+                        AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
+        doThrow(new RuntimeException("제목 갱신 실패"))
+                .when(updateRoomTitleUseCase).updateRoomTitle(anyLong(), any());
+
+        StepVerifier.create(service.streamAndSave(command).tokens())
+                .expectNextCount(2)
+                .expectComplete()
+                .verify(Duration.ofSeconds(2));
+
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(42L, "답", null, (String) null, (String) null, (String) null);
+        verify(updateRoomTitleUseCase, timeout(2000)).updateRoomTitle(42L, "제목");
+    }
+
+    @Test
+    @DisplayName("title — title 이벤트가 final보다 늦게 도착해도(순서 무관) 캡처되어 영속된다 (QA 보강, 순서 독립)")
+    void streamAndSave_titleAfterFinal_stillPersisted() {
+        SendQueryCommand command = new SendQueryCommand(1L, null, "강남구 문화행사", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
+        // title이 final 뒤에 도착하는 시퀀스 — AtomicReference 캡처는 순서에 무관해야 한다.
+        when(aiServiceStreamPort.stream("강남구 문화행사", 42L, 1L, null, null, List.of(), Carryover.empty()))
+                .thenReturn(Flux.just(
+                        AiStreamEvent.finalEvent("{\"answer\":\"안내드립니다\"}", "안내드립니다"),
+                        AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"늦게 온 제목\"}", "늦게 온 제목")));
+
+        StepVerifier.create(service.streamAndSave(command).tokens())
+                .expectNextCount(2)
+                .verifyComplete();
+
+        // final 저장과 title 영속 모두 doFinally에서 수행되며, 도착 순서와 무관하게 title이 캡처된다.
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(42L, "안내드립니다", null, (String) null, (String) null, (String) null);
+        verify(updateRoomTitleUseCase, timeout(2000)).updateRoomTitle(42L, "늦게 온 제목");
+    }
+
+    @Test
+    @DisplayName("title — 같은 스트림에서 title 이벤트가 2회 도착하면 마지막 캡처값으로 updateRoomTitle이 1회 호출된다(멱등은 서비스가 보장) (QA 보강)")
+    void streamAndSave_duplicateTitleEvents_lastCapturedSinglePersistCall() {
+        SendQueryCommand command = new SendQueryCommand(1L, null, "질문", null, null);
+        when(sendQueryUseCase.prepare(command)).thenReturn(new PrepareResult(42L, 1L, true, List.of(), Carryover.empty()));
+        // title 이벤트 2회 도착(재발행/재시도 시뮬레이션). 캡처는 AtomicReference이므로 마지막 값이 남고,
+        // doFinally의 영속 호출은 정확히 1회. 중복 덮어쓰기 방지는 UpdateRoomTitleService의 멱등 가드 책임.
+        when(aiServiceStreamPort.stream("질문", 42L, 1L, null, null, List.of(), Carryover.empty()))
+                .thenReturn(Flux.just(
+                        AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"첫 제목\"}", "첫 제목"),
+                        AiStreamEvent.titleEvent("{\"type\":\"title\",\"title\":\"둘째 제목\"}", "둘째 제목"),
+                        AiStreamEvent.finalEvent("{\"answer\":\"답\"}", "답")));
+
+        StepVerifier.create(service.streamAndSave(command).tokens())
+                .expectNextCount(3)
+                .verifyComplete();
+
+        // 영속 호출은 종료 시점 1회뿐이고 마지막 캡처값으로 호출된다.
+        verify(updateRoomTitleUseCase, timeout(2000).times(1)).updateRoomTitle(42L, "둘째 제목");
+        verify(updateRoomTitleUseCase, never()).updateRoomTitle(42L, "첫 제목");
+    }
+
     // ── disconnect 내성(detach) ────────────────────────────────────────────
 
     @Test
@@ -579,7 +714,7 @@ class ChatStreamServiceTest {
     @DisplayName("cap — 스트림이 정상 완료되면 permit이 해제되어 다시 생성할 수 있다(누수 없음)")
     void streamAndSave_completes_releasesPermit() throws InterruptedException {
         ChatConcurrencyGuard tight = new ChatConcurrencyGuard(new ChatConcurrencyProperties(1, 50, 5));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase);
 
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
@@ -607,7 +742,7 @@ class ChatStreamServiceTest {
     @DisplayName("cap — 업스트림 에러로 끝나도 permit이 해제된다(누수 없음)")
     void streamAndSave_error_releasesPermit() throws InterruptedException {
         ChatConcurrencyGuard tight = new ChatConcurrencyGuard(new ChatConcurrencyProperties(1, 50, 5));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase);
 
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
@@ -659,7 +794,7 @@ class ChatStreamServiceTest {
     void streamAndSave_backgroundTimeout_relayErrorsAndSavesEmptyString() {
         // backgroundTimeout=1s. final이 그보다 늦게(2s) 오므로 timeout이 먼저 발화한다.
         ChatConcurrencyGuard timed = new ChatConcurrencyGuard(new ChatConcurrencyProperties(2, 50, 1));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, timed);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, timed, updateRoomTitleUseCase);
 
         SendQueryCommand cmd = new SendQueryCommand(1L, 5L, "느린 질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
@@ -683,7 +818,7 @@ class ChatStreamServiceTest {
     @DisplayName("타임아웃 — timeout 후 permit이 해제되어 cap이 막혔던 사용자가 다시 생성할 수 있다(누수 없음, QA 보강)")
     void streamAndSave_timeout_releasesPermit() {
         ChatConcurrencyGuard tight = new ChatConcurrencyGuard(new ChatConcurrencyProperties(1, 50, 1));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase);
 
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "느린 질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
@@ -704,7 +839,7 @@ class ChatStreamServiceTest {
     @DisplayName("permit 누수 — prepare 예외(구독 와이어 전 실패)에서도 permit이 해제되어 재획득 가능하다(QA 보강)")
     void streamAndSave_prepareThrows_releasesPermitNoLeak() {
         ChatConcurrencyGuard tight = new ChatConcurrencyGuard(new ChatConcurrencyProperties(1, 1, 5));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase);
 
         SendQueryCommand cmd = new SendQueryCommand(7L, null, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd))
@@ -726,7 +861,7 @@ class ChatStreamServiceTest {
     @DisplayName("획득 순서 — cap 초과로 거부되면 prepare/stream을 전혀 호출하지 않는다(acquire가 prepare/AI보다 먼저, 비용 단락, QA 보강)")
     void streamAndSave_capRejected_doesNotCallPrepareOrStream() {
         ChatConcurrencyGuard full = new ChatConcurrencyGuard(new ChatConcurrencyProperties(1, 50, 5));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, full);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, full, updateRoomTitleUseCase);
 
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
