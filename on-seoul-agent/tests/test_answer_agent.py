@@ -1,7 +1,8 @@
 """AnswerAgent 단위 테스트.
 
-답변 생성, 시설 카드 정규화, 제목 생성, fallback URL 처리를 검증한다.
-2-Tier 프롬프트 조립(Phase D) 포함.
+답변 생성, 시설 카드 정규화, fallback URL 처리를 검증한다.
+2-Tier 프롬프트 조립(Phase D) 포함. (제목 생성은 generate_title_node 로 분리되어
+test_generate_title_node.py 가 커버한다.)
 """
 
 import json
@@ -11,7 +12,6 @@ from tests.helpers import make_agent_state
 from agents.answer_agent import (
     AnswerAgent,
     _DISPLAY_LIMIT,
-    _TitleOutput,
     _build_card_system,
     _compose,
     _more_notice,
@@ -36,19 +36,12 @@ def _make_state(**kwargs) -> AgentState:
 
 def _make_agent(
     answer_text: str = "수영장 목록입니다.",
-    title_text: str | None = None,
 ) -> AnswerAgent:
     agent = AnswerAgent.__new__(AnswerAgent)
 
     mock_answer_chain = MagicMock()
     mock_answer_chain.ainvoke = AsyncMock(return_value=answer_text)
     agent._answer_chain = mock_answer_chain
-
-    mock_title_chain = MagicMock()
-    mock_title_chain.ainvoke = AsyncMock(
-        return_value=_TitleOutput(title=title_text or "수영장 조회")
-    )
-    agent._title_chain = mock_title_chain
 
     # Tier 1 정적 프롬프트 캐시 — 실제 __init__과 동일한 값으로 초기화.
     agent._static_prompts = {
@@ -70,21 +63,12 @@ class TestAnswerAgent:
 
         assert result["answer"] == "강남구 수영장은 현재 접수 중입니다."
 
-    async def test_title_not_generated_when_not_needed(self):
-        """title_needed=False면 title_chain이 호출되지 않고 title은 None이다."""
+    async def test_answer_does_not_set_title(self):
+        """제목 생성은 generate_title_node 로 분리됐다 — answer 는 title 을 채우지 않는다."""
         agent = _make_agent()
-        result = await agent.answer(_make_state(title_needed=False))
-
-        agent._title_chain.ainvoke.assert_not_called()
-        assert result.get("title") is None
-
-    async def test_title_generated_when_needed(self):
-        """title_needed=True면 title_chain이 호출되고 title이 채워진다."""
-        agent = _make_agent(title_text="수영장 안내")
         result = await agent.answer(_make_state(title_needed=True))
 
-        agent._title_chain.ainvoke.assert_called_once()
-        assert result["title"] == "수영장 안내"
+        assert "title" not in result
 
     async def test_answer_chain_receives_message_and_results(self):
         """answer_chain에 message, results_json, more_notice가 전달된다."""

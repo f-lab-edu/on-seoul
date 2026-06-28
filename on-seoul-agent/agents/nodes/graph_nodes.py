@@ -36,6 +36,7 @@ from agents.nodes.observability import ObservabilityNodes
 from agents.nodes.planning import PlanningNodes
 from agents.nodes.reference import ReferenceNodes
 from agents.nodes.retrieval import RetrievalNodes
+from agents.nodes.title import TitleNodes
 from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.triage_agent import TriageAgent
@@ -116,6 +117,9 @@ class GraphNodes:
         self._answer_nodes = AnswerNodes(answer=self._answer)
         self._correction = CorrectionNodes(redis=self._redis)
         self._observability = ObservabilityNodes()
+        # 제목 생성 — START 에서 intake 와 병렬 분기하는 독립 노드(fire-and-emit).
+        # 자체 전역 Redis 캐시를 위해 AgentGraph 가 보유한 redis 를 재사용한다.
+        self._title = TitleNodes(redis=self._redis)
 
     # ------------------------------------------------------------------
     # Intake 페이즈 위임 (reference_resolution + triage 병합)
@@ -126,6 +130,9 @@ class GraphNodes:
 
     async def working_set_refine_node(self, state: AgentState) -> dict[str, Any]:
         return await self._intake.working_set_refine_node(state)
+
+    async def generate_title_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._title.generate_title_node(state)
 
     def route_intake(self, state: AgentState) -> str:
         return self._intake.route_intake(state)

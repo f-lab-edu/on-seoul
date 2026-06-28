@@ -112,10 +112,3 @@ class ChatRequest(BaseModel):
         if isinstance(v, str) and v not in IntentType.__members__:
             return None
         return v
-
-
-class ChatResponse(BaseModel):
-    message_id: int
-    answer: str  # 에이전트가 생성한 자연어 답변 (AgentState.answer)
-    intent: IntentType | None = None  # 분류된 사용자 의도
-    title: str | None = None  # 대화 제목. title_needed=True인 첫 메시지에서만 채워진다.

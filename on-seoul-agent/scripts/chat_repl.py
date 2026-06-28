@@ -312,6 +312,8 @@ def _print_event(evt: SSEEvent) -> None:
         rationale = d.get("user_rationale")
         if rationale:
             print(_magenta(f"              근거: {rationale}"))
+    elif evt.event == "title":
+        print(_magenta(f"  · title  {d.get('title')!r}"))
     elif evt.event == "sources_update":
         srcs = d.get("sources") or []
         summary = ", ".join(
@@ -349,10 +351,8 @@ def _print_final_ux(final: SSEEvent | None) -> None:
 
     intent = d.get("intent")
     cache_hit = d.get("cache_hit")
-    title = d.get("title")
+    # title 은 별도 title 이벤트로 도착하므로 final meta 에서 표기하지 않는다.
     meta = f"intent={intent}  cache_hit={cache_hit}"
-    if title:
-        meta += f"  title={title!r}"
     print(_dim(f"\n[{meta}]"))
 
 

@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from agents.analytics_agent import AnalyticsAgent, _AnalyticsParams
 from agents.answer_agent import (
     AnswerAgent,
-    _TitleOutput,
     _compose,
     _FALLBACK_GUARDRAILS,
     _OUTPUT_RULES,
@@ -77,7 +76,6 @@ _FLAT_TO_NESTED: dict[str, tuple[str, str]] = {
     "hydrated_services": ("hydration", "hydrated_services"),
     # output
     "answer": ("output", "answer"),
-    "title": ("output", "title"),
     "service_cards": ("output", "service_cards"),
     # emit
     "decision_emitted": ("emit", "decision_emitted"),
@@ -401,20 +399,17 @@ def make_analytics_agent(
 
 def make_answer_agent(
     answer: str = "답변입니다.",
-    title: str | None = None,
 ) -> AnswerAgent:
-    """고정 answer/title 을 반환하는 AnswerAgent mock."""
+    """고정 answer 를 반환하는 AnswerAgent mock.
+
+    제목 생성은 독립 노드(agents/nodes/title.py)로 분리되어 AnswerAgent 는 더 이상
+    title chain 을 보유하지 않는다.
+    """
     agent = AnswerAgent.__new__(AnswerAgent)
 
     answer_chain = MagicMock()
     answer_chain.ainvoke = AsyncMock(return_value=answer)
     agent._answer_chain = answer_chain
-
-    title_chain = MagicMock()
-    title_chain.ainvoke = AsyncMock(
-        return_value=_TitleOutput(title=title or "수영장 안내")
-    )
-    agent._title_chain = title_chain
 
     # Tier 1 정적 프롬프트 캐시 — 실제 __init__과 동일한 값으로 초기화.
     agent._static_prompts = {

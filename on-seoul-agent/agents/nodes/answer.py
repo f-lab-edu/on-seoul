@@ -48,7 +48,6 @@ class AnswerNodes:
                 "plan": {"intent": IntentType.FALLBACK},
                 "output": {
                     "answer": answer,
-                    "title": new_state.get("title"),
                     "service_cards": new_state.get("service_cards"),
                 },
                 "node_path": ["direct_answer_node"],
@@ -191,7 +190,10 @@ class AnswerNodes:
             }
 
     async def answer_node(self, state: AgentState) -> dict[str, Any]:
-        """AnswerAgent.answer() 호출 — answer, title 설정."""
+        """AnswerAgent.answer() 호출 — answer, service_cards 설정.
+
+        제목 생성은 독립 병렬 노드(generate_title_node)로 분리됐다.
+        """
         if state.get("error") and state["output"].get("answer"):
             return {"node_path": ["answer_node"]}
 
@@ -219,7 +221,6 @@ class AnswerNodes:
             return {
                 "output": {
                     "answer": new_state.get("answer"),
-                    "title": new_state.get("title"),
                     "service_cards": new_state.get("service_cards"),
                 },
                 "node_path": ["answer_node"],

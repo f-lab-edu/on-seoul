@@ -3,7 +3,8 @@
 AgentState의 검색 결과(sql_results / vector_results / map_results)를 종합해
 사용자에게 전달할 최종 답변과 시설 카드 목록을 생성한다.
 
-title_needed=True 인 경우(첫 메시지) 대화 제목도 함께 생성한다.
+대화 제목 생성은 독립 병렬 노드(agents/nodes/title.py:generate_title_node)가
+별도 SSE 이벤트로 담당한다 — answer 경로는 더 이상 title 을 다루지 않는다.
 
 ## 프롬프트 조립 구조 (2-Tier)
 
@@ -22,7 +23,6 @@ import re
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel
 
 from agents.router_agent import SEOUL_DISTRICTS, build_context_block
 from llm.client import get_chat_model
@@ -611,17 +611,6 @@ def _more_notice(extra_count: int) -> str:
         )
     return "모든 결과를 표시했습니다. '외 N건' 류 표기를 절대 하지 마세요."
 
-# ---------------------------------------------------------------------------
-# 제목 생성 프롬프트
-# ---------------------------------------------------------------------------
-
-_TITLE_SYSTEM = """\
-사용자 질문을 보고 대화 제목을 10자 이내로 만드세요.
-특수문자나 이모지 없이 명사형으로 끝내세요.
-"""
-
-_TITLE_HUMAN = "사용자 질문: {message}"
-
 _FALLBACK_URL = "https://yeyak.seoul.go.kr"
 
 # AMBIGUOUS 폴백 안내문 — LLM 오류/빈 출력 시 사용자 응답이 비지 않도록 보장한다.
@@ -753,12 +742,8 @@ def _guarded_use_time(start, end):
     return start, end
 
 
-class _TitleOutput(BaseModel):
-    title: str
-
-
 class AnswerAgent:
-    """검색 결과 → 자연어 답변 + 시설 카드 + (선택) 제목 생성 에이전트.
+    """검색 결과 → 자연어 답변 + 시설 카드 생성 에이전트.
 
     ## 프롬프트 조립 전략
 
@@ -785,14 +770,6 @@ class AnswerAgent:
             ]
         )
         self._answer_chain = answer_prompt | llm | StrOutputParser()
-
-        title_prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", _TITLE_SYSTEM),
-                ("human", _TITLE_HUMAN),
-            ]
-        )
-        self._title_chain = title_prompt | llm.with_structured_output(_TitleOutput)
 
         # Tier 1: 조건부 절 없는 intent 시스템 프롬프트를 init 1회 조립 후 캐시.
         self._static_prompts: dict[str, str] = {
@@ -951,7 +928,7 @@ class AnswerAgent:
         return {**state, "answer": answer_text, "service_cards": []}
 
     async def answer(self, state: AgentState) -> AgentState:
-        """검색 결과를 종합해 answer(+title)을 채운 AgentState를 반환한다.
+        """검색 결과를 종합해 answer 를 채운 AgentState를 반환한다.
 
         intent별 분기:
         - ANALYTICS: analytics_results를 직접 읽어 LLM에 전달. service_cards=[].
@@ -1124,12 +1101,6 @@ class AnswerAgent:
                 "answer": answer_text,
                 "service_cards": [dict(card) for card in display],
             }
-
-        if state.get("title_needed"):
-            title_out: _TitleOutput = await self._title_chain.ainvoke(
-                {"message": message}
-            )
-            updates["title"] = title_out.title
 
         return {**state, **updates}
 

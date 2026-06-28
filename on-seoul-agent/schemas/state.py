@@ -130,10 +130,12 @@ class HydrationState(TypedDict, total=False):
 
 
 class OutputState(TypedDict, total=False):
-    """최종 답변 산출 — answer/describe/direct/ambiguous/explain/out_of_scope wholesale."""
+    """최종 답변 산출 — answer/describe/direct/ambiguous/explain/out_of_scope wholesale.
+
+    제목(title)은 별도 채널(generate_title_node)로 분리되어 이 산출에 포함되지 않는다.
+    """
 
     answer: str | None
-    title: str | None
     service_cards: "list[dict[str, Any]] | None"
 
 
@@ -187,7 +189,7 @@ class AgentState(TypedDict):
     prev_intent: IntentType | None
     # 직전 턴의 판단 근거(user_rationale). EXPLAIN action 이 소비한다.
     prev_reasoning: str | None
-    # 대화 워킹셋(P1) — 직전 검색 레시피. 입력 전용 중첩 채널(리듀서 없음).
+    # 대화 워킹셋 — 직전 검색 레시피. 입력 전용 중첩 채널(리듀서 없음).
     # 신규 채널 우선, 미전송 시 평면 슬롯(prev_entities/prev_intent/prev_reasoning)
     # 으로 폴백한다(routers/chat.py 조립). 첫 턴/구 클라이언트면 전부 None(하위호환).
     prev_working_set: "PrevWorkingSet | None"
@@ -205,7 +207,7 @@ class AgentState(TypedDict):
     forced_intent: IntentType | None
     # MAP 0건 재시도 시 확장 반경(m). 없으면 기본 반경(1000m) 적용.
     retry_radius_m: int | None
-    # ── 결과 품질 자각 패스(P2-B, 평면) ──
+    # ── 결과 품질 자각 패스 ──
     # pre_answer_gate_node 가 RETRIEVE 경로에서 산출. answer 가 소비해 톤/제안 조정(P3).
     # 쏠림/빈약 휴리스틱 결과(예: {"skew_field","skew_value","skew_ratio","thin"})
     # 또는 점검할 게 없거나 실패 시 None(현행 조립 그대로, 완전 하위호환). 리듀서 불필요.

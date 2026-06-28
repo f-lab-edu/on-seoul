@@ -88,6 +88,15 @@ def get_langfuse_handler() -> Any:
     return _HANDLER
 
 
+def get_langfuse_client() -> Any:
+    """enclosing span(Option 2) 진입·트레이스 I/O 설정에 쓰는 클라이언트 accessor.
+
+    비활성/실패 시 None. 그래프는 client 와 handler 가 모두 있을 때만 enclosing span
+    경로를 타고, 둘 중 하나라도 None 이면 기존(span/callback 미적용) 경로로 폴백한다.
+    """
+    return _CLIENT
+
+
 def shutdown_langfuse() -> None:
     """클라이언트 flush + shutdown. lifespan 종료 시 호출 (best-effort)."""
     global _CLIENT, _HANDLER
