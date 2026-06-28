@@ -117,6 +117,39 @@ describe("useChatStream", () => {
     expect(onInit).toHaveBeenCalledWith({ roomId: 42, created: true });
   });
 
+  it("title 이벤트(payload type)로 onTitle 콜백이 호출되고 진행으로 흡수되지 않는다", async () => {
+    const frames = [
+      `event:init\ndata:${JSON.stringify({ room_id: 7, created: true })}`,
+      // name 없는 data + payload type=title (이름 비의존 식별 검증)
+      `data:${JSON.stringify({ type: "title", room_id: 7, title: "도봉구 시설 안내", message_id: 9, query: "도봉구 시설" })}`,
+      `data:${JSON.stringify({ message_id: 9, answer: "답변", intent: null, cache_hit: false, service_cards: [] })}`,
+    ];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(rawFrames(frames), { status: 200 })),
+    );
+
+    const onTitle = vi.fn();
+    const { result } = renderHook(() => useChatStream({ onTitle }));
+    await act(async () => {
+      await result.current.send({ question: "hi" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.phase).toBe("done");
+    });
+    expect(onTitle).toHaveBeenCalledWith({
+      roomId: 7,
+      title: "도봉구 시설 안내",
+      messageId: 9,
+      query: "도봉구 시설",
+    });
+    // title은 trace(진행)로 새지 않는다.
+    if (result.current.state.phase !== "done") throw new Error("expected done");
+    expect(result.current.state.trace).toEqual([]);
+  });
+
   it("init로 roomId를 받은 뒤 retry는 같은 방으로 재전송된다(방 중복 생성 방지)", async () => {
     const bodies: string[] = [];
     // init만 오고 final 없이 종료 → '스트림 미완료' error. retry가 같은 roomId를 실어야 한다.

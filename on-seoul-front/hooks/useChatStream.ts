@@ -20,6 +20,14 @@ export interface ChatRoomInfo {
   created: boolean;
 }
 
+/** `title` 이벤트로 전달되는 생성된 대화 제목(신규 방 첫 턴, fail-open). */
+export interface ChatTitleInfo {
+  roomId: number;
+  title: string;
+  messageId: number;
+  query: string;
+}
+
 export type ChatStreamState =
   | { phase: "idle" }
   | { phase: "streaming"; content: string; trace: string[] }
@@ -35,6 +43,8 @@ export type ChatStreamState =
 export interface UseChatStreamOptions {
   /** `init` 이벤트 수신 시 1회 호출. 페이지가 roomId로 URL 전환/스레딩을 시작한다. */
   onInit?: (info: ChatRoomInfo) => void;
+  /** `title` 이벤트 수신 시 호출. 방 제목 표시/캐시 갱신에 사용(순서 무관, 미수신 가능). */
+  onTitle?: (info: ChatTitleInfo) => void;
 }
 
 export interface UseChatStreamResult {
@@ -64,6 +74,7 @@ function progressLabel(ev: Record<string, unknown>): string | null {
  *
  * 이벤트 처리(docs/chat-sse-event-catalog.md):
  * - `init` → onInit 콜백 (종료 아님).
+ * - `title` → onTitle 콜백 (종료 아님, 순서 무관, 미수신 가능).
  * - `final`(answer 있고 error 없음) → 종료(done).
  * - `workflow_error`(answer+error) → 종료(error, answer를 사용자 메시지로).
  * - `error`(API 레벨) → 종료(error).
@@ -74,9 +85,11 @@ export function useChatStream(options?: UseChatStreamOptions): UseChatStreamResu
   const abortRef = useRef<AbortController | null>(null);
   const lastInputRef = useRef<ChatStreamInput | null>(null);
   const mountedRef = useRef(true);
-  // onInit은 매 렌더 최신값을 ref로 들고 있어 send 재생성 없이 호출한다.
+  // onInit/onTitle은 매 렌더 최신값을 ref로 들고 있어 send 재생성 없이 호출한다.
   const onInitRef = useRef(options?.onInit);
   onInitRef.current = options?.onInit;
+  const onTitleRef = useRef(options?.onTitle);
+  onTitleRef.current = options?.onTitle;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -150,6 +163,20 @@ export function useChatStream(options?: UseChatStreamOptions): UseChatStreamResu
               // 직전 input에 roomId를 심어 retry()가 같은 방으로 재전송되게 한다(방 중복 생성 방지).
               if (lastInputRef.current) lastInputRef.current.roomId = ev.room_id;
               onInitRef.current?.({ roomId: ev.room_id, created: ev.created === true });
+            }
+            continue;
+          }
+
+          // title — 별도 제목 이벤트. final보다 먼저/나중 무관. 종료 아님.
+          // answer가 없어 진행으로 흡수되기 전에 먼저 분기한다.
+          if (ev.type === "title") {
+            if (typeof ev.room_id === "number" && typeof ev.title === "string") {
+              onTitleRef.current?.({
+                roomId: ev.room_id,
+                title: ev.title,
+                messageId: typeof ev.message_id === "number" ? ev.message_id : 0,
+                query: typeof ev.query === "string" ? ev.query : "",
+              });
             }
             continue;
           }
