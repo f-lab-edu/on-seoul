@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { AUTH_LOGOUT_EVENT } from "@/lib/api-client";
+import { AUTH_LOGOUT_EVENT, refreshOnce } from "@/lib/api-client";
 import { parseSseStream } from "@/lib/sse";
 import type { ServiceCard } from "@/types/sse-events";
 
@@ -69,7 +69,8 @@ function progressLabel(ev: Record<string, unknown>): string | null {
 /**
  * SSE 챗봇 스트림 훅. `fetch + ReadableStream` 패턴 사용 (EventSource 금지).
  * - AbortController로 unmount/명시적 취소를 다룬다.
- * - 401 응답 시 `auth:logout` 이벤트 발행 → useAuth가 /login으로 라우팅.
+ * - 401 응답 시 refresh 1회(api-client와 single-flight 공유) 후 재시도. refresh도 401이면
+ *   `auth:logout` 이벤트 발행 → useAuth가 /login으로 라우팅(절대규칙 A.4).
  * - 직전 input을 보관해 `retry()`에서 재사용한다 (스트림 단절 복구용, 절대규칙 B.4).
  *
  * 이벤트 처리(docs/chat-sse-event-catalog.md):
@@ -118,29 +119,52 @@ export function useChatStream(options?: UseChatStreamOptions): UseChatStreamResu
 
       try {
         // Route Handler 경유 필수 — 직접 백엔드 호출 금지 (CLAUDE.md A.2)
-        const res = await fetch("/api/chat/query", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "text/event-stream",
-          },
-          credentials: "include",
-          body: JSON.stringify(input),
-          signal: ctrl.signal,
-          cache: "no-store",
-        });
-
-        if (res.status === 401) {
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(new Event(AUTH_LOGOUT_EVENT));
-          }
-          safeSetState({
-            phase: "error",
-            message: "세션이 만료되었습니다. 다시 로그인해주세요.",
-            content,
-            trace: [...trace],
+        const doFetch = () =>
+          fetch("/api/chat/query", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "text/event-stream",
+            },
+            credentials: "include",
+            body: JSON.stringify(input),
+            signal: ctrl.signal,
+            cache: "no-store",
           });
-          return;
+
+        let res = await doFetch();
+
+        // access 토큰 만료 시 SSE도 REST와 동일하게 refresh 1회 후 재시도한다.
+        // (idle 후 첫 행동이 채팅이면 백그라운드 REST 갱신을 못 타 access가 만료돼 있을 수 있다.)
+        if (res.status === 401) {
+          try {
+            await refreshOnce();
+          } catch {
+            // refresh 자체가 401 — refreshOnce가 이미 auth:logout을 발행했다.
+            safeSetState({
+              phase: "error",
+              message: "세션이 만료되었습니다. 다시 로그인해주세요.",
+              content,
+              trace: [...trace],
+            });
+            return;
+          }
+          // refresh 도중 취소/언마운트되었으면 불필요한 재요청을 보내지 않는다.
+          if (ctrl.signal.aborted) return;
+          res = await doFetch();
+          if (res.status === 401) {
+            // 갱신 직후에도 401 — 세션 복구 불가. 로그아웃 처리(무한 재시도 금지, A.4).
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new Event(AUTH_LOGOUT_EVENT));
+            }
+            safeSetState({
+              phase: "error",
+              message: "세션이 만료되었습니다. 다시 로그인해주세요.",
+              content,
+              trace: [...trace],
+            });
+            return;
+          }
         }
 
         if (!res.ok || !res.body) {
