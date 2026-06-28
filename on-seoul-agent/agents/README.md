@@ -184,6 +184,8 @@ LangGraph는 데이터(상태)와 제어(엣지)를 분리합니다. 노드는 `
 
 빈 검색 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 hydrated 0건이면 답변 생성 전에 곧장 재시도로 보냅니다(0건 게이트). `forced_intent`는 `router_node`가 honor 후 즉시 None으로 소비(1회성)하므로 무한 전환이 없고, 재시도는 `retry_count` 캡으로 최대 1회(`recursion_limit=50`)입니다. 재시도 시 `retry_relaxed=True`로 `AnswerAgent`가 완화 사실을 답변에 명시합니다.
 
+`pre_answer_gate_node`는 카드형 턴(SQL/VECTOR 비-identification)에서 결정적 카드 큐레이션도 수행합니다(내부 순서: 0건 게이트 → `_curate_display` → `result_quality`). `_curate_display`는 LLM/DB/추가검색 없이 의도 적합도(area_name,max_class_name,payment_type,예약가능 상태)로 정렬해 `curated_display`(상위 5건)/`curated_extra_count`(잔여)/`curated_alt_count`(대안 수)를 상태에 적재합니다. 마감 항목은 제외하지 않고 강등만 하며, 완화로 드롭된 의도 제약은 `relaxed_values`로 복원합니다. `result_quality`(빈약/쏠림)는 큐레이션된 display 기준으로 산출되어 카드와 정합합니다. `AnswerAgent`(카드형 경로)는 이 슬롯들을 읽어 렌더링만 하므로(자체 슬라이스/extra_count 계산 없음) 답변 문구=카드=display 개수, "외 N건"=curated 잔여가 구조적으로 일치합니다.
+
 ---
 
 ### triage_agent.py — 행동(action) 결정

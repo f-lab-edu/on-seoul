@@ -6,6 +6,7 @@ from typing import Any
 from agents import _emit
 from agents._helpers import assess_result_quality, reservation_guide_already_shown
 from agents._ondata_gateway import OnDataReader, default_reader
+from agents.answer_agent import _DISPLAY_LIMIT, _curate_display, _normalize_card_row
 from agents.detail_excerpt import extract_operational_keywords, prepare_detail_excerpt
 from agents._search_channel_utils import _to_hits
 from agents.analytics_agent import AnalyticsAgent
@@ -22,7 +23,7 @@ from schemas.search import (
     SearchChannel,
     SearchKind,
 )
-from schemas.state import ActionType, AgentState
+from schemas.state import ActionType, AgentState, IntentType
 from tools.map_search import DEFAULT_RADIUS_M as _MAP_DEFAULT_RADIUS_M
 from tools.map_search import TOP_K as _MAP_TOP_K
 from tools.sql_search import TOP_K as _SQL_TOP_K
@@ -126,27 +127,91 @@ class RetrievalNodes:
         """
         result_quality: dict[str, Any] | None = None
         reservation_shown = False
+        curated_display: list[dict[str, Any]] | None = None
+        curated_extra_count: int | None = None
+        curated_alt_count: int | None = None
         if self._is_retrieve_path(state):
             try:
                 rows = state["hydration"].get("hydrated_services") or []
+                # B-2 카드 큐레이션 — 카드형 턴에서만, result_quality *이전*에 실행한다
+                # (8-4 순서). curated/display 산출 후 그 기준으로 품질을 점검해 정합을
+                # 맞춘다. 비카드형/0건은 큐레이션 스킵(슬롯 None 유지).
+                quality_rows = rows
+                if self._is_card_turn(state) and rows:
+                    normalized = [_normalize_card_row(r) for r in rows]
+                    intended = self._intended_constraints(state)
+                    curated, alt_count = _curate_display(
+                        normalized,
+                        intended,
+                        relaxed=bool(state.get("retry_relaxed")),
+                        relaxed_filters=state.get("relaxed_filters"),
+                    )
+                    curated_display = curated[:_DISPLAY_LIMIT]
+                    curated_extra_count = max(0, len(curated) - _DISPLAY_LIMIT)
+                    curated_alt_count = alt_count
+                    # result_quality 는 큐레이션된 display 기준으로 산출(8-4 정합).
+                    quality_rows = curated_display
                 result_quality = assess_result_quality(
-                    rows, area_filter=state["filters"].get("area_name")
+                    quality_rows, area_filter=state["filters"].get("area_name")
                 )
                 reservation_shown = reservation_guide_already_shown(
                     state.get("history")
                 )
             except Exception:
                 # best-effort: 점검 실패가 답변을 막지 않는다(현행 조립으로 폴백).
-                logger.exception("pre_answer_gate 결과 품질 점검 실패")
+                logger.exception("pre_answer_gate 결과 품질/큐레이션 점검 실패")
                 result_quality = None
+                curated_display = None
+                curated_extra_count = None
+                curated_alt_count = None
 
         detail_excerpt = await self._prepare_operational_detail(state)
         return {
             "result_quality": result_quality,
             "reservation_guide_shown": reservation_shown,
+            "curated_display": curated_display,
+            "curated_extra_count": curated_extra_count,
+            "curated_alt_count": curated_alt_count,
             "detail_excerpt": detail_excerpt,
             "node_path": ["pre_answer_gate"],
         }
+
+    @staticmethod
+    def _is_card_turn(state: AgentState) -> bool:
+        """카드 목록형 턴인지 판정한다(SQL/VECTOR 비-identification).
+
+        큐레이션 대상은 answer 의 카드형(Tier 2) 경로와 정확히 일치해야 한다 —
+        identification(상세형)/attribute_gap/operational_detail/MAP/ANALYTICS/FALLBACK 은
+        목록 나열형이 아니라 제외한다. 분기 신호(intent/vector_sub_intent)는 answer 가
+        쓰는 것과 동일하다(중복 정의 아님, 상류 평가).
+        """
+        intent = state["plan"].get("intent")
+        if intent not in (IntentType.SQL_SEARCH, IntentType.VECTOR_SEARCH):
+            return False
+        sub_intent = state["plan"].get("vector_sub_intent")
+        # identification(상세)·attribute_gap·operational_detail 은 카드 목록형 아님.
+        if sub_intent in ("identification", "attribute_gap", "operational_detail"):
+            return False
+        return True
+
+    @staticmethod
+    def _intended_constraints(state: AgentState) -> dict[str, str | None]:
+        """큐레이션 적합도 정렬용 의도 제약을 복원한다(5.1).
+
+        effective(완화 후) filters 채널의 비-None 값에, 완화로 드롭된 원래 값
+        (relaxed_values)을 합쳐 *원 요청* 제약을 복원한다. 완화 후 applied 가 비어도
+        relaxed_values 로 area_name/max_class_name/payment_type 를 되살린다.
+        """
+        intended: dict[str, str | None] = {}
+        filters = state.get("filters") or {}
+        for key in ("area_name", "max_class_name", "payment_type"):
+            value = filters.get(key)
+            if value:
+                intended[key] = value
+        for key, value in (state.get("relaxed_values") or {}).items():
+            if value and key not in intended:
+                intended[key] = value
+        return intended
 
     async def _prepare_operational_detail(self, state: AgentState) -> str | None:
         """operational_detail turn 의 focal detail_content fetch + 발췌(best-effort).

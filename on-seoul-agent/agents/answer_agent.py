@@ -79,11 +79,14 @@ _STRUCT_CARD_LIST = """\
        · "딱 그 장소는 아니어도, 관련해서 예약할 수 있는 시설들을 찾아봤어요."
    - 결과가 0건이면 "죄송합니다, 조건에 맞는 시설을 찾지 못했습니다." 만 출력.
 
-2) 시설명 목록 (전달된 결과의 시설명만 한 줄씩 나열. 상세 줄은 출력 금지.
+2) 시설명 목록 — 전달된 결과(JSON 배열)를 **순서대로 빠짐없이 1:1로** 나열하세요.
+   전달된 항목 중 일부를 임의로 제외하거나 생략하지 마세요(부적합해 보이는 항목도
+   이미 큐레이션 단계에서 적합도 순으로 정렬·처리됐습니다 — 당신이 다시 거르지 않습니다).
+   전달된 개수만큼 그대로 나열합니다. 상세 줄은 출력 금지.
    미표시 건수 안내는 입력의 "미표시 건수 안내" 문장 지시를 그대로 따르세요.
    해당 문장이 "외 N건"을 표기하라고 하면 목록 끝 줄에 표기하고,
    표기하지 말라고 하면 "외 N건" 류 표기를 절대 하지 마세요.
-   입력에 숫자가 없으면 임의로 "외 0건" 같은 표기를 만들지 마세요)
+   입력에 숫자가 없으면 임의로 "외 0건" 같은 표기를 만들지 마세요.
 
 3) 마무리 안내 (아래 _CLAUSE_RESERVATION_GUIDE / _CLAUSE_REFINE_HINT 절 참조)
 
@@ -447,6 +450,15 @@ _CLAUSE_THIN_CAVEAT = """\
 부족함을 사과하듯 단정하지 말고, 조건을 넓히거나 다른 지역도 찾아볼 수 있다고
 도움을 이어가는 톤을 유지하세요."""
 
+# 딱맞음/대안 구분 절(혼합-A) — 큐레이션이 부족분을 부적합 항목으로 채운 경우.
+# 카드는 결정적으로 적합도 정렬됐고(딱 맞는 항목 우선), 그 뒤에 "비슷한" 대안이 따른다.
+# 목록을 두 묶음으로 정직하게 구분하도록 지시한다(완화 안내와 겹치면 호출부가 생략).
+_CLAUSE_ALT_LABEL = """\
+전달된 결과에는 요청 조건에 딱 맞는 시설과, 조건을 다 만족하진 않지만 비슷한 대안
+시설이 함께 들어 있습니다(이미 적합한 순서로 정렬돼 있습니다). 목록을 안내할 때
+딱 맞는 시설을 먼저 안내하고, 그 뒤에 "비슷한 시설로는" 같은 표현으로 대안임을
+자연스럽게 구분해 주세요. 대안을 딱 맞는 결과인 것처럼 섞어 안내하지 마세요."""
+
 # 필터 키 → 사용자 노출용 한국어 라벨. 완화 안내 문구를 동적으로 구성할 때 사용한다.
 _FILTER_LABELS: dict[str, str] = {
     "payment_type": "요금 조건",
@@ -514,6 +526,7 @@ def _build_card_system(
     relaxed_filters: list[str] | None = None,
     result_quality: dict | None = None,
     reservation_guide_shown: bool = False,
+    alt_count: int = 0,
 ) -> str:
     """카드형(SQL/VECTOR) intent의 시스템 프롬프트를 런타임에 조립한다.
 
@@ -560,6 +573,10 @@ def _build_card_system(
     relaxed_added = bool(retry_relaxed and results)
     if relaxed_added:
         blocks.append(_relaxed_notice(relaxed_filters))
+    # 딱맞음/대안 라벨 절(혼합-A) — 상위 카드 중 대안이 섞였을 때만. 완화 안내가 이미
+    # "조건을 넓힌 결과"임을 고지하면(relaxed_added) 중복이라 생략(R-2 길이/혼선 관리).
+    if alt_count > 0 and results and not relaxed_added:
+        blocks.append(_CLAUSE_ALT_LABEL)
     # 빈약 캐비엇 — 완화 안내와 겹치면(둘 다 "조건을 좁혀보라" 취지) 생략해 중복/길이 관리.
     if is_thin and results and not relaxed_added:
         blocks.append(_CLAUSE_THIN_CAVEAT)
@@ -623,6 +640,119 @@ _CLARIFY_FALLBACK = (
 # 카드 상세 표시 상한. 이 값 초과분의 건수(extra_count)만 숫자로 LLM에 전달된다.
 # 클래스 밖 모듈 상수로 두어 인스턴스 오버라이드로 프롬프트와 불일치하는 사고를 방지한다.
 _DISPLAY_LIMIT: int = 5
+
+# 예약 가능 상태 우선순위 — 작을수록 상단(접수중 > 안내중 > 마감류). 화이트리스트
+# (router_agent._ALLOWED_SERVICE_STATUSES)의 정규값 기준. 미상/그 외는 마감과 동급으로
+# 후순위 처리한다(과강등 방지 위해 정규값만 별도 가점).
+_STATUS_RANK: dict[str, int] = {
+    "접수중": 0,
+    "안내중": 1,
+    "예약일시중지": 2,
+    "예약마감": 3,
+    "접수종료": 3,
+}
+_STATUS_RANK_DEFAULT = 3
+
+# 큐레이션 적합도 비교 대상 의도 제약 키(화이트리스트 정규값으로 비교한다).
+_CURATE_INTENDED_KEYS: tuple[str, ...] = ("area_name", "max_class_name", "payment_type")
+
+
+def _payment_matches(row_value: object, intended: str) -> bool:
+    """큐레이션 payment_type 매칭을 sql_search 의미와 정렬한다(단일 출처).
+
+    sql_search 는 "유료" 요청을 LIKE '유료%' 접두 매칭으로 두 유료 변형
+    ("유료","유료(요금안내문의)")을 모두 포섭하고, "무료" 는 정확 일치한다
+    (tools/sql_search.py:108-115). 큐레이션 row 의 payment_type 은 정규화되지 않은
+    원천 DB 값이므로(_normalize_card_row 가 그대로 통과), 동일 규칙으로 비교해야
+    정당한 유료 결과를 "대안"으로 오라벨하지 않는다.
+
+    Args:
+        row_value: row 의 원천 payment_type(정규화 전 값일 수 있음).
+        intended: 사용자가 요청한 정규값("유료"/"무료"). None 은 호출 전 처리.
+    """
+    if intended == "유료":
+        return str(row_value or "").startswith("유료")
+    return row_value == intended
+
+
+def _curate_score(row: dict, intended: dict[str, str | None]) -> tuple[int, ...]:
+    """단일 결과의 적합도 정렬 키(작을수록 상단)를 산출한다(결정적, 무비용).
+
+    5.2 우선순위 — area_name > max_class_name > payment_type(무료 요청 시 무료 우선)
+    > 예약 가능 상태(접수중 > 안내중 > 마감류). 각 차원은 만족=0/불만족=1 로 점수화해
+    사전식(lexicographic) 비교한다. 마지막 차원은 _STATUS_RANK 정수다.
+
+    화이트리스트 정규값(area_name/max_class_name/payment_type)으로만 비교해 표기 변형에
+    의한 과강등(R-1)을 피한다. intended 에 없는 차원은 만족(0)으로 둬 영향 없음.
+    """
+    score: list[int] = []
+    for key in _CURATE_INTENDED_KEYS:
+        want = intended.get(key)
+        if want is None:
+            score.append(0)
+            continue
+        if key == "payment_type":
+            score.append(0 if _payment_matches(row.get(key), want) else 1)
+        else:
+            score.append(0 if row.get(key) == want else 1)
+    score.append(_STATUS_RANK.get(row.get("service_status"), _STATUS_RANK_DEFAULT))
+    return tuple(score)
+
+
+def _is_exact_match(row: dict, intended: dict[str, str | None]) -> bool:
+    """결과가 의도 제약(area/category/payment)을 모두 만족하면 True(딱맞음).
+
+    상태(service_status)는 딱맞음 판정에 넣지 않는다 — 마감 항목도 의도 제약을
+    만족하면 "딱 맞는" 시설이고, 상태는 정렬-강등으로만 다룬다(8-1).
+    """
+    for key in _CURATE_INTENDED_KEYS:
+        want = intended.get(key)
+        if want is None:
+            continue
+        if key == "payment_type":
+            if not _payment_matches(row.get(key), want):
+                return False
+        elif row.get(key) != want:
+            return False
+    return True
+
+
+def _curate_display(
+    all_results: list[dict],
+    intended: dict[str, str | None],
+    *,
+    relaxed: bool,
+    relaxed_filters: list[str] | None,
+) -> tuple[list[dict], int]:
+    """카드형 결과를 의도 적합도로 결정적 정렬한다(B-1). LLM/DB/추가검색 없음.
+
+    하드 제외 없이 항상 적합도 정렬 후 전체를 반환한다(혼합-A 8-2): 마감 항목도
+    제외하지 않고 강등만(8-1), 부족분은 이미 가져온 결과(top_k)로 채워진다. 호출자가
+    `[:_DISPLAY_LIMIT]` 슬라이스를 취한다.
+
+    동점(동일 적합도)은 Python sort 가 stable 하므로 입력 순서(RRF/_focal_first 또는
+    SQL 순서)를 보존한다.
+
+    Args:
+        all_results: 정규화된 결과 목록(area_name/max_class_name/payment_type/
+            service_status 키 접근).
+        intended: 사용자가 원래 요청한 제약(완화로 드롭된 값 복원 포함). 호출자가
+            applied(state["filters"]) ∪ relaxed_values 로 조립해 전달한다.
+        relaxed: 완화 재시도 결과인지(현재 시그니처 보존용 — 정렬은 비완화/완화 단일
+            규칙이라 동작에 쓰지 않으나, 호출 계약/향후 분기 여지를 위해 받는다).
+        relaxed_filters: 완화로 드롭된 필터 키(동일 — 시그니처 보존).
+
+    Returns:
+        (curated, alt_count):
+          - curated: 적합도 내림차순 정렬된 전체 결과.
+          - alt_count: 상위 _DISPLAY_LIMIT 건 중 의도 제약을 모두 만족하지 *못한*
+            ("대안") 항목 수. >0 이면 answer 가 "딱맞음/대안" 라벨 절을 추가한다.
+    """
+    del relaxed, relaxed_filters  # 단일 규칙 — 현재 정렬 동작에는 미사용(계약 보존).
+    curated = sorted(all_results, key=lambda r: _curate_score(r, intended))
+    top = curated[:_DISPLAY_LIMIT]
+    alt_count = sum(1 for r in top if not _is_exact_match(r, intended))
+    return curated, alt_count
 
 
 def _group_by_place_name(
@@ -740,6 +870,42 @@ def _guarded_use_time(start, end):
     if ts is None or te is None or ts >= te:
         return None, None
     return start, end
+
+
+def _normalize_card_row(row: dict) -> dict:
+    """카드 렌더링용 필드 추출 + fallback URL/렌더 가드 적용(모듈 레벨 단일 출처).
+
+    AnswerAgent._normalize 와 pre_answer_gate 큐레이션이 동일 정규화를 공유하도록
+    클래스 밖으로 끌어냈다. 동작/필드 카탈로그는 AnswerAgent._normalize docstring 참조.
+    """
+    # service_url 스킴 가드: http(s):// 로 시작하지 않으면 fallback URL 로 강등.
+    url = row.get("service_url")
+    if not url or not str(url).startswith(("http://", "https://")):
+        url = _FALLBACK_URL
+
+    use_start, use_end = _guarded_use_time(
+        row.get("use_time_start"), row.get("use_time_end")
+    )
+
+    return {
+        "service_id": row.get("service_id"),
+        "service_name": row.get("service_name"),
+        "area_name": row.get("area_name"),
+        "place_name": row.get("place_name"),
+        "max_class_name": row.get("max_class_name"),
+        "min_class_name": row.get("min_class_name"),
+        "service_status": row.get("service_status"),
+        "payment_type": row.get("payment_type"),
+        "target_info": row.get("target_info"),
+        "receipt_start_dt": _iso_or_none(row.get("receipt_start_dt")),
+        "receipt_end_dt": _iso_or_none(row.get("receipt_end_dt")),
+        "use_time_start": _iso_or_none(use_start),
+        "use_time_end": _iso_or_none(use_end),
+        "cancel_std_type": row.get("cancel_std_type"),
+        "cancel_std_days": row.get("cancel_std_days"),
+        "tel_no": _guarded_tel_no(row.get("tel_no")),
+        "service_url": url,
+    }
 
 
 class AnswerAgent:
@@ -1013,8 +1179,23 @@ class AnswerAgent:
             if (is_detail or is_attribute_gap or is_operational_detail) and all_results:
                 all_results = _focal_first(all_results)
 
-            display = all_results[:_DISPLAY_LIMIT]
-            extra_count = max(0, len(all_results) - _DISPLAY_LIMIT)
+            # 카드형(Tier 2) 턴은 pre_answer_gate 가 결정적으로 큐레이션한 display/
+            # extra_count 를 그대로 렌더링한다(B-3, 8-4 상류화). answer 는 슬라이스/
+            # extra_count 계산을 하지 않는다(생성 전용). 상세형/attribute_gap/MAP 은
+            # 큐레이션 비대상이라 슬롯이 None → 기존 슬라이스 경로로 폴백한다(동작 불변).
+            is_card_turn = not (
+                is_detail
+                or is_attribute_gap
+                or is_operational_detail
+                or intent == IntentType.MAP
+            )
+            curated_display = state.get("curated_display")
+            if is_card_turn and curated_display is not None:
+                display = curated_display
+                extra_count = state.get("curated_extra_count") or 0
+            else:
+                display = all_results[:_DISPLAY_LIMIT]
+                extra_count = max(0, len(all_results) - _DISPLAY_LIMIT)
             results_json = json.dumps(display, ensure_ascii=False, default=str)
 
             if is_operational_detail:
@@ -1072,6 +1253,7 @@ class AnswerAgent:
                     reservation_guide_shown=bool(
                         state.get("reservation_guide_shown")
                     ),
+                    alt_count=state.get("curated_alt_count") or 0,
                 )
 
             # 상세형/attribute_gap 은 평면 "외 N건" 꼬리표 지시를 주입하지 않는다
@@ -1174,39 +1356,8 @@ class AnswerAgent:
 
         extractor 메타데이터(fee/operating_hours/cancellation 등)는 임베딩 전용이라
         여기서 조인하지 않는다(결정 A).
+
+        구현은 모듈 레벨 _normalize_card_row 로 위임한다(pre_answer_gate 큐레이션과
+        동일 정규화 공유 — 단일 출처).
         """
-        # service_url 스킴 가드: http(s):// 로 시작하지 않으면(빈 값/None 포함)
-        # fallback URL 로 강등한다. DB 원본을 무검증 통과시키면 프론트가 href 에
-        # 그대로 링크하므로 javascript:/data: 등 위험 스킴을 차단해야 한다.
-        url = row.get("service_url")
-        if not url or not str(url).startswith(("http://", "https://")):
-            url = _FALLBACK_URL
-
-        # use_time / tel_no 렌더 가드 (실DB 검증 후속 보정). 가드 근거·임계는
-        # _guarded_use_time / _guarded_tel_no docstring 참조. raw 값으로 가드한 뒤
-        # 살아남은 use_time 만 _iso_or_none 으로 직렬화한다.
-        use_start, use_end = _guarded_use_time(
-            row.get("use_time_start"), row.get("use_time_end")
-        )
-
-        return {
-            "service_id": row.get("service_id"),
-            "service_name": row.get("service_name"),
-            "area_name": row.get("area_name"),
-            "place_name": row.get("place_name"),
-            "max_class_name": row.get("max_class_name"),
-            "min_class_name": row.get("min_class_name"),
-            "service_status": row.get("service_status"),
-            "payment_type": row.get("payment_type"),
-            "target_info": row.get("target_info"),
-            "receipt_start_dt": _iso_or_none(row.get("receipt_start_dt")),
-            "receipt_end_dt": _iso_or_none(row.get("receipt_end_dt")),
-            # 신규 답변 가능 카탈로그(결정 A) — use_time 은 TIME 이라 isoformat 보정.
-            # 가드 통과분만 직렬화(오염값은 위에서 None 으로 omit 됨).
-            "use_time_start": _iso_or_none(use_start),
-            "use_time_end": _iso_or_none(use_end),
-            "cancel_std_type": row.get("cancel_std_type"),
-            "cancel_std_days": row.get("cancel_std_days"),
-            "tel_no": _guarded_tel_no(row.get("tel_no")),
-            "service_url": url,
-        }
+        return _normalize_card_row(row)

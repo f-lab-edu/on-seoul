@@ -203,6 +203,10 @@ class AgentState(TypedDict):
     # 완화 재시도 시 retry_prep_node 가 드롭한 필터 키 목록(M1-b).
     # AnswerAgent 가 사용자 라벨로 변환해 "무엇을 완화했는지" 답변에 명시한다.
     relaxed_filters: list[str] | None
+    # 완화로 드롭된 필터의 *원래 값*(키→값). 큐레이션이 의도 제약을 복원할 때 쓴다 —
+    # filters 채널은 드롭 시 값을 None 으로 비우므로 원 요청값은 여기서만 복원 가능하다.
+    # retry_prep_node 가 드롭 시점에 적재한다. 완화가 없으면 None(하위호환). 리듀서 불필요.
+    relaxed_values: "dict[str, str | None] | None"
     # 방향성 재시도: retry_prep_node 가 다음 순회의 intent 를 강제할 때 세팅(1회성).
     forced_intent: IntentType | None
     # MAP 0건 재시도 시 확장 반경(m). 없으면 기본 반경(1000m) 적용.
@@ -221,6 +225,16 @@ class AgentState(TypedDict):
     # 부재/raw 없음/길이<게이트 → None(= P4 attribute_gap interim 리다이렉트 폴백 신호).
     # raw 블롭은 절대 싣지 않는다(focal 단건 발췌 완료 문자열만). 리듀서 불필요.
     detail_excerpt: str | None
+    # ── 카드 큐레이션(B, 평면) ──
+    # pre_answer_gate_node 가 카드형 턴에서 _curate_display 로 산출. answer 는 슬라이스·
+    # extra_count 계산을 하지 않고 이 슬롯을 읽어 렌더링만 한다(생성 전용 유지).
+    # curated_display: 카드 단일 출처(정규화·적합도 정렬 완료, 상위 _DISPLAY_LIMIT 건).
+    # curated_extra_count: curated 잔여(= max(0, len(curated) - _DISPLAY_LIMIT)).
+    # curated_alt_count: display 상위 건 중 의도 제약 불만족("대안") 항목 수(>0 시 라벨).
+    # 카드형이 아니거나 결과 없음/예외면 None(answer 가 현행 슬라이스 경로로 폴백). 리듀서 불필요.
+    curated_display: "list[dict[str, Any]] | None"
+    curated_extra_count: int | None
+    curated_alt_count: int | None
     # ── 오류/캐시 (평면) ──
     error: str | None  # 오류 메시지 (있을 경우)
     cache_hit: bool  # cache_check_node 결과 (기본값 False)

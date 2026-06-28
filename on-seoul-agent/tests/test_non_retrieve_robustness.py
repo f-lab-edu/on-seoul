@@ -243,9 +243,11 @@ class TestGapOosHomomorphismAdversarial:
     async def test_retry_prep_domain_outside_no_attribute_gap_relax(self):
         """domain_outside 는 동형 그룹 밖 — attribute_gap M1 완화 분기를 타지 않는다.
 
-        gap 분기는 0건 유발 필터만 부분 드롭 + relaxed_filters 기록 + 검색 컨텍스트
-        보존(plan 미리셋)이다. domain_outside 는 is_gap_oos=False 라 이 분기를 건너뛰고
-        케이스 C(전체 리셋)로 떨어져 relaxed_filters 미기록 + plan refined_query 리셋된다.
+        gap 분기는 0건 유발 필터만 *부분* 드롭 + 검색 컨텍스트 보존(plan 미리셋)이다.
+        domain_outside 는 is_gap_oos=False 라 이 분기를 건너뛰고 케이스 C(전체 리셋)로
+        떨어져 모든 필터 드롭 + plan refined_query 리셋된다. (B: 케이스 C 도 완화 경로라
+        relaxed_filters/relaxed_values 를 기록하지만 — 큐레이션 의도 복원용 — gap 분기와의
+        구분 신호는 "부분 드롭+plan 보존" vs "전체 드롭+plan 리셋" 이다.)
         """
         nodes = self._nodes()
         state = _state(
@@ -257,10 +259,17 @@ class TestGapOosHomomorphismAdversarial:
         )
         with patch("agents._redis_gateway.release_answer_lock", AsyncMock()):
             update = await nodes.retry_prep_node(state)
-        # gap 전용 산출물(relaxed_filters 기록 + 부분 드롭)이 없다 — 케이스 C 로 떨어진다.
-        assert "relaxed_filters" not in update
+        # 케이스 C 는 전체 필터 드롭(gap 의 부분 드롭과 구분).
+        assert update["filters"] == {
+            "max_class_name": None,
+            "area_name": None,
+            "service_status": None,
+            "payment_type": None,
+        }
         # 케이스 C 는 plan.refined_query 를 리셋한다(gap 분기는 plan 미터치).
         assert update["plan"] == {"refined_query": None}
+        # 완화 경로라 의도 복원용 스냅샷을 남긴다(드롭 직전 원래 값).
+        assert update["relaxed_values"] == {"payment_type": "무료", "area_name": "강남구"}
 
     # ── 분기점 ⑤: self_correction_edge 종료 안전성 (correction.py) ──
     def test_termination_operational_detail_2nd_pass_ends_normal(self):

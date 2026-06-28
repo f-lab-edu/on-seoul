@@ -124,6 +124,14 @@ class CorrectionNodes:
             "service_status": None,
             "payment_type": None,
         }
+        # 큐레이션 의도 복원용 — 전체 드롭 직전 원래(비-None) 필터값 스냅샷.
+        # filters 채널이 None 으로 비워진 뒤에도 pre_answer_gate 가 원 요청 제약을
+        # 복원해 적합도 정렬할 수 있게 한다(케이스 A/C 완화 경로).
+        _relaxed_snapshot = {
+            f: state["filters"].get(f)
+            for f in _filters_clear
+            if state["filters"].get(f)
+        }
 
         # 케이스 M1(attribute_gap): OUT_OF_SCOPE/attribute_gap 의 vector 검색 0건.
         # 케이스 C(전체 리셋)와 달리 검색 컨텍스트를 보존한다:
@@ -146,6 +154,8 @@ class CorrectionNodes:
                     # 드롭 대상 필터만 None 으로(머지) — max_class_name 등 미드롭 항목은 유지.
                     "filters": {f: None for f in dropped},
                     "relaxed_filters": dropped,
+                    # 큐레이션 의도 복원용 — 드롭 *직전* 원래 값을 보존한다(filters 는 None 됨).
+                    "relaxed_values": {f: state["filters"].get(f) for f in dropped},
                 }
             )
             return update
@@ -165,6 +175,8 @@ class CorrectionNodes:
                     "plan": {"refined_query": None},
                     # 전환 시 정형 필터는 유지하지 않는다(전환 경로가 자체 정제, 머지).
                     "filters": dict(_filters_clear),
+                    "relaxed_filters": list(_relaxed_snapshot.keys()) or None,
+                    "relaxed_values": _relaxed_snapshot or None,
                 }
             )
             return update
@@ -201,6 +213,8 @@ class CorrectionNodes:
                 "hydration": {},
                 "plan": {"refined_query": None},
                 "filters": dict(_filters_clear),
+                "relaxed_filters": list(_relaxed_snapshot.keys()) or None,
+                "relaxed_values": _relaxed_snapshot or None,
             }
         )
         return update
