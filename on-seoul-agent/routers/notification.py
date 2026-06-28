@@ -18,6 +18,7 @@ from datetime import date
 
 from fastapi import APIRouter, HTTPException
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from opentelemetry import trace
 from pydantic import BaseModel
 
 from llm.client import get_chat_model
@@ -33,6 +34,9 @@ from schemas.notification import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 모듈 tracer — OTel 비활성 시 no-op tracer 를 반환한다.
+_tracer = trace.get_tracer(__name__)
 
 router = APIRouter(prefix="/notification", tags=["notification"])
 
@@ -146,31 +150,36 @@ async def create_template(
     - LLM 실패 degrade: 모든 예외를 503으로 반환.
     """
     service_ids = ",".join(g.service_id for g in req.services)
-    try:
-        result: _HighlightResponse = await asyncio.wait_for(
-            _invoke_llm(req),
-            timeout=_LLM_TIMEOUT_SECONDS,
-        )
-    except TimeoutError:
-        logger.warning(
-            "알림 템플릿 LLM 타임아웃 (%.1fs 초과). service_ids=%s",
-            _LLM_TIMEOUT_SECONDS,
-            service_ids,
-        )
-        raise HTTPException(status_code=503, detail=_503_DETAIL)
-    except Exception:
-        logger.exception("알림 템플릿 LLM 호출 실패. service_ids=%s", service_ids)
-        raise HTTPException(status_code=503, detail=_503_DETAIL)
+    # 인라인 핸들러라 LLM span 은 서버 span 컨텍스트 안에서 이미 연결된다(단절 없음).
+    # 명시 span 은 LLM 호출을 의미있는 노드로 묶고 SigNoz 필터용 속성을 부여하기 위함.
+    # 비활성 시 start_as_current_span/set_attribute 는 모두 no-op 이라 동작 불변.
+    with _tracer.start_as_current_span("notification.template") as span:
+        span.set_attribute("notification.service_count", len(req.services))
+        try:
+            result: _HighlightResponse = await asyncio.wait_for(
+                _invoke_llm(req),
+                timeout=_LLM_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning(
+                "알림 템플릿 LLM 타임아웃 (%.1fs 초과). service_ids=%s",
+                _LLM_TIMEOUT_SECONDS,
+                service_ids,
+            )
+            raise HTTPException(status_code=503, detail=_503_DETAIL)
+        except Exception:
+            logger.exception("알림 템플릿 LLM 호출 실패. service_ids=%s", service_ids)
+            raise HTTPException(status_code=503, detail=_503_DETAIL)
 
-    if not result.summary.strip():
-        logger.warning(
-            "알림 템플릿 LLM이 빈 summary 반환. service_ids=%s summary=%r",
-            service_ids,
-            result.summary,
-        )
-        raise HTTPException(status_code=503, detail=_503_DETAIL)
+        if not result.summary.strip():
+            logger.warning(
+                "알림 템플릿 LLM이 빈 summary 반환. service_ids=%s summary=%r",
+                service_ids,
+                result.summary,
+            )
+            raise HTTPException(status_code=503, detail=_503_DETAIL)
 
-    return NotificationTemplateResponse(
-        title=_make_title(len(req.services)),
-        summary=result.summary,
-    )
+        return NotificationTemplateResponse(
+            title=_make_title(len(req.services)),
+            summary=result.summary,
+        )

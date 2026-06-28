@@ -101,7 +101,9 @@ def _setup_logs(resource: Resource) -> None:
 
 
 def _setup_instrumentors(app: FastAPI) -> None:
-    # FastAPI 서버 요청 span. instrument_app 은 app 생성 후 호출해야 한다.
+    # FastAPI 서버 요청 span. instrument_app 은 app 생성 후 + 서빙 시작 전
+    # (ASGI 미들웨어 스택 빌드 전)에 호출해야 한다 — lifespan 안에서 호출하면
+    # 스택이 이미 빌드·캐시된 뒤라 늦어 서버 span 이 생성되지 않는다.
     # SSE(/chat/stream) StreamingResponse 는 ASGI http.response.body 이벤트를
     # 스트리밍하며, FastAPIInstrumentor 는 응답을 버퍼링하지 않고 send 이벤트를
     # 패스스루로 계측하므로 스트리밍을 깨지 않는다.
