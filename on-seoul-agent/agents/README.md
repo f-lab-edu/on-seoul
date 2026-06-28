@@ -38,7 +38,8 @@ agents/
 ├── vector_agent.py          # 질의 정제 + BM25/vector 하이브리드 검색 (RRF 결합)
 ├── analytics_agent.py       # 집계/분포 질의 (GROUP BY / DISTINCT)
 ├── hydration_node.py        # service_id → public_service_reservations 원본 hydration
-├── answer_agent.py          # 검색 결과 → 자연어 답변 + 시설 카드 + 대화 제목
+├── answer_agent.py          # 검색 결과 → 자연어 답변 + 시설 카드 (제목 생성 제외)
+├── nodes/title.py           # generate_title_node — START 병렬 분기, 대화 제목 별도 SSE 이벤트(fire-and-emit)
 └── workflow.py              # LangChain(LCEL) 워크플로우 — graph.py 전환 전 레거시
 ```
 
@@ -109,7 +110,7 @@ DB를 쓰는 노드는 노드 내부에서 `data_session_ctx()` / `ai_session_ct
 - **TriageAgent(action 축)** — `action`(5종)/`out_of_scope_type`/`user_rationale`(decision SSE 노출).
 - **RouterAgent(검색 계획)** — `intent`/`secondary_intent`/`refined_query`/`vector_sub_intent` + post-filter(`max_class_name`/`area_name`/`service_status`/`payment_type`), 방향성 재시도 신호(`forced_intent`/`retry_radius_m`).
 - **검색 결과 슬롯** — `sql_results`/`sql_keyword`/`vector_results`/`map_results`/`analytics_*`, 팬아웃 통합 `rrf_merged_ids`.
-- **hydration·카드·답변** — `hydrated_services`/`service_cards`/`answer`/`title`/`cache_hit`.
+- **hydration·카드·답변** — `hydrated_services`/`service_cards`/`answer`/`cache_hit`. (대화 제목은 공유 state에 없음 — `generate_title_node`가 별도 SSE 이벤트로 fire-and-emit.)
 - **관측** — `node_path`(reducer append)/`started_at`/`trace`/`error`.
 - **재시도** — `retry_count`(최대 1)/`retry_relaxed`.
 - **search_channels** — 채널별 입력(query)+출력(hits)를 reducer 누적. 명시적 리셋은 `RESET_CHANNELS` sentinel만 유효하다(**빈 dict 는 리셋이 아니라 no-op** — UNIQUE 위반 방지 계약).
@@ -136,7 +137,7 @@ result = await graph.run(
         # 나머지 필드는 None으로 초기화
     },
 )
-# result["answer"], result["title"], result["trace"] 사용
+# result["answer"], result["trace"] 사용 (제목은 stream()의 별도 title 이벤트로 전달)
 ```
 
 각 에이전트는 생성자 주입으로 교체할 수 있어 테스트에서 Mock으로 대체합니다.
@@ -226,7 +227,7 @@ LangGraph는 데이터(상태)와 제어(엣지)를 분리합니다. 노드는 `
 
 ### answer_agent.py — 답변 생성
 
-검색 결과(`sql_results`/`vector_results`/`map_results`)를 단일 목록으로 합쳐 LLM에 전달하고, 자연어 답변과 시설 카드를 생성합니다(중첩 `metadata` JSONB는 자동 언팩, `title_needed=True`이면 제목을 별도 호출로 생성). **`service_url`이 없으면 `https://yeyak.seoul.go.kr`로 fallback**합니다.
+검색 결과(`sql_results`/`vector_results`/`map_results`)를 단일 목록으로 합쳐 LLM에 전달하고, 자연어 답변과 시설 카드를 생성합니다(중첩 `metadata` JSONB는 자동 언팩). 대화 제목 생성은 독립 병렬 노드(`nodes/title.py`의 `generate_title_node`)로 분리되어 answer 경로에서 제외됐습니다. **`service_url`이 없으면 `https://yeyak.seoul.go.kr`로 fallback**합니다.
 
 ---
 

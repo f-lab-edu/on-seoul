@@ -126,6 +126,24 @@ def test_get_langfuse_handler_default_none():
     assert lf.get_langfuse_handler() is None
 
 
+def test_get_langfuse_client_default_none():
+    """초기화 전 client accessor 는 None (Option 2 enclosing span 미진입)."""
+    lf._CLIENT = None
+    assert lf.get_langfuse_client() is None
+
+
+def test_get_langfuse_client_after_init():
+    """enabled+키 설정 후 get_langfuse_client() 가 생성된 클라이언트를 반환."""
+    fake_client = MagicMock(name="client")
+    with (
+        patch.object(lf, "settings", _make_settings(langfuse_enabled=True)),
+        patch.object(lf, "Langfuse", return_value=fake_client),
+        patch.object(lf, "CallbackHandler", return_value=MagicMock()),
+    ):
+        lf.init_langfuse()
+        assert lf.get_langfuse_client() is fake_client
+
+
 def test_shutdown_langfuse_flushes_and_is_safe():
     """shutdown → flush + shutdown 호출. 예외는 무시."""
     fake_client = MagicMock(name="client")
@@ -148,6 +166,21 @@ def test_shutdown_langfuse_swallows_errors():
     lf._HANDLER = MagicMock()
 
     lf.shutdown_langfuse()  # no raise
+
+
+def test_shutdown_langfuse_swallows_shutdown_error():
+    """shutdown() 예외도 전파하지 않고 전역을 클리어한다 (flush 는 정상)."""
+    fake_client = MagicMock(name="client")
+    fake_client.shutdown.side_effect = RuntimeError("shutdown boom")
+    lf._CLIENT = fake_client
+    lf._HANDLER = MagicMock()
+
+    lf.shutdown_langfuse()  # no raise
+
+    fake_client.flush.assert_called_once()
+    fake_client.shutdown.assert_called_once()
+    assert lf._CLIENT is None
+    assert lf._HANDLER is None
 
 
 def test_shutdown_langfuse_safe_when_not_initialized():

@@ -60,9 +60,11 @@
 
 import logging
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import ExitStack, contextmanager
 from typing import Any, Literal
 
+from langfuse import propagate_attributes
 from langgraph.graph import END, START, StateGraph
 
 from agents.analytics_agent import AnalyticsAgent
@@ -134,6 +136,8 @@ def _build_graph(nodes: GraphNodes) -> Any:
     # ── 노드 등록 (GraphNodes 바운드 메서드 직접 등록) ──
     # 입구 단일화: reference_resolution + triage → intake_node(단일 LLM 분류).
     builder.add_node("intake_node", nodes.intake_node)
+    # 제목 생성: START 에서 intake 와 병렬 분기하는 독립 노드(fire-and-emit, END 직행).
+    builder.add_node("generate_title_node", nodes.generate_title_node)
     builder.add_node("working_set_refine_node", nodes.working_set_refine_node)
     builder.add_node("rehydrate_node", nodes.rehydrate_node)
     builder.add_node("describe_node", nodes.describe_node)
@@ -160,6 +164,11 @@ def _build_graph(nodes: GraphNodes) -> Any:
 
     # ── START → intake_node (입구 단일화) ──
     builder.add_edge(START, "intake_node")
+    # ── START → generate_title_node (병렬 분기, fire-and-emit) ──
+    # 공유 state 에 쓰지 않고 자기 일만 하고 END 로 간다. 캐시 히트=즉시,
+    # 미스=짧은 1콜로 critical path 가 아니다(그래프 완료를 지연시키지 않음).
+    builder.add_edge(START, "generate_title_node")
+    builder.add_edge("generate_title_node", END)
     # route_intake: turn_kind 1차 분기 + NEW→action 서브스위치.
     #   REFINE → working_set_refine_node (머지 필터 재검색)
     #   DRILL/RELEVANCE → rehydrate_node → describe_node (검색 스킵)
@@ -278,6 +287,7 @@ def _build_graph(nodes: GraphNodes) -> Any:
 _StreamEvent = (
     tuple[Literal["progress"], dict[str, str]]
     | tuple[Literal["decision"], dict[str, Any]]
+    | tuple[Literal["title"], dict[str, Any]]
     | tuple[Literal["sources_update"], dict[str, Any]]
     | tuple[Literal["result"], AgentState]
 )
@@ -314,30 +324,113 @@ def _build_sources(state: dict[str, Any]) -> list[dict[str, Any]]:
     return sources
 
 
-def _build_run_config(state: AgentState) -> dict[str, Any]:
-    """run()/stream() 공용 config 조립 — Langfuse 핸들러가 있으면 callbacks/metadata 부착.
+def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
+    """그래프 완료 후 root span 에 부착할 §4.5.1 메타데이터를 result state 에서 추출한다.
 
-    핸들러가 None(비활성/실패)이면 {"recursion_limit": 50} 만 반환해 기존 동작과 100%
-    동일하다(회귀 금지). 핸들러 활성 시에만 callbacks=[handler] + Langfuse 메타데이터
-    (langfuse_session_id=대화방, message_id)를 추가한다.
-
-    지연 import: core.langfuse_client 는 core.config 를 import 하므로, 모듈 상단 import
-    시 import 순서/사이클에 묶이는 것을 피한다(telemetry 의 core.database 지연 import 패턴).
+    intent/action 은 enum 이라 .value 로 직렬화한다. 그 외(node_path/retry_count/
+    retry_relaxed/cache_hit/error)는 평면 슬롯이라 직접 읽는다. v4 propagate_attributes
+    의 tags 는 진입 시점에만 설정 가능하고(post-hoc 태그 API 미지원), intent/retried/
+    cache_hit 는 그래프 완료 후에야 확정되므로 모두 metadata 로만 노출한다(§4.5.1 폴백).
     """
-    config: dict[str, Any] = {"recursion_limit": 50}
+    intent = (result.get("plan") or {}).get("intent")
+    action = (result.get("triage") or {}).get("action")
+    return {
+        "intent": intent.value if intent is not None else None,
+        "action": action.value if action is not None else None,
+        "node_path": result.get("node_path"),
+        "retry_count": result.get("retry_count"),
+        "retry_relaxed": result.get("retry_relaxed"),
+        "cache_hit": result.get("cache_hit"),
+        "error": result.get("error"),
+    }
 
-    from core.langfuse_client import get_langfuse_handler
+
+def _update_root_span(root_span: Any, result: dict[str, Any]) -> None:
+    """완료 후 root span 갱신(output=답변 + §4.5.1 metadata)을 best-effort 로 수행한다.
+
+    런타임 fail-open: root_span.update 가 예외를 던져도(metadata 직렬화 실패·내부
+    상태 이상 등) 관측 실패가 그래프 결과/SSE 반환을 막지 않는다 — warning 후 무시.
+    root_span 이 None(비활성/폴백)이면 no-op.
+    """
+    if root_span is None:
+        return
+    try:
+        root_span.update(
+            output=(result.get("output") or {}).get("answer"),
+            metadata=_trace_completion_metadata(result),
+        )
+    except Exception:
+        logger.warning(
+            "Langfuse root span 갱신 실패 — 그래프 결과는 정상 반환합니다.",
+            exc_info=True,
+        )
+
+
+@contextmanager
+def _langfuse_trace(state: AgentState) -> Iterator[tuple[dict[str, Any], Any]]:
+    """Option 2 (enclosing span) — run()/stream() 공용 트레이스 컨텍스트.
+
+    client+handler 가 모두 활성이면:
+      - client.start_as_current_observation(as_type="span", name="chat") 로 root span 진입
+        (input=사용자 메시지로 트레이스 I/O 위생 통제 — AgentState 전체 노출 회피),
+      - propagate_attributes(trace_name="chat", session_id=room_id) 로 트레이스 속성 전파,
+      - config 에 callbacks=[handler] + metadata(message_id) 부착.
+    둘 중 하나라도 None(비활성/실패)이면 root span=None + config={"recursion_limit": 50}
+    만 yield 해 기존 동작과 100% 동일하다(회귀 금지, span/callback 미적용).
+
+    yield (config, root_span). 호출부는 astream/ainvoke 의 *전체 수명* 을 이 with 블록
+    안에 두고(stream 의 async generator 루프 포함), 완료 후 root span 에 output/metadata 를
+    갱신한다. SSE 경로에 동기 flush 는 넣지 않는다(백그라운드 배치 + shutdown flush).
+
+    지연 import: core.langfuse_client 는 core.config 를 import 하므로 모듈 상단 import 시
+    import 순서/사이클에 묶이는 것을 피한다(telemetry 의 core.database 지연 import 패턴).
+    """
+    from core.langfuse_client import get_langfuse_client, get_langfuse_handler
 
     handler = get_langfuse_handler()
-    if handler is not None:
-        config["callbacks"] = [handler]
-        config["metadata"] = {
-            # 대화방 = Langfuse 세션. v4 콜백 핸들러는 langfuse_session_id(str)/
-            # langfuse_user_id(str) 메타데이터 키를 trace 속성으로 승격한다.
-            "langfuse_session_id": str(state.get("room_id")),
-            "message_id": state.get("message_id"),
-        }
-    return config
+    client = get_langfuse_client()
+
+    if handler is None or client is None:
+        # 비활성: 기존과 동일 — span 미진입, callbacks/metadata 미부착.
+        yield {"recursion_limit": 50}, None
+        return
+
+    # 런타임 fail-open: 활성 상태에서 span 진입·propagate 가 예외를 던지면(메타데이터
+    # 직렬화 실패·내부 상태 이상 등) 관측 실패로 채팅 요청이 죽지 않도록 비활성 분기로
+    # 폴백한다(shutdown_langfuse 의 best-effort 정신). span/callback/metadata 미적용.
+    # 진입(ExitStack 으로 두 CM 을 묶음)만 try 로 감싸고, yield(=그래프 실행) 는 가드
+    # 밖에 둬 그래프 실행 예외는 그대로 전파한다.
+    stack = ExitStack()
+    try:
+        root_span = stack.enter_context(
+            client.start_as_current_observation(
+                as_type="span",
+                name="chat",
+                input=state.get("message"),
+            )
+        )
+        stack.enter_context(
+            propagate_attributes(
+                trace_name="chat",
+                session_id=str(state.get("room_id")),
+            )
+        )
+    except Exception:
+        stack.close()
+        logger.warning(
+            "Langfuse span 진입 실패 — 관측 없이 그래프를 계속 실행합니다.",
+            exc_info=True,
+        )
+        yield {"recursion_limit": 50}, None
+        return
+
+    config: dict[str, Any] = {
+        "recursion_limit": 50,
+        "callbacks": [handler],
+        "metadata": {"message_id": state.get("message_id")},
+    }
+    with stack:
+        yield config, root_span
 
 
 def _prepare_state(state: AgentState) -> AgentState:
@@ -448,11 +541,16 @@ class AgentGraph:
         state = _prepare_state(state)
 
         # recursion_limit: 최악 경로(RETRIEVE + secondary 팬아웃 + retry 1회) ~23 super-step + 여유.
-        # Langfuse 활성 시 callbacks/metadata 추가(없으면 recursion_limit 만 — 기존 동작 불변).
-        result: AgentState = await self._compiled_graph.ainvoke(
-            state,
-            config=_build_run_config(state),
-        )  # type: ignore[arg-type]
+        # Langfuse Option 2: 활성 시 enclosing span 으로 trace_name="chat"·session=room_id·
+        # input=메시지를 통제하고 callbacks/metadata 를 부착한다. 비활성 시 root_span=None +
+        # config={"recursion_limit": 50} 으로 기존 동작 불변(회귀 금지).
+        with _langfuse_trace(state) as (config, root_span):
+            result: AgentState = await self._compiled_graph.ainvoke(
+                state,
+                config=config,
+            )  # type: ignore[arg-type]
+            # 완료 후 root span 갱신: output=최종 답변 + §4.5.1 metadata (best-effort).
+            _update_root_span(root_span, result)
 
         return result
 
@@ -497,31 +595,53 @@ class AgentGraph:
         # 멀티모드: "values"(reducer 적용 전체 state)로 최종 result 스냅샷,
         # "custom"(노드가 writer 로 보낸 progress/decision 페이로드)으로 SSE 이벤트.
         # "updates" 는 더 이상 progress/decision 산출에 쓰이지 않으므로 받지 않는다.
-        # Langfuse 활성 시 callbacks/metadata 추가(없으면 recursion_limit 만 — 기존 동작 불변).
+        # Langfuse Option 2: astream 루프 *전체 수명* 을 enclosing span 컨텍스트 안에 둔다
+        # (sync CM 은 async generator 의 yield/await 정지 동안에도 유지된다). 비활성 시
+        # root_span=None + config={"recursion_limit": 50} 으로 기존 동작 불변(회귀 금지).
         # SSE 블로킹 금지: 동기 flush 를 넣지 않는다(백그라운드 배치 + shutdown flush 로 충분).
-        async for mode, chunk in self._compiled_graph.astream(
-            state,
-            stream_mode=["values", "custom"],
-            config=_build_run_config(state),  # 최악 경로 ~23 super-step + 여유
-        ):
-            if mode == "values":
-                # reducer가 적용된 전체 state 스냅샷.
-                last_values = chunk
-                continue
+        with _langfuse_trace(state) as (config, root_span):
+            async for mode, chunk in self._compiled_graph.astream(
+                state,
+                stream_mode=["values", "custom"],
+                config=config,  # 최악 경로 ~23 super-step + 여유
+            ):
+                if mode == "values":
+                    # reducer가 적용된 전체 state 스냅샷.
+                    last_values = chunk
+                    continue
 
-            # mode == "custom": 노드가 get_stream_writer 로 보낸 페이로드.
-            evt = chunk.get("_evt")
-            if evt == "progress":
-                yield "progress", {"step": chunk["step"], "message": chunk["message"]}
-            elif evt == "decision":
-                yield (
-                    "decision",
-                    DecisionEvent(
-                        action=chunk["action"],
-                        routes=chunk["routes"],
-                        user_rationale=chunk["user_rationale"],
-                    ).model_dump(),
-                )
+                # mode == "custom": 노드가 get_stream_writer 로 보낸 페이로드.
+                evt = chunk.get("_evt")
+                if evt == "progress":
+                    yield (
+                        "progress",
+                        {"step": chunk["step"], "message": chunk["message"]},
+                    )
+                elif evt == "decision":
+                    yield (
+                        "decision",
+                        DecisionEvent(
+                            action=chunk["action"],
+                            routes=chunk["routes"],
+                            user_rationale=chunk["user_rationale"],
+                        ).model_dump(),
+                    )
+                elif evt == "title":
+                    # generate_title_node 가 보낸 별도 title 페이로드. payload 의
+                    # type:"title" 식별자를 포함해 그대로 SSE 로 전달한다(_evt 키만 제거).
+                    yield (
+                        "title",
+                        {
+                            "type": chunk["type"],
+                            "room_id": chunk["room_id"],
+                            "title": chunk["title"],
+                            "message_id": chunk["message_id"],
+                            "query": chunk["query"],
+                        },
+                    )
+
+            # 완료 후 root span 갱신: output=최종 답변 + §4.5.1 metadata (best-effort).
+            _update_root_span(root_span, last_values)
 
         sources = _build_sources(last_values)
         if sources:

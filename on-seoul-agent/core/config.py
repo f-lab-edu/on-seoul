@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -110,13 +111,18 @@ class Settings(BaseSettings):
     #   LANGFUSE_ENABLED=true
     #   LANGFUSE_PUBLIC_KEY=pk-lf-...        (.env 주입, 커밋 금지)
     #   LANGFUSE_SECRET_KEY=sk-lf-...        (.env 주입, 커밋 금지)
-    #   LANGFUSE_HOST=https://cloud.langfuse.com  (선택)
+    #   LANGFUSE_BASE_URL=https://cloud.langfuse.com  (선택, LANGFUSE_HOST 도 허용)
     # 기본 off — 명시적으로 LANGFUSE_ENABLED=true + 키를 줘야 동작한다.
     # 키가 비어 있으면 enabled여도 no-op(fail-open).
     langfuse_enabled: bool = False
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
-    langfuse_host: str = "https://cloud.langfuse.com"
+    # host env 이름: 현행 SDK 표준은 LANGFUSE_BASE_URL 이지만 LANGFUSE_HOST 도 인식한다.
+    # 실제 .env 는 LANGFUSE_BASE_URL=https://jp.cloud.langfuse.com (JP 리전).
+    langfuse_host: str = Field(
+        default="https://cloud.langfuse.com",
+        validation_alias=AliasChoices("LANGFUSE_BASE_URL", "LANGFUSE_HOST"),
+    )
 
     # LLM — Gemini 우선, GPT 폴백
     llm_provider: str = "gemini"  # gemini | openai

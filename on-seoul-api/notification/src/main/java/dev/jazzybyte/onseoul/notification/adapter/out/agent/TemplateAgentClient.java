@@ -1,5 +1,6 @@
 package dev.jazzybyte.onseoul.notification.adapter.out.agent;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.jazzybyte.onseoul.notification.domain.NotificationTemplate;
 import dev.jazzybyte.onseoul.notification.domain.NotificationTemplateRequest;
 import dev.jazzybyte.onseoul.notification.domain.TemplateResult;
@@ -19,6 +20,8 @@ import java.time.Duration;
 @Component
 class TemplateAgentClient implements TemplateGenerationPort {
 
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
     private final WebClient webClient;
     private final TemplateAgentDtoMapper mapper;
     private final TemplateAgentProperties properties;
@@ -36,10 +39,20 @@ class TemplateAgentClient implements TemplateGenerationPort {
     public TemplateResult generate(NotificationTemplateRequest request) {
         Span.current().setAttribute("notification.service_count", request.services().size());
         try {
+            TemplateAgentRequest aiRequest = mapper.toRequest(request);
+            // [임시 개발 진단] AI 서비스로 보내는 요청 본문 전체를 DEBUG로 기록한다. 안정화 후 제거할 것.
+            if (log.isDebugEnabled()) {
+                try {
+                    log.debug("[TemplateAgent] AI 요청 payload(serviceCount={}): {}",
+                            request.services().size(), OBJECT_MAPPER.writeValueAsString(aiRequest));
+                } catch (Exception e) {
+                    log.debug("[TemplateAgent] AI 요청 payload 직렬화 실패: {}", e.getMessage());
+                }
+            }
             TemplateAgentResponse response = webClient.post()
                     .uri("/notification/template")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(mapper.toRequest(request))
+                    .bodyValue(aiRequest)
                     .retrieve()
                     .bodyToMono(TemplateAgentResponse.class)
                     .timeout(Duration.ofSeconds(properties.templateTimeoutSeconds()))
