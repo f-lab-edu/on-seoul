@@ -197,6 +197,8 @@ SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬
 
 검색 경로 외에도 Answer Agent는 몇 가지 전용 산출을 더 소비한다. **결과 품질 자각**(`result_quality`)이 채워져 있으면 답변의 톤과 제안을 조정하고(아래 6장), **운영-상세 발췌**(`detail_excerpt`)가 채워져 있으면 폭염, 휴무, 주차, 우천 같은 운영 질문에 그 발췌를 근거로 실답변을 만든다(아래 3-8). 직전 답변에 통합회원 안내가 이미 나갔으면(`reservation_guide_shown`) 같은 안내를 반복하지 않는다.
 
+**카드형 턴은 렌더링 전용이다** — 시설 목록을 나열하는 카드형(SQL/VECTOR 비-식별) 턴에서 Answer Agent는 어떤 카드를 보일지, 몇 건을 더 숨길지 스스로 정하지 않는다. 무엇을 보일지(적합도 순으로 정렬된 상위 카드 `curated_display`)와 표시되지 않은 잔여 건수(`curated_extra_count`), 그리고 부족분을 조건이 다 맞지 않는 항목으로 채웠는지(`curated_alt_count`)를 모두 상류 `pre_answer_gate_node`가 결정해 슬롯에 적재하고(아래 6장), Answer Agent는 이를 그대로 렌더링한다. 답변 본문은 전달된 카드를 임의로 거르지 않고 1:1로 빠짐없이 나열하며, 잔여 건수가 있으면 "외 N건"으로 표기하고, 부족분을 채운 경우 딱 맞는 시설과 비슷한 대안을 라벨로 구분한다. 자체 슬라이스, 잔여 건수 계산은 카드형이 아닌 경로(상세형, 운영-상세, MAP)와 결과 0건, 예외 폴백에서만 남는다(이 경우 큐레이션 슬롯이 비어 있어 기존 슬라이스 경로로 폴백한다).
+
 ### 3-8. 운영-상세 발췌 — detail_excerpt
 
 폭염 시 운영 여부, 휴무일, 주차, 우천 시 진행처럼 시설 카드의 정형 필드로는 답할 수 없지만 원본 상세 설명(`detail_content`) 안에는 적혀 있는 질문이 있다. `intake_node`가 이를 `OUT_OF_SCOPE`의 `operational_detail` 서브타입으로 분류하면, 시설 식별 검색(VECTOR) 뒤 `pre_answer_gate_node`가 지목된 단건(focal) 시설의 상세 본문을 가져와 발췌까지 끝내 `detail_excerpt` 슬롯에 적재한다.
@@ -242,9 +244,10 @@ SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬
 | `hydration.hydrated_services` | hydration_node / rehydrate_node | `service_id`로 재조회한 최신 원본. AnswerAgent가 검색 경로와 무관하게 보는 단일 슬롯 |
 | `result_quality` | pre_answer_gate_node | RETRIEVE 결과의 쏠림/빈약 휴리스틱 자각(없으면 None). answer가 톤, 제안 조정에 소비 |
 | `detail_excerpt` | pre_answer_gate_node | 운영-상세 turn에서 focal 단건 상세 본문 발췌(없으면 None = 폴백 신호). answer가 소비 |
+| `curated_display`, `curated_extra_count`, `curated_alt_count` | pre_answer_gate_node | 카드형 턴의 큐레이션 산출 — 적합도 정렬된 상위 카드, 표시되지 않은 잔여 건수, 부족분을 채운 대안 수. answer가 슬라이스, 잔여 건수 계산 없이 그대로 렌더링(카드형 아니면 None) |
 | `output.{answer, title, service_cards}` | answer_node / action 노드 | 최종 자연어 답변 / 대화 제목 / 카드 UI용 상위 N건 |
 | `trace`, `error`, `retry_count` | trace_node / 각 노드 / retry_prep_node | 관측 메타데이터, 오류 메시지, 재시도 횟수(최대 1) |
-| **그 외** | — | `forced_intent`, `retry_radius_m`, `retry_relaxed`, `relaxed_filters`, `reservation_guide_shown`, `rrf_merged_ids`, `node_path`, `search_channels`, `cache_hit`, `answer_lock_key`, `emit.*`(SSE emit-once 가드) 등 라우팅 세부, 관측, 재시도 제어용 보조 슬롯 |
+| **그 외** | — | `forced_intent`, `retry_radius_m`, `retry_relaxed`, `relaxed_filters`, `relaxed_values`(완화로 드롭된 필터의 원래 값 — 큐레이션이 원 요청 조건을 복원할 때 소비), `reservation_guide_shown`, `rrf_merged_ids`, `node_path`, `search_channels`, `cache_hit`, `answer_lock_key`, `emit.*`(SSE emit-once 가드) 등 라우팅 세부, 관측, 재시도 제어용 보조 슬롯 |
 
 ---
 
@@ -258,7 +261,9 @@ SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬
 
 **자기 교정(Self-Correction)** — 검색이 0건이거나 답변이 비면 한 번만 다시 시도한다. 단순히 조건을 푸는 게 아니라 방향을 바꾼다 — 정형 검색(SQL)이 비면 의미 검색(VECTOR)으로 강제 전환하고, 지도 검색이 비면 반경을 넓히는 식이다. 빈 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 0건을 감지하면 답변 생성 전에 곧장 재시도로 보낸다(0건 게이트, `route_pre_answer_gate`). 무한 루프는 재시도 1회 캡(`retry_count`)과 `recursion_limit=50`으로 막는다. **왜 하필 1회인가**: 0회면 SQL→VECTOR 전환, 반경 확장 같은 방향 전환의 복구 기회를 통째로 잃고, 2회 이상이면 검색, LLM 호출이 누적되어 지연과 비용이 커지는 데 비해 추가 복구율은 미미하다. 빈 결과의 대부분이 한 번의 방향 전환으로 해소된다고 보고, 복구 가능성과 응답 지연 사이에서 1회를 택했다. 재시도는 intake를 거치지 않고 `router_node`로 재진입한다(action은 이미 RETRIEVE로 확정). intent별 재시도 동작은 `retry_prep_node`가 분기한다 — SQL은 VECTOR로 강제 전환, ANALYTICS는 가장 제약이 큰 필터 1개를 드롭, MAP은 반경을 넓히고, `attribute_gap`/`operational_detail` 검색은 0건을 유발한 필터를 완화한다. self-correction은 RETRIEVE 경로 전용이라 비-RETRIEVE action(DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE의 domain_outside)은 평가에서 제외된다.
 
-**결과 품질 자각(전진 패스)** — 재시도가 0건만 다룬다면, "결과는 있지만 빈약하거나 한쪽으로 쏠려 있는" 경우는 자기 교정 대상이 아니다. 이를 위해 `pre_answer_gate_node`가 0건 판정과 함께 RETRIEVE 결과의 성격을 경량 휴리스틱으로 점검한다 — 결과가 1~2건이면 빈약(thin), 결과가 충분한데도(3건 이상) 자치구 한 곳에 임계 이상 몰려 있으면 쏠림(skew)으로 보고 `result_quality` 슬롯에 적재한다. 이는 **재검색을 트리거하지 않는다**(라우팅 불변, 전진 1회). Answer Agent가 이 신호를 읽어 답변의 톤과 후속 제안만 조정한다(예: "결과가 많지 않습니다", "대부분 OO구에 있습니다"). 점검이 실패해도 `result_quality=None`으로 격리되어 답변을 막지 않는다(best-effort). 같은 노드가 운영-상세 turn이면 `detail_excerpt`도 함께 준비한다(위 3-8).
+**카드 큐레이션과 결과 품질 자각(전진 패스)** — `pre_answer_gate_node`는 답변 생성 직전, RETRIEVE 결과를 두고 정해진 순서로 일을 한다. ① 먼저 0건이면 답변 LLM을 부르지 않고 곧장 재시도로 보낸다(0건 게이트). ② 0건이 아니고 카드형 턴이면 결과를 **결정적으로 큐레이션**한다 — 사용자가 요청한 조건(지역 > 카테고리 > 요금 > 예약 가능 상태 순)에 대한 적합도로 안정 정렬하고, 마감된 항목은 목록에서 빼지 않고 뒤로 강등만 한다. 동점은 기존 검색 순서를 보존한다. 요금 매칭은 정형 검색(`sql_search`)과 같은 의미로 비교하고(무료는 정확 일치, 유료는 접두 매칭), 완화 재시도로 필터가 드롭됐어도 원래 요청 조건(`relaxed_values`로 스냅샷한 값)을 되살려 적합도를 잰다. 큐레이션 결과는 상위 카드(`curated_display`), 잔여 건수(`curated_extra_count`), 부족분을 채운 대안 수(`curated_alt_count`)로 슬롯에 적재돼 Answer Agent가 그대로 렌더링한다(위 3-7). ③ 그다음 결과 품질을 **큐레이션된 카드 기준으로** 점검한다 — 결과가 1~2건이면 빈약(thin), 충분한데도(3건 이상) 자치구 한 곳에 임계 이상 몰려 있으면 쏠림(skew)으로 보고 `result_quality` 슬롯에 적재한다. 품질 점검을 큐레이션 *뒤*에 두는 것은, 자각 신호가 실제로 사용자에게 보일 카드와 어긋나지 않게 하기 위해서다.
+
+이 전진 패스는 **재검색을 트리거하지 않는다**(라우팅 불변, 전진 1회). 재시도가 0건만 다룬다면, "결과는 있지만 빈약하거나 한쪽으로 쏠려 있는" 경우는 자기 교정 대상이 아니므로 Answer Agent가 `result_quality` 신호를 읽어 답변의 톤과 후속 제안만 조정한다(예: "결과가 많지 않습니다", "대부분 OO구에 있습니다"). 큐레이션, 품질 점검이 실패해도 슬롯은 모두 `None`으로 격리되어 답변을 막지 않으며(best-effort), 이 경우 Answer Agent는 기존 슬라이스 경로로 폴백한다. 카드형이 아닌 턴(상세형, 운영-상세, MAP, ANALYTICS)은 큐레이션 대상이 아니라 슬롯이 비어 있다. 같은 노드가 운영-상세 turn이면 `detail_excerpt`도 함께 준비한다(위 3-8).
 
 **맥락 활용** — 멀티턴 후속 질문(직전 결과를 가리키거나 직전 판단을 묻는 등)은 API 서비스가 실어 준 맥락에 의존한다. AI는 무상태이므로 대화 이력(history), 직전 워킹셋(`prev_working_set`: 직전 결과 시설, 정제 질의, 적용 필터, 판단 근거), 직전 결과 정체성(`prev_entities`)을 요청으로 받는다. 맥락이 필요한 답변/분류 생성 노드는 이 맥락을 선별 없이 전부 활용한다 — 예컨대 설명형(EXPLAIN)은 직전 근거 한 줄만이 아니라 실제 사용자 질문, 대화 이력, 직전 결과를 함께 본다. 대화 이력을 몇 턴 실을지 같은 맥락의 양은 API 서비스가 정하고, AI는 받은 만큼 쓴다(스스로 잘라내지 않는다). 다만 이 원칙은 대화를 이해해 답이나 분류를 생성하는 노드에 적용하며, 새 제약만 뽑아내는 결정적 추출 단계는 오히려 직전 발화에 좁게 한정해 엉뚱한 맥락이 섞이지 않게 한다. 외부에서 들어온 맥락 텍스트는 경계 마커로 감싸 데이터로만 취급하고 지시로 실행하지 않는다.
 
