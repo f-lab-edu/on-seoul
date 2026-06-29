@@ -129,6 +129,11 @@ class Settings(BaseSettings):
 
     google_api_key: str | None = None
     gemini_model: str = "gemini-2.0-flash"
+    # 모델 티어 fallback — primary 모델이 일시적 오류로 실패하면 이 모델로 재시도한다.
+    # 벤더(provider) fallback과 별개의 "모델 티어 fallback"이며 항상 Gemini provider로 빌드한다.
+    gemini_fallback_model: str = "gemini-3.1-flash-lite"
+    # False면 get_chat_model이 fallback 없이 raw primary 모델을 그대로 반환(하위호환·테스트·eval 안전장치).
+    llm_fallback_enabled: bool = True
 
     openai_api_key: str | None = None
     gpt_model: str = "gpt-4o-mini"

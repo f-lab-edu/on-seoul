@@ -91,6 +91,7 @@ class TestOpenAIHttpxClientInjection:
             mock_settings.openai_api_key = "fake-openai-key"
             mock_settings.gpt_model = "gpt-4o-mini"
             mock_settings.llm_http_max_connections = 400
+            mock_settings.llm_fallback_enabled = False
 
             get_chat_model(provider="openai")
 
@@ -120,6 +121,7 @@ class TestOpenAIHttpxClientInjection:
             mock_settings.openai_api_key = "fake-openai-key"
             mock_settings.gpt_model = "gpt-4o-mini"
             mock_settings.llm_http_max_connections = 400
+            mock_settings.llm_fallback_enabled = False
 
             get_chat_model(provider="openai")
 
@@ -137,6 +139,7 @@ class TestOpenAIHttpxClientInjection:
             mock_settings.llm_provider = "gemini"
             mock_settings.google_api_key = "fake-google-key"
             mock_settings.gemini_model = "gemini-2.0-flash"
+            mock_settings.llm_fallback_enabled = False
 
             get_chat_model(provider="gemini")
 

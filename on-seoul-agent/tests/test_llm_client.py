@@ -459,7 +459,7 @@ class TestGetChatModel:
     # --- 정상 경로: 올바른 클래스 인스턴스 반환 ---
 
     def test_gemini_returns_chat_google_generative_ai(self):
-        """google_api_key가 있으면 ChatGoogleGenerativeAI 인스턴스를 반환한다."""
+        """fallback 비활성 시 google_api_key가 있으면 raw ChatGoogleGenerativeAI 인스턴스를 반환한다."""
         with (
             patch("llm.client.settings") as mock_settings,
             patch("llm.client.ChatGoogleGenerativeAI") as mock_cls,
@@ -467,6 +467,7 @@ class TestGetChatModel:
             mock_settings.llm_provider = "gemini"
             mock_settings.google_api_key = "fake-google-key"
             mock_settings.gemini_model = "gemini-2.0-flash"
+            mock_settings.llm_fallback_enabled = False
 
             result = get_chat_model(provider="gemini")
 
@@ -474,7 +475,7 @@ class TestGetChatModel:
             assert result is mock_cls.return_value
 
     def test_openai_returns_chat_openai(self):
-        """openai_api_key가 있으면 ChatOpenAI 인스턴스를 반환한다."""
+        """fallback 비활성 시 openai_api_key가 있으면 raw ChatOpenAI 인스턴스를 반환한다."""
         with (
             patch("llm.client.settings") as mock_settings,
             patch("llm.client.ChatOpenAI") as mock_cls,
@@ -483,6 +484,7 @@ class TestGetChatModel:
             mock_settings.openai_api_key = "fake-openai-key"
             mock_settings.gpt_model = "gpt-4o-mini"
             mock_settings.llm_http_max_connections = 400
+            mock_settings.llm_fallback_enabled = False
 
             result = get_chat_model(provider="openai")
 
@@ -499,6 +501,7 @@ class TestGetChatModel:
             mock_settings.openai_api_key = "fake-openai-key"
             mock_settings.gpt_model = "gpt-4o-mini"
             mock_settings.llm_http_max_connections = 400
+            mock_settings.llm_fallback_enabled = False
 
             # provider 인자 없이 호출 — settings.llm_provider="openai"가 적용되어야 한다
             get_chat_model()  # ConfigurationException 없이 통과하면 OK
@@ -514,6 +517,7 @@ class TestGetChatModel:
             mock_settings.llm_provider = "gemini"
             mock_settings.google_api_key = "fake-google-key"
             mock_settings.gemini_model = "gemini-2.0-flash"
+            mock_settings.llm_fallback_enabled = False
 
             get_chat_model(provider="gemini")
 
@@ -531,6 +535,7 @@ class TestGetChatModel:
             mock_settings.openai_api_key = "fake-openai-key"
             mock_settings.gpt_model = "gpt-4o-mini"
             mock_settings.llm_http_max_connections = 400
+            mock_settings.llm_fallback_enabled = False
 
             get_chat_model(provider="openai")
 
@@ -547,6 +552,7 @@ class TestGetChatModel:
             mock_settings.llm_provider = "gemini"
             mock_settings.google_api_key = "fake-google-key"
             mock_settings.gemini_model = "gemini-2.0-flash"
+            mock_settings.llm_fallback_enabled = False
 
             get_chat_model(provider="gemini", timeout=8, max_retries=1)
 
@@ -564,6 +570,7 @@ class TestGetChatModel:
             mock_settings.openai_api_key = "fake-openai-key"
             mock_settings.gpt_model = "gpt-4o-mini"
             mock_settings.llm_http_max_connections = 400
+            mock_settings.llm_fallback_enabled = False
 
             get_chat_model(provider="openai", timeout=8, max_retries=1)
 

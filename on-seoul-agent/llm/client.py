@@ -1,20 +1,76 @@
 import asyncio
 import logging
 import random
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from functools import wraps
 from typing import Any
 
 import httpx
 from aiolimiter import AsyncLimiter
-from google.api_core.exceptions import ResourceExhausted
+from google.api_core.exceptions import (
+    DeadlineExceeded,
+    InternalServerError,
+    ResourceExhausted,
+    ServiceUnavailable,
+)
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
 from langchain_core.embeddings import Embeddings
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
+from langchain_core.runnables import Runnable
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_openai import ChatOpenAI
+from pydantic import PrivateAttr
 
 from core.config import settings
 from core.exceptions import ConfigurationException, RateLimitException
+
+
+# ---------------------------------------------------------------------------
+# 모델 티어 fallback — 일시적 오류 집합
+# ---------------------------------------------------------------------------
+# primary 모델 호출이 *일시적 오류*로 실패할 때만 fallback 모델로 재시도한다.
+# ConfigurationException·ValueError·ValidationError 같은 명백한 버그/설정 오류는
+# 포함하지 않는다(헛된 재호출 방지). LangChain with_fallbacks(exceptions_to_handle=)
+# 와 _FallbackChatModel._agenerate/_generate 위임 판정에 동일하게 쓰인다.
+def _build_transient_exc() -> tuple[type[BaseException], ...]:
+    excs: list[type[BaseException]] = [
+        # google.api_core: 429 / 503 / 500 / timeout
+        ResourceExhausted,
+        ServiceUnavailable,
+        InternalServerError,
+        DeadlineExceeded,
+        # httpx 네트워크/타임아웃
+        httpx.TimeoutException,
+        httpx.TransportError,
+        # 임베딩/LLM rate limit 소진(이미 정의됨)
+        RateLimitException,
+        # 구조화 출력 파싱 실패 → fallback 모델로 재시도
+        OutputParserException,
+    ]
+    # primary가 openai일 때를 위한 조건부 포함(import 가용 시).
+    try:
+        import openai
+
+        excs.extend(
+            [
+                openai.RateLimitError,
+                openai.APITimeoutError,
+                openai.InternalServerError,
+                openai.APIConnectionError,
+            ]
+        )
+    except ImportError:  # pragma: no cover
+        pass
+    return tuple(excs)
+
+
+_TRANSIENT_EXC: tuple[type[BaseException], ...] = _build_transient_exc()
 
 # ---------------------------------------------------------------------------
 # 프로세스 전역 httpx.AsyncClient (OpenAI provider 전용)
@@ -178,23 +234,175 @@ class _GeminiEmbeddings(Embeddings):
         return results
 
 
-def get_chat_model(
-    provider: str | None = None,
-    model: str | None = None,
-    temperature: float = 0.0,
-    streaming: bool = False,
-    timeout: int = 30,
-    max_retries: int = 3,
-) -> BaseChatModel:
-    """Return a configured chat LLM instance.
+class _FallbackChatModel(BaseChatModel):
+    """primary + fallback 모델을 품은 얇은 BaseChatModel 래퍼.
 
-    Gemini를 기본으로 사용하고, provider="openai" 지정 시 GPT로 전환한다.
+    "모델 티어 fallback": primary 모델 호출이 *일시적 오류*(_TRANSIENT_EXC)로
+    실패하면 fallback 모델로 자동 재시도한다. 벤더 fallback과는 별개이며 fallback은
+    항상 Gemini provider로 빌드된다(get_chat_model 참조).
 
-    timeout/max_retries는 SDK(I/O 레이어)로 직접 내려보내 in-flight HTTP 요청을
-    실제 소켓 레벨에서 끊게 한다. 기본값은 기존 하드코딩값과 동일하다.
+    두 가지 소비 경로를 모두 투명하게 지원한다:
+      (a) `.with_structured_output(Schema)` 경로 — with_structured_output을 각
+          모델에 먼저 적용한 뒤 RunnableWithFallbacks로 묶는다. RunnableWithFallbacks
+          자체에는 with_structured_output이 없으므로 합성 순서가 핵심이다.
+      (b) `prompt | llm | StrOutputParser()` raw 파이프 경로 — ainvoke가 결국
+          _agenerate를 호출하므로, _agenerate에서 primary 실패 시 fallback에 위임한다.
+
+    관측 한계: fallback 위임 시 primary가 시작한 run_manager를 그대로 재사용한다.
+    BaseChatModel이 on_llm_start를 primary 기준으로 이미 발행한 뒤이므로, fallback
+    응답은 콜백 트레이스(Langfuse/OTel)상 primary run에 귀속된다 — 실제로 어느 모델이
+    응답했는지는 위임 시 남기는 logger.warning으로만 구분된다.
     """
-    selected_provider = provider or settings.llm_provider
 
+    _primary: BaseChatModel = PrivateAttr()
+    _fallback: BaseChatModel = PrivateAttr()
+    _exc: tuple[type[BaseException], ...] = PrivateAttr()
+
+    def __init__(
+        self,
+        primary: BaseChatModel,
+        fallback: BaseChatModel,
+        exceptions_to_handle: tuple[type[BaseException], ...] = _TRANSIENT_EXC,
+    ) -> None:
+        super().__init__()
+        self._primary = primary
+        self._fallback = fallback
+        self._exc = exceptions_to_handle
+
+    @property
+    def _llm_type(self) -> str:
+        return "fallback_chat_model"
+
+    # --- (a) 구조화 출력 경로 ---------------------------------------------
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> Runnable:
+        # 각 모델에 with_structured_output을 먼저 적용한 뒤 fallback으로 묶는다.
+        # 순서를 뒤집으면(RunnableWithFallbacks.with_structured_output) AttributeError.
+        return self._primary.with_structured_output(schema, **kwargs).with_fallbacks(
+            [self._fallback.with_structured_output(schema, **kwargs)],
+            exceptions_to_handle=self._exc,
+        )
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> Runnable:
+        # with_structured_output과 동일 패턴. 현재 사용처는 없으나 대칭성을 위해 제공.
+        return self._primary.bind_tools(tools, **kwargs).with_fallbacks(
+            [self._fallback.bind_tools(tools, **kwargs)],
+            exceptions_to_handle=self._exc,
+        )
+
+    # --- (b) raw 파이프 경로 (ainvoke → _agenerate) -----------------------
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        try:
+            return await self._primary._agenerate(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+        except self._exc as exc:
+            logger.warning(
+                "primary 모델 일시적 오류(%s) → fallback 모델로 재시도",
+                type(exc).__name__,
+            )
+            return await self._fallback._agenerate(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        try:
+            return self._primary._generate(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+        except self._exc as exc:
+            logger.warning(
+                "primary 모델 일시적 오류(%s) → fallback 모델로 재시도",
+                type(exc).__name__,
+            )
+            return self._fallback._generate(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+
+    # --- streaming: best-effort -------------------------------------------
+    # 현재 어떤 호출부도 streaming=True 모델을 만들지 않으므로 hot path가 아니다.
+    # 첫 청크 이전(스트림 시작 전) primary 실패 시에만 fallback으로 위임한다.
+    # mid-stream 복구(일부 청크 yield 후 실패)는 지원하지 않는다.
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        try:
+            stream = self._primary._astream(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+            first = await stream.__anext__()
+        except StopAsyncIteration:
+            return
+        except self._exc as exc:
+            logger.warning(
+                "primary 스트림 시작 실패(%s) → fallback 스트림으로 재시도",
+                type(exc).__name__,
+            )
+            async for chunk in self._fallback._astream(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            ):
+                yield chunk
+            return
+        yield first
+        async for chunk in stream:
+            yield chunk
+
+    def _stream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        try:
+            stream = self._primary._stream(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+            first = next(stream)
+        except StopIteration:
+            return
+        except self._exc as exc:
+            logger.warning(
+                "primary 스트림 시작 실패(%s) → fallback 스트림으로 재시도",
+                type(exc).__name__,
+            )
+            yield from self._fallback._stream(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+            return
+        yield first
+        yield from stream
+
+
+def _build_chat_model(
+    selected_provider: str,
+    model: str | None,
+    temperature: float,
+    streaming: bool,
+    timeout: int,
+    max_retries: int,
+) -> BaseChatModel:
+    """raw chat 모델 빌더 — fallback 래핑 없이 단일 SDK 인스턴스를 만든다.
+
+    get_chat_model이 primary와 (Gemini) fallback을 둘 다 이 헬퍼로 만든 뒤
+    _FallbackChatModel로 한 번만 감싼다. fallback을 get_chat_model 재귀로 만들면
+    무한 래핑이 되므로 반드시 이 헬퍼를 거친다.
+    """
     if selected_provider in ("gemini", "google"):
         if not settings.google_api_key:
             raise ConfigurationException(
@@ -235,6 +443,57 @@ def get_chat_model(
         raise ConfigurationException(
             f"Unknown LLM provider: {selected_provider!r}. Use 'gemini' or 'openai'."
         )
+
+
+def get_chat_model(
+    provider: str | None = None,
+    model: str | None = None,
+    temperature: float = 0.0,
+    streaming: bool = False,
+    timeout: int = 30,
+    max_retries: int = 3,
+) -> BaseChatModel:
+    """Return a configured chat LLM instance.
+
+    Gemini를 기본으로 사용하고, provider="openai" 지정 시 GPT로 전환한다.
+
+    timeout/max_retries는 SDK(I/O 레이어)로 직접 내려보내 in-flight HTTP 요청을
+    실제 소켓 레벨에서 끊게 한다. 기본값은 기존 하드코딩값과 동일하다.
+
+    모델 티어 fallback(settings.llm_fallback_enabled=True, 기본):
+      primary 모델이 일시적 오류로 실패하면 settings.gemini_fallback_model
+      (기본 gemini-3.1-flash-lite)로 자동 재시도하는 _FallbackChatModel로 감싼다.
+      호출부 코드 변경은 0이다(with_structured_output / raw 파이프 둘 다 투명 지원).
+
+      비활성(False)이거나 fallback(Gemini)에 필요한 google_api_key가 없으면
+      raw primary 모델을 그대로 반환한다(하위호환·크래시 금지).
+    """
+    selected_provider = provider or settings.llm_provider
+
+    primary = _build_chat_model(
+        selected_provider, model, temperature, streaming, timeout, max_retries
+    )
+
+    if not settings.llm_fallback_enabled:
+        return primary
+
+    # fallback은 항상 Gemini provider. 키가 없으면 fallback 없이 primary만 반환.
+    if not settings.google_api_key:
+        logger.warning(
+            "llm_fallback_enabled=True 이나 GOOGLE_API_KEY 부재 → "
+            "모델 티어 fallback 없이 primary 모델만 사용한다."
+        )
+        return primary
+
+    fallback = _build_chat_model(
+        "gemini",
+        settings.gemini_fallback_model,
+        temperature,
+        streaming,
+        timeout,
+        max_retries,
+    )
+    return _FallbackChatModel(primary=primary, fallback=fallback)
 
 
 def get_embeddings(model: str | None = None) -> Embeddings:
