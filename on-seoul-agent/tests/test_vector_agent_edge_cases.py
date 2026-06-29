@@ -59,8 +59,8 @@ def _mock_ai_session_ctx():
 def _patch_all_empty():
     """4채널 모두 빈 결과 + ai_session_ctx 패치.
 
-    Phase 2: hydrate_services 는 HydrationNode 책임이므로 여기서 patch 하지 않는다.
-    제안 2 이후: ai_session_ctx 도 함께 patch 한다.
+    hydrate_services 는 HydrationNode 책임이므로 여기서 patch 하지 않는다.
+    ai_session_ctx 도 함께 patch 한다.
     """
 
     class _Ctx:
@@ -147,7 +147,7 @@ class TestVectorAgentAllChannelsEmpty:
     async def test_all_channels_empty_search_channels_has_rrf_key(self):
         """4채널 모두 빈 결과여도 search_channels에 core 채널 키가 존재해야 한다.
 
-        Phase 2: VectorAgent 는 FINAL 채널을 구성하지 않는다 (HydrationNode 책임).
+        VectorAgent 는 FINAL 채널을 구성하지 않는다 (HydrationNode 책임).
         VECTOR_A/B/C, BM25, RRF 5개 채널이 항상 포함된다.
         """
         agent = _make_agent()

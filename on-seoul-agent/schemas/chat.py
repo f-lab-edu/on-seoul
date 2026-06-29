@@ -41,14 +41,14 @@ class PrevEntity(BaseModel):
 
 
 class PrevWorkingSetPayload(BaseModel):
-    """직전 턴 대화 워킹셋(P1) — 단일 중첩 채널.
+    """직전 턴 대화 워킹셋 — 단일 중첩 채널.
 
-    Spring 이 영속·중계하고 AI 가 소비한다(옵션 A). emit 측 `final` 의 prev_working_set
+    Spring 이 영속·중계하고 AI 가 소비한다. emit 측 `final` 의 prev_working_set
     을 거울처럼 반영한다. 미전송 시 ChatRequest 가 평면 슬롯(prev_entities/prev_intent/
     prev_reasoning)으로 폴백한다(하위호환).
 
     철학: "검색 레시피"지 "결과 스냅샷"이 아니다. applied_filters 는 effective(완화 후)
-    필터여야 후속이 올바른 베이스에 얹힌다(P1-4).
+    필터여야 후속이 올바른 베이스에 얹힌다.
     """
 
     entities: list[PrevEntity] = Field(default_factory=list, max_length=10)
@@ -97,7 +97,7 @@ class ChatRequest(BaseModel):
     prev_intent: IntentType | None = Field(default=None)
     # 직전 턴 판단 근거(user_rationale). 미전송 시 None. EXPLAIN action 이 소비.
     prev_reasoning: str | None = Field(default=None, max_length=500)
-    # ─── 대화 워킹셋(P1) — 단일 중첩 채널 ───
+    # ─── 대화 워킹셋 — 단일 중첩 채널 ───
     # Spring 이 영속·중계. 미전송 시 위 평면 슬롯으로 폴백한다(하위호환).
     prev_working_set: PrevWorkingSetPayload | None = Field(default=None)
 

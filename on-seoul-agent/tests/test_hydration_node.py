@@ -288,5 +288,5 @@ class TestHydrationNodeCall:
 
 
 # ---------------------------------------------------------------------------
-# HydrationNode.hydrate_by_service_ids (Phase 2 의 핵심 API — 미래 사용 + 단위 검증)
+# HydrationNode.hydrate_by_service_ids (핵심 API — 미래 사용 + 단위 검증)
 # ---------------------------------------------------------------------------

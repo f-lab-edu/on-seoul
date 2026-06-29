@@ -1,9 +1,9 @@
-"""Fetch Detail Content Tool — focal service_id 단건 detail_content 조회 (P5).
+"""Fetch Detail Content Tool — focal service_id 단건 detail_content 조회.
 
 운영-상세(operational_detail) 답변 경로 전용. 사용자가 지목한 focal 시설 1건의
 원시 detail_content(TEXT, 최대 641KB)를 SELECT 한다.
 
-설계 결정사항 (P5):
+설계 결정사항:
   - **단건 한정**: focal service_id 1개만 조회한다(멀티건 detail 은 비채택).
     raw 블롭이 전 카드/answer 에 실리지 않도록 일반 hydration(tools/hydrate_services)
     과 분리한다. _result_columns(PUBLIC_SERVICE_RESERVATIONS_COLUMNS)에는 절대

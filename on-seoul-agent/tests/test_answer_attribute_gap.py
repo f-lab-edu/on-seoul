@@ -1,6 +1,6 @@
 """attribute_gap 전용 답변 경로 테스트.
 
-room 63 결함 수정: triage 가 OUT_OF_SCOPE/attribute_gap 으로 정확히 분류했음에도
+결함 수정: triage 가 OUT_OF_SCOPE/attribute_gap 으로 정확히 분류했음에도
 AnswerAgent 가 이를 DETAIL(시설 심층 서술)과 동일 신호로 받아 물어본 속성(보수공사)을
 무시하고 예약 정보만 나열하던 버그를 끊는다.
 
@@ -107,7 +107,7 @@ class TestAttributeGapTrigger:
 
 
 class TestAttributeGapDetailMutualExclusion:
-    """is_attribute_gap 과 is_detail 은 상호배타다(결정 C).
+    """is_attribute_gap 과 is_detail 은 상호배타다.
 
     is_detail 트리거는 vector_sub_intent == "identification" 정확 일치이므로
     "attribute_gap" 신호가 DETAIL 분기를 깨우면 안 된다(반대도 마찬가지).
@@ -201,7 +201,7 @@ class TestAttributeGapRationaleSeed:
 
 
 class TestAttributeGapRelaxedNotice:
-    """완화 재시도(M1) 후 식별 성공 시 완화 고지 절이 함께 실린다."""
+    """완화 재시도 후 식별 성공 시 완화 고지 절이 함께 실린다."""
 
     async def test_relaxed_notice_appended_when_relaxed(self):
         agent = make_answer_agent("완화 후 안내입니다.")

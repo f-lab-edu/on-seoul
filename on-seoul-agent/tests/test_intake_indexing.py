@@ -1,6 +1,6 @@
 """intake 인덱스→service_id 매핑·범위검증 순수 함수 단위 테스트 (LLM 무관·결정적).
 
-인덱스 계약(intake-node-merge §2.3):
+인덱스 계약:
   - LLM 은 1-based 인덱스 반환. 런타임이 1≤idx≤N 검증 후 prev_entities[idx-1].service_id.
   - 범위 밖/빈 prev_entities → 빈 결과(ID 환각 0).
 """

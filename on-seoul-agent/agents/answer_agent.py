@@ -36,8 +36,8 @@ from schemas.state import AgentState, IntentType
 
 _ROLE = "당신은 서울시 공공서비스 예약 안내 챗봇입니다."
 
-# §2.5 공통 보이스 지침 — 카드형(SQL/VECTOR) system 프롬프트 상단 1회 고정.
-# P3 가 정형 꼬리말을 제거/조건화하므로 그 자리가 건조·사무적으로 들리지 않도록
+# 공통 보이스 지침 — 카드형(SQL/VECTOR) system 프롬프트 상단 1회 고정.
+# 정형 꼬리말을 제거/조건화하므로 그 자리가 건조·사무적으로 들리지 않도록
 # 톤을 명시한다. intent별 _STRUCT_* 와 직교(무엇을 말할지 ⟂ 어떻게 말할지).
 _VOICE_GUIDE = """\
 # 대화 톤
@@ -308,15 +308,15 @@ _STRUCT_DESCRIBE_EMPTY = """\
 # attribute_gap 전용 — OUT_OF_SCOPE/attribute_gap (보수공사·주차·편의시설 등
 # 예약 데이터에 담기지 않는 시설 운영 상세를 물었을 때).
 # DETAIL(identification)과 분리된 전용 분기로, 물어본 속성을 무시하고 예약 정보만
-# 풀로 나열하던 결함(room 63)을 끊는다.
+# 풀로 나열하던 결함을 끊는다.
 #
-# 프레이밍 원칙(결정 B + P4 interim/R10): 부재를 단정하지 않는다. "X 정보는 없습니다"
+# 프레이밍 원칙(interim): 부재를 단정하지 않는다. "X 정보는 없습니다"
 # 류 단정은 물론, "예약 데이터에는 그런 운영 상세까지는 담겨있지 않다" 류 데이터-성격
 # 부재 단언도 동일하게 금지한다 — detail_content 로 답할 수 있는 운영성 질문(폭염철
 # 이용안내 등)에 대해 "없다"고 거짓 단정해 신뢰를 훼손하는 결함(사례 162-163) 때문이다.
 # 대신 "여기엔 예약·접수 중심 정보가 있고, 상세 운영 안내는 공식 페이지/바로가기가
 # 정확하다"는 단정 회피·리다이렉트로 안내한다(형태: 모순 회피·바로가기 유도는 유지).
-# ※ 근본 해소(detail_content 로 실제 답변)는 P5 범위이며 여기선 거짓 단정만 제거한다.
+# ※ 근본 해소(detail_content 로 실제 답변)는 운영-상세 경로가 담당하며 여기선 거짓 단정만 제거한다.
 _STRUCT_ATTRIBUTE_GAP = """\
 사용자가 특정 시설의 어떤 속성(예: 보수공사 일정, 주차, 편의시설, 사진, 후기,
 혼잡도, 운영 상세 등)을 물었습니다.
@@ -359,13 +359,13 @@ _STRUCT_ATTRIBUTE_GAP = """\
   출력에 노출하지 마세요."""
 
 # operational_detail 운영-상세 발췌형 — VECTOR_SEARCH + vector_sub_intent=
-# operational_detail + detail_excerpt 존재 시 전용 분기(P5).
+# operational_detail + detail_excerpt 존재 시 전용 분기.
 # attribute_gap interim 리다이렉트(부재 단정 회피·바로가기 유도)에서 detail_content
 # 발췌 실답변 경로로 승격한 것이다(사례 162-163 근본 해소). pre_answer prep 이 focal
 # 단건 detail_content 를 정제·키워드 중심 발췌(섹션4 포함)한 detail_excerpt 문자열만
 # 받아, 질문 관련 구간을 인용/요약한다.
 #
-# 환각 금지(R9·R10): 발췌 윈도우 *밖* 내용은 절대 날조하지 않는다. 발췌에 답이 없으면
+# 환각 금지: 발췌 윈도우 *밖* 내용은 절대 날조하지 않는다. 발췌에 답이 없으면
 # 솔직히 "공식 페이지 확인"으로 유도한다(거짓 단정·없는 운영지침 발명 금지).
 _STRUCT_OPERATIONAL_DETAIL = """\
 사용자가 특정 시설의 운영 상세(폭염·우천·휴무·주차·이용안내 등)를 물었습니다.
@@ -447,7 +447,7 @@ _CLAUSE_REFINE_HINT = """\
 특정 자치구(예: 강남구, 마포구)나 요금 조건(무료/유료)을 함께 알려주시면 더 정확하게 찾아드릴 수 있어요.
 원하시는 지역이나 무료/유료 여부를 알려주시면 더 좁혀서 찾아드릴게요."""
 
-# 쏠림 자각 절(P3) — 결과가 한 지역에 쏠려 있을 때 _CLAUSE_REFINE_HINT 를 대체한다.
+# 쏠림 자각 절 — 결과가 한 지역에 쏠려 있을 때 _CLAUSE_REFINE_HINT 를 대체한다.
 # 사용자가 지역을 지정하지 않았는데 결과가 전부 한 구라면 "어느 구냐" 되묻는 것은
 # 모순(사례 161)이므로, "묻기"가 아니라 "결과를 자각한 제안"으로 마무리한다.
 # {skew_value} 는 _build_card_system 이 실제 지역명으로 치환한다.
@@ -458,13 +458,13 @@ _CLAUSE_SKEW_OFFER = """\
 사용자에게 어느 자치구를 원하는지 되묻지 마세요(이미 결과가 한 지역에 모여 있으므로
 "어느 구를 찾으세요?" 류의 되물음은 모순입니다)."""
 
-# 빈약(thin) 정직 캐비엇 절(P3) — 결과가 1~2건뿐일 때 솔직하게 알린다.
+# 빈약(thin) 정직 캐비엇 절 — 결과가 1~2건뿐일 때 솔직하게 알린다.
 _CLAUSE_THIN_CAVEAT = """\
 조건에 맞는 결과가 많지 않다는 점을 솔직하고 부드럽게 한 문장으로 안내하세요.
 부족함을 사과하듯 단정하지 말고, 조건을 넓히거나 다른 지역도 찾아볼 수 있다고
 도움을 이어가는 톤을 유지하세요."""
 
-# 딱맞음/대안 구분 절(혼합-A) — 큐레이션이 부족분을 부적합 항목으로 채운 경우.
+# 딱맞음/대안 구분 절 — 큐레이션이 부족분을 부적합 항목으로 채운 경우.
 # 카드는 결정적으로 적합도 정렬됐고(딱 맞는 항목 우선), 그 뒤에 "비슷한" 대안이 따른다.
 # 목록을 두 묶음으로 정직하게 구분하도록 지시한다(완화 안내와 겹치면 호출부가 생략).
 _CLAUSE_ALT_LABEL = """\
@@ -483,7 +483,7 @@ _FILTER_LABELS: dict[str, str] = {
 
 
 def _relaxed_notice(relaxed_filters: list[str] | None) -> str:
-    """완화한 필터 항목을 사용자 라벨로 안내하는 시스템 절을 동적으로 구성한다(M1-b).
+    """완화한 필터 항목을 사용자 라벨로 안내하는 시스템 절을 동적으로 구성한다.
 
     드롭한 필터(relaxed_filters)를 한국어 라벨로 치환해 "무엇을 완화했는지" 밝힌다.
     추적값이 없으면(완화 사실은 있으나 항목 미상) 항목을 특정하지 않는 일반 문구로
@@ -544,12 +544,12 @@ def _build_card_system(
 ) -> str:
     """카드형(SQL/VECTOR) intent의 시스템 프롬프트를 런타임에 조립한다.
 
-    §2.5 보이스 지침(_VOICE_GUIDE)을 상단 1회 고정하고, 조건부 꼬리말 절(_CLAUSE_*)을
-    결과 자각(P2 result_quality)·맥락(reservation_guide_shown)에 따라 조건화한다.
+    보이스 지침(_VOICE_GUIDE)을 상단 1회 고정하고, 조건부 꼬리말 절(_CLAUSE_*)을
+    결과 자각(result_quality)·맥락(reservation_guide_shown)에 따라 조건화한다.
 
     조건부 절:
     - _CLAUSE_RESERVATION_GUIDE: 결과 중 service_status="접수중" 시설이 있고,
-      직전 턴에 이미 안내하지 않았을 때(reservation_guide_shown=False)만 추가(P3 반복 억제).
+      직전 턴에 이미 안내하지 않았을 때(reservation_guide_shown=False)만 추가(반복 억제).
     - 지역 쏠림 자각 시(result_quality.skew_field=="area_name") _CLAUSE_REFINE_HINT 대신
       _CLAUSE_SKEW_OFFER(skew_value 치환)로 치환 — "어느 구냐" 되묻기 → 자각한 제안.
     - _CLAUSE_THIN_CAVEAT: result_quality.thin 이면 정직 캐비엇 추가. 단 완화
@@ -566,8 +566,8 @@ def _build_card_system(
         message: 사용자 원본 발화 (자치구 명시 여부 fallback 판단용).
         results: 정규화 이전 또는 이후 결과 목록 (service_status 키 접근).
         area_name: Router가 해소한 자치구명. 해소 실패 시 None.
-        result_quality: P2 자각 패스(B) 산출 플래그(쏠림·빈약) 또는 None(현행 조립).
-        reservation_guide_shown: 직전 턴에 통합회원 안내가 이미 나갔는지(P3 반복 억제).
+        result_quality: 결과 품질 자각 패스 산출 플래그(쏠림·빈약) 또는 None(현행 조립).
+        reservation_guide_shown: 직전 턴에 통합회원 안내가 이미 나갔는지(반복 억제).
 
     Returns:
         조립된 시스템 프롬프트 문자열.
@@ -583,12 +583,12 @@ def _build_card_system(
     ):
         blocks.append(_CLAUSE_RESERVATION_GUIDE)
     # 완화 재시도 결과(0건 후 조건 완화)이고 표시할 결과가 있으면 완화 안내 절을 추가한다.
-    # 실제 드롭된 필터(relaxed_filters)를 사용자 라벨로 안내한다(M1-b 동적 구성).
+    # 실제 드롭된 필터(relaxed_filters)를 사용자 라벨로 안내한다(동적 구성).
     relaxed_added = bool(retry_relaxed and results)
     if relaxed_added:
         blocks.append(_relaxed_notice(relaxed_filters))
-    # 딱맞음/대안 라벨 절(혼합-A) — 상위 카드 중 대안이 섞였을 때만. 완화 안내가 이미
-    # "조건을 넓힌 결과"임을 고지하면(relaxed_added) 중복이라 생략(R-2 길이/혼선 관리).
+    # 딱맞음/대안 라벨 절 — 상위 카드 중 대안이 섞였을 때만. 완화 안내가 이미
+    # "조건을 넓힌 결과"임을 고지하면(relaxed_added) 중복이라 생략(길이/혼선 관리).
     if alt_count > 0 and results and not relaxed_added:
         blocks.append(_CLAUSE_ALT_LABEL)
     # 빈약 캐비엇 — 완화 안내와 겹치면(둘 다 "조건을 좁혀보라" 취지) 생략해 중복/길이 관리.
@@ -717,7 +717,7 @@ def _is_exact_match(row: dict, intended: dict[str, str | None]) -> bool:
     """결과가 의도 제약(area/category/payment)을 모두 만족하면 True(딱맞음).
 
     상태(service_status)는 딱맞음 판정에 넣지 않는다 — 마감 항목도 의도 제약을
-    만족하면 "딱 맞는" 시설이고, 상태는 정렬-강등으로만 다룬다(8-1).
+    만족하면 "딱 맞는" 시설이고, 상태는 정렬-강등으로만 다룬다.
     """
     for key in _CURATE_INTENDED_KEYS:
         want = intended.get(key)
@@ -738,10 +738,10 @@ def _curate_display(
     relaxed: bool,
     relaxed_filters: list[str] | None,
 ) -> tuple[list[dict], int]:
-    """카드형 결과를 의도 적합도로 결정적 정렬한다(B-1). LLM/DB/추가검색 없음.
+    """카드형 결과를 의도 적합도로 결정적 정렬한다. LLM/DB/추가검색 없음.
 
-    하드 제외 없이 항상 적합도 정렬 후 전체를 반환한다(혼합-A 8-2): 마감 항목도
-    제외하지 않고 강등만(8-1), 부족분은 이미 가져온 결과(top_k)로 채워진다. 호출자가
+    하드 제외 없이 항상 적합도 정렬 후 전체를 반환한다: 마감 항목도
+    제외하지 않고 강등만, 부족분은 이미 가져온 결과(top_k)로 채워진다. 호출자가
     `[:_DISPLAY_LIMIT]` 슬라이스를 취한다.
 
     동점(동일 적합도)은 Python sort 가 stable 하므로 입력 순서(RRF/_focal_first 또는
@@ -965,7 +965,7 @@ class AnswerAgent:
             "DETAIL": _compose(_ROLE, _STRUCT_DETAIL, _OUTPUT_RULES),
             # attribute_gap 전용 (OUT_OF_SCOPE/attribute_gap). identification 과 분리.
             "ATTRIBUTE_GAP": _compose(_ROLE, _STRUCT_ATTRIBUTE_GAP, _OUTPUT_RULES),
-            # operational_detail 운영-상세 발췌형 (P5). detail_excerpt 존재 시 전용 분기.
+            # operational_detail 운영-상세 발췌형. detail_excerpt 존재 시 전용 분기.
             "OPERATIONAL_DETAIL": _compose(
                 _ROLE, _STRUCT_OPERATIONAL_DETAIL, _OUTPUT_RULES
             ),
@@ -984,7 +984,7 @@ class AnswerAgent:
         }
 
     async def explain(self, state: AgentState) -> AgentState:
-        """EXPLAIN 경로 — 직전 판단의 근거를, API 가 실어준 맥락 전부로 설명한다(원칙 §0).
+        """EXPLAIN 경로 — 직전 판단의 근거를, API 가 실어준 맥락 전부로 설명한다.
 
         clarify() 와 동일한 런타임 합성 패턴을 따른다 — 실제 사용자 질문은 human
         message 자리에 그대로 전달하고(무엇에 대한 "왜"인지 LLM 이 인지), 맥락은
@@ -1049,7 +1049,7 @@ class AnswerAgent:
     async def describe(self, state: AgentState) -> AgentState:
         """참조 해소 경로 — 재-hydrate 한 엔티티를 turn_kind 에 따라 서술한다.
 
-        turn_kind 분기(P4):
+        turn_kind 분기:
         - RELEVANCE(집합 적합성, "왜 이 항목들이 {성격}이야?") → _STRUCT_RELEVANCE 로
           "왜 이게 맞는지"를 결과 속성으로 묶어 설명한다(사례 156: 현재형 no-results
           변질 차단). 원 성격 키워드는 human 템플릿의 message 로 전달된다.
@@ -1075,7 +1075,7 @@ class AnswerAgent:
 
         # 참조 집합 설명(DRILL/RELEVANCE)은 검색-쏠림 자각(result_quality) 비대상이다 —
         # 사용자가 명시적으로 참조한 집합이라 "특정 지역에 쏠려 있다" 류 캐비엇이 부적절
-        # (P2 자각 패스는 RETRIEVE 전용이라 pre_answer_gate 가 이 경로엔 result_quality 를
+        # (자각 패스는 RETRIEVE 전용이라 pre_answer_gate 가 이 경로엔 result_quality 를
         # 산출하지 않음). 의도된 경계이므로 describe 는 result_quality 를 읽지 않는다.
         # RELEVANCE(집합 적합성)면 적합성 설명 변형, 그 외(DRILL 포함)는 현행 describe.
         turn_kind = state["triage"].get("turn_kind")
@@ -1188,7 +1188,7 @@ class AnswerAgent:
 
             sub_intent = state["plan"].get("vector_sub_intent")
 
-            # operational_detail 운영-상세 발췌형 트리거 (P5): out_of_scope_node 가 세팅한
+            # operational_detail 운영-상세 발췌형 트리거: out_of_scope_node 가 세팅한
             # vector_sub_intent=="operational_detail" + pre_answer prep 이 적재한
             # detail_excerpt 존재 시. detail_excerpt 가 None 이면(키워드 부재·raw 없음 등)
             # attribute_gap interim 리다이렉트로 폴백한다(정직 "공식 페이지 확인").
@@ -1199,7 +1199,8 @@ class AnswerAgent:
                 and bool(detail_excerpt)
             )
 
-            # attribute_gap 전용 트리거 (결정 C): out_of_scope_node 가 세팅한
+            # attribute_gap 전용 트리거 — is_attribute_gap 과 is_detail 은 상호배타다.
+            # out_of_scope_node 가 세팅한
             # vector_sub_intent=="attribute_gap" 신호로 DETAIL(identification)과 분리한다.
             # 검색은 동일하게 식별 검색을 수행했으므로 focal 시설을 앞으로 끌어올리되,
             # 답변은 데이터-성격 갭 프레이밍 프롬프트로 생성한다(예약 정보만 풀로
@@ -1228,7 +1229,7 @@ class AnswerAgent:
                 all_results = _focal_first(all_results)
 
             # 카드형(Tier 2) 턴은 pre_answer_gate 가 결정적으로 큐레이션한 display/
-            # extra_count 를 그대로 렌더링한다(B-3, 8-4 상류화). answer 는 슬라이스/
+            # extra_count 를 그대로 렌더링한다(큐레이션 상류화). answer 는 슬라이스/
             # extra_count 계산을 하지 않는다(생성 전용). 상세형/attribute_gap/MAP 은
             # 큐레이션 비대상이라 슬롯이 None → 기존 슬라이스 경로로 폴백한다(동작 불변).
             is_card_turn = not (
@@ -1247,7 +1248,7 @@ class AnswerAgent:
             results_json = json.dumps(display, ensure_ascii=False, default=str)
 
             if is_operational_detail:
-                # P5 운영-상세 발췌형 — detail_excerpt(focal 단건, 정제·키워드 발췌 완료)를
+                # 운영-상세 발췌형 — detail_excerpt(focal 단건, 정제·키워드 발췌 완료)를
                 # 경계 마커로 감싸 system 에 주입한다. answer 는 발췌 안 내용만 인용/요약
                 # 하고 윈도우 밖 날조는 금지된다(_STRUCT_OPERATIONAL_DETAIL 가드).
                 system_prompt = _compose(
@@ -1273,14 +1274,14 @@ class AnswerAgent:
                         f"{rationale}\n"
                         "---RATIONALE_END---",
                     )
-                # 완화 재시도(M1) 후 식별 성공 시 완화 사실도 고지한다(DETAIL 과 동일).
+                # attribute_gap 완화 재시도 후 식별 성공 시 완화 사실도 고지한다(DETAIL 과 동일).
                 if state.get("retry_relaxed") and display:
                     system_prompt = _compose(
                         system_prompt, _relaxed_notice(state.get("relaxed_filters"))
                     )
             elif is_detail:
                 system_prompt = self._static_prompts["DETAIL"]
-                # identification 상세형 답변에 완화 재시도(M1)가 있었으면 무엇을
+                # identification 상세형 답변에 완화 재시도가 있었으면 무엇을
                 # 완화했는지 고지한다 — DETAIL 은 _build_card_system 을 거치지
                 # 않으므로 여기서 완화 절을 덧붙인다. 유료→무료 오안내 가드도 함께 실린다.
                 if state.get("retry_relaxed") and display:
@@ -1384,7 +1385,7 @@ class AnswerAgent:
 
         프롬프트에서 실제로 출력하는 필드만 LLM 컨텍스트에 노출한다.
 
-        ## 답변 가능 속성 카탈로그 (결정 A)
+        ## 답변 가능 속성 카탈로그
 
         카드/LLM 컨텍스트에 노출하는 필드 = 카드 필드 + hydration 이 끌어오는 보유
         정형 컬럼. use_time_start/end(이용시간)·cancel_std_type/days(취소기준)·
@@ -1403,7 +1404,7 @@ class AnswerAgent:
           - 데이터 신뢰성이 개선되면(별도 작업) 다시 노출 검토.
 
         extractor 메타데이터(fee/operating_hours/cancellation 등)는 임베딩 전용이라
-        여기서 조인하지 않는다(결정 A).
+        여기서 조인하지 않는다.
 
         구현은 모듈 레벨 _normalize_card_row 로 위임한다(pre_answer_gate 큐레이션과
         동일 정규화 공유 — 단일 출처).

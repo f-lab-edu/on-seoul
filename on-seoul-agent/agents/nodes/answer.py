@@ -39,7 +39,7 @@ class AnswerNodes:
         }
         try:
             new_state = await self._answer.answer(fallback_state)
-            # S1 빈 답변 가드: LLM 성공 후에도 answer 가 None/빈 문자열이면 폴백 문구로
+            # 빈 답변 가드: LLM 성공 후에도 answer 가 None/빈 문자열이면 폴백 문구로
             # 대체한다(UI 빈 말풍선 방지). AnswerAgent 보장이 1차, 이 가드가 2차 방어막.
             answer = new_state.get("answer")
             if not (answer or "").strip():
@@ -75,7 +75,7 @@ class AnswerNodes:
         logger.info("ambiguous_node room=%s", state.get("room_id"))
         try:
             new_state = await self._answer.clarify(state)
-            # S1 빈 답변 가드: clarify() 내부 폴백이 1차이나, 노드 차원에서도
+            # 빈 답변 가드: clarify() 내부 폴백이 1차이나, 노드 차원에서도
             # answer 가 None/빈 문자열이면 _CLARIFY_FALLBACK 으로 대체한다(2차 방어막).
             answer = new_state.get("answer")
             if not (answer or "").strip():
@@ -102,7 +102,7 @@ class AnswerNodes:
         domain_outside: 즉시 거절 메시지, 검색 없음, END로.
         attribute_gap / operational_detail: refined_query + vector_sub_intent=
             attribute_gap 으로 vector_node → answer 경로. 데이터-성격 갭 프레이밍,
-            환각 금지. 두 서브타입은 P5 전까지 동형이다(아래 is_gap_oos).
+            환각 금지. 두 서브타입은 검색 경로상 동형이다(아래 is_gap_oos).
         """
         oos_type = state["triage"].get("out_of_scope_type")
         if is_gap_oos(oos_type):
@@ -111,12 +111,12 @@ class AnswerNodes:
             # hydrate한다(HydrationNode는 intent==VECTOR_SEARCH를 체크해 hydrated_services
             # 를 채운다).
             #
-            # 결정 C: 정상 DETAIL("이 시설 자세히")과 동일 신호(identification)로
+            # 정상 DETAIL("이 시설 자세히")과 동일 신호(identification)로
             # 위장하지 않고 전용 vector_sub_intent 를 전달한다. 검색 동작(식별 검색)은
             # 동일하지만(vector_node/hydration 은 intent 만 보고 동작), AnswerAgent 는
             # 이 값으로 전용 분기를 선택한다.
             #
-            # P5 승격: operational_detail(폭염·휴무·주차·우천)은 식별 검색 경로(VECTOR)는
+            # operational_detail(폭염·휴무·주차·우천)은 식별 검색 경로(VECTOR)는
             # attribute_gap 과 공유하되 sub_intent 를 "operational_detail" 로 분리한다 —
             # pre_answer prep 이 적재한 detail_excerpt 가 있으면 answer 가 운영-상세 발췌
             # 실답변을 생성하고(사례 162-163 근본 해소), 없으면 attribute_gap interim
@@ -159,7 +159,7 @@ class AnswerNodes:
         }
 
     async def explain_node(self, state: AgentState) -> dict[str, Any]:
-        """EXPLAIN action — API 가 실어준 맥락 전부로 직전 판단 근거를 설명한다(S2, 원칙 §0).
+        """EXPLAIN action — API 가 실어준 맥락 전부로 직전 판단 근거를 설명한다.
 
         explain() 이 history/entities/prev_reasoning 을 모두 소비하므로, 셋 중 하나라도
         있으면 설명이 가능하다. 폴백 조건을 "맥락이 전혀 없을 때"로 둬, 과도하게
@@ -181,7 +181,7 @@ class AnswerNodes:
             return await self.direct_answer_node(state)
 
         try:
-            # 단순 string 포맷팅 대신 LLM 으로 재서술 — 내부 기술 토큰 노출 차단(S2).
+            # 단순 string 포맷팅 대신 LLM 으로 재서술 — 내부 기술 토큰 노출 차단.
             new_state = await self._answer.explain(state)
             answer = new_state.get("answer")
             if not (answer or "").strip():

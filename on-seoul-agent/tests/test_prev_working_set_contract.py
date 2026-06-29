@@ -1,10 +1,10 @@
-"""대화 워킹셋(P1) 크로스턴 계약 — ChatRequest 주입 + emit 라운드트립 + 평면 폴백.
+"""대화 워킹셋 크로스턴 계약 — ChatRequest 주입 + emit 라운드트립 + 평면 폴백.
 
-검증(P1):
+검증:
 - ChatRequest.prev_working_set(신규 채널) → AgentState.prev_working_set 주입.
 - 평면 슬롯(prev_entities/prev_intent/prev_reasoning) 폴백(하위호환).
 - 미전송 → None(현행 100% 보존).
-- emit: final 의 prev_working_set 이 effective(완화 후) 필터를 캡처(P1-4) →
+- emit: final 의 prev_working_set 이 effective(완화 후) 필터를 캡처 →
   다음 턴 ChatRequest 로 라운드트립.
 """
 

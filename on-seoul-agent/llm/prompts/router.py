@@ -282,7 +282,7 @@ ROUTER_FEW_SHOT_EXAMPLES = [
         ),
     },
     {
-        # 11. 단일턴 payment 추출 (케이스2) — 무료가 정형 조건이므로 SQL_SEARCH + payment_type
+        # 11. 단일턴 payment 추출 — 무료가 정형 조건이므로 SQL_SEARCH + payment_type
         "message": "강남구 무료 문화행사 알려줘",
         "output": (
             '{"reasoning": "지역·카테고리·결제유형이 모두 명시된 목록 조회이므로 SQL_SEARCH.'
@@ -294,7 +294,7 @@ ROUTER_FEW_SHOT_EXAMPLES = [
         ),
     },
     {
-        # 12. 멀티턴 맥락 상속 (케이스1) — 직전 "강남구 문화행사"를 상속하고 무료만 추가.
+        # 12. 멀티턴 맥락 상속 — 직전 "강남구 문화행사"를 상속하고 무료만 추가.
         #     intent를 VECTOR로 뒤집지 말고, area/class를 상속하며 payment만 더한다.
         "message": (
             "[직전 맥락] 사용자: 강남구 문화행사 알려줘 / 어시스턴트: 강남구 문화행사 5건을 안내합니다.\n"
@@ -325,7 +325,7 @@ ROUTER_FEW_SHOT_EXAMPLES = [
         ),
     },
     {
-        # 14. 지명 "알아?" 프레이밍 (케이스1a) — 일반지식이 아니라 지명 기반 식별 검색.
+        # 14. 지명 "알아?" 프레이밍 — 일반지식이 아니라 지명 기반 식별 검색.
         #     검색 훅(지명 '남산 한국숲정원')이 있으므로 FALLBACK 금지, VECTOR_SEARCH.
         "message": "남산 한국숲정원 알아?",
         "output": (
@@ -340,7 +340,7 @@ ROUTER_FEW_SHOT_EXAMPLES = [
         ),
     },
     {
-        # 15. 지명 열거 (케이스1b) — "어떤 서비스 있어"는 개별 목록 열거 요청.
+        # 15. 지명 열거 — "어떤 서비스 있어"는 개별 목록 열거 요청.
         #     집계(종류/개수)가 아니므로 ANALYTICS 아님. 지명(남산) 위주이므로 VECTOR 목록.
         "message": "남산에 어떤 서비스 있어?",
         "output": (

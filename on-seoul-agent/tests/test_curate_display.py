@@ -1,4 +1,4 @@
-"""단위 — `_curate_display` 결정적 카드 큐레이션(B-1).
+"""단위 — `_curate_display` 결정적 카드 큐레이션.
 
 순수 헬퍼: LLM/DB/추가검색 없이 in-memory 적합도 정렬만 한다.
 적합도 키(area_name > max_class_name > payment_type > 예약가능 상태), 마감 강등,
@@ -40,7 +40,7 @@ class TestCurateSorting:
         assert [r["service_id"] for r in curated] == ["B", "A"]
 
     def test_closed_status_demoted_even_without_status_intent(self):
-        """질의에 상태 미명시여도, 비완화에서도 마감(접수종료)은 강등된다(8-1)."""
+        """질의에 상태 미명시여도, 비완화에서도 마감(접수종료)은 강등된다."""
         rows = [
             _row("CLOSED", area="광진구", klass="체육시설", status="접수종료"),
             _row("OPEN", area="광진구", klass="체육시설", status="접수중"),

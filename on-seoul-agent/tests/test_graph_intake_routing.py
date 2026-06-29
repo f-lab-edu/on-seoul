@@ -1,6 +1,6 @@
 """그래프 통합 — route_intake 분기 (REFINE 재검색 / 폴백-NEW) E2E.
 
-검증(intake-node-merge §6 통합):
+검증:
 - REFINE → working_set_refine_node → router(forced_intent) → 머지 필터 재검색.
 - 폴백-NEW(분류 모호): 미지 turn_kind 주입 → NEW+RETRIEVE 경로 + breadcrumb.
 - META → explain_node.
@@ -89,7 +89,7 @@ class TestMetaPath:
 
 class TestClassificationAmbiguityFallback:
     async def test_unknown_turn_kind_degrades_to_new_retrieve(self):
-        """분류 모호(§2.5-A): 미지 turn_kind 주입 → NEW+RETRIEVE + breadcrumb.
+        """분류 모호: 미지 turn_kind 주입 → NEW+RETRIEVE + breadcrumb.
 
         intake LLM 이 IntakeOutput 스키마 밖 값을 낼 수는 없으나, _build_update 의
         방어 분기가 NEW 로 강등하는지 확인한다(미지 enum 시뮬레이션).

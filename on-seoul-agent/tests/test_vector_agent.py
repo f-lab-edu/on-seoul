@@ -60,7 +60,7 @@ def _mock_ai_session_ctx():
 def _patch_search(vector_rows: list[dict], bm25_rows: list[dict]):
     """vector_search, question_search, bm25_search, ai_session_ctx 를 동시에 patch.
 
-    Phase 2: hydrate_services 는 HydrationNode 책임이므로 여기서 patch 하지 않는다.
+    hydrate_services 는 HydrationNode 책임이므로 여기서 patch 하지 않는다.
     vector_results 는 메타데이터 only ({service_id, rrf_score}) 로 반환된다.
 
     제안 2 이후: ai_session_ctx 도 함께 patch 한다.
@@ -397,7 +397,7 @@ class TestHybridSearchRrf:
     async def test_bm25_only_result_included_in_vector_results(self):
         """BM25 전용 결과(벡터 검색에 없는 service_id)가 vector_results 에 포함된다.
 
-        Phase 2: vector_results 는 메타데이터 only — service_id + rrf_score 만 보장.
+        vector_results 는 메타데이터 only — service_id + rrf_score 만 보장.
         원본 필드(service_name 등)는 HydrationNode 가 채운다.
         """
         vector_rows = [
@@ -551,7 +551,7 @@ class TestVectorAgentRrfFinalCut:
 
 
 class TestVectorAgentMetaOnlyResults:
-    """Phase 2: vector_results 는 메타데이터 only — HydrationNode 가 원본을 채운다."""
+    """vector_results 는 메타데이터 only — HydrationNode 가 원본을 채운다."""
 
     async def test_vector_results_contains_service_id_and_rrf_score_only(self):
         """vector_results 각 행은 service_id 와 rrf_score 만 포함한다."""

@@ -11,7 +11,7 @@
 - EXPLAIN: prev_reasoning 있으면 근거 설명, 없으면 DIRECT_ANSWER 폴백
 - 캐시 키: RETRIEVE 단일/멀티 충돌 없음, 비-RETRIEVE 캐시 제외
 - self-correction: 비-RETRIEVE action이 0건 재시도 경로 미진입
-- C2: 0건 시 answer LLM 미호출 + retry_prep 직행
+- 0건 게이트: 0건 시 answer LLM 미호출 + retry_prep 직행
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -189,11 +189,11 @@ class TestTriageActionRouting:
         assert result["output"]["answer"] is not None
 
     async def test_out_of_scope_operational_detail_routes_to_vector(self):
-        """OUT_OF_SCOPE/operational_detail -> 식별 검색(VECTOR) 경로(P5 승격).
+        """OUT_OF_SCOPE/operational_detail -> 식별 검색(VECTOR) 경로.
 
         회귀(사례 162-163): intake 가 신설 oos_type=operational_detail(폭염·휴무·주차·우천)
         을 산출하면 domain_outside 전면 거절로 새지 않고 식별 검색(vector)을 실제로 돌린다.
-        P5: 검색 routing 은 attribute_gap 과 동일(is_gap_oos)하되 sub_intent 는
+        검색 routing 은 attribute_gap 과 동일(is_gap_oos)하되 sub_intent 는
         "operational_detail" 전용으로 분리되어 answer 가 발췌 실답변/폴백을 고른다.
         (detail_excerpt 적재·발췌 답변 도달은 test_operational_detail_integration 이 커버.)
         """
@@ -259,12 +259,12 @@ class TestTriageActionRouting:
         assert "out_of_scope_domain_outside" not in result["node_path"]
         assert "out_of_scope_operational_detail" in result["node_path"]
         assert result["vector"]["results"] is not None
-        # P5 전용 신호: vector_sub_intent 가 operational_detail 로 세팅된다(answer 분기 신호).
+        # 전용 신호: vector_sub_intent 가 operational_detail 로 세팅된다(answer 분기 신호).
         assert result["plan"].get("vector_sub_intent") == "operational_detail"
         assert result["output"]["answer"] is not None
 
     async def test_explain_with_prev_reasoning(self):
-        """META turn_kind + prev_reasoning -> explain LLM 재서술(S2) 답변 생성."""
+        """META turn_kind + prev_reasoning -> explain LLM 재서술 답변 생성."""
         intake = make_intake(
             turn_kind=TurnKind.META, user_rationale="판단 근거를 설명드립니다."
         )
@@ -282,7 +282,7 @@ class TestTriageActionRouting:
         )
         assert result["triage"]["turn_kind"] == "META"
         assert result["output"]["answer"] is not None
-        # S2: explain() 으로 재서술된 답변이 채워진다.
+        # explain() 으로 재서술된 답변이 채워진다.
         assert len(result["output"]["answer"]) > 10
 
     # EXPLAIN + prev_reasoning 없음 → DIRECT_ANSWER 폴백은 test_non_retrieve_robustness
@@ -328,7 +328,7 @@ class TestSelfCorrectionExcludesNonRetrieve:
 
 
 # ---------------------------------------------------------------------------
-# 3. C2 pre-answer 0건 게이트
+# 3. pre-answer 0건 게이트
 # ---------------------------------------------------------------------------
 
 
@@ -382,7 +382,7 @@ class TestPreAnswerGate:
             assert nodes.route_pre_answer_gate(state) == "answer_node"
 
     async def test_c2_gate_prevents_answer_llm_on_zero_hits(self):
-        """C2 게이트: 0건 시 answer_node LLM 미호출 + retry_prep 직행 E2E."""
+        """0건 게이트: 0건 시 answer_node LLM 미호출 + retry_prep 직행 E2E."""
         intake = make_intake(
             turn_kind=TurnKind.NEW, action=IntakeAction.RETRIEVE
         )
@@ -1059,7 +1059,7 @@ class TestRetryReentersRouterNotTriage:
             user_rationale="검색합니다",
         )
         # router 는 VECTOR_SEARCH 를 반환 — _RETRY_FALLBACK_INTENT 전환 없이
-        # 케이스 C(완화)로 router 재진입만 시키기 위해 VECTOR 경로를 쓴다.
+        # 기존 완화로 router 재진입만 시키기 위해 VECTOR 경로를 쓴다.
         router = make_router(IntentType.VECTOR_SEARCH)
         answer_agent = _answer_agent("재시도 후 답변")
 

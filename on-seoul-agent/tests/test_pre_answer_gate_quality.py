@@ -1,4 +1,4 @@
-"""P2 자각 패스(B) — pre_answer_gate_node 가 result_quality/reservation_guide_shown
+"""결과 품질 자각 패스 — pre_answer_gate_node 가 result_quality/reservation_guide_shown
 부분 dict 를 산출하는지 검증한다.
 
 RETRIEVE(hydration 결과) 경로에서만 평가하고, best-effort 격리(점검 예외가 답변을

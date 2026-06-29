@@ -1,4 +1,4 @@
-"""QA 보강 회귀 — P4 메타/적합성 + attribute_gap interim(R10).
+"""QA 보강 회귀 — 메타/적합성 + attribute_gap interim.
 
 구현 에이전트 테스트(test_answer_p4_meta_relevance.py)가 다루지 않은 경계/적대 케이스만
 보강한다. 중복 금지: 여기선 (1) attribute_gap 금지문구가 '부정 절' 안에서만 인용되는지
@@ -29,7 +29,7 @@ class TestAttributeGapForbiddenPhraseIsNegativeOnly:
                 ), f"긍정 지시로 인용된 부재 단정 문구: {line!r}"
 
     def test_no_data_character_absence_assertion_recommended(self):
-        # R10: "담겨있지 않" 데이터-성격 부재 단언은 전면 제거(권장도 인용도 금지).
+        # "담겨있지 않" 데이터-성격 부재 단언은 전면 제거(권장도 인용도 금지).
         assert "담겨있지 않" not in _STRUCT_ATTRIBUTE_GAP
         assert "담겨 있지 않" not in _STRUCT_ATTRIBUTE_GAP
         assert "담기지 않" not in _STRUCT_ATTRIBUTE_GAP

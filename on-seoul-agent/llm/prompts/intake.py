@@ -6,7 +6,7 @@ reference_resolution(규칙) + triage(LLM)를 단일 LLM 노드로 병합한 int
 
 핵심 grounding:
   - 참조는 "명확히 가리킬 때만"(화제 전환은 NEW). LLM 은 인덱스만 선택(service_id 생성 금지).
-  - operational_detail vs attribute_gap 구분(P5 연계).
+  - operational_detail vs attribute_gap 구분.
 """
 
 import json

@@ -231,7 +231,7 @@ async def test_stream_with_langfuse_keeps_span_over_loop():
 def test_completion_metadata_none_intent_action_safe():
     """intent/action 미설정(plan/triage 빈 dict) → .value 접근 없이 None 직렬화.
 
-    enum 이 없을 때 `intent.value` AttributeError 가 나지 않아야 한다(§커버리지 갭).
+    enum 이 없을 때 `intent.value` AttributeError 가 나지 않아야 한다(커버리지 갭).
     """
     meta = _trace_completion_metadata(make_agent_state())
     assert meta["intent"] is None

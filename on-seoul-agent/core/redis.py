@@ -1,7 +1,7 @@
 """비동기 Redis 클라이언트 팩토리.
 
 MVP 단계에서는 설정 확인 및 연결 준비만 제공한다.
-실제 캐싱/Rate Limiting은 Phase 14 이후에 활성화한다.
+실제 캐싱/Rate Limiting은 후속 단계에서 활성화한다.
 """
 
 import redis.asyncio as aioredis

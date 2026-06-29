@@ -1,4 +1,4 @@
-"""AgentGraph (LangGraph StateGraph) 단위 / 통합 테스트 (Phase 17).
+"""AgentGraph (LangGraph StateGraph) 단위 / 통합 테스트.
 
 검증 대상:
 - 각 노드(router, sql, vector, map, fallback, answer, trace) 단위 동작
@@ -524,7 +524,7 @@ class TestSelfCorrectionCycle:
     async def test_error_state_with_fallback_answer_skips_retry(self):
         """router 예외 시 fallback_answer가 설정되므로 재시도 없이 trace_node로 진행한다.
 
-        수정(Phase 17): needs_retry = not answer.strip() and retry_count == 0
+        needs_retry = not answer.strip() and retry_count == 0
         error + fallback_answer 조합은 이미 최선의 응답이므로 재시도 불필요.
         """
         _, data_session = _sql_agent([])
@@ -1167,7 +1167,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
         assert "retry_prep" in result["node_path"]
 
     async def test_self_correction_edge_skips_retry_when_answer_present(self):
-        """수정(Phase 17): answer가 있으면 error 유무와 무관하게 trace_node로 진행한다.
+        """answer가 있으면 error 유무와 무관하게 trace_node로 진행한다.
 
         needs_retry = not answer.strip() and retry_count == 0
         — error + fallback_answer 조합은 재시도 불필요.
@@ -1202,7 +1202,7 @@ class TestSelfCorrectionInfiniteLoopRegression:
         assert graph._nodes.self_correction_edge(state_after_retry) == "end_normal"
 
     async def test_self_correction_edge_zero_hits_triggers_retry(self):
-        """SQL/VECTOR 하드 필터 0건이면 answer가 있어도 1회 재시도(케이스1 안전망)."""
+        """SQL/VECTOR 하드 필터 0건이면 answer가 있어도 1회 재시도(안전망)."""
         graph = AgentGraph(answer_agent=_answer_agent())
 
         zero_hits = _state(

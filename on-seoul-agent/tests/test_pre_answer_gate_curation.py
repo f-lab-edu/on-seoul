@@ -1,4 +1,4 @@
-"""B-2 — pre_answer_gate_node 카드 큐레이션 합류.
+"""pre_answer_gate_node 카드 큐레이션 합류.
 
 카드형 턴(SQL/VECTOR 비-identification)에서만 _curate_display 로 display/extra_count/
 alt_count 를 상태에 적재하고, result_quality 를 *큐레이션된* display 기준으로 산출한다.
