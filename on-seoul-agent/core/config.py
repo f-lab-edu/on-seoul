@@ -189,7 +189,7 @@ class Settings(BaseSettings):
 
     # VectorSubIntent 활성화 단계
     # False(기본): 항상 vector_default_sub_intent 프로파일 사용.
-    # True 전환 조건: Router의 sub_intent 분류 정확도 ≥ 80% 검증 후 수동 전환. (Phase 3)
+    # True 전환 조건: Router의 sub_intent 분류 정확도 ≥ 80% 검증 후 수동 전환.
     vector_sub_intent_enabled: bool = False
     # rrf_weight_profiles에 반드시 존재하는 키여야 한다 (없으면 equal-weight로 폴백).
     vector_default_sub_intent: str = "semantic"
@@ -218,8 +218,8 @@ class Settings(BaseSettings):
         "semantic": {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3},
     }
 
-    # Phase 1 baseline 모드: True → 모든 채널 가중치 1.0 (비가중치 RRF).
-    # False 전환 조건: recall@k baseline 측정 완료 후 가중치 활성화. (Phase 2)
+    # baseline 모드: True → 모든 채널 가중치 1.0 (비가중치 RRF).
+    # False 전환 조건: recall@k baseline 측정 완료 후 가중치 활성화.
     rrf_unweighted_baseline: bool = True
 
 

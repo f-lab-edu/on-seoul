@@ -34,7 +34,7 @@ _ANALYTICS_DROP_ORDER: tuple[str, ...] = (
     "area_name",
 )
 
-# attribute_gap 완화(M1) — 드롭 우선순위. 케이스 C/ANALYTICS 완화와 일관되게
+# attribute_gap 완화 — 드롭 우선순위. 기존 완화/ANALYTICS 완화와 일관되게
 # 제약 강도 순으로 드롭하되 max_class_name(카테고리)은 의미 보존상 유지(드롭 제외).
 # 동일 vector 질의를 "필터만 완화"해 재검색하기 위해 0건을 유발한 필터를 모두 드롭한다.
 _ATTRIBUTE_GAP_DROP_ORDER: tuple[str, ...] = (
@@ -63,15 +63,15 @@ class CorrectionNodes:
         retry_count를 1 증가시키고 intent에 따라 전환/완화/반경확장을 수행한다.
 
         분기:
-          - 케이스 M1 (attribute_gap): OUT_OF_SCOPE/attribute_gap vector 0건 →
+          - attribute_gap: OUT_OF_SCOPE/attribute_gap vector 0건 →
             forced_intent=VECTOR_SEARCH + refined_query/vector_sub_intent 보존,
             0건 유발 필터만 드롭(max_class_name 유지) + relaxed_filters 기록.
-          - 케이스 A (전환): _RETRY_FALLBACK_INTENT 키 intent(SQL_SEARCH 등) →
+          - 전환: _RETRY_FALLBACK_INTENT 키 intent(SQL_SEARCH 등) →
             forced_intent 세팅 + 정형 필터 전부 비움(전환 경로가 자체 정제).
-          - 케이스 B (ANALYTICS): 가장 제약 큰 effective 필터 1개만 드롭(status→area).
+          - ANALYTICS: 가장 제약 큰 effective 필터 1개만 드롭(status→area).
             max_class_name 은 유지. 드롭할 게 없으면 no-op.
-          - 케이스 D (MAP): retry_radius_m=3000 으로 반경 확장, map_results 리셋.
-          - 케이스 C (기존 완화): VECTOR_SEARCH 0건/빈 답변 등 — 필터·refined_query 리셋.
+          - MAP: retry_radius_m=3000 으로 반경 확장, map_results 리셋.
+          - 기존 완화: VECTOR_SEARCH 0건/빈 답변 등 — 필터·refined_query 리셋.
 
         모든 분기는 공통 베이스(retry_count 증가 + error 클리어 + retry_relaxed=True +
         RESET_CHANNELS)를 공유하고 분기별 override 만 더한다. retry_count 캡(최대 1회)을
@@ -91,7 +91,7 @@ class CorrectionNodes:
             action.value if action else None,
         )
 
-        # C2 0건 게이트 우회 경로 회귀 방지: 이 재시도는 cache_write 를 거치지 않고
+        # 0건 게이트 우회 경로 회귀 방지: 이 재시도는 cache_write 를 거치지 않고
         # router_node 로 재진입하므로, 직전 패스의 cache_check 가 잡은 singleflight 락을
         # 여기서 해제해야 한다(미해제 시 재진입 cache_check 가 SET NX 실패 → poll 타임아웃).
         # Option B: 획득 시점 키를 평면 슬롯에서 그대로 읽어 해제 — refined_query/필터
@@ -117,7 +117,7 @@ class CorrectionNodes:
             # 해제 완료 → 슬롯 비움(재진입 cache_check 가 새 락 키를 다시 기록).
             "answer_lock_key": None,
         }
-        # 전 분기 공통 필터 드롭 페이로드(머지) — 케이스 B(ANALYTICS)만 부분 드롭.
+        # 전 분기 공통 필터 드롭 페이로드(머지) — ANALYTICS 분기만 부분 드롭.
         _filters_clear = {
             "max_class_name": None,
             "area_name": None,
@@ -126,15 +126,15 @@ class CorrectionNodes:
         }
         # 큐레이션 의도 복원용 — 전체 드롭 직전 원래(비-None) 필터값 스냅샷.
         # filters 채널이 None 으로 비워진 뒤에도 pre_answer_gate 가 원 요청 제약을
-        # 복원해 적합도 정렬할 수 있게 한다(케이스 A/C 완화 경로).
+        # 복원해 적합도 정렬할 수 있게 한다(전환/기존 완화 경로).
         _relaxed_snapshot = {
             f: state["filters"].get(f)
             for f in _filters_clear
             if state["filters"].get(f)
         }
 
-        # 케이스 M1(attribute_gap): OUT_OF_SCOPE/attribute_gap 의 vector 검색 0건.
-        # 케이스 C(전체 리셋)와 달리 검색 컨텍스트를 보존한다:
+        # attribute_gap 분기: OUT_OF_SCOPE/attribute_gap 의 vector 검색 0건.
+        # 기존 완화(전체 리셋)와 달리 검색 컨텍스트를 보존한다:
         #   · forced_intent=VECTOR_SEARCH 로 2회차 router_node 가 LLM 재분류를 skip 하게 한다.
         #   · vector_sub_intent(identification 등)·refined_query 는 보존(plan 리셋 금지) —
         #     "동일 vector 질의를 필터만 완화해 재검색"이 성립한다.
@@ -160,7 +160,7 @@ class CorrectionNodes:
             )
             return update
 
-        # 케이스 A: 강제 전환 대상 intent (SQL_SEARCH → VECTOR_SEARCH 등)
+        # 전환 분기: 강제 전환 대상 intent (SQL_SEARCH → VECTOR_SEARCH 등)
         fallback = _RETRY_FALLBACK_INTENT.get(intent) if intent else None
         if fallback is not None:
             update.update(
@@ -181,7 +181,7 @@ class CorrectionNodes:
             )
             return update
 
-        # 케이스 B: ANALYTICS — 가장 제약 큰 effective 필터 1개만 드롭(intent 유지)
+        # ANALYTICS 분기 — 가장 제약 큰 effective 필터 1개만 드롭(intent 유지)
         if intent == IntentType.ANALYTICS:
             update["analytics"] = {}
             for field in _ANALYTICS_DROP_ORDER:
@@ -190,8 +190,8 @@ class CorrectionNodes:
                     break
             return update
 
-        # 케이스 D: MAP — 반경 확장(intent 유지)
-        # 케이스 C 와 달리 sql/vector/hydration 그룹을 건드리지 않는다: MAP 경로는
+        # MAP 분기 — 반경 확장(intent 유지)
+        # 기존 완화와 달리 sql/vector/hydration 그룹을 건드리지 않는다: MAP 경로는
         # 이 슬롯들을 채우지 않으므로 리셋 자체가 무의미하다(반경만 확장하면 충분).
         if intent == IntentType.MAP:
             update.update(
@@ -203,7 +203,7 @@ class CorrectionNodes:
             )
             return update
 
-        # 케이스 C: 기존 완화 (VECTOR_SEARCH 0건, 빈 답변 등)
+        # 기존 완화 분기 (VECTOR_SEARCH 0건, 빈 답변 등)
         # payment_type 완화 — 0건 재시도 시 결제 유형 필터를 드롭한다.
         update.update(
             {

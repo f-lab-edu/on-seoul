@@ -1,11 +1,11 @@
-"""운영-상세(operational_detail) 답변 경로 테스트 (P5 §8 D-4).
+"""운영-상세(operational_detail) 답변 경로 테스트.
 
-P5: operational_detail 을 attribute_gap interim 리다이렉트에서 detail_content 발췌
+operational_detail 을 attribute_gap interim 리다이렉트에서 detail_content 발췌
 실답변 경로로 승격. focal 단건 한정.
 
 핵심 검증:
 - detail_excerpt 존재 → 운영-상세 변형 구조 프롬프트(발췌 가드·환각 금지) 사용.
-- detail_excerpt None → P4 attribute_gap interim 리다이렉트로 폴백.
+- detail_excerpt None → attribute_gap interim 리다이렉트로 폴백.
 - 발췌 윈도우 밖 날조 금지 가드가 프롬프트에 포함된다.
 """
 
@@ -129,6 +129,6 @@ class TestOperationalDetailRender:
         await agent.answer(state)
 
         system = agent._answer_chain.ainvoke.call_args[0][0]["system"]
-        # excerpt 부재 → P4 interim(attribute_gap) 리다이렉트로 폴백.
+        # excerpt 부재 → interim(attribute_gap) 리다이렉트로 폴백.
         assert _STRUCT_ATTRIBUTE_GAP[:30] in system
         assert _STRUCT_OPERATIONAL_DETAIL[:30] not in system

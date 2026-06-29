@@ -1,4 +1,4 @@
-"""fetch_detail_content tool 단위 테스트 (P5 §8 D-3).
+"""fetch_detail_content tool 단위 테스트.
 
 focal service_id 단건 detail_content SELECT(파라미터 바인딩·AsyncSession).
 미존재→None. raw 블롭 격리 회귀(_result_columns/카드에 미포함).

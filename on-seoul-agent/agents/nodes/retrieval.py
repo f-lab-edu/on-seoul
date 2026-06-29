@@ -106,12 +106,12 @@ class RetrievalNodes:
         return {"rrf_merged_ids": merged_ids, "node_path": ["rrf_fusion_node"]}
 
     async def pre_answer_gate_node(self, state: AgentState) -> dict[str, Any]:
-        """C2 pre-answer 0건 게이트 + P2 결과 품질 자각 패스(B).
+        """pre-answer 0건 게이트 + 결과 품질 자각 패스.
 
         hydration_node 직후 hydrated_services=[] 이면 answer_node를 미호출하고
         retry_prep_node로 직행하도록 엣지 로직(route_pre_answer_gate)에서 판정한다.
 
-        P2 자각 패스(B): RETRIEVE(hydration 결과) 경로에서만 결과 성격(쏠림·빈약)을
+        자각 패스: RETRIEVE(hydration 결과) 경로에서만 결과 성격(쏠림·빈약)을
         경량 휴리스틱으로 점검해 answer 가 소비할 평면 슬롯 result_quality 를 산출한다.
         재검색은 하지 않고(라우팅 불변, 전진 1회) answer 톤만 바꾼다. 통합회원 안내
         반복 억제용 reservation_guide_shown(history 상류 파싱, answer 는 bool 만 소비)도
@@ -120,10 +120,10 @@ class RetrievalNodes:
         attribute_gap(OUT_OF_SCOPE)·describe·MAP·ANALYTICS 는 자각 패스 비대상이라
         result_quality 슬롯을 건드리지 않는다(None 유지).
 
-        P5 운영-상세 prep: operational_detail turn 이면 focal 단건 detail_content 를
+        운영-상세 prep: operational_detail turn 이면 focal 단건 detail_content 를
         fetch + 발췌해 detail_excerpt 슬롯에 적재한다(없으면 None = attribute_gap interim
         폴백 신호). fetch·정제·발췌는 상류(여기/tools/agents)가 담당하고 answer 는 소비만
-        한다(§2.3 책임 경계). 예외는 best-effort 격리(답변 막지 않음).
+        한다(책임 경계). 예외는 best-effort 격리(답변 막지 않음).
         """
         result_quality: dict[str, Any] | None = None
         reservation_shown = False
@@ -133,8 +133,8 @@ class RetrievalNodes:
         if self._is_retrieve_path(state):
             try:
                 rows = state["hydration"].get("hydrated_services") or []
-                # B-2 카드 큐레이션 — 카드형 턴에서만, result_quality *이전*에 실행한다
-                # (8-4 순서). curated/display 산출 후 그 기준으로 품질을 점검해 정합을
+                # 카드 큐레이션 — 카드형 턴에서만, result_quality *이전*에 실행한다.
+                # curated/display 산출 후 그 기준으로 품질을 점검해 정합을
                 # 맞춘다. 비카드형/0건은 큐레이션 스킵(슬롯 None 유지).
                 quality_rows = rows
                 if self._is_card_turn(state) and rows:
@@ -149,7 +149,7 @@ class RetrievalNodes:
                     curated_display = curated[:_DISPLAY_LIMIT]
                     curated_extra_count = max(0, len(curated) - _DISPLAY_LIMIT)
                     curated_alt_count = alt_count
-                    # result_quality 는 큐레이션된 display 기준으로 산출(8-4 정합).
+                    # result_quality 는 큐레이션된 display 기준으로 산출(정합).
                     quality_rows = curated_display
                 result_quality = assess_result_quality(
                     quality_rows, area_filter=state["filters"].get("area_name")
@@ -239,7 +239,7 @@ class RetrievalNodes:
 
     @staticmethod
     def _is_retrieve_path(state: AgentState) -> bool:
-        """자각 패스(B) 평가 대상 — 순수 RETRIEVE(hydration) 경로인지 판정한다.
+        """결과 품질 자각 패스 평가 대상 — 순수 RETRIEVE(hydration) 경로인지 판정한다.
 
         attribute_gap(OUT_OF_SCOPE)·describe·MAP·ANALYTICS 는 비대상이다.
         action=None 은 router fallback(검색 실행)이라 RETRIEVE 와 동일 취급한다.
@@ -247,9 +247,9 @@ class RetrievalNodes:
         return state["triage"].get("action") in (ActionType.RETRIEVE, None)
 
     def route_pre_answer_gate(self, state: AgentState) -> str:
-        """C2 게이트 엣지: hydrated_services=[] 시 retry_prep, 그 외 answer_node.
+        """0건 게이트 엣지: hydrated_services=[] 시 retry_prep, 그 외 answer_node.
 
-        M1-a: gap(attribute_gap/operational_detail, OUT_OF_SCOPE)은 vector 검색을 실제
+        gap(attribute_gap/operational_detail, OUT_OF_SCOPE)은 vector 검색을 실제
         실행하므로 RETRIEVE 와 동일한 0건 처리 대상이다. 그 외 비-RETRIEVE action 은
         게이트 통과(직접 answer).
         """
@@ -268,7 +268,7 @@ class RetrievalNodes:
         hydrated = state["hydration"].get("hydrated_services")
         retry_count = state.get("retry_count", 0)
 
-        # C2: hydrated_services=[] 이면 answer LLM 미호출 + retry_prep 직행
+        # hydrated_services=[] 이면 answer LLM 미호출 + retry_prep 직행
         # retry_count 캡(>=1) 시에는 answer_node로 통과(무한루프 방지)
         #
         # []=검색 실행·0건(→retry) vs None=hydration 미실행(→retry 무의미, 통과)을

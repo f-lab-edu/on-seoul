@@ -175,9 +175,9 @@ class TestExplainFallbackSelectsFallbackBranch:
         assert _STRUCT_CARD_LIST[:30] not in system
 
     async def test_explain_with_prev_reasoning_uses_explain_prompt_not_fallback(self):
-        """대조군: prev_reasoning이 있으면 폴백하지 않고 EXPLAIN 재서술(S2)을 탄다.
+        """대조군: prev_reasoning이 있으면 폴백하지 않고 EXPLAIN 재서술을 탄다.
 
-        S2 이후 explain_node 는 단순 string 포맷팅 대신 AnswerAgent.explain() 으로
+        explain_node 는 단순 string 포맷팅 대신 AnswerAgent.explain() 으로
         LLM 재서술한다. FALLBACK/카드 분기가 아니라 EXPLAIN 프롬프트를 고른다.
         """
         agent = _real_answer_agent_with_fake_llm()

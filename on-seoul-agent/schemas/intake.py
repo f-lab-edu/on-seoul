@@ -3,7 +3,7 @@
 intake_node 는 턴 1회 with_structured_output 호출로 "이 턴이 무엇인가"를 끝낸다.
   - turn_kind: 1차 분기 스위치 (REFINE/DRILL/RELEVANCE/META/NEW)
   - action:    turn_kind=NEW 일 때만 의미 (RETRIEVE/DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE)
-  - oos_type:  action=OUT_OF_SCOPE 일 때 서브타입 (operational_detail 신설 — P5 연계)
+  - oos_type:  action=OUT_OF_SCOPE 일 때 서브타입 (operational_detail 신설)
   - ref_indices: 1-based prev_entities 인덱스 (LLM 은 인덱스만 선택, service_id 생성 금지)
   - user_rationale: sanitize 후 decision 이벤트로
 
@@ -25,8 +25,8 @@ class TurnKind(str, Enum):
     NEW = "NEW"  # 신규 질문 (action 위임). 누락·미지·파싱 실패 시 기본값.
     REFINE = "REFINE"  # 직전 결과에 제약 추가 → working_set_refine_node 재검색
     DRILL = "DRILL"  # 개별 상세 → rehydrate(단건) → describe
-    # 집합 적합성 → rehydrate(집합) → describe. "적합성 변형"은 P4 이연이라 현재는
-    # describe 가 공용 서술을 재사용한다(drift 오해 방지 — 변형은 P4 에서 분기).
+    # 집합 적합성 → rehydrate(집합) → describe. "적합성 변형"은 후속 단계로 이연이라
+    # 현재는 describe 가 공용 서술을 재사용한다(drift 오해 방지 — 변형은 후속에서 분기).
     RELEVANCE = "RELEVANCE"
     META = "META"  # 판단 근거 → explain (기존 EXPLAIN 흡수)
 
@@ -43,7 +43,7 @@ class IntakeAction(str, Enum):
     OUT_OF_SCOPE = "OUT_OF_SCOPE"
 
 
-# OUT_OF_SCOPE 서브타입. operational_detail 신설(P5 운영-상세 답변가능 분기):
+# OUT_OF_SCOPE 서브타입. operational_detail 신설(운영-상세 답변가능 분기):
 # 폭염·휴무·주차·우천 등은 attribute_gap 이 아니라 operational_detail 로 분리한다.
 OosType = Literal["domain_outside", "attribute_gap", "operational_detail"]
 

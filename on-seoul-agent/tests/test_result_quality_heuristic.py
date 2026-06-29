@@ -1,4 +1,4 @@
-"""P2 자각 패스(B) 휴리스틱 단위 테스트.
+"""결과 품질 자각 패스 휴리스틱 단위 테스트.
 
 assess_result_quality(쏠림/빈약) + reservation_guide_already_shown(상류 history 파싱)
 의 결정적 동작을 검증한다. 실제 LLM·DB 미호출.

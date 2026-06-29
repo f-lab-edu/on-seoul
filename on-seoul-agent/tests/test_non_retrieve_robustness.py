@@ -1,10 +1,10 @@
-"""non-RETRIEVE action 자가교정 + 품질 안전망 (M1 / S1 / S2).
+"""non-RETRIEVE action 자가교정 + 품질 안전망.
 
-- M1: attribute_gap 0건 → retry_prep attribute_gap 분기(검색 컨텍스트 보존) →
-      필터 완화 재검색. forced_intent=VECTOR_SEARCH + refined_query/vector_sub_intent
-      보존. relaxed_filters 기록. 완화 후 결과 有/無 3-상태. 무한루프 없음.
-- S1: direct_answer_node / ambiguous_node 빈 답변 가드(노드별).
-- S2: AnswerAgent.explain() LLM 재서술 — prev_reasoning 기술 토큰 비노출,
+- attribute_gap 완화: attribute_gap 0건 → retry_prep attribute_gap 분기(검색 컨텍스트
+      보존) → 필터 완화 재검색. forced_intent=VECTOR_SEARCH + refined_query/
+      vector_sub_intent 보존. relaxed_filters 기록. 완화 후 결과 有/無 3-상태. 무한루프 없음.
+- 빈 답변 가드: direct_answer_node / ambiguous_node 빈 답변 가드(노드별).
+- EXPLAIN 재서술: AnswerAgent.explain() LLM 재서술 — prev_reasoning 기술 토큰 비노출,
       prev_reasoning 없음→direct_answer 폴백, LLM 예외→폴백.
 
 모든 LLM/외부 호출은 fake 로 차단한다(hermetic).
@@ -46,7 +46,7 @@ def _attribute_gap_intake():
 
 
 # ---------------------------------------------------------------------------
-# M1-a — route_pre_answer_gate: attribute_gap 0건도 0건 체크 경로
+# route_pre_answer_gate: attribute_gap 0건도 0건 체크 경로
 # ---------------------------------------------------------------------------
 
 
@@ -97,7 +97,7 @@ class TestPreAnswerGateAttributeGap:
 
 
 # ---------------------------------------------------------------------------
-# out_of_scope_node — attribute_gap 전용 신호 (결정 C)
+# out_of_scope_node — attribute_gap 전용 신호
 # ---------------------------------------------------------------------------
 
 
@@ -108,7 +108,7 @@ class TestOutOfScopeNodeAttributeGapSignal:
     async def test_attribute_gap_emits_dedicated_sub_intent(self):
         """attribute_gap 은 identification 으로 위장하지 않고 전용 신호를 전달한다.
 
-        AnswerAgent 가 정상 DETAIL(identification)과 구분할 수 있어야 한다(결정 C).
+        AnswerAgent 가 정상 DETAIL(identification)과 구분할 수 있어야 한다.
         """
         nodes = self._nodes()
         state = _state(
@@ -156,7 +156,7 @@ class TestGapOosHomomorphismAdversarial:
         return AgentGraph(answer_agent=make_answer_agent())._nodes
 
     # ── 분기점 ①: out_of_scope_node (answer.py) ──
-    # P5 승격: operational_detail 은 식별 검색 경로(VECTOR_SEARCH)는 attribute_gap 과
+    # operational_detail 은 식별 검색 경로(VECTOR_SEARCH)는 attribute_gap 과
     # 공유하되, sub_intent 는 전용("operational_detail")으로 분리한다 — answer 가
     # detail_excerpt 발췌 실답변 경로를 고르게 한다. 검색 routing(vector/0건/retry/종료)은
     # 여전히 is_gap_oos 동형(아래 분기점 ②~⑤).
@@ -218,7 +218,7 @@ class TestGapOosHomomorphismAdversarial:
         # 검색 경로 아님 → 0건 체크 대상 아님 → 통과(직접 answer).
         assert nodes.route_pre_answer_gate(state) == "answer_node"
 
-    # ── 분기점 ④: retry_prep_node M1 완화 (correction.py) ──
+    # ── 분기점 ④: retry_prep_node attribute_gap 완화 (correction.py) ──
     async def test_retry_prep_operational_detail_relaxes_filters(self):
         nodes = self._nodes()
         state = _state(
@@ -234,18 +234,18 @@ class TestGapOosHomomorphismAdversarial:
         )
         with patch("agents._redis_gateway.release_answer_lock", AsyncMock()):
             update = await nodes.retry_prep_node(state)
-        # attribute_gap 과 동일한 M1 완화 경로(0건 유발 필터 드롭 + forced_intent).
+        # attribute_gap 과 동일한 완화 경로(0건 유발 필터 드롭 + forced_intent).
         assert update["forced_intent"] == IntentType.VECTOR_SEARCH
         assert update["retry_relaxed"] is True
         assert set(update["relaxed_filters"]) == {"payment_type", "area_name"}
         assert update["filters"] == {"payment_type": None, "area_name": None}
 
     async def test_retry_prep_domain_outside_no_attribute_gap_relax(self):
-        """domain_outside 는 동형 그룹 밖 — attribute_gap M1 완화 분기를 타지 않는다.
+        """domain_outside 는 동형 그룹 밖 — attribute_gap 완화 분기를 타지 않는다.
 
         gap 분기는 0건 유발 필터만 *부분* 드롭 + 검색 컨텍스트 보존(plan 미리셋)이다.
-        domain_outside 는 is_gap_oos=False 라 이 분기를 건너뛰고 케이스 C(전체 리셋)로
-        떨어져 모든 필터 드롭 + plan refined_query 리셋된다. (B: 케이스 C 도 완화 경로라
+        domain_outside 는 is_gap_oos=False 라 이 분기를 건너뛰고 기존 완화(전체 리셋)로
+        떨어져 모든 필터 드롭 + plan refined_query 리셋된다. (기존 완화도 완화 경로라
         relaxed_filters/relaxed_values 를 기록하지만 — 큐레이션 의도 복원용 — gap 분기와의
         구분 신호는 "부분 드롭+plan 보존" vs "전체 드롭+plan 리셋" 이다.)
         """
@@ -259,14 +259,14 @@ class TestGapOosHomomorphismAdversarial:
         )
         with patch("agents._redis_gateway.release_answer_lock", AsyncMock()):
             update = await nodes.retry_prep_node(state)
-        # 케이스 C 는 전체 필터 드롭(gap 의 부분 드롭과 구분).
+        # 기존 완화는 전체 필터 드롭(gap 의 부분 드롭과 구분).
         assert update["filters"] == {
             "max_class_name": None,
             "area_name": None,
             "service_status": None,
             "payment_type": None,
         }
-        # 케이스 C 는 plan.refined_query 를 리셋한다(gap 분기는 plan 미터치).
+        # 기존 완화는 plan.refined_query 를 리셋한다(gap 분기는 plan 미터치).
         assert update["plan"] == {"refined_query": None}
         # 완화 경로라 의도 복원용 스냅샷을 남긴다(드롭 직전 원래 값).
         assert update["relaxed_values"] == {"payment_type": "무료", "area_name": "강남구"}
@@ -300,7 +300,7 @@ class TestGapOosHomomorphismAdversarial:
 
 
 # ---------------------------------------------------------------------------
-# M1-재진입 — retry_prep attribute_gap 분기(검색 컨텍스트 보존)
+# 재진입 — retry_prep attribute_gap 분기(검색 컨텍스트 보존)
 # ---------------------------------------------------------------------------
 
 
@@ -359,7 +359,7 @@ class TestRetryPrepAttributeGapBranch:
 
 
 # ---------------------------------------------------------------------------
-# M1 E2E — 3-상태 표
+# attribute_gap 완화 E2E — 3-상태 표
 # ---------------------------------------------------------------------------
 
 
@@ -452,12 +452,12 @@ class TestAttributeGapRelaxRetryE2E:
         assert "유료 시설을 무료라고 표현하지 마세요" in last_system
 
     async def test_attribute_gap_signal_survives_retry_to_answer(self):
-        """M1 회귀: attribute_gap 0건 → retry_prep(forced_intent) → router 재진입 →
-        2차 hit → answer 가 *여전히* ATTRIBUTE_GAP 프롬프트를 고른다.
+        """attribute_gap 완화 회귀: attribute_gap 0건 → retry_prep(forced_intent) →
+        router 재진입 → 2차 hit → answer 가 *여전히* ATTRIBUTE_GAP 프롬프트를 고른다.
 
         retry_prep 이 plan 을 리셋하지 않고 forced_intent 분기가 vector_sub_intent 를
         덮지 않으므로 'attribute_gap' 신호가 보존돼야 한다. 보존 실패 시 answer 는
-        DETAIL/CARD_LIST 로 빠져 room 63 결함이 재현된다.
+        DETAIL/CARD_LIST 로 빠져 결함이 재현된다.
         """
         intake = _attribute_gap_intake()
         vrows_hit = [
@@ -581,7 +581,7 @@ class TestAttributeGapRelaxRetryE2E:
 
 
 # ---------------------------------------------------------------------------
-# M1-b — relaxed_filters 라벨 매핑 + 유료→무료 오안내 회귀
+# relaxed_filters 라벨 매핑 + 유료→무료 오안내 회귀
 # ---------------------------------------------------------------------------
 
 
@@ -620,7 +620,7 @@ class TestRelaxedFilterLabels:
 
 
 # ---------------------------------------------------------------------------
-# S1 — 빈 답변 가드 (노드별)
+# 빈 답변 가드 (노드별)
 # ---------------------------------------------------------------------------
 
 
@@ -668,7 +668,7 @@ class TestEmptyAnswerGuard:
 
 
 # ---------------------------------------------------------------------------
-# S2 — EXPLAIN LLM 재서술
+# EXPLAIN LLM 재서술
 # ---------------------------------------------------------------------------
 
 
@@ -687,7 +687,7 @@ class TestExplainRephrase:
 
         explain() 이 EXPLAIN system 프롬프트를 고르고, 그 프롬프트가 기술 토큰
         비노출 지시를 담고 있는지(=출력에 raw 토큰이 새지 않도록 강제) 단언한다.
-        prev_reasoning 은 보조 맥락으로 system 에 경계 마커로 감싸 주입된다(원칙 §0).
+        prev_reasoning 은 보조 맥락으로 system 에 경계 마커로 감싸 주입된다.
         """
         agent = self._real_answer_agent("자연 체험으로 안내드린 이유를 쉽게 설명드릴게요.")
         nodes = GraphNodes(
@@ -762,7 +762,7 @@ class TestExplainRephrase:
 
     async def test_explain_injects_real_question_history_entities(self):
         """explain() 이 실제 사용자 질문 + history + entities + prev_reasoning 을
-        모두 LLM 입력에 주입한다(원칙 §0: API 운반 맥락 전부 소비)."""
+        모두 LLM 입력에 주입한다(API 운반 맥락 전부 소비)."""
         agent = self._real_answer_agent("데이트 검색 결과라 그렇게 안내드렸어요.")
         nodes = GraphNodes(intake=make_intake(), answer_agent=agent)
         history = [

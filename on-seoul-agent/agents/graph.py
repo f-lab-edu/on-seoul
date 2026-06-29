@@ -13,7 +13,7 @@
       ├─ RETRIEVE     → router_node (RouterAgent.classify(), intent·refined_query·post-filter·secondary_intent)
       │                  → cache_check_node → [sql/vector/map/analytics]
       │                  → hydration_node → rrf_fusion_node → pre_answer_gate_node
-      │                       ├─ 0건(C2) → retry_prep_node → router_node 재진입
+      │                       ├─ 0건 → retry_prep_node → router_node 재진입
       │                       └─ 유건    → answer_node
       │                  ⚠️ enable_secondary_intent 활성화 전 fusion 을 hydration
       │                     앞으로 이동 필요(아래 _build_graph 엣지부 TODO 참조).
@@ -85,7 +85,7 @@ def _out_of_scope_route(state: AgentState) -> str:
 
     GraphNodes 메서드가 아닌 graph.py 모듈 수준 라우팅 함수다(상태만 읽는 순수 함수).
     operational_detail 도 attribute_gap 과 동일 식별 검색 경로(vector)를 탄다 — 검색
-    routing 은 is_gap_oos 동형이고, 답변 경로만 P5 에서 갈린다(answer_agent).
+    routing 은 is_gap_oos 동형이고, 답변 경로만 갈린다(answer_agent).
     """
     from agents.nodes._shared import is_gap_oos
 
@@ -112,13 +112,13 @@ def _build_graph(nodes: GraphNodes) -> Any:
            ├─ action=RETRIEVE     → router_node (검색 계획) → cache_check_node
            │                           → [sql/vector/map/analytics]
            │                           → hydration_node → rrf_fusion_node → pre_answer_gate_node
-           │                                ├─ 0건(C2) → retry_prep_node → router_node 재진입
+           │                                ├─ 0건 → retry_prep_node → router_node 재진입
            │                                └─ 유건    → answer_node
            ├─ action=DIRECT_ANSWER → direct_answer_node → 종단 체인
            ├─ action=AMBIGUOUS     → ambiguous_node → 종단 체인
            └─ action=OUT_OF_SCOPE  → out_of_scope_node
                 ├─ domain_outside → 종단 체인
-                └─ attribute_gap / operational_detail(검색 routing 동형, 답변 분기는 P5 분리)
+                └─ attribute_gap / operational_detail(검색 routing 동형, 답변 분기 분리)
                                   → vector_node → hydration_node → ...
     (EXPLAIN action 은 META turn_kind 로 승격되어 NEW 서브스위치에서 제외된다.)
 
@@ -241,7 +241,7 @@ def _build_graph(nodes: GraphNodes) -> Any:
     builder.add_edge("hydration_node", "rrf_fusion_node")
     builder.add_edge("rrf_fusion_node", "pre_answer_gate_node")
 
-    # C2 게이트: 0건 → retry_prep_node, 유건 → answer_node
+    # 0건 게이트: 0건 → retry_prep_node, 유건 → answer_node
     builder.add_conditional_edges(
         "pre_answer_gate_node",
         nodes.route_pre_answer_gate,
@@ -325,12 +325,12 @@ def _build_sources(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
-    """그래프 완료 후 root span 에 부착할 §4.5.1 메타데이터를 result state 에서 추출한다.
+    """그래프 완료 후 root span 에 부착할 메타데이터를 result state 에서 추출한다.
 
     intent/action 은 enum 이라 .value 로 직렬화한다. 그 외(node_path/retry_count/
     retry_relaxed/cache_hit/error)는 평면 슬롯이라 직접 읽는다. v4 propagate_attributes
     의 tags 는 진입 시점에만 설정 가능하고(post-hoc 태그 API 미지원), intent/retried/
-    cache_hit 는 그래프 완료 후에야 확정되므로 모두 metadata 로만 노출한다(§4.5.1 폴백).
+    cache_hit 는 그래프 완료 후에야 확정되므로 모두 metadata 로만 노출한다(폴백).
     """
     intent = (result.get("plan") or {}).get("intent")
     action = (result.get("triage") or {}).get("action")
@@ -346,7 +346,7 @@ def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _update_root_span(root_span: Any, result: dict[str, Any]) -> None:
-    """완료 후 root span 갱신(output=답변 + §4.5.1 metadata)을 best-effort 로 수행한다.
+    """완료 후 root span 갱신(output=답변 + metadata)을 best-effort 로 수행한다.
 
     런타임 fail-open: root_span.update 가 예외를 던져도(metadata 직렬화 실패·내부
     상태 이상 등) 관측 실패가 그래프 결과/SSE 반환을 막지 않는다 — warning 후 무시.
@@ -549,7 +549,7 @@ class AgentGraph:
                 state,
                 config=config,
             )  # type: ignore[arg-type]
-            # 완료 후 root span 갱신: output=최종 답변 + §4.5.1 metadata (best-effort).
+            # 완료 후 root span 갱신: output=최종 답변 + metadata (best-effort).
             _update_root_span(root_span, result)
 
         return result
@@ -640,7 +640,7 @@ class AgentGraph:
                         },
                     )
 
-            # 완료 후 root span 갱신: output=최종 답변 + §4.5.1 metadata (best-effort).
+            # 완료 후 root span 갱신: output=최종 답변 + metadata (best-effort).
             _update_root_span(root_span, last_values)
 
         sources = _build_sources(last_values)

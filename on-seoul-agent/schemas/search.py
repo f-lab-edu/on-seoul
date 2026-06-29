@@ -74,11 +74,11 @@ class SearchChannel:
     SQL: Final[str] = "sql"
 
     # kind=vector
-    VECTOR: Final[str] = "vector"  # Phase 1 단일 경쟁
-    VECTOR_A: Final[str] = "vector_a"  # Phase 2+ (post-filter A)
-    VECTOR_B: Final[str] = "vector_b"  # Phase 2+ (post-filter B)
-    VECTOR_C: Final[str] = "vector_c"  # Phase 2+ (intent 분류 트랙)
-    HYDE_VECTOR: Final[str] = "hyde_vector"  # Phase 3+ (HyDE 생성 후 임베딩)
+    VECTOR: Final[str] = "vector"  # 단일 경쟁
+    VECTOR_A: Final[str] = "vector_a"  # post-filter A
+    VECTOR_B: Final[str] = "vector_b"  # post-filter B
+    VECTOR_C: Final[str] = "vector_c"  # intent 분류 트랙
+    HYDE_VECTOR: Final[str] = "hyde_vector"  # HyDE 생성 후 임베딩
 
     # kind=bm25
     BM25: Final[str] = "bm25"

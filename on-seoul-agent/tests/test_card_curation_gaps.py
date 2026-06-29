@@ -1,12 +1,12 @@
 """QA 보완 — 카드 큐레이션 빈틈/회귀 가드.
 
-본 변경(답변 카드 일관성 A + 적합도 큐레이션 B)이 명시 테스트로 덮지 않은 경로를
+본 변경(답변 카드 일관성 + 적합도 큐레이션)이 명시 테스트로 덮지 않은 경로를
 가드한다:
   · answer 폴백 — curated_display=None(비카드형/예외) 시 기존 슬라이스 경로로 폴백(동작 불변).
   · 큐레이션 예외 best-effort — _curate_display 가 던져도 슬롯 None + result_quality 폴백.
-  · _curate_score 화이트리스트 정확비교 — 표기 변형은 매칭 안 됨(R-1 의 정확비교 측면).
+  · _curate_score 화이트리스트 정확비교 — 표기 변형은 매칭 안 됨(정확비교 측면).
   · extra_count 음수 방지.
-  · few-exact/many-raw 현행 동작 핀(혼합-A: thin 아님, alt 라벨로 처리) — 회귀 앵커.
+  · few-exact/many-raw 현행 동작 핀(many-raw/few-exact: thin 아님, alt 라벨로 처리) — 회귀 앵커.
   · 동점 stable 보존이 큐레이션 합류 후에도 유지(RRF/SQL 순서).
 """
 
@@ -138,9 +138,9 @@ class TestExtraCountClamp:
 
 
 class TestHybridAFewExactBehaviorPin:
-    """혼합-A 핀(회귀 앵커) — 원본 많지만 적합 적을 때.
+    """many-raw/few-exact 핀(회귀 앵커) — 원본 많지만 적합 적을 때.
 
-    혼합-A 는 하드 제외가 없으므로 빈 슬롯을 대안으로 채운다. 따라서:
+    이 경우 하드 제외가 없으므로 빈 슬롯을 대안으로 채운다. 따라서:
       · curated_display 는 _DISPLAY_LIMIT 로 채워지고(적합 2건뿐이어도),
       · result_quality.thin 은 display 개수(5)를 보므로 False,
       · 적합 부족은 alt_count(대안 라벨)로 표면화된다.
@@ -187,10 +187,10 @@ class TestStableTieAfterCurationJoin:
 
 
 class TestRelaxedValuesSnapshotAllPaths:
-    """relaxed_values 스냅샷이 완화 경로별로 드롭 직전 원래 값을 보존하는지 가드(5.1).
+    """relaxed_values 스냅샷이 완화 경로별로 드롭 직전 원래 값을 보존하는지 가드.
 
-    M1(gap) 은 test_pre_answer_gate_curation 이, 케이스 C 는 test_non_retrieve_robustness
-    가 덮는다. 여기선 케이스 A(intent 전환: SQL→VECTOR)를 덮는다 — 전환 경로도
+    gap 분기는 test_pre_answer_gate_curation 이, 기존 완화는 test_non_retrieve_robustness
+    가 덮는다. 여기선 전환(intent 전환: SQL→VECTOR)을 덮는다 — 전환 경로도
     완화이므로 의도 복원 스냅샷이 필요하다.
     """
 
@@ -199,7 +199,7 @@ class TestRelaxedValuesSnapshotAllPaths:
 
     async def test_case_a_intent_switch_snapshots_relaxed_values(self):
         nodes = self._retry_nodes()
-        # SQL_SEARCH → VECTOR_SEARCH 전환(케이스 A). filters 는 전체 드롭되지만
+        # SQL_SEARCH → VECTOR_SEARCH 전환. filters 는 전체 드롭되지만
         # 원래 값은 relaxed_values 로 복원 가능해야 한다.
         state = make_agent_state(
             intent=IntentType.SQL_SEARCH,

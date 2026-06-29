@@ -1,11 +1,11 @@
-"""P3 적응형 답변 조립 + §2.5 보이스 단위 테스트.
+"""적응형 답변 조립 + 보이스 단위 테스트.
 
 _build_card_system 에 result_quality/reservation_guide_shown 를 얹은 뒤:
 - 쏠림 → REFINE_HINT 미포함 + SKEW_OFFER 포함
 - reservation_guide_shown=True → RESERVATION_GUIDE 생략
 - thin → THIN_CAVEAT
 - 플래그 없음 → 현행 출력 동일(회귀 가드)
-- 거절/캐비엇 경로 system 프롬프트에 §2.5 공통 보이스 지침 포함(보이스 가드)
+- 거절/캐비엇 경로 system 프롬프트에 공통 보이스 지침 포함(보이스 가드)
 """
 
 from agents.answer_agent import (

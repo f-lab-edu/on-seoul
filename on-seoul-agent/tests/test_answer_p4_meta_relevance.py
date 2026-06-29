@@ -1,4 +1,4 @@
-"""P4 메타/적합성 후속 graceful 처리 + attribute_gap 거짓 부재 단정 제거(interim).
+"""메타/적합성 후속 graceful 처리 + attribute_gap 거짓 부재 단정 제거(interim).
 
 사례 156(적합성 "왜 이 항목들?"이 현재형 no-results로 변질) + 162-163(attribute_gap
 이 detail_content 로 답할 수 있는 운영성 질문을 "없다"고 거짓 단정) 대응.
@@ -21,7 +21,7 @@ from tests.helpers import make_agent_state, make_answer_agent
 
 
 class TestAttributeGapNoAbsenceAssertion:
-    """interim(R10): attribute_gap 프롬프트가 부재를 단정하지 않는다."""
+    """interim: attribute_gap 프롬프트가 부재를 단정하지 않는다."""
 
     def test_no_contains_absence_assertion(self):
         # "담겨있지 않" 류 부재 단정을 권장/노출하지 않는다(부재 단언 거짓 방지).
@@ -58,7 +58,7 @@ class TestExplainNoResultsGuard:
         # EXPLAIN 정적 프롬프트가 실리고, no-results 가드 문구가 포함된다.
         assert _STRUCT_EXPLAIN[:30] in call["system"]
         assert "못 찾" in call["system"] or "찾지 못" in call["system"]
-        # 실제 사용자 질문은 human message 자리에 전달된다(원칙 §0).
+        # 실제 사용자 질문은 human message 자리에 전달된다.
         assert call["message"] == "왜 그렇게 판단했어?"
         # 직전 근거는 보조 맥락으로 system 에 경계 마커로 감싸 전달(회귀 가드).
         assert "---REASONING_START---" in call["system"]

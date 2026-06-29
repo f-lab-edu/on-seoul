@@ -1,4 +1,4 @@
-"""working_set_refine_node 단위 테스트 (P1-3) — 신규 제약 머지 + forced_intent.
+"""working_set_refine_node 단위 테스트 — 신규 제약 머지 + forced_intent.
 
 검증:
 - prev applied_filters{area_name:강남} + 이번 발화 신규 제약(payment_type=무료)을

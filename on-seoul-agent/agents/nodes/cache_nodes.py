@@ -74,7 +74,7 @@ class CacheCheckNode:
             )
             if acquired:
                 # 이 패스가 락 보유자 — 해제 책임을 위해 키를 state 에 기록한다.
-                # cache_write 정상 종료 또는 C2 0건 게이트의 retry_prep 우회 경로
+                # cache_write 정상 종료 또는 0건 게이트의 retry_prep 우회 경로
                 # 양쪽이 이 키로 release 한다(획득 시점 키와 일치 → SET NX 락 해제).
                 lock_key = key
             if not acquired:

@@ -1,6 +1,6 @@
 """intake_node 단위/에이전트 테스트 (fake LLM) — turn_kind 분류·참조·폴백·decision.
 
-검증(intake-node-merge §6):
+검증:
 - 5종 turn_kind 분류 + ref_indices 바인딩
 - (A) 분류 모호 폴백: 미지/누락 → NEW + RETRIEVE + breadcrumb
 - (B) 노드 예외 폴백: DIRECT_ANSWER + error + intake_error
@@ -158,8 +158,8 @@ class TestBackwardCompat:
 
 
 # ---------------------------------------------------------------------------
-# QA 추가 회귀 — 갭 보강 (intake-node-merge §2.5-A action 폴백, §2.5 라벨 노출,
-# §2.3 적대적 인덱스 타입, §2.4 route_intake 분기 도달)
+# QA 추가 회귀 — 갭 보강 (action 폴백, 라벨 노출,
+# 적대적 인덱스 타입, route_intake 분기 도달)
 # ---------------------------------------------------------------------------
 
 
@@ -173,9 +173,9 @@ def _intake_returning(out: IntakeOutput) -> IntakeAgent:
 
 
 class TestActionFallbackBreadcrumb:
-    """§2.5-A 두 번째 층: NEW 인데 action 이 매핑 불가 → RETRIEVE 강등 + breadcrumb.
+    """폴백 두 번째 층: NEW 인데 action 이 매핑 불가 → RETRIEVE 강등 + breadcrumb.
 
-    설계 must-have(검증항목 4-A). turn_kind 폴백과 별개로 action 폴백 breadcrumb 가
+    turn_kind 폴백과 별개로 action 폴백 breadcrumb 가
     남는지 — RETRIEVE-강등은 trace 에서 정상 검색과 구분 안 되므로 필수.
     """
 
@@ -207,7 +207,7 @@ class TestActionFallbackBreadcrumb:
 
 
 class TestDecisionLabelExposure:
-    """§2.5 in-range 오선택 완화 — decision 이벤트에 선택 라벨 노출(soft 오선택 투명화).
+    """in-range 오선택 완화 — decision 이벤트에 선택 라벨 노출(soft 오선택 투명화).
 
     검색 스킵 경로(DRILL)에서 _emit_intake 가 decision 을 단일 발행하며, 바인딩된
     service_id 의 라벨을 '(선택: 〈라벨〉)' 로 붙여 노출하는지.
@@ -252,7 +252,7 @@ class TestDecisionLabelExposure:
 
 
 class TestAdversarialIndexType:
-    """§2.3 조작 ID 바인딩 0 — LLM 이 비-int 인덱스(타입 환각)를 줘도 안전.
+    """조작 ID 바인딩 0 — LLM 이 비-int 인덱스(타입 환각)를 줘도 안전.
 
     resolve_ref_indices 의 isinstance(idx, int) 가드가 _build_update 경로에서도
     가짜 service_id 를 만들지 않고 NEW 로 강등하는지(적대적).
@@ -272,7 +272,7 @@ class TestAdversarialIndexType:
 
 
 class TestRouteIntakeBranches:
-    """§2.4 route_intake 각 분기 도달(직접 단위) — 그래프 E2E 없이 분기 매핑 확인."""
+    """route_intake 각 분기 도달(직접 단위) — 그래프 E2E 없이 분기 매핑 확인."""
 
     def _route(self, *, turn_kind=None, action=None, error=None, answer=""):
         node = _nodes(make_intake())

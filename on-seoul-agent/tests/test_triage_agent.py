@@ -107,10 +107,10 @@ class TestTriageOutputShape:
         assert out.user_rationale is None
 
 
-# 답변 가능 속성 카탈로그 grounding (결정 A의 예방축)
+# 답변 가능 속성 카탈로그 grounding (오분류 예방축)
 class TestTriageCatalogGrounding:
     """이용시간/취소기준/문의처가 답변 가능 속성으로 명시되어 attribute_gap
-    오분류를 예방하는지 검증한다(결정 A). 기존 attribute_gap 예시(보수공사 등)는 유지."""
+    오분류를 예방하는지 검증한다. 기존 attribute_gap 예시(보수공사 등)는 유지."""
 
     def test_answerable_catalog_lists_newly_answerable_attributes(self):
         from llm.prompts.triage import TRIAGE_SYSTEM

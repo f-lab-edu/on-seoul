@@ -55,7 +55,7 @@ class GraphNodes:
       - 시작 시각 → AgentState["started_at"].
     따라서 동시 요청이 같은 GraphNodes 를 공유해도 세션/경로 교차가 발생하지 않는다.
 
-    구조(C2): god-class 를 6개 페이즈 클래스(Reference/Planning/Retrieval/Answer/
+    구조: god-class 를 6개 페이즈 클래스(Reference/Planning/Retrieval/Answer/
     Correction/Observability)로 분해하고, GraphNodes 는 각 페이즈 인스턴스를 보유한
     composition root + 위임 facade 로 남는다. graph.py 가 등록하는 노드명·테스트가
     직접 호출하는 메서드명을 위임 메서드로 그대로 노출해 외부 표면을 보존한다.

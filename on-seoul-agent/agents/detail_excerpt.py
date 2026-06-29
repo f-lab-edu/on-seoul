@@ -1,31 +1,30 @@
-"""detail_content 노출 전 정제·발췌 — 운영-상세(P5) 순수 셰이핑.
+"""detail_content 노출 전 정제·발췌 — 운영-상세 순수 셰이핑.
 
 `prepare_detail_excerpt(raw, query_keywords) -> str | None` 는 DB/LLM/state 와 무관한
-순수·결정적 함수다. answer 책임 경계(상위 §2.3): fetch·정제·발췌·키워드매칭은 상류
+순수·결정적 함수다. answer 책임 경계: fetch·정제·발췌·키워드매칭은 상류
 (여기)가 담당하고 answer 는 준비된 발췌 문자열만 소비한다. 선례: agents/_reference_resolution.
 
-파이프라인 (P5 §4 확정값):
+파이프라인:
   1. hwpjson 블록 제거(<!--[data-hwpjson]…-->) — 길이 outlier(교육강좌 641KB) 제거
   2. HTML 엔티티 디코드 → 태그 strip — 교육/진료·문화체험에 효과, 평문 카테고리엔 no-op
   3. 공백 정규화 — 연속 줄바꿈/탭/공백 축약
   4. 경계 — "3. 상세내용"부터 끝까지(섹션4 포함). 마커 없으면 선두 보일러플레이트만 제거
-     ※ head-truncation 금지: 폭염 답의 64%·우천 41%가 "4. 주의사항"(후반)에 있음(§3.4).
+     ※ head-truncation 금지: 폭염 답의 64%·우천 41%가 "4. 주의사항"(후반)에 있음.
   5. 질의 키워드 span 탐색 — 정제 본문에서 매칭 위치(다중 매칭 모두)
   6. 키워드 중심 발췌 윈도우 — 매칭 위치 ±윈도우, 다중 매칭이면 구간 병합(상한 ~2,000자)
   7. 모바일 PII 마스킹 — 01[016-9]-?\\d{3,4}-?\\d{4}
   8. 답변가능 게이트 — 질의 키워드 본문 부재 → None / 길이<50 → None(거짓 발췌·환각 차단)
 
-DRY(OI-7 연계): hwpjson/엔티티/태그/공백 primitive 는 scripts/cleaning/detail_content
+DRY: hwpjson/엔티티/태그/공백 primitive 는 scripts/cleaning/detail_content
 (임베딩 정제)와 개념상 겹치나, 런타임이 scripts/(오프라인)를 import 하지 않도록 여기
-자족 구현한다(경계 3→끝·키워드 발췌·PII 는 런타임 전용). 임베딩 정제기 자체의 섹션4
-폐기 재검토는 OI-7(별도 PR) 범위.
+자족 구현한다(경계 3→끝·키워드 발췌·PII 는 런타임 전용).
 """
 
 import html
 import re
 
 # 정제 마커 — "3. 상세내용"부터 끝까지(섹션4 포함). 임베딩 정제기와 달리 종료 마커를
-# 두지 않는다(§3.4: 운영 답변 상당량이 "4. 주의사항" 뒤에 있어 잘라내면 안 됨).
+# 두지 않는다(운영 답변 상당량이 "4. 주의사항" 뒤에 있어 잘라내면 안 됨).
 _DETAIL_START_MARKER = "3. 상세내용"
 
 # hwpjson 블록 — 한글 문서 JSON 이 본문에 박혀있는 주석 블록(86건, 길이 outlier 주범).
@@ -42,7 +41,7 @@ _MULTI_NL_RE = re.compile(r"\n{2,}")
 # 길이 캡이 없다. `<` 가 많고 `>` 가 없는 입력이면 _TAG_RE 가 O(n²) 백트래킹해 동기
 # 호출(retrieval._prepare_operational_detail)이 이벤트 루프를 9.5~45초 블록(DoS).
 # 결정적 방어로 hwpjson 제거 *후* 남은 텍스트를 64KB 로 절단한 뒤 태그 strip 한다.
-# 근거(OI-6 Q2): hwpjson 제거 후 p99≈45KB 라 64KB 캡은 섹션4 실내용을 보존한다(무손실).
+# 근거: hwpjson 제거 후 p99≈45KB 라 64KB 캡은 섹션4 실내용을 보존한다(무손실).
 _CLEAN_INPUT_CAP = 64 * 1024
 
 # 경계 마커 breakout(프롬프트 인젝션) 중화 — detail_content 에 리터럴
@@ -77,7 +76,7 @@ _WINDOW_AFTER = 1300
 _MERGE_CAP = 2000
 
 # 운영 주제 동의어 그룹 — 질의에 한 동의어가 있으면 그룹 전체를 본문 검색어로 쓴다
-# (예: "폭염" 질의가 본문의 "무더위"도 잡도록). §3.1 OI-6 실신호 기반(폭염·우천·
+# (예: "폭염" 질의가 본문의 "무더위"도 잡도록). 실신호 기반(폭염·우천·
 # 휴무·주차가 핵심). caution(주의사항)은 전건 섹션 마커라 의미 신호가 아니므로 제외.
 _OPERATIONAL_SYNONYMS: tuple[tuple[str, ...], ...] = (
     ("폭염", "혹서", "무더위"),
@@ -107,7 +106,7 @@ def extract_operational_keywords(message: str) -> list[str]:
 
 
 # 답변가능 게이트 — boilerplate 제거 후 길이가 이 미만이면 (a) 무력.
-# §4 는 명목상 50 자를 제시하나, 1차 게이트는 "질의 키워드 존재"이고 길이는 trivial
+# 명목상 50 자가 기준이나, 1차 게이트는 "질의 키워드 존재"이고 길이는 trivial
 # 발췌(키워드만 단독 등장)를 거르는 2차 안전망이다. 실 데이터(body p50≈2,000)에선
 # 50/20 차이가 무의미하고, 운영지침 한 문장(~20-40자)도 유효 답변일 수 있어 20 자로
 # 둔다(키워드 부재 게이트가 거짓 발췌의 1차 방어).
@@ -117,7 +116,7 @@ _MIN_LEN = 20
 def _clean(raw: str) -> str:
     """1~3단계: hwpjson 제거 → 길이 캡 → 태그 strip → 엔티티 디코드 → 공백 정규화.
 
-    ※ 태그 strip 을 엔티티 디코드보다 *먼저* 한다(§4 의 명목 순서와 반대). 디코드를
+    ※ 태그 strip 을 엔티티 디코드보다 *먼저* 한다(명목 순서와 반대). 디코드를
     먼저 하면 escaped 컨텐츠(&lt;실내&gt;)가 태그 모양(<실내>)으로 변해 strip 에 잘려
     본문이 손실된다. 진짜 태그(<br>/<p>)는 literal 이라 먼저 제거되고, escaped 엔티티는
     디코드 후 보존된다.
@@ -225,7 +224,7 @@ def prepare_detail_excerpt(
     -------
     str | None
         키워드 중심 발췌 + PII 마스킹 완료 문자열(≤ ~2,000자). 키워드 본문 부재·
-        길이<50자 → None(답변가능 게이트: 거짓 발췌·환각 차단, P4 interim 폴백 신호).
+        길이<50자 → None(답변가능 게이트: 거짓 발췌·환각 차단, interim 폴백 신호).
     """
     if not raw or not query_keywords:
         return None

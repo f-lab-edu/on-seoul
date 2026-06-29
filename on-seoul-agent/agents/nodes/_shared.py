@@ -53,7 +53,7 @@ def sanitize_user_rationale(text: str | None) -> str | None:
 
 
 # LLM 예외 / 빈 답변 시 공유 폴백 문구.
-# direct_answer_node 의 except 블록과 빈 답변 가드(S1)가 같은 출처를 재사용한다(drift 방지).
+# direct_answer_node 의 except 블록과 빈 답변 가드가 같은 출처를 재사용한다(drift 방지).
 _FALLBACK_ANSWER = (
     "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 )
@@ -66,7 +66,7 @@ _FALLBACK_ANSWER = (
 # 검색(vector)을 돌리고 0건 게이트·retry·종료를 공유한다. domain_outside(진짜 범위 밖)만
 # 전면 거절한다. 이 predicate 는 "식별 검색이 필요한가"를 묻는 단일 출처다.
 #
-# P5 승격(분기 지점): 검색은 동형이되 *답변 경로*는 갈린다. out_of_scope_node 가
+# 분기 지점: 검색은 동형이되 *답변 경로*는 갈린다. out_of_scope_node 가
 # operational_detail 에는 전용 vector_sub_intent="operational_detail" 을 세팅하고,
 # pre_answer prep 이 focal detail_content 를 발췌해 detail_excerpt 를 적재하면 answer 가
 # 운영-상세 발췌 실답변을 생성한다(사례 162-163 근본 해소). 발췌가 없으면(키워드 부재 등)
@@ -80,6 +80,6 @@ def is_gap_oos(oos_type: str | None) -> bool:
     """식별 검색이 필요한 동형 그룹(attribute_gap/operational_detail) 판정.
 
     domain_outside(진짜 범위 밖, 전면 거절)와 구분하는 단일 출처 predicate 다. *검색
-    routing* 만 동형이며, 답변 경로는 P5 에서 out_of_scope_type 원본으로 분기한다.
+    routing* 만 동형이며, 답변 경로는 out_of_scope_type 원본으로 분기한다.
     """
     return oos_type in _GAP_OOS_TYPES

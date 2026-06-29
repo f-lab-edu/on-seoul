@@ -12,7 +12,7 @@ prev_entities 의 1-based 인덱스를 선택하면 여기서 범위 검증 후 
 import re
 from typing import Any
 
-# prev_entities 열거 상한(intake §2.1: ≤10).
+# prev_entities 열거 상한(≤10).
 _ENUM_CAP = 10
 
 # 라벨 길이 상한(열거 행 비대화·토큰 폭주 방지). 초과분은 절단.

@@ -1,7 +1,7 @@
-"""detail_excerpt 순수 셰이핑 단위 테스트 (P5 §8 D-1/D-2).
+"""detail_excerpt 순수 셰이핑 단위 테스트.
 
 prepare_detail_excerpt 는 DB/LLM/state 무관 순수 함수다 — 결정적 assert.
-§4 파이프라인: hwpjson 제거 → 엔티티/태그 strip → 공백 정규화 → "3.상세내용~끝"
+파이프라인: hwpjson 제거 → 엔티티/태그 strip → 공백 정규화 → "3.상세내용~끝"
 경계(섹션4 포함) → 질의 키워드 span 탐색 → 키워드 중심 발췌 윈도우 → 모바일 PII
 마스킹 → truncate → 답변가능 게이트.
 """
@@ -189,10 +189,10 @@ class TestSynonymExpansion:
 
 
 class TestHwpjsonPiiRemoval:
-    """QA 보강 — hwpjson 블록 제거가 그 안의 PII 오탐(rrn형)까지 함께 제거한다(§3.5).
+    """QA 보강 — hwpjson 블록 제거가 그 안의 PII 오탐(rrn형)까지 함께 제거한다.
 
-    OI-6 은 rrn_like 144건이 대부분 hwpjson 내부 코드/타임스탬프 오탐이며 strip 되면
-    사라진다고 했다. hwpjson 제거가 PII 마스킹보다 선행함을 회귀로 고정한다.
+    rrn_like 144건은 대부분 hwpjson 내부 코드/타임스탬프 오탐이며 strip 되면
+    사라진다. hwpjson 제거가 PII 마스킹보다 선행함을 회귀로 고정한다.
     """
 
     def test_hwpjson_pii_gone_with_block(self):

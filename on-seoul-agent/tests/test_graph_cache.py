@@ -400,15 +400,15 @@ class TestGraphRouting:
 
 
 # ---------------------------------------------------------------------------
-# Singleflight 락 누수 회귀 (C2 0건 게이트 → retry_prep 우회 경로)
+# Singleflight 락 누수 회귀 (0건 게이트 → retry_prep 우회 경로)
 # ---------------------------------------------------------------------------
 
 
 class TestSingleflightLockLeak:
-    """C2 0건 게이트가 cache_write를 우회할 때 첫 패스 락이 해제되는지 검증.
+    """0건 게이트가 cache_write를 우회할 때 첫 패스 락이 해제되는지 검증.
 
     회귀: cache_check가 SET NX로 잡은 락이 cache_write에서만 풀렸는데,
-    C2 게이트(hydrated=[] & retry_count==0)는 cache_write를 우회하고 retry_prep로
+    0건 게이트(hydrated=[] & retry_count==0)는 cache_write를 우회하고 retry_prep로
     직행한다. 재진입한 cache_check가 미해제 락을 다시 잡지 못해 poll 타임아웃을
     소진했다. retry_prep가 직전 패스 락을 해제해야 한다.
     """
@@ -474,7 +474,7 @@ class TestSingleflightLockLeak:
         first = await check(state)
         lock_key = first["answer_lock_key"]
 
-        # C2 게이트 → retry_prep 가 락 해제 (B3-1: CorrectionNodes 정상 생성)
+        # 0건 게이트 → retry_prep 가 락 해제 (CorrectionNodes 정상 생성)
         state["answer_lock_key"] = lock_key
         nodes = CorrectionNodes(redis=redis)
         await nodes.retry_prep_node(state)
@@ -656,9 +656,9 @@ class TestSingleflightLockLeak:
         assert write_update["answer_lock_key"] is None
 
     async def test_graph_zero_hit_retry_does_not_enter_poll(self):
-        """그래프 레벨 회귀: C2 0건 1회 재시도 시 poll 타임아웃이 발생하지 않는다.
+        """그래프 레벨 회귀: 0건 1회 재시도 시 poll 타임아웃이 발생하지 않는다.
 
-        RETRIEVE → VECTOR_SEARCH(eligible) → 첫 패스 hydration 0건(C2 게이트) →
+        RETRIEVE → VECTOR_SEARCH(eligible) → 첫 패스 hydration 0건(0건 게이트) →
         retry_prep(락 해제) → router 재진입 → cache_check 재획득.
         재진입 cache_check 가 SET NX 성공해야 하므로 poll_for_answer 는 호출되지 않는다.
         """
@@ -700,7 +700,7 @@ class TestSingleflightLockLeak:
 
         from tests.helpers import make_ai_session
 
-        # vector_search/bm25_search 모두 0건 → hydration 0건 → C2 게이트 발동 →
+        # vector_search/bm25_search 모두 0건 → hydration 0건 → 0건 게이트 발동 →
         # retry_prep(락 해제) → 재진입. retry_count 캡(==1)에 의해 둘째 패스는
         # answer_node 로 통과해 정상 답변을 낸다.
         with (

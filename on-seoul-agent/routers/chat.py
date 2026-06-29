@@ -87,7 +87,7 @@ def _resolve_graph(request: Request) -> AgentGraph:
 
 
 def _build_prev_working_set(request: ChatRequest) -> dict[str, Any] | None:
-    """ChatRequest → prev_working_set 중첩 채널 (P1).
+    """ChatRequest → prev_working_set 중첩 채널.
 
     신규 채널(request.prev_working_set) 우선. 미전송 시 평면 슬롯(prev_entities/
     prev_intent/prev_reasoning)으로 폴백한다(하위호환). 폴백 시 신규 필드
@@ -134,10 +134,10 @@ _SEARCH_INTENTS = frozenset(
 
 
 def _emit_working_set(result: dict[str, Any]) -> dict[str, Any]:
-    """result(최종 AgentState) → 다음 턴 carryover 용 prev_working_set (P1-2/P1-4).
+    """result(최종 AgentState) → 다음 턴 carryover 용 prev_working_set.
 
     applied_filters 는 result["filters"] (dict_merge 채널)에서 읽는다 — retry_prep 의
-    완화 드롭이 머지로 반영된 *effective(완화 후)* 필터다(요청 필터가 아님, P1-4).
+    완화 드롭이 머지로 반영된 *effective(완화 후)* 필터다(요청 필터가 아님).
     entities 는 노출된 service_cards 의 (service_id, label) 정체성만 담는다(레시피·정체성
     운반, 결과 스냅샷 아님).
 
@@ -257,10 +257,10 @@ async def _stream(
         prev_reasoning=ws_reasoning,
         prev_working_set=prev_working_set,
         target_service_ids=None,
-        # ── 결과 품질 자각 패스(P2-B) — pre_answer_gate_node 가 채운다 ──
+        # ── 결과 품질 자각 패스 — pre_answer_gate_node 가 채운다 ──
         result_quality=None,
         reservation_guide_shown=False,
-        # ── 운영-상세 발췌(P5) — pre_answer_gate_node 가 operational_detail turn 에 채운다 ──
+        # ── 운영-상세 발췌 — pre_answer_gate_node 가 operational_detail turn 에 채운다 ──
         detail_excerpt=None,
         # ── 재시도 제어 (평면) ──
         retry_count=0,
@@ -325,7 +325,7 @@ async def _stream(
                         "intent": intent.value if intent is not None else None,
                         "cache_hit": bool(result.get("cache_hit")),
                         "service_cards": output.get("service_cards") or [],
-                        # P1-2/P1-4: 다음 턴 carryover 용 워킹셋(effective 필터 포함).
+                        # 다음 턴 carryover 용 워킹셋(effective 필터 포함).
                         "prev_working_set": _emit_working_set(result),
                     }
                     if result.get("error"):
