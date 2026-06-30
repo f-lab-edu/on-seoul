@@ -147,6 +147,49 @@ class KnockNotificationAdapterTest {
     }
 
     @Test
+    @DisplayName("Idempotency-Key 헤더 = dispatchId:workflowKey 로 실린다 (단일 채널)")
+    void send_singleChannel_sendsIdempotencyKeyHeader() throws Exception {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
+
+        adapter.send(FULL_CONTACT, content(), 12345L, Set.of(NotificationChannel.EMAIL));
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        assertThat(request.getHeader("Idempotency-Key")).isEqualTo("12345:email-workflow");
+    }
+
+    @Test
+    @DisplayName("같은 dispatch의 EMAIL/SMS 두 채널은 서로 다른 Idempotency-Key를 받는다")
+    void send_bothChannels_useDistinctIdempotencyKeysPerWorkflow() throws Exception {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
+
+        adapter.send(FULL_CONTACT, content(), 777L,
+                Set.of(NotificationChannel.EMAIL, NotificationChannel.SMS));
+
+        RecordedRequest first = mockWebServer.takeRequest();
+        RecordedRequest second = mockWebServer.takeRequest();
+        Set<String> keys = new HashSet<>();
+        keys.add(first.getHeader("Idempotency-Key"));
+        keys.add(second.getHeader("Idempotency-Key"));
+        assertThat(keys).containsExactlyInAnyOrder("777:email-workflow", "777:sms-workflow");
+    }
+
+    @Test
+    @DisplayName("동일 dispatch·동일 채널 재호출(재시도) → 동일 Idempotency-Key")
+    void send_sameDispatchSameChannelRetried_usesSameIdempotencyKey() throws Exception {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
+
+        adapter.send(FULL_CONTACT, content(), 555L, Set.of(NotificationChannel.EMAIL));
+        adapter.send(FULL_CONTACT, content(), 555L, Set.of(NotificationChannel.EMAIL));
+
+        RecordedRequest first = mockWebServer.takeRequest();
+        RecordedRequest second = mockWebServer.takeRequest();
+        assertThat(first.getHeader("Idempotency-Key")).isEqualTo("555:email-workflow");
+        assertThat(second.getHeader("Idempotency-Key")).isEqualTo("555:email-workflow");
+    }
+
+    @Test
     @DisplayName("EMAIL+SMS 복수 채널 → 두 번 트리거")
     void send_bothChannels_triggersTwice() throws Exception {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));

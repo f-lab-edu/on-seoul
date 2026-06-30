@@ -126,6 +126,15 @@ class KnockNotificationAdapter implements PushNotificationPort {
      *          changes:[{label,old,new}]}], dispatch_id }
      * </pre>
      * null 필드는 {@code @JsonInclude} 없이 직접 생략한다(빈 키 미포함).
+     *
+     * <p><b>멱등성(중복 발송 방어):</b> Knock REST API 표준 {@code Idempotency-Key} HTTP 헤더를
+     * 실어 at-least-once 재시도 시 실발송 중복을 방지한다(Knock은 ~24h 동안 동일 키 요청을 dedup).
+     * 키 = {@code dispatchId + ":" + workflowKey}:
+     * <ul>
+     *   <li>같은 dispatch 재시도 → dispatchId·workflowKey 동일 → 동일 키 → Knock이 멱등 처리</li>
+     *   <li>EMAIL/SMS는 workflowKey가 달라 키가 분리 → 채널별로 각각 정상 발송(서로 dedup 안 됨)</li>
+     * </ul>
+     * 재시도 윈도우(최대 5h~12h)가 Knock 멱등 보관 기간(통상 24h) 내라 유효하다.
      */
     private void triggerWorkflow(String workflowKey, UserContact recipient,
                                  NotificationContent content, Long dispatchId) {
@@ -143,9 +152,13 @@ class KnockNotificationAdapter implements PushNotificationPort {
                 "data", toDataPayload(content, dispatchId)
         );
 
+        // dispatchId:workflowKey — 같은 dispatch의 같은 채널 재시도는 동일 키, 채널별은 분리.
+        String idempotencyKey = dispatchId + ":" + workflowKey;
+
         try {
             knockWebClient.post()
                     .uri("/v1/workflows/{key}/trigger", workflowKey)
+                    .header("Idempotency-Key", idempotencyKey)
                     .bodyValue(requestBody)
                     .retrieve()
                     .onStatus(status -> status.is5xxServerError(),
