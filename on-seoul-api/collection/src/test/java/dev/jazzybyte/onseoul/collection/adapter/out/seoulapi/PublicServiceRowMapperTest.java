@@ -175,6 +175,92 @@ class PublicServiceRowMapperTest {
     }
 
     @Test
+    @DisplayName("HTML-escape된 표시 텍스트는 디코딩되어 매핑된다 (named/numeric)")
+    void toEntity_htmlEscapedText_isUnescaped() {
+        PublicServiceRow row = buildValidRow();
+        setField(row, "svcnm", "&lt;(아동)&gt; 프로그램");
+        setField(row, "gubun", "A &amp; B");
+        setField(row, "dtlcont", "It&#39;s &quot;상세&quot;");
+        setField(row, "placenm", "서울&middot;중구");
+
+        Optional<PublicServiceReservation> result = mapper.toEntity(row);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getServiceName()).isEqualTo("<(아동)> 프로그램");
+        assertThat(result.get().getServiceGubun()).isEqualTo("A & B");
+        assertThat(result.get().getDetailContent()).isEqualTo("It's \"상세\"");
+        assertThat(result.get().getPlaceName()).isEqualTo("서울·중구");
+    }
+
+    @Test
+    @DisplayName("URL 필드(serviceUrl/imageUrl)의 &amp;도 디코딩된다")
+    void toEntity_htmlEscapedUrl_isUnescaped() {
+        PublicServiceRow row = buildValidRow();
+        setField(row, "svcurl", "https://yeyak.seoul.go.kr/svc?a=1&amp;b=2");
+        setField(row, "imgurl", "https://img.seoul.go.kr/x?a=1&amp;b=2");
+
+        Optional<PublicServiceReservation> result = mapper.toEntity(row);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getServiceUrl()).isEqualTo("https://yeyak.seoul.go.kr/svc?a=1&b=2");
+        assertThat(result.get().getImageUrl()).isEqualTo("https://img.seoul.go.kr/x?a=1&b=2");
+    }
+
+    @Test
+    @DisplayName("엔티티가 없는 값은 디코딩 no-op이며 멱등하다")
+    void toEntity_noEntities_isNoOp() {
+        PublicServiceRow row = buildValidRow();
+        setField(row, "svcnm", "일반 서비스명");
+
+        Optional<PublicServiceReservation> result = mapper.toEntity(row);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getServiceName()).isEqualTo("일반 서비스명");
+    }
+
+    @Test
+    @DisplayName("제외 필드(serviceId)는 엔티티 모양 문자열이어도 디코딩하지 않고 원본 보존")
+    void toEntity_serviceId_isNotDecoded() {
+        PublicServiceRow row = buildValidRow();
+        // serviceId 는 디코딩 대상이 아니다. 실제 서울 ID에 &가 들어올 일은 없으나
+        // 디코딩 경로를 절대 타지 않음을 회귀 고정한다.
+        setField(row, "svcid", "SVC&amp;001");
+
+        Optional<PublicServiceReservation> result = mapper.toEntity(row);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getServiceId()).isEqualTo("SVC&amp;001");
+    }
+
+    @Test
+    @DisplayName("제외 필드(좌표/일시)는 디코딩 경로를 타지 않고 그대로 파싱된다")
+    void toEntity_coordsAndDates_areNotDecoded() {
+        PublicServiceRow row = buildValidRow();
+
+        Optional<PublicServiceReservation> result = mapper.toEntity(row);
+
+        assertThat(result).isPresent();
+        // 좌표/일시는 디코딩과 무관하게 숫자/시간 파싱만 적용된다.
+        assertThat(result.get().getCoordX()).isEqualByComparingTo(new BigDecimal("126.9779"));
+        assertThat(result.get().getCoordY()).isEqualByComparingTo(new BigDecimal("37.5665"));
+        assertThat(result.get().getReceiptStartDt())
+                .isEqualTo(LocalDateTime.of(2025, 1, 1, 9, 0, 0));
+        assertThat(result.get().getCancelStdDays()).isEqualTo((short) 1);
+    }
+
+    @Test
+    @DisplayName("이중 인코딩된 표시 텍스트는 저장 경계에서 1회만 디코딩된다(&amp;lt; → &lt;)")
+    void toEntity_doubleEncodedText_decodesOnce() {
+        PublicServiceRow row = buildValidRow();
+        setField(row, "svcnm", "A&amp;lt;B");
+
+        Optional<PublicServiceReservation> result = mapper.toEntity(row);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getServiceName()).isEqualTo("A&lt;B");
+    }
+
+    @Test
     @DisplayName("USETGTINFO가 빈 문자열이면 targetInfo는 null로 trim 처리된다")
     void toEntity_blankUsetgtinfo_setsNullTargetInfo() {
         PublicServiceRow row = buildValidRow();
