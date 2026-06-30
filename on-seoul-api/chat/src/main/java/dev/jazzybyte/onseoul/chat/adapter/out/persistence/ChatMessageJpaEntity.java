@@ -62,11 +62,6 @@ public class ChatMessageJpaEntity {
         if (createdAt == null) createdAt = OffsetDateTime.now();
     }
 
-    /** 일회성 백필용 — service_cards JSON 스냅샷의 디코딩된 값으로 교체한다. */
-    void replaceServiceCards(String decoded) {
-        this.serviceCards = decoded;
-    }
-
     public ChatMessage toDomain() {
         return new ChatMessage(id, roomId, seq, ChatMessageRole.valueOf(role), content,
                 serviceCards, intent, decision, workingSet, createdAt);
