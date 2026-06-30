@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS notification_dispatches
     updated_at           TIMESTAMP    NOT NULL DEFAULT NOW(),
 
     CONSTRAINT uq_nd_batch_subscription UNIQUE (batch_id, subscription_id),
-    CONSTRAINT chk_nd_status CHECK (status IN ('PENDING', 'SUCCESS', 'FAILED', 'DEAD')),
+    CONSTRAINT chk_nd_status CHECK (status IN ('PENDING', 'SUCCESS', 'FAILED', 'DEAD', 'EXPIRED')),
     CONSTRAINT chk_nd_trigger_type CHECK (trigger_type IN ('CHANGE', 'OPEN_DAY', 'BEFORE_RECEIPT_D1', 'DEADLINE_DDAY')),
     CONSTRAINT chk_nd_template_source CHECK (template_source IN ('AI', 'FALLBACK') OR template_source IS NULL)
 );

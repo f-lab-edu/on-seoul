@@ -143,6 +143,62 @@ class NotificationDispatchTest {
     }
 
     @Test
+    @DisplayName("markExpired() — EXPIRED 상태 전환, lastError 저장, attemptCount 불변")
+    void markExpired_transitionsToExpiredWithoutTouchingAttemptCount() {
+        NotificationDispatch dispatch = NotificationDispatch.create(7L, 10L);
+        dispatch.incrementAttemptCount();
+        dispatch.incrementAttemptCount();
+        int before = dispatch.getAttemptCount();
+
+        dispatch.markExpired("max-age 초과");
+
+        assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.EXPIRED);
+        assertThat(dispatch.getLastError()).isEqualTo("max-age 초과");
+        assertThat(dispatch.getAttemptCount()).isEqualTo(before);
+        assertThat(dispatch.isPending()).isFalse();
+    }
+
+    @Test
+    @DisplayName("isOlderThan() — createdAt이 now-maxAge 이전이면 true")
+    void isOlderThan_returnsTrueWhenStale() {
+        java.time.Instant now = java.time.Instant.parse("2026-06-30T12:00:00Z");
+        java.time.Duration maxAge = java.time.Duration.ofHours(12);
+
+        // createdAt = now - 13h → stale
+        NotificationDispatch stale = reconstituteWithCreatedAt(now.minus(java.time.Duration.ofHours(13)));
+        assertThat(stale.isOlderThan(now, maxAge)).isTrue();
+
+        // createdAt = now - 11h → fresh
+        NotificationDispatch fresh = reconstituteWithCreatedAt(now.minus(java.time.Duration.ofHours(11)));
+        assertThat(fresh.isOlderThan(now, maxAge)).isFalse();
+    }
+
+    @Test
+    @DisplayName("isOlderThan() — 정확히 임계값(now-maxAge)이면 false (isBefore 경계)")
+    void isOlderThan_atExactThreshold_isFalse() {
+        java.time.Instant now = java.time.Instant.parse("2026-06-30T12:00:00Z");
+        java.time.Duration maxAge = java.time.Duration.ofHours(12);
+
+        NotificationDispatch atThreshold = reconstituteWithCreatedAt(now.minus(maxAge));
+        assertThat(atThreshold.isOlderThan(now, maxAge)).isFalse();
+    }
+
+    @Test
+    @DisplayName("isOlderThan() — createdAt이 null이면 false (방어)")
+    void isOlderThan_nullCreatedAt_isFalse() {
+        NotificationDispatch dispatch = reconstituteWithCreatedAt(null);
+        assertThat(dispatch.isOlderThan(java.time.Instant.now(), java.time.Duration.ofHours(12)))
+                .isFalse();
+    }
+
+    private NotificationDispatch reconstituteWithCreatedAt(java.time.Instant createdAt) {
+        return new NotificationDispatch(
+                1L, 1L, 10L, TriggerType.CHANGE, null, null,
+                DispatchStatus.FAILED, null, "t", "b", TemplateSource.AI,
+                "e", 1, null, createdAt, createdAt);
+    }
+
+    @Test
     @DisplayName("isRetryExhausted() — attemptCount=4이면 false, 5이면 true")
     void isRetryExhausted_boundaryValues() {
         NotificationDispatch dispatch = NotificationDispatch.create(7L, 10L);
