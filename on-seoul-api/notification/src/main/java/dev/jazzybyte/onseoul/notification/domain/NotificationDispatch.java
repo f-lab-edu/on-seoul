@@ -2,6 +2,7 @@ package dev.jazzybyte.onseoul.notification.domain;
 
 import lombok.Getter;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 
@@ -183,6 +184,25 @@ public class NotificationDispatch {
         this.status = DispatchStatus.DEAD;
         this.lastError = error;
         this.updatedAt = Instant.now();
+    }
+
+    /**
+     * createdAt 기준 max-age 초과로 stale 폐기 → EXPIRED 전환.
+     * markDead와 동일 사상으로 last_notified_at은 갱신하지 않으며, attempt_count도 증가시키지 않는다.
+     * 재시도 소진(DEAD)과 구분되는 종료 상태다.
+     */
+    public void markExpired(String reason) {
+        this.status = DispatchStatus.EXPIRED;
+        this.lastError = reason;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * createdAt이 {@code now - maxAge} 이전이면 true(stale).
+     * createdAt이 null이면 false(폐기 판단 불가 — 안전하게 재시도 경로 유지).
+     */
+    public boolean isOlderThan(Instant now, Duration maxAge) {
+        return this.createdAt != null && this.createdAt.isBefore(now.minus(maxAge));
     }
 
     /** attempt_count를 1 증가시킨다. */

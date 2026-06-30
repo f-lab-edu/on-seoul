@@ -12,6 +12,7 @@
 | 챗봇 질의 릴레이 | `POST /api/chat/query` — AI 서비스 `/chat/stream`으로 WebClient 릴레이, 응답을 `SseEmitter`로 스트리밍 |
 | 대화방 라이프사이클 | 방 생성(질의 시 자동)·목록 조회·이력 조회·삭제(soft delete) |
 | 이력 저장 | 사용자 질문 + AI 최종 답변(`final.answer`)과 결과 카드(`service_cards`)·`intent`를 영속 |
+| 대화방 제목 생성 | 새 방 첫 턴에 `title_needed=true`로 AI에 제목 생성 요청 → `title` 이벤트 수신 시 `chat_rooms.title` 갱신(멱등) |
 | 멀티턴 맥락 | 직전 N턴 history + carryover(직전 턴 워킹셋)를 다음 질의에 실어 "이 곳/세번째" 같은 참조 해소 |
 | 남용 방지 | per-user 동시 생성 cap + 분당 호출 RPM 제한으로 LLM 비용 보호 |
 
@@ -77,6 +78,7 @@ chat/
 | `event:init` | API | AI 호출 전 1회. `{room_id, created}` — 답변 완료 전 roomId 선전송(URL 전환/스레딩) |
 | (name 없는 data) step | AI | 진행 상태. 그대로 relay |
 | (name 없는 data) final | AI | 최종 답변. `answer`(있고 `error` 없음)로 식별. `service_cards`, `intent`, `prev_working_set` 포함 |
+| (name 없는 data) title | AI | 새 방 첫 턴 제목. payload `type=="title"`로 식별. relay + `chat_rooms.title` 영속(API) |
 | `event:error` | API | API 레벨 오류 (`{code, message}`) |
 
 - **disconnect 내성**: 클라이언트가 스트림 도중 끊어도 백그라운드 구독이 AI 스트림을 끝까지 소비해 `final.answer`, `service_cards`, `intent`, `decision`, `working_set`을 저장한다(답변 유실 방지).

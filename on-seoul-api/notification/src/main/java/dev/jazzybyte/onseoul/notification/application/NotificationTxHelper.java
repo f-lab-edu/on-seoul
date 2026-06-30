@@ -177,6 +177,16 @@ public class NotificationTxHelper {
     }
 
     /**
+     * Retry TX 만료: createdAt 기준 max-age 초과로 EXPIRED 전환된 dispatch를 저장.
+     * 호출 전에 도메인 {@link NotificationDispatch#markExpired(String)}를 호출해야 한다.
+     * txBRetryFailure와 동형의 트랜잭션 경계 — last_notified_at은 전진시키지 않는다.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void txBRetryExpired(NotificationDispatch dispatch) {
+        saveDispatchPort.save(dispatch);
+    }
+
+    /**
      * TX A 결과 묶음.
      *
      * @param changes  필터에 매칭된 변경 목록 (빈 경우 발송 생략)

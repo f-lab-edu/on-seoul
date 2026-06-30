@@ -55,11 +55,13 @@ class DispatchRetrySchedulerTest {
     private static final Long USER_ID = 1L;
     private static final UserContact CONTACT = new UserContact(USER_ID, "user@example.com", null);
 
+    private static final int MAX_AGE_HOURS = 12;
+
     @BeforeEach
     void setUp() {
         scheduler = new DispatchRetryScheduler(
                 loadDispatchPort, loadSubscriptionPort, loadUserContactPort,
-                pushNotificationPort, txHelper, contentSerializer);
+                pushNotificationPort, txHelper, contentSerializer, MAX_AGE_HOURS);
     }
 
     private NotificationDispatch failedDispatch(Long id, int attemptCount) {
@@ -67,13 +69,17 @@ class DispatchRetrySchedulerTest {
     }
 
     private NotificationDispatch failedDispatch(Long id, int attemptCount, String payload) {
+        return failedDispatch(id, attemptCount, payload, Instant.now());
+    }
+
+    private NotificationDispatch failedDispatch(Long id, int attemptCount, String payload, Instant createdAt) {
         return new NotificationDispatch(
                 id, 1L, SUB_ID,
                 dev.jazzybyte.onseoul.notification.domain.TriggerType.CHANGE, null, null,
                 DispatchStatus.FAILED,
                 null, "재시도 제목", "재시도 본문", TemplateSource.AI,
                 "이전 오류", attemptCount, payload,
-                Instant.now(), Instant.now());
+                createdAt, createdAt);
     }
 
     private NotificationSubscription subscription() {
@@ -219,6 +225,140 @@ class DispatchRetrySchedulerTest {
 
         verify(txHelper).txBRetryFailure(eq(dispatch));
         verify(txHelper, never()).txBRetrySuccess(any(), any(), any());
+    }
+
+    // ── staleness 가드 (createdAt 기준 max-age 초과) ─────────────────────
+
+    @Test
+    @DisplayName("createdAt 12h 초과 FAILED → send 미호출, EXPIRED 전환 + txBRetryExpired (attempt_count 불변)")
+    void staleDispatch_expiresWithoutSending() {
+        Instant created = Instant.now().minus(java.time.Duration.ofHours(13));
+        NotificationDispatch dispatch = failedDispatch(100L, 2, null, created);
+
+        when(loadDispatchPort.findRetryable()).thenReturn(List.of(dispatch));
+
+        scheduler.retryFailedDispatches();
+
+        assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.EXPIRED);
+        assertThat(dispatch.getAttemptCount()).isEqualTo(2);
+
+        verify(txHelper).txBRetryExpired(eq(dispatch));
+        verifyNoInteractions(pushNotificationPort, loadSubscriptionPort, loadUserContactPort);
+        verify(txHelper, never()).txBRetrySuccess(any(), any(), any());
+        verify(txHelper, never()).txBRetryFailure(any());
+    }
+
+    @Test
+    @DisplayName("createdAt 12h 이내 FAILED → 정상 재시도 (send 호출, EXPIRED 미전환)")
+    void freshDispatch_retriesNormally() {
+        Instant created = Instant.now().minus(java.time.Duration.ofHours(11));
+        NotificationDispatch dispatch = failedDispatch(100L, 1, null, created);
+
+        when(loadDispatchPort.findRetryable()).thenReturn(List.of(dispatch));
+        when(loadSubscriptionPort.loadById(SUB_ID)).thenReturn(Optional.of(subscription()));
+        when(loadUserContactPort.loadContact(USER_ID)).thenReturn(Optional.of(CONTACT));
+
+        scheduler.retryFailedDispatches();
+
+        verify(pushNotificationPort).send(eq(CONTACT), any(NotificationContent.class), eq(100L), any());
+        verify(txHelper, never()).txBRetryExpired(any());
+    }
+
+    @Test
+    @DisplayName("경계: createdAt 정확히 임계값(12h)이면 EXPIRED 아님 — 정상 재시도")
+    void boundary_exactlyAtThreshold_retries() {
+        // retryStartedAt - createdAt == maxAge → isBefore false → 재시도
+        Instant created = Instant.now().minus(java.time.Duration.ofHours(MAX_AGE_HOURS)).plusSeconds(2);
+        NotificationDispatch dispatch = failedDispatch(100L, 1, null, created);
+
+        when(loadDispatchPort.findRetryable()).thenReturn(List.of(dispatch));
+        when(loadSubscriptionPort.loadById(SUB_ID)).thenReturn(Optional.of(subscription()));
+        when(loadUserContactPort.loadContact(USER_ID)).thenReturn(Optional.of(CONTACT));
+
+        scheduler.retryFailedDispatches();
+
+        verify(pushNotificationPort).send(eq(CONTACT), any(NotificationContent.class), eq(100L), any());
+        verify(txHelper, never()).txBRetryExpired(any());
+    }
+
+    @Test
+    @DisplayName("max-age-hours 주입값 반영 — 6h 설정 시 7h 경과 FAILED는 EXPIRED")
+    void injectedMaxAge_isHonored() {
+        DispatchRetryScheduler shortScheduler = new DispatchRetryScheduler(
+                loadDispatchPort, loadSubscriptionPort, loadUserContactPort,
+                pushNotificationPort, txHelper, contentSerializer, 6);
+
+        Instant created = Instant.now().minus(java.time.Duration.ofHours(7));
+        NotificationDispatch dispatch = failedDispatch(100L, 1, null, created);
+        when(loadDispatchPort.findRetryable()).thenReturn(List.of(dispatch));
+
+        shortScheduler.retryFailedDispatches();
+
+        assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.EXPIRED);
+        verify(txHelper).txBRetryExpired(eq(dispatch));
+        verifyNoInteractions(pushNotificationPort);
+    }
+
+    @Test
+    @DisplayName("PII: markExpired reason에 제목·본문 평문이 포함되지 않는다")
+    void staleDispatch_expiredReason_containsNoPii() {
+        Instant created = Instant.now().minus(java.time.Duration.ofHours(13));
+        // 제목/본문에 식별 가능한 PII 성격 문자열을 넣어 reason 누출 여부를 검증한다.
+        NotificationDispatch dispatch = new NotificationDispatch(
+                100L, 1L, SUB_ID,
+                dev.jazzybyte.onseoul.notification.domain.TriggerType.CHANGE, null, null,
+                DispatchStatus.FAILED, null,
+                "민감-제목-홍길동", "민감-본문-강남구수영교실", TemplateSource.AI,
+                "이전 오류", 2, null, created, created);
+
+        when(loadDispatchPort.findRetryable()).thenReturn(List.of(dispatch));
+
+        scheduler.retryFailedDispatches();
+
+        assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.EXPIRED);
+        assertThat(dispatch.getLastError())
+                .doesNotContain("민감-제목-홍길동")
+                .doesNotContain("민감-본문-강남구수영교실")
+                .contains("max-age")
+                .contains(String.valueOf(MAX_AGE_HOURS));
+        // 제목/본문 자체는 재시도 복원용으로 도메인에 보존되어야 한다(폐기지 삭제 아님).
+        assertThat(dispatch.getGeneratedTitle()).isEqualTo("민감-제목-홍길동");
+        verifyNoInteractions(pushNotificationPort);
+    }
+
+    @Test
+    @DisplayName("txBRetryExpired TX 실패해도 루프가 죽지 않고 send도 호출하지 않는다")
+    void staleDispatch_txExpiredThrows_doesNotSendAndSwallows() {
+        Instant created = Instant.now().minus(java.time.Duration.ofHours(13));
+        NotificationDispatch dispatch = failedDispatch(100L, 2, null, created);
+
+        when(loadDispatchPort.findRetryable()).thenReturn(List.of(dispatch));
+        doThrow(new RuntimeException("DB down")).when(txHelper).txBRetryExpired(any());
+
+        // 예외가 전파되지 않아야 한다(스케줄러는 단건 실패를 삼킨다).
+        scheduler.retryFailedDispatches();
+
+        assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.EXPIRED);
+        verify(txHelper).txBRetryExpired(eq(dispatch));
+        verifyNoInteractions(pushNotificationPort, loadSubscriptionPort);
+    }
+
+    @Test
+    @DisplayName("staleness 가드 우선: 재시도 소진(attemptCount=4) + stale 이면 send 없이 EXPIRED (DEAD 아님)")
+    void staleAndRetryExhausted_takesExpiredPathNotDead() {
+        Instant created = Instant.now().minus(java.time.Duration.ofHours(13));
+        NotificationDispatch dispatch = failedDispatch(100L, 4, null, created);
+
+        when(loadDispatchPort.findRetryable()).thenReturn(List.of(dispatch));
+
+        scheduler.retryFailedDispatches();
+
+        // staleness 가드가 send 이전에 동작하므로 DEAD 경로(send 실패 후 markDead)에 닿지 않는다.
+        assertThat(dispatch.getStatus()).isEqualTo(DispatchStatus.EXPIRED);
+        assertThat(dispatch.getAttemptCount()).isEqualTo(4);
+        verify(txHelper).txBRetryExpired(eq(dispatch));
+        verify(txHelper, never()).txBRetryFailure(any());
+        verifyNoInteractions(pushNotificationPort);
     }
 
     // ── 구독 없음 (삭제된 구독) ──────────────────────────────────────────

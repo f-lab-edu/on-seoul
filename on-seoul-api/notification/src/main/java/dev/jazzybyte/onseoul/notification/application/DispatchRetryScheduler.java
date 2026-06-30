@@ -10,9 +10,11 @@ import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
 import dev.jazzybyte.onseoul.notification.port.out.NotificationContentSerializerPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -43,19 +45,29 @@ public class DispatchRetryScheduler {
     private final NotificationTxHelper txHelper;
     private final NotificationContentSerializerPort contentSerializer;
 
+    /**
+     * FAILED dispatch staleness 임계값. createdAt 으로부터 이 기간을 초과하면 재시도하지 않고
+     * EXPIRED 로 폐기한다(저장된 콘텐츠가 stale 할 수 있어 재발송보다 안전). 기본 12h.
+     */
+    private final Duration maxAge;
+    private final int maxAgeHours;
+
     public DispatchRetryScheduler(
             final LoadDispatchPort loadDispatchPort,
             final LoadSubscriptionPort loadSubscriptionPort,
             final LoadUserContactPort loadUserContactPort,
             final PushNotificationPort pushNotificationPort,
             final NotificationTxHelper txHelper,
-            final NotificationContentSerializerPort contentSerializer) {
+            final NotificationContentSerializerPort contentSerializer,
+            @Value("${notification.retry-scheduler.max-age-hours:12}") final int maxAgeHours) {
         this.loadDispatchPort = loadDispatchPort;
         this.loadSubscriptionPort = loadSubscriptionPort;
         this.loadUserContactPort = loadUserContactPort;
         this.pushNotificationPort = pushNotificationPort;
         this.txHelper = txHelper;
         this.contentSerializer = contentSerializer;
+        this.maxAgeHours = maxAgeHours;
+        this.maxAge = Duration.ofHours(maxAgeHours);
     }
 
     @Scheduled(fixedDelayString = "${notification.retry-scheduler.fixed-delay-ms:3600000}")
@@ -87,6 +99,22 @@ public class DispatchRetryScheduler {
 
     private void retryOne(NotificationDispatch dispatch, Instant retryStartedAt) {
         Long subscriptionId = dispatch.getSubscriptionId();
+
+        // staleness 가드: createdAt 기준 max-age 초과면 send/구독 로드 이전에 EXPIRED 로 폐기한다.
+        // findRetryable(status=FAILED) 가 다시 잡지 않으므로 영원한 FAILED(limbo)를 방지한다.
+        // DEAD(재시도 소진)와 EXPIRED(max-age 초과)는 둘 중 먼저 닿는 조건이 종료를 결정한다.
+        if (dispatch.isOlderThan(retryStartedAt, maxAge)) {
+            dispatch.markExpired("max-age(" + maxAgeHours + "h) 초과 — stale 폐기");
+            try {
+                txHelper.txBRetryExpired(dispatch);
+            } catch (Exception e) {
+                log.error("[DispatchRetryScheduler] TX RetryExpired 실패: dispatchId={}, error={}",
+                        dispatch.getId(), e.getMessage());
+            }
+            log.info("[DispatchRetryScheduler] EXPIRED 전환(stale): dispatchId={}, subscriptionId={}, ageHours>{}",
+                    dispatch.getId(), subscriptionId, maxAgeHours);
+            return;
+        }
 
         Optional<NotificationSubscription> subOpt;
         try {
