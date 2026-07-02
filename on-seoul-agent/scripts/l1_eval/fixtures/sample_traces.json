@@ -1,144 +1,244 @@
 [
   {
     "id": "fx-normal-1",
-    "input": "강남구 수영장 알려줘",
-    "output": "강남구 수영장 3곳을 안내합니다...",
-    "metadata": {
-      "intent": "SQL_SEARCH",
-      "action": "RETRIEVE",
-      "node_path": ["intake", "router", "sql", "hydration", "answer"],
-      "retry_count": 0,
-      "cache_hit": false,
-      "total_hits": 6,
-      "sql_hits": 6,
-      "applied_filter_count": 2
-    }
+    "observations": [
+      {
+        "id": "obs-fx-normal-1-root",
+        "trace_id": "fx-normal-1",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "input": "강남구 수영장 알려줘",
+        "output": "강남구 수영장 3곳을 안내합니다...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "node_path": ["intake", "router", "sql", "hydration", "answer"],
+          "retry_count": 0,
+          "cache_hit": false,
+          "total_hits": 6,
+          "sql_hits": 6,
+          "applied_filter_count": 2
+        }
+      },
+      {
+        "id": "obs-fx-normal-1-router",
+        "trace_id": "fx-normal-1",
+        "type": "GENERATION",
+        "name": "router",
+        "parent_observation_id": "obs-fx-normal-1-root",
+        "input": null,
+        "output": null,
+        "metadata": null
+      }
+    ]
   },
   {
     "id": "fx-normal-2",
-    "input": {"message": "지금 예약 가능한 문화행사"},
-    "output": "예약 가능한 문화행사 8건...",
-    "metadata": {
-      "intent": "SQL_SEARCH",
-      "action": "RETRIEVE",
-      "node_path": ["intake", "router", "sql", "answer"],
-      "retry_count": 0,
-      "total_hits": 8,
-      "sql_hits": 8,
-      "applied_filter_count": 1
-    }
+    "observations": [
+      {
+        "id": "obs-fx-normal-2-root",
+        "trace_id": "fx-normal-2",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "input": {"message": "지금 예약 가능한 문화행사"},
+        "output": "예약 가능한 문화행사 8건...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "node_path": ["intake", "router", "sql", "answer"],
+          "retry_count": 0,
+          "total_hits": 8,
+          "sql_hits": 8,
+          "applied_filter_count": 1
+        }
+      }
+    ]
   },
   {
     "id": "fx-zero-1",
-    "input": "은평구 심야 승마 강습 예약",
-    "output": "조건에 맞는 예약을 찾지 못했습니다...",
-    "metadata": {
-      "intent": "SQL_SEARCH",
-      "action": "RETRIEVE",
-      "node_path": ["intake", "router", "sql", "retry_prep", "sql", "answer"],
-      "retry_count": 1,
-      "forced_intent": null,
-      "total_hits": 0,
-      "sql_hits": 0,
-      "applied_filter_count": 3
-    }
+    "observations": [
+      {
+        "id": "obs-fx-zero-1-root",
+        "trace_id": "fx-zero-1",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "input": "은평구 심야 승마 강습 예약",
+        "output": "조건에 맞는 예약을 찾지 못했습니다...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "node_path": ["intake", "router", "sql", "retry_prep", "sql", "answer"],
+          "retry_count": 1,
+          "forced_intent": null,
+          "total_hits": 0,
+          "sql_hits": 0,
+          "applied_filter_count": 3
+        }
+      }
+    ]
   },
   {
     "id": "fx-thin-1",
-    "input": "한강 근처 야간 개장 실내 클라이밍장",
-    "output": "1곳을 찾았습니다...",
-    "metadata": {
-      "intent": "VECTOR_SEARCH",
-      "action": "RETRIEVE",
-      "node_path": ["intake", "router", "vector", "hydration", "pre_answer_gate", "answer"],
-      "retry_count": 0,
-      "total_hits": 1,
-      "vector_hits": 1,
-      "result_quality": {"thin": true},
-      "applied_filter_count": 1
-    }
+    "observations": [
+      {
+        "id": "obs-fx-thin-1-root",
+        "trace_id": "fx-thin-1",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "input": "한강 근처 야간 개장 실내 클라이밍장",
+        "output": "1곳을 찾았습니다...",
+        "metadata": {
+          "intent": "VECTOR_SEARCH",
+          "action": "RETRIEVE",
+          "node_path": ["intake", "router", "vector", "hydration", "pre_answer_gate", "answer"],
+          "retry_count": 0,
+          "total_hits": 1,
+          "vector_hits": 1,
+          "result_quality": {"thin": true},
+          "applied_filter_count": 1
+        }
+      }
+    ]
   },
   {
     "id": "fx-skew-1",
-    "input": "서울 무료 전시 추천",
-    "output": "무료 전시 5건...",
-    "metadata": {
-      "intent": "VECTOR_SEARCH",
-      "action": "RETRIEVE",
-      "node_path": ["intake", "router", "vector", "hydration", "pre_answer_gate", "answer"],
-      "retry_count": 0,
-      "total_hits": 5,
-      "vector_hits": 5,
-      "result_quality": {"skew_field": "area_name", "skew_value": "종로구", "skew_ratio": 0.8, "thin": false},
-      "applied_filter_count": 1
-    }
+    "observations": [
+      {
+        "id": "obs-fx-skew-1-root",
+        "trace_id": "fx-skew-1",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "input": "서울 무료 전시 추천",
+        "output": "무료 전시 5건...",
+        "metadata": {
+          "intent": "VECTOR_SEARCH",
+          "action": "RETRIEVE",
+          "node_path": ["intake", "router", "vector", "hydration", "pre_answer_gate", "answer"],
+          "retry_count": 0,
+          "total_hits": 5,
+          "vector_hits": 5,
+          "result_quality": {"skew_field": "area_name", "skew_value": "종로구", "skew_ratio": 0.8, "thin": false},
+          "applied_filter_count": 1
+        }
+      }
+    ]
   },
   {
     "id": "fx-retry-1",
-    "input": "무료 강좌 있나요",
-    "output": "무료 강좌 4건...",
-    "metadata": {
-      "intent": "VECTOR_SEARCH",
-      "action": "RETRIEVE",
-      "node_path": ["intake", "router", "sql", "retry_prep", "vector", "answer"],
-      "retry_count": 1,
-      "forced_intent": "VECTOR_SEARCH",
-      "total_hits": 4,
-      "vector_hits": 4,
-      "applied_filter_count": 1
-    }
+    "observations": [
+      {
+        "id": "obs-fx-retry-1-root",
+        "trace_id": "fx-retry-1",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "input": "무료 강좌 있나요",
+        "output": "무료 강좌 4건...",
+        "metadata": {
+          "intent": "VECTOR_SEARCH",
+          "action": "RETRIEVE",
+          "node_path": ["intake", "router", "sql", "retry_prep", "vector", "answer"],
+          "retry_count": 1,
+          "forced_intent": "VECTOR_SEARCH",
+          "total_hits": 4,
+          "vector_hits": 4,
+          "applied_filter_count": 1
+        }
+      }
+    ]
   },
   {
     "id": "fx-mispick-1",
-    "input": "자치구별 체육시설 예약 건수 순위 알려줘",
-    "output": "체육시설 목록 10건...",
-    "metadata": {
-      "intent": "SQL_SEARCH",
-      "action": "RETRIEVE",
-      "node_path": ["intake", "router", "sql", "answer"],
-      "retry_count": 0,
-      "total_hits": 10,
-      "sql_hits": 10,
-      "applied_filter_count": 1
-    }
+    "observations": [
+      {
+        "id": "obs-fx-mispick-1-root",
+        "trace_id": "fx-mispick-1",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "input": "자치구별 체육시설 예약 건수 순위 알려줘",
+        "output": "체육시설 목록 10건...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "node_path": ["intake", "router", "sql", "answer"],
+          "retry_count": 0,
+          "total_hits": 10,
+          "sql_hits": 10,
+          "applied_filter_count": 1
+        }
+      }
+    ]
   },
   {
     "id": "fx-compound-1",
-    "input": "강남에 있는 무료 실내 수영장 중 주차 가능하고 주말에 여는 곳",
-    "output": "조건에 맞는 곳 2건...",
-    "metadata": {
-      "intent": "SQL_SEARCH",
-      "action": "RETRIEVE",
-      "node_path": ["intake", "router", "sql", "answer"],
-      "retry_count": 0,
-      "total_hits": 2,
-      "sql_hits": 2,
-      "result_quality": {"thin": true},
-      "applied_filter_count": 1
-    }
+    "observations": [
+      {
+        "id": "obs-fx-compound-1-root",
+        "trace_id": "fx-compound-1",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "input": "강남에 있는 무료 실내 수영장 중 주차 가능하고 주말에 여는 곳",
+        "output": "조건에 맞는 곳 2건...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "node_path": ["intake", "router", "sql", "answer"],
+          "retry_count": 0,
+          "total_hits": 2,
+          "sql_hits": 2,
+          "result_quality": {"thin": true},
+          "applied_filter_count": 1
+        }
+      }
+    ]
   },
   {
     "id": "fx-drift-1",
-    "input": "자연 속에서 할 수 있는 활동 추천해줘",
-    "output": "실내 원예 강좌 등 6건...",
-    "metadata": {
-      "intent": "VECTOR_SEARCH",
-      "action": "RETRIEVE",
-      "node_path": ["intake", "router", "vector", "hydration", "answer"],
-      "retry_count": 0,
-      "total_hits": 6,
-      "vector_hits": 6,
-      "applied_filter_count": 0
-    }
+    "observations": [
+      {
+        "id": "obs-fx-drift-1-root",
+        "trace_id": "fx-drift-1",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "input": "자연 속에서 할 수 있는 활동 추천해줘",
+        "output": "실내 원예 강좌 등 6건...",
+        "metadata": {
+          "intent": "VECTOR_SEARCH",
+          "action": "RETRIEVE",
+          "node_path": ["intake", "router", "vector", "hydration", "answer"],
+          "retry_count": 0,
+          "total_hits": 6,
+          "vector_hits": 6,
+          "applied_filter_count": 0
+        }
+      }
+    ]
   },
   {
     "id": "fx-old-1",
-    "input": "체육시설 예약",
-    "output": "체육시설 예약 안내...",
-    "metadata": {
-      "intent": "SQL_SEARCH",
-      "node_path": ["router", "sql", "answer"],
-      "retry_count": 0
-    }
+    "observations": [
+      {
+        "id": "obs-fx-old-1-root",
+        "trace_id": "fx-old-1",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "input": "체육시설 예약",
+        "output": "체육시설 예약 안내...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "node_path": ["router", "sql", "answer"],
+          "retry_count": 0
+        }
+      }
+    ]
   }
 ]

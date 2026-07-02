@@ -181,12 +181,17 @@ def test_followup_reask_false_when_turn_kind_absent():
 # ── 라운드트립: emit → extract.trace_to_signals 가 실제 값으로 소비 ──
 
 
-class _FakeTrace:
-    """trace_to_signals 가 기대하는 속성 접근 형태로 payload 를 감싼다."""
+class _FakeSpan:
+    """root "chat" span observation 을 모사(input/metadata 는 span 에 실림)."""
 
     def __init__(self, meta: dict, query: str) -> None:
-        self.id = "rt-1"
+        self.id = "obs-rt-1"
+        self.trace_id = "rt-1"
+        self.type = "SPAN"
+        self.name = "chat"
+        self.parent_observation_id = None
         self.input = query
+        self.output = None
         self.metadata = meta
 
 
@@ -205,7 +210,9 @@ def test_roundtrip_extractor_reads_extended_signals_as_real_values():
     state["retry_count"] = 1
 
     meta = _trace_completion_metadata(state)
-    signals: QuerySignals = trace_to_signals(_FakeTrace(meta, state["message"]))
+    signals: QuerySignals = trace_to_signals(
+        trace_id="rt-1", span=_FakeSpan(meta, state["message"])
+    )
 
     # 추출기가 확장 신호를 실제 값으로 읽는다(더 이상 None 관대 처리 아님).
     assert signals.sql_hits == 2
@@ -224,6 +231,8 @@ def test_roundtrip_zero_hit_detectable():
     """0건 채널이 total_hits=0 으로 실려 추출기 is_zero_hit()=True 로 판정된다."""
     state = make_agent_state(message="은평구 심야 승마", sql_results=[])
     meta = _trace_completion_metadata(state)
-    signals = trace_to_signals(_FakeTrace(meta, state["message"]))
+    signals = trace_to_signals(
+        trace_id="rt-1", span=_FakeSpan(meta, state["message"])
+    )
     assert signals.total_hits == 0
     assert signals.is_zero_hit() is True
