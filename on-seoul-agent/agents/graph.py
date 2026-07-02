@@ -324,6 +324,66 @@ def _build_sources(state: dict[str, Any]) -> list[dict[str, Any]]:
     return sources
 
 
+# turn_kind 중 "직전 결과 대상 후속 턴"으로 간주하는 값(NEW/META 제외).
+# followup_reask 신호는 이 집합 소속 여부로 도출한다(전용 슬롯 부재 — turn_kind 재사용).
+_FOLLOWUP_TURN_KINDS: frozenset[str] = frozenset({"REFINE", "DRILL", "RELEVANCE"})
+
+
+def _channel_hits(result: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
+    """채널별·총 결과 건수를 집계한다 — L1 규칙 라벨(ZERO_HIT/THIN/SKEW) 근거.
+
+    - sql/vector: results 리스트 길이. 채널 미실행(빈 dict / results 키 없음)이면 None.
+    - map: GeoJSON features 길이(features 부재 시 dict 존재를 1로 간주, _build_sources 동형).
+    - analytics: results 리스트 길이.
+    - total_hits: 실행된 채널의 합. 어느 채널도 안 돌면 None(0건과 구별 — 추출기가
+      is_zero_hit 판정 시 total 미가용 vs total==0 을 다르게 다룬다).
+
+    건수(집계 신호)만 산출하며 raw row/텍스트는 절대 싣지 않는다(PII 금지).
+    """
+
+    def _list_hits(channel: str) -> int | None:
+        rows = (result.get(channel) or {}).get("results")
+        return len(rows) if rows is not None else None
+
+    sql_hits = _list_hits("sql")
+    vector_hits = _list_hits("vector")
+    analytics_hits = _list_hits("analytics")
+
+    map_res = (result.get("map") or {}).get("results")
+    if map_res is None:
+        map_hits: int | None = None
+    elif isinstance(map_res, dict):
+        features = map_res.get("features")
+        map_hits = len(features) if features is not None else 1
+    else:
+        map_hits = None
+
+    parts = [h for h in (sql_hits, vector_hits, map_hits, analytics_hits) if h is not None]
+    total_hits = sum(parts) if parts else None
+    return sql_hits, vector_hits, total_hits
+
+
+def _applied_filter_count(result: dict[str, Any]) -> int:
+    """router 가 적용한 post-filter 수 — filters 채널의 비-None 값 개수.
+
+    완화 재시도로 None 드롭된 필터는 세지 않는다(effective 필터만). LLM 분류기가
+    질의 제약 수 대비 추출 필터 수를 비교할 때 쓴다.
+    """
+    filters = result.get("filters") or {}
+    return sum(1 for v in filters.values() if v is not None)
+
+
+def _followup_reask(result: dict[str, Any]) -> bool:
+    """세션 내 후속 재질의 신호 — turn_kind(REFINE/DRILL/RELEVANCE) 에서 도출.
+
+    전용 슬롯은 없다. intake_node 가 산출한 turn_kind 가 "직전 결과에 얹은 후속 턴"
+    (제약 추가·상세·적합성)이면 True, 신규 질문(NEW)/메타(META)면 False. turn_kind
+    부재 시 False(안전 기본).
+    """
+    turn_kind = (result.get("triage") or {}).get("turn_kind")
+    return turn_kind in _FOLLOWUP_TURN_KINDS
+
+
 def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
     """그래프 완료 후 root span 에 부착할 메타데이터를 result state 에서 추출한다.
 
@@ -331,9 +391,16 @@ def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
     retry_relaxed/cache_hit/error)는 평면 슬롯이라 직접 읽는다. v4 propagate_attributes
     의 tags 는 진입 시점에만 설정 가능하고(post-hoc 태그 API 미지원), intent/retried/
     cache_hit 는 그래프 완료 후에야 확정되므로 모두 metadata 로만 노출한다(폴백).
+
+    L1 Phase 0 측정 확장(scripts/l1_eval/extract.py 계약 일치, 키명 정확 일치):
+      sql_hits/vector_hits/total_hits, result_quality(thin/skew passthrough),
+      forced_intent(enum→str), applied_filter_count, followup_reask.
+    모두 집계 신호(건수·플래그·enum)만 싣는다 — raw 텍스트/식별정보 금지(PII 차단).
     """
     intent = (result.get("plan") or {}).get("intent")
     action = (result.get("triage") or {}).get("action")
+    forced_intent = result.get("forced_intent")
+    sql_hits, vector_hits, total_hits = _channel_hits(result)
     return {
         "intent": intent.value if intent is not None else None,
         "action": action.value if action is not None else None,
@@ -342,6 +409,14 @@ def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
         "retry_relaxed": result.get("retry_relaxed"),
         "cache_hit": result.get("cache_hit"),
         "error": result.get("error"),
+        # ── L1 Phase 0 측정 신호 (추출기 계약 키명) ──
+        "sql_hits": sql_hits,
+        "vector_hits": vector_hits,
+        "total_hits": total_hits,
+        "result_quality": result.get("result_quality"),
+        "forced_intent": forced_intent.value if forced_intent is not None else None,
+        "applied_filter_count": _applied_filter_count(result),
+        "followup_reask": _followup_reask(result),
     }
 
 

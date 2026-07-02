@@ -4,12 +4,19 @@
 자격증명은 env/settings 로만 주입하며(하드코딩 금지), 라이브 접근 불가 환경에서는
 번들 픽스처로 end-to-end 파이프라인을 증명한다.
 
-⚠️ Langfuse root span metadata 갭:
-  현재 그래프(agents/graph.py::_trace_completion_metadata)는 intent/action/node_path/
-  retry_count/retry_relaxed/cache_hit/error 만 metadata 로 노출한다. 계획서가 요구하는
-  sql/vector 건수·result_quality(thin/skew)·forced_intent·후속 재질문은 아직 트레이스에
-  실리지 않는다. 이 추출기는 metadata 에 있으면 읽고 없으면 None 으로 둔다(관대). 실측
-  정밀도를 높이려면 그래프의 metadata payload 를 확장해야 한다(Phase 0 핸드오프 참고).
+Langfuse root span metadata 계약(갭 닫힘):
+  그래프(agents/graph.py::_trace_completion_metadata)가 아래 신호를 모두 root span
+  metadata 로 노출한다 — 이 추출기가 읽는 키명과 정확히 일치한다:
+    intent/action/node_path/retry_count/retry_relaxed/cache_hit/error,
+    sql_hits/vector_hits/total_hits, result_quality(thin/skew_field/skew_ratio),
+    forced_intent, applied_filter_count, followup_reask.
+  따라서 실 트래픽 트레이스에서 규칙 라벨(ZERO_HIT/THIN/SKEW/RETRIED)이 실제 값으로
+  결정된다. 신호가 없는 구(舊) 트레이스는 여전히 None/기본값으로 관대하게 흡수한다
+  (fx-old-1 픽스처가 이 하위호환을 커버).
+
+  followup_reask 는 전용 state 슬롯이 아니라 turn_kind(REFINE/DRILL/RELEVANCE)에서
+  도출한 근사 신호다(그래프 측 _followup_reask 참고). 프로덕션 트레이스가 여전히
+  담지 않을 수 있는 필드는 None/False 로 두고 라벨러가 NORMAL 로 흡수한다.
 """
 
 from __future__ import annotations
