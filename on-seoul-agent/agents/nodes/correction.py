@@ -3,7 +3,6 @@
 import logging
 from typing import Any
 
-from agents import _redis_gateway
 from agents._helpers import emit_progress
 from agents.nodes._shared import is_gap_oos
 from schemas.search import RESET_CHANNELS
@@ -50,7 +49,9 @@ _MAP_RETRY_RADIUS_M: int = 3000
 class CorrectionNodes:
     """자기 교정 페이즈 — retry_prep 노드 + self_correction 엣지·0건 판정 헬퍼.
 
-    의존: redis(재진입 전 answer 락 해제).
+    의존: redis(생성자 주입 슬롯 — 현재 노드 로직에서 직접 사용하지 않는다. answer 락은
+    전 요청 수명 동안 K_original 에 유지되고 cache_write 가 단독 해제하므로 retry_prep 는
+    락을 건드리지 않는다. 주입 일관성·하위호환을 위해 슬롯은 보존한다).
     """
 
     def __init__(self, redis: Any) -> None:
@@ -91,14 +92,14 @@ class CorrectionNodes:
             action.value if action else None,
         )
 
-        # 0건 게이트 우회 경로 회귀 방지: 이 재시도는 cache_write 를 거치지 않고
-        # router_node 로 재진입하므로, 직전 패스의 cache_check 가 잡은 singleflight 락을
-        # 여기서 해제해야 한다(미해제 시 재진입 cache_check 가 SET NX 실패 → poll 타임아웃).
-        # Option B: 획득 시점 키를 평면 슬롯에서 그대로 읽어 해제 — refined_query/필터
-        # 리셋 이전·이후 순서와 무관하게 키 불일치 위험이 없다. release 는 멱등.
-        lock_key = state.get("answer_lock_key")
-        if lock_key:
-            await _redis_gateway.release_answer_lock(lock_key, self._redis)
+        # 락은 여기서 해제하지 않는다(회귀 방지 핵심): answer_lock_key(= 최초 cache_check
+        # 시점 K_original)는 이제 락 대상이자 cache_write 의 저장 타깃을 겸한다. 재시도
+        # 재진입 시 cache_check 는 이 슬롯이 있으면 즉시 pass-through 하므로(재획득 안 함)
+        # 락을 미리 풀 필요가 없다 — 락은 최초 획득부터 cache_write 저장까지 K_original 에
+        # 걸린 채 유지되고, 그 사이 동일 원 질의의 대기자는 계속 폴한다. 여기서 해제하면
+        # K_original 락이 사라져 대기자가 고아가 되고(저장 전 fail-open), 재진입 cache_check
+        # 가드로 재획득도 안 하므로 락 정합이 깨진다. 따라서 answer_lock_key 도 보존한다
+        # (아래 update 에서 슬롯을 건드리지 않는다).
 
         # 재시도 경계: re_searching emit + progress 가드 리셋(다음 순회의
         # searching/answering 이벤트가 다시 흐르게 한다 — 기존 동작 보존).
@@ -114,8 +115,9 @@ class CorrectionNodes:
             "search_channels": RESET_CHANNELS,
             "node_path": ["retry_prep"],
             "emit": {"searching_emitted": False, "answering_emitted": False},
-            # 해제 완료 → 슬롯 비움(재진입 cache_check 가 새 락 키를 다시 기록).
-            "answer_lock_key": None,
+            # answer_lock_key 는 보존한다(슬롯 미기록 = LangGraph 머지에서 무변경).
+            # 락은 전 요청 수명 동안 K_original 에 유지되고, cache_write 가 저장 후 단독
+            # 해제한다. 재진입 cache_check 는 이 슬롯을 보고 즉시 pass-through(재획득 안 함).
         }
         # 전 분기 공통 필터 드롭 페이로드(머지) — ANALYTICS 분기만 부분 드롭.
         _filters_clear = {

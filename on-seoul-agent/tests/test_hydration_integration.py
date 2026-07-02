@@ -197,7 +197,7 @@ class TestCacheCheckNodeHydratedServicesRestore:
 
 
 class TestCacheWriteNodeHydratedServicesSnap:
-    """set_cached_answer 에 snap["hydrated_services"] 가 전달되어야 한다."""
+    """set_cached_answer_by_key 에 snap["hydrated_services"] 가 전달되어야 한다."""
 
     async def test_snap_includes_hydrated_services(self):
         hydrated = [{"service_id": "S1", "service_name": "수영장"}]
@@ -209,12 +209,14 @@ class TestCacheWriteNodeHydratedServicesSnap:
             hydrated_services=hydrated,
         )
 
-        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
+        with patch(
+            "agents._redis_gateway.set_cached_answer_by_key", AsyncMock()
+        ) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(state)
 
         mock_set.assert_called_once()
-        # set_cached_answer(refined, payload, snap, redis, ...)
+        # set_cached_answer_by_key(store_key, payload, snap, redis)
         snap = mock_set.call_args.args[2]
         assert snap["hydrated_services"] == hydrated
 
@@ -228,7 +230,9 @@ class TestCacheWriteNodeHydratedServicesSnap:
         )
         # hydrated_services 키 자체가 없는 경우 state.get() → None
 
-        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
+        with patch(
+            "agents._redis_gateway.set_cached_answer_by_key", AsyncMock()
+        ) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(state)
 

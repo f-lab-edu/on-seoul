@@ -238,9 +238,12 @@ class AgentState(TypedDict):
     # ── 오류/캐시 (평면) ──
     error: str | None  # 오류 메시지 (있을 경우)
     cache_hit: bool  # cache_check_node 결과 (기본값 False)
-    # singleflight 락 키 — cache_check_node 가 락을 획득한 패스에서 기록한다.
-    # 락 해제(retry_prep / cache_write)가 획득 시점과 동일 키를 쓰도록 보관해
-    # 0건 게이트(cache_write 우회) 경로에서도 락이 누수되지 않게 한다.
+    # singleflight 락 키 겸 answer 저장 타깃 — 최초 cache_check_node 가 락을 획득한
+    # 패스에서 K_original(= 사용자 원 질의가 산출하는 키)로 1회 기록하고, 이후 재시도
+    # 재진입에서도 보존한다(cache_check 가드가 슬롯 존재 시 재획득·덮어쓰기 skip). 락은
+    # 전 요청 수명 동안 K_original 에 유지되고 cache_write 가 이 키로 저장·해제한다.
+    # self-correction 완화(K_relaxed)가 있어도 저장 키를 K_original 로 고정해, 동일 원
+    # 질의 재요청이 hit 하고 K_original 을 폴링하던 singleflight 대기자도 hit 한다.
     answer_lock_key: str | None
     # ── 인프라/관측 (평면) ──
     # 노드 실행 경로 누적 (관측용). node_path_reducer 가 부분 리스트를 append 병합한다.
