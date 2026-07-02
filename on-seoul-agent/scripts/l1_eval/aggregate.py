@@ -117,14 +117,28 @@ def apply_human_labels(
 
 
 def build_distribution(items: list[LabeledQuery]) -> BucketDistribution:
-    """최종 버킷 분포 + L1/L2 수요 분해 + (있으면) 사람 일치율을 산출한다."""
+    """최종 버킷 분포 + L1/L2 수요 분해 + (있으면) 사람 일치율을 산출한다.
+
+    L1/L2 수요 분모는 retrieval_total(실제 검색을 시도한 RETRIEVE 트레이스)이다.
+    NON_RETRIEVE(action≠RETRIEVE 또는 META)는 rule_counts 로 투명하게 집계하되
+    수요 계산에서 제외해 결정 게이트를 정직하게 만든다.
+    """
     rule_counts = Counter(it.rule_bucket.value for it in items)
     llm_counts = Counter(
         it.llm_bucket.value for it in items if it.llm_bucket is not None
     )
 
-    l1 = sum(1 for it in items if _is_l1_demand(it))
-    l2 = sum(1 for it in items if it.llm_bucket in _L2_LLM)
+    # 분모 스코핑: 검색 미시도 턴은 수요 집계에서 뺀다.
+    retrieval_items = [it for it in items if it.rule_bucket is not RuleBucket.NON_RETRIEVE]
+    non_retrieve = len(items) - len(retrieval_items)
+
+    # turn_kind 세그먼트(RETRIEVE 트레이스만) — DRILL/REFINE 등 = L2 수요 prior.
+    turn_kind_counts = Counter(
+        it.signals.turn_kind for it in retrieval_items if it.signals.turn_kind
+    )
+
+    l1 = sum(1 for it in retrieval_items if _is_l1_demand(it))
+    l2 = sum(1 for it in retrieval_items if it.llm_bucket in _L2_LLM)
 
     reviewed = [it for it in items if it.human_bucket]
     agreement: float | None = None
@@ -134,8 +148,11 @@ def build_distribution(items: list[LabeledQuery]) -> BucketDistribution:
 
     return BucketDistribution(
         total=len(items),
+        retrieval_total=len(retrieval_items),
+        non_retrieve_total=non_retrieve,
         rule_counts=dict(rule_counts),
         llm_counts=dict(llm_counts),
+        turn_kind_counts=dict(turn_kind_counts),
         l1_demand=l1,
         l2_demand=l2,
         human_agreement=agreement,
@@ -144,6 +161,9 @@ def build_distribution(items: list[LabeledQuery]) -> BucketDistribution:
 
 
 def _is_l1_demand(item: LabeledQuery) -> bool:
+    # 검색 미시도는 수요 아님(방어 — 호출부가 이미 제외하지만 이중 안전).
+    if item.rule_bucket is RuleBucket.NON_RETRIEVE:
+        return False
     if item.llm_bucket in _L1_LLM:
         return True
     # LLM 이 복합-표현불가로 판정하지 않았고 규칙이 단일-intent 실패면 L1 수요.
@@ -156,20 +176,32 @@ def format_report(dist: BucketDistribution) -> str:
     """분포를 사람이 읽는 리포트 문자열로 포맷(stdout 출력용)."""
     lines = [
         "=== L1 Phase 0 실패 버킷 분포 ===",
-        f"총 질의: {dist.total}",
+        f"총 질의: {dist.total}  "
+        f"(검색 시도 RETRIEVE: {dist.retrieval_total}, "
+        f"검색 미시도 NON_RETRIEVE: {dist.non_retrieve_total})",
         "",
-        "[규칙 자동 라벨]",
+        "[규칙 자동 라벨]  (%는 RETRIEVE 분모 기준, NON_RETRIEVE 은 전체 기준)",
     ]
     for k, v in sorted(dist.rule_counts.items(), key=lambda kv: -kv[1]):
-        pct = 100 * v / dist.total if dist.total else 0
+        # NON_RETRIEVE 는 분모에서 빠지므로 전체 기준 %, 나머지는 RETRIEVE 분모 기준 %.
+        base = dist.total if k == "NON_RETRIEVE" else dist.retrieval_total
+        pct = 100 * v / base if base else 0
         lines.append(f"  {k:24s} {v:5d}  ({pct:5.1f}%)")
     lines.append("")
-    lines.append("[LLM 판단 라벨]")
+    lines.append("[LLM 판단 라벨]  (%는 RETRIEVE 분모 기준)")
     for k, v in sorted(dist.llm_counts.items(), key=lambda kv: -kv[1]):
-        pct = 100 * v / dist.total if dist.total else 0
+        pct = 100 * v / dist.retrieval_total if dist.retrieval_total else 0
         lines.append(f"  {k:24s} {v:5d}  ({pct:5.1f}%)")
     lines.append("")
-    lines.append("[결정 게이트 입력]")
+    lines.append("[turn_kind 세그먼트]  (RETRIEVE 트레이스, DRILL/REFINE = L2 수요 prior)")
+    if dist.turn_kind_counts:
+        for k, v in sorted(dist.turn_kind_counts.items(), key=lambda kv: -kv[1]):
+            pct = 100 * v / dist.retrieval_total if dist.retrieval_total else 0
+            lines.append(f"  {k:24s} {v:5d}  ({pct:5.1f}%)")
+    else:
+        lines.append("  (turn_kind 신호 없음 — 구 트레이스이거나 미배포)")
+    lines.append("")
+    lines.append("[결정 게이트 입력]  (분모 = RETRIEVE 트레이스)")
     lines.append(f"  L1 수요(단일-intent 실패):     {dist.l1_demand}")
     lines.append(f"  L2 수요(복합-표현불가):        {dist.l2_demand}")
     if dist.human_agreement is not None:

@@ -47,8 +47,48 @@ class TestRuleLabeler:
         assert label_rule(s) is RuleBucket.THIN
 
     def test_normal(self):
-        assert label_rule(_sig(total_hits=5)) is RuleBucket.NORMAL
+        # NORMAL = 검색은 됐고(action=RETRIEVE) 실패 신호 없음.
+        assert label_rule(_sig(action="RETRIEVE", total_hits=5)) is RuleBucket.NORMAL
 
     def test_unknown_hits_defaults_normal(self):
         # 건수 신호가 전혀 없으면(구 트레이스) 실패로 단정하지 않고 NORMAL.
+        # action 도 None(구 트레이스) → 검색 미시도로 단정하지 않음(하위호환).
         assert label_rule(_sig()) is RuleBucket.NORMAL
+
+
+class TestNonRetrieveScoping:
+    """검색 미시도(action≠RETRIEVE 또는 META)는 NON_RETRIEVE 로 분리 — 분모 제외."""
+
+    def test_direct_answer_is_non_retrieve(self):
+        assert label_rule(_sig(action="DIRECT_ANSWER")) is RuleBucket.NON_RETRIEVE
+
+    def test_out_of_scope_is_non_retrieve(self):
+        assert label_rule(_sig(action="OUT_OF_SCOPE")) is RuleBucket.NON_RETRIEVE
+
+    def test_ambiguous_is_non_retrieve(self):
+        assert label_rule(_sig(action="AMBIGUOUS")) is RuleBucket.NON_RETRIEVE
+
+    def test_meta_turn_is_non_retrieve_even_if_action_retrieve(self):
+        # META 턴은 action=RETRIEVE 여도 검색 실패가 아니라 설명 턴 → 분모 제외.
+        s = _sig(action="RETRIEVE", turn_kind="META")
+        assert label_rule(s) is RuleBucket.NON_RETRIEVE
+
+    def test_non_retrieve_beats_zero_hit(self):
+        # 검색 미시도 판정이 최우선 — 0건 신호가 있어도(우연히 담겼어도) NON_RETRIEVE.
+        s = _sig(action="DIRECT_ANSWER", total_hits=0)
+        assert label_rule(s) is RuleBucket.NON_RETRIEVE
+
+    def test_retrieve_new_turn_not_scoped_out(self):
+        # action=RETRIEVE + turn_kind=NEW 는 정상 검색 트레이스(NON_RETRIEVE 아님).
+        s = _sig(action="RETRIEVE", turn_kind="NEW", total_hits=5)
+        assert label_rule(s) is RuleBucket.NORMAL
+
+    def test_drill_retrieve_is_retrieval_not_scoped_out(self):
+        # DRILL(멀티홉 후속)은 검색을 시도하므로 분모에 남는다(META 만 제외).
+        s = _sig(action="RETRIEVE", turn_kind="DRILL", total_hits=1)
+        assert label_rule(s) is RuleBucket.NORMAL
+
+    def test_old_trace_no_action_not_scoped_out(self):
+        # 구 트레이스(action None) 는 검색 미시도로 단정하지 않는다(하위호환).
+        s = _sig(total_hits=5)
+        assert label_rule(s) is not RuleBucket.NON_RETRIEVE

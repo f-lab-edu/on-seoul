@@ -62,6 +62,33 @@ class TestTraceToSignals:
         assert sig.action == "RETRIEVE"
         assert sig.retry_count == 0
 
+    def test_extracts_turn_kind_from_span(self):
+        span = _ObsView(
+            input="그 중 첫 번째",
+            metadata={"action": "RETRIEVE", "turn_kind": "DRILL"},
+        )
+        sig = trace_to_signals(trace_id="tr-tk", span=span)
+        assert sig.turn_kind == "DRILL"
+        # DRILL 은 검색 시도 턴 → 분모에 남는다.
+        assert sig.is_non_retrieve() is False
+
+    def test_direct_answer_is_non_retrieve(self):
+        span = _ObsView(input="안녕", metadata={"action": "DIRECT_ANSWER"})
+        sig = trace_to_signals(trace_id="tr-da", span=span)
+        assert sig.is_non_retrieve() is True
+
+    def test_meta_turn_is_non_retrieve(self):
+        span = _ObsView(input="왜 그랬어", metadata={"action": "RETRIEVE", "turn_kind": "META"})
+        sig = trace_to_signals(trace_id="tr-meta", span=span)
+        assert sig.is_meta() is True
+        assert sig.is_non_retrieve() is True
+
+    def test_old_trace_turn_kind_none_not_non_retrieve(self):
+        # 구 트레이스(action/turn_kind 부재) 는 검색 미시도로 단정하지 않는다.
+        sig = trace_to_signals(trace_id="tr-old", span=None)
+        assert sig.turn_kind is None
+        assert sig.is_non_retrieve() is False
+
     def test_dict_input_message_extracted(self):
         # input 이 dict({"message": ...}) 형태일 수 있다.
         span = _ObsView(input={"message": "무료 전시"}, metadata={})
@@ -138,6 +165,21 @@ class TestFixtureLoading:
         assert by_id["fx-normal-1"].sql_hits == 6
         # 구(舊) 트레이스(신호 부재)는 관대하게 흡수.
         assert by_id["fx-old-1"].intent == "SQL_SEARCH"
+
+    def test_fixture_includes_non_retrieve_and_turn_kind_cases(self):
+        # 스코핑/세그먼트 데모용 케이스가 픽스처에 실제 구조로 포함된다.
+        by_id = {s.trace_id: s for s in load_fixture_traces()}
+        # 비-RETRIEVE (DIRECT_ANSWER / OUT_OF_SCOPE) — 분모 제외 대상.
+        assert by_id["fx-direct-1"].action == "DIRECT_ANSWER"
+        assert by_id["fx-direct-1"].is_non_retrieve() is True
+        assert by_id["fx-oos-1"].is_non_retrieve() is True
+        # META 턴 — action=RETRIEVE 여도 설명 턴이라 분모 제외.
+        assert by_id["fx-meta-1"].turn_kind == "META"
+        assert by_id["fx-meta-1"].is_non_retrieve() is True
+        # DRILL/REFINE — 검색 시도 턴(분모에 남고 L2 prior 세그먼트).
+        assert by_id["fx-drill-1"].turn_kind == "DRILL"
+        assert by_id["fx-drill-1"].is_non_retrieve() is False
+        assert by_id["fx-refine-1"].turn_kind == "REFINE"
 
     def test_load_custom_fixture_path(self, tmp_path):
         p = tmp_path / "traces.json"

@@ -17,9 +17,11 @@ Langfuse observation(root span) metadata 계약:
   (observation.id ≠ trace_id).
 
   root span metadata 는 추출기가 읽는 키명과 정확히 일치한다:
-    intent/action/node_path/retry_count/retry_relaxed/cache_hit/error,
+    intent/action/turn_kind/node_path/retry_count/retry_relaxed/cache_hit/error,
     sql_hits/vector_hits/total_hits, result_quality(thin/skew_field/skew_ratio),
     forced_intent, applied_filter_count, followup_reask.
+  turn_kind 는 원본 TurnKind(NEW/REFINE/DRILL/RELEVANCE/META)로, 분모 스코핑
+    (NON_RETRIEVE)과 L2 수요 prior 세그먼트에 쓴다. 구 트레이스는 None(하위호환).
   따라서 실 트래픽 트레이스에서 규칙 라벨(ZERO_HIT/THIN/SKEW/RETRIED)이 실제 값으로
   결정된다. root span 이 없거나(구 트레이스) 신호가 빠진 경우 None/기본값으로 관대하게
   흡수한다(fx-old-1 픽스처가 하위호환을 커버).
@@ -72,6 +74,7 @@ def trace_to_signals(*, trace_id: str, span: Any) -> QuerySignals:
         raw_query=_extract_query(getattr(span, "input", None)),
         intent=meta.get("intent"),
         action=meta.get("action"),
+        turn_kind=meta.get("turn_kind"),
         sql_hits=meta.get("sql_hits"),
         vector_hits=meta.get("vector_hits"),
         total_hits=meta.get("total_hits"),

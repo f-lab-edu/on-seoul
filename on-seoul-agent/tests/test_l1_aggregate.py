@@ -22,9 +22,10 @@ def _labeled(
     rule: RuleBucket,
     llm: LlmBucket | None = None,
     human: str | None = None,
+    turn_kind: str | None = None,
 ) -> LabeledQuery:
     return LabeledQuery(
-        signals=QuerySignals(trace_id=tid, raw_query=f"q{tid}"),
+        signals=QuerySignals(trace_id=tid, raw_query=f"q{tid}", turn_kind=turn_kind),
         rule_bucket=rule,
         llm_bucket=llm,
         llm_rationale="r" if llm else None,
@@ -44,6 +45,7 @@ class TestDistribution:
         ]
         dist = build_distribution(items)
         assert dist.total == 6
+        assert dist.retrieval_total == 6  # NON_RETRIEVE 없음
         assert dist.rule_counts["ZERO_HIT"] == 1
         assert dist.rule_counts["THIN"] == 1
         assert dist.llm_counts["INTENT_MISPICK"] == 1
@@ -52,6 +54,43 @@ class TestDistribution:
         assert dist.l1_demand == 3
         # L2 수요: COMPOUND_UNEXPRESSIBLE = 2
         assert dist.l2_demand == 2
+
+
+class TestNonRetrieveScoping:
+    def test_non_retrieve_excluded_from_demand_denominator(self):
+        items = [
+            _labeled("1", RuleBucket.ZERO_HIT),  # L1
+            _labeled("2", RuleBucket.NON_RETRIEVE),  # 분모 제외
+            _labeled("3", RuleBucket.NON_RETRIEVE),  # 분모 제외
+            _labeled("4", RuleBucket.NORMAL),  # RETRIEVE 정상
+        ]
+        dist = build_distribution(items)
+        assert dist.total == 4
+        assert dist.retrieval_total == 2  # ZERO_HIT + NORMAL
+        assert dist.non_retrieve_total == 2
+        # NON_RETRIEVE 는 rule_counts 로 투명하게 보이되 수요에서 빠진다.
+        assert dist.rule_counts["NON_RETRIEVE"] == 2
+        assert dist.l1_demand == 1  # ZERO_HIT 만
+        assert dist.l2_demand == 0
+
+    def test_non_retrieve_never_counted_as_l1_even_with_stray_llm(self):
+        # 방어: NON_RETRIEVE 는 (설령 llm 라벨이 붙어도) 수요로 세지 않는다.
+        items = [_labeled("1", RuleBucket.NON_RETRIEVE, LlmBucket.INTENT_MISPICK)]
+        dist = build_distribution(items)
+        assert dist.l1_demand == 0
+        assert dist.retrieval_total == 0
+
+    def test_turn_kind_segment_over_retrieve_only(self):
+        items = [
+            _labeled("1", RuleBucket.NORMAL, turn_kind="NEW"),
+            _labeled("2", RuleBucket.NORMAL, turn_kind="DRILL"),
+            _labeled("3", RuleBucket.THIN, turn_kind="REFINE"),
+            # NON_RETRIEVE(META)는 turn_kind 세그먼트에도 안 들어간다(분모 밖).
+            _labeled("4", RuleBucket.NON_RETRIEVE, turn_kind="META"),
+        ]
+        dist = build_distribution(items)
+        assert dist.turn_kind_counts == {"NEW": 1, "DRILL": 1, "REFINE": 1}
+        assert "META" not in dist.turn_kind_counts
 
     def test_empty_and_all_mismatch_agreement_edges(self):
         # 빈 표본: 분모 0 → 나눗셈 없이 None(사람 미검증).

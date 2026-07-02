@@ -393,17 +393,22 @@ def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
     cache_hit 는 그래프 완료 후에야 확정되므로 모두 metadata 로만 노출한다(폴백).
 
     L1 Phase 0 측정 확장(scripts/l1_eval/extract.py 계약 일치, 키명 정확 일치):
-      sql_hits/vector_hits/total_hits, result_quality(thin/skew passthrough),
-      forced_intent(enum→str), applied_filter_count, followup_reask.
+      turn_kind(원본 TurnKind — 분모 스코핑/L2 prior), sql_hits/vector_hits/
+      total_hits, result_quality(thin/skew passthrough), forced_intent(enum→str),
+      applied_filter_count, followup_reask.
+    turn_kind 는 followup_reask(bool)로 뭉개기 전 원본이라, 추출기가 NON_RETRIEVE
+    분모 스코핑(META 제외)과 DRILL/REFINE 세그먼트(L2 수요 prior)에 쓴다.
     모두 집계 신호(건수·플래그·enum)만 싣는다 — raw 텍스트/식별정보 금지(PII 차단).
     """
     intent = (result.get("plan") or {}).get("intent")
     action = (result.get("triage") or {}).get("action")
+    turn_kind = (result.get("triage") or {}).get("turn_kind")
     forced_intent = result.get("forced_intent")
     sql_hits, vector_hits, total_hits = _channel_hits(result)
     return {
         "intent": intent.value if intent is not None else None,
         "action": action.value if action is not None else None,
+        "turn_kind": getattr(turn_kind, "value", turn_kind),
         "node_path": result.get("node_path"),
         "retry_count": result.get("retry_count"),
         "retry_relaxed": result.get("retry_relaxed"),

@@ -35,6 +35,7 @@ def test_existing_keys_preserved():
     for key in (
         "intent",
         "action",
+        "turn_kind",
         "node_path",
         "retry_count",
         "retry_relaxed",
@@ -142,6 +143,43 @@ def test_applied_filter_count_zero_when_no_filters():
     """필터가 하나도 없으면 0."""
     meta = _trace_completion_metadata(make_agent_state())
     assert meta["applied_filter_count"] == 0
+
+
+# ── 신규 신호: turn_kind (원본 emit — 분모 스코핑/L2 prior) ──
+
+
+def test_turn_kind_emitted_as_string():
+    """triage.turn_kind(원본 TurnKind)가 문자열로 metadata 에 실린다."""
+    state = make_agent_state()
+    state["triage"] = {"turn_kind": "DRILL"}
+    meta = _trace_completion_metadata(state)
+    assert meta["turn_kind"] == "DRILL"
+
+
+def test_turn_kind_enum_serialized_to_value():
+    """turn_kind 가 enum 형태여도 .value 로 직렬화된다(방어)."""
+    state = make_agent_state()
+    state["triage"] = {"turn_kind": MagicMock(value="META")}
+    meta = _trace_completion_metadata(state)
+    assert meta["turn_kind"] == "META"
+
+
+def test_turn_kind_none_when_absent():
+    """turn_kind 미설정(빈 triage)이면 None(구 트레이스 하위호환)."""
+    meta = _trace_completion_metadata(make_agent_state())
+    assert meta["turn_kind"] is None
+
+
+def test_turn_kind_roundtrip_scopes_non_retrieve():
+    """graph 가 emit 한 turn_kind=META 를 추출기가 읽어 NON_RETRIEVE 로 스코핑한다."""
+    state = make_agent_state(message="왜 그 결과야")
+    state["triage"] = {"action": MagicMock(value="RETRIEVE"), "turn_kind": "META"}
+    meta = _trace_completion_metadata(state)
+    signals = trace_to_signals(
+        trace_id="rt-meta", span=_FakeSpan(meta, state["message"])
+    )
+    assert signals.turn_kind == "META"
+    assert signals.is_non_retrieve() is True
 
 
 # ── 신규 신호: followup_reask (turn_kind 도출) ──
