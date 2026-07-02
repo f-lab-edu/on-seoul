@@ -9,7 +9,7 @@ input/metadata/output 을 읽되, trace_id 는 트레이스에서 가져온다.
 
 import json
 
-from scripts.l1_eval.extract import (
+from scripts.eval.l1.extract import (
     load_fixture_traces,
     pick_root_span,
     trace_to_signals,

@@ -38,7 +38,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from scripts.l1_eval.signals import QuerySignals
+from scripts.eval.l1.signals import QuerySignals
 
 _FIXTURE_DEFAULT = Path(__file__).parent / "fixtures" / "sample_traces.json"
 _ROOT_SPAN_NAME = "chat"

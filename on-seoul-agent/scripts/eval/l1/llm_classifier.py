@@ -25,7 +25,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from llm.client import get_chat_model
-from scripts.l1_eval.signals import LlmBucket, QuerySignals
+from scripts.eval.l1.signals import LlmBucket, QuerySignals
 
 logger = logging.getLogger(__name__)
 

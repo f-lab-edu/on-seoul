@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from scripts.l1_eval.eval_set import (
+from scripts.eval.l1.eval_set import (
     CURATED_CASES,
     EvalCase,
     push_dataset,

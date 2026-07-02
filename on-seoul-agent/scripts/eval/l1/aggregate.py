@@ -17,7 +17,7 @@ import random
 from collections import Counter
 from pathlib import Path
 
-from scripts.l1_eval.signals import (
+from scripts.eval.l1.signals import (
     BucketDistribution,
     LabeledQuery,
     LlmBucket,

@@ -3,11 +3,11 @@
 CURATED_CASES 를 Langfuse Dataset 으로 등록한다. Phase 6 baseline↔after 채점에 재사용.
 
 사용법 (드라이런 — 자격증명 불필요, 등록 페이로드만 출력):
-  uv run python -m scripts.l1_eval.push_eval_set --dry-run
+  uv run python -m scripts.eval.l1.push_eval_set --dry-run
 
 사용법 (라이브 — 사람이 자격증명 주입 후 실행):
   # .env 에 LANGFUSE_PUBLIC_KEY / SECRET_KEY / (HOST) 설정 후:
-  uv run python -m scripts.l1_eval.push_eval_set --dataset l1-retrieval-critic
+  uv run python -m scripts.eval.l1.push_eval_set --dataset l1-retrieval-critic
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from scripts.l1_eval.eval_set import CURATED_CASES, push_dataset
+from scripts.eval.l1.eval_set import CURATED_CASES, push_dataset
 
 
 def _build_client():

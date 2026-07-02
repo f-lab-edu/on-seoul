@@ -1,6 +1,6 @@
 """_trace_completion_metadata 의 L1 Phase 0 신호 확장 검증.
 
-계약 단일 출처: scripts/l1_eval/extract.py::trace_to_signals + signals.py::QuerySignals.
+계약 단일 출처: scripts/eval/l1/extract.py::trace_to_signals + signals.py::QuerySignals.
 그래프가 root span metadata 로 emit 하는 키가 추출기가 읽는 키명과 정확히 일치해야
 라이브 측정에서 규칙 라벨(THIN/SKEW/ZERO_HIT/RETRIED)이 정확해진다.
 
@@ -21,8 +21,8 @@ from unittest.mock import MagicMock
 
 from agents.graph import _trace_completion_metadata
 from schemas.state import IntentType
-from scripts.l1_eval.extract import trace_to_signals
-from scripts.l1_eval.signals import QuerySignals
+from scripts.eval.l1.extract import trace_to_signals
+from scripts.eval.l1.signals import QuerySignals
 from tests.helpers import make_agent_state
 
 

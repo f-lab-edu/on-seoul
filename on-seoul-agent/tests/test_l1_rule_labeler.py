@@ -1,7 +1,7 @@
 """규칙 자동 라벨러 단위 테스트 — state 신호만으로 결정적 라벨(LLM 불필요)."""
 
-from scripts.l1_eval.rule_labeler import label_rule
-from scripts.l1_eval.signals import QuerySignals, RuleBucket
+from scripts.eval.l1.rule_labeler import label_rule
+from scripts.eval.l1.signals import QuerySignals, RuleBucket
 
 
 def _sig(**kw) -> QuerySignals:

@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from scripts.l1_eval.llm_classifier import (
+from scripts.eval.l1.llm_classifier import (
     ClassifierOutput,
     FailureClassifier,
 )
-from scripts.l1_eval.signals import LlmBucket, QuerySignals
+from scripts.eval.l1.signals import LlmBucket, QuerySignals
 
 
 def _fake_model(output: ClassifierOutput) -> MagicMock:

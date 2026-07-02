@@ -3,13 +3,13 @@
 import csv
 import json
 
-from scripts.l1_eval.aggregate import (
+from scripts.eval.l1.aggregate import (
     build_distribution,
     export_human_review,
     load_human_labels,
     sample_for_review,
 )
-from scripts.l1_eval.signals import (
+from scripts.eval.l1.signals import (
     LabeledQuery,
     LlmBucket,
     QuerySignals,

@@ -8,17 +8,17 @@ end-to-end 흐름:
   5. 버킷 분포 리포트 stdout 출력(결정 게이트 입력).
 
 사용법 (드라이런 — 자격증명 불필요, 파이프라인 증명):
-  uv run python -m scripts.l1_eval.run_demand --dry-run
-  uv run python -m scripts.l1_eval.run_demand --dry-run --export review.csv
-  uv run python -m scripts.l1_eval.run_demand --dry-run --human review.csv
+  uv run python -m scripts.eval.l1.run_demand --dry-run
+  uv run python -m scripts.eval.l1.run_demand --dry-run --export review.csv
+  uv run python -m scripts.eval.l1.run_demand --dry-run --human review.csv
 
 사용법 (라이브 — 사람이 자격증명 주입 후 실행):
   # .env 에 LANGFUSE_ENABLED=true / PUBLIC_KEY / SECRET_KEY / HOST 설정 후:
-  uv run python -m scripts.l1_eval.run_demand --days 14 --limit 500 --classify \
+  uv run python -m scripts.eval.l1.run_demand --days 14 --limit 500 --classify \
       --export review.csv
 
   # 사람이 review.csv 의 human_bucket 열을 채운 뒤 최종 분포:
-  uv run python -m scripts.l1_eval.run_demand --days 14 --classify --human review.csv
+  uv run python -m scripts.eval.l1.run_demand --days 14 --classify --human review.csv
 
 --classify 는 실제 LLM 을 호출한다(비용 발생). 미지정 시 규칙 라벨만으로 분포를 낸다.
 """
@@ -29,7 +29,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from scripts.l1_eval.aggregate import (
+from scripts.eval.l1.aggregate import (
     apply_human_labels,
     build_distribution,
     export_human_review,
@@ -37,15 +37,32 @@ from scripts.l1_eval.aggregate import (
     load_human_labels,
     sample_for_review,
 )
-from scripts.l1_eval.extract import fetch_live_traces, load_fixture_traces
-from scripts.l1_eval.llm_classifier import FailureClassifier
-from scripts.l1_eval.rule_labeler import label_rule
-from scripts.l1_eval.signals import (
+from scripts.eval.l1.extract import fetch_live_traces, load_fixture_traces
+from scripts.eval.l1.llm_classifier import FailureClassifier
+from scripts.eval.l1.rule_labeler import label_rule
+from scripts.eval.l1.signals import (
     LabeledQuery,
     LlmBucket,
     QuerySignals,
     RuleBucket,
 )
+
+
+# 산출물(사람 검증 샘플 등)은 gitignore 된 eval 홈 하위로 모은다 — 프로젝트 루트에
+# review.csv 같은 파일이 흩어지지 않게. 절대 경로가 주어지면 그대로 존중한다.
+_EVAL_RESULTS_DIR = Path(__file__).resolve().parents[2] / "eval" / "eval_results"
+
+
+def _resolve_output(path_str: str) -> Path:
+    """상대 경로/파일명은 scripts/eval/eval_results/ 기준으로 resolve(없으면 mkdir).
+
+    절대 경로는 그대로 존중한다.
+    """
+    p = Path(path_str)
+    if not p.is_absolute():
+        p = _EVAL_RESULTS_DIR / p
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def _rule_label(signals: list[QuerySignals]) -> list[LabeledQuery]:
@@ -102,13 +119,13 @@ async def _amain(args: argparse.Namespace) -> None:
 
     # 4. 사람 검증
     if args.human:
-        labels = load_human_labels(Path(args.human))
+        labels = load_human_labels(_resolve_output(args.human))
         items = apply_human_labels(items, labels)
         print(f"[검증] 사람 라벨 {len(labels)}건 반영")
 
     if args.export:
         sample = sample_for_review(items, n=args.sample_size, seed=args.seed)
-        path = export_human_review(sample, Path(args.export))
+        path = export_human_review(sample, _resolve_output(args.export))
         print(f"[검증] 샘플 {len(sample)}건 → {path} (human_bucket 열을 채운 뒤 --human 로 재실행)")
 
     # 5. 분포
@@ -129,8 +146,16 @@ def main() -> None:
         action="store_true",
         help="드라이런에서도 실제 LLM 호출(비용 발생)",
     )
-    p.add_argument("--export", help="사람 검증 샘플 내보내기 경로(.csv/.json)")
-    p.add_argument("--human", help="사람이 채운 검증 파일 경로(.csv/.json)")
+    p.add_argument(
+        "--export",
+        help="사람 검증 샘플 내보내기 경로(.csv/.json). "
+        "상대 경로/파일명은 scripts/eval/eval_results/ 하위로 저장(gitignored).",
+    )
+    p.add_argument(
+        "--human",
+        help="사람이 채운 검증 파일 경로(.csv/.json). "
+        "상대 경로/파일명은 scripts/eval/eval_results/ 기준으로 resolve.",
+    )
     p.add_argument("--sample-size", type=int, default=80, help="검증 샘플 건수(50~100 권장)")
     p.add_argument("--seed", type=int, default=42, help="샘플링 시드(재현용)")
     args = p.parse_args()
