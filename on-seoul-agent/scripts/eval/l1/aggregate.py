@@ -57,6 +57,8 @@ def _review_records(items: list[LabeledQuery]) -> list[dict]:
             "trace_id": it.signals.trace_id,
             "raw_query": it.signals.raw_query,
             "intent": it.signals.intent or "",
+            "action": it.signals.action or "",
+            "turn_kind": it.signals.turn_kind or "",
             "auto_bucket": effective_bucket(it),
             "rule_bucket": it.rule_bucket.value,
             "llm_bucket": it.llm_bucket.value if it.llm_bucket else "",
@@ -212,4 +214,101 @@ def format_report(dist: BucketDistribution) -> str:
         )
     lines.append("")
     lines.append("※ 판단(L1 계속 vs L2 우선)은 사람 몫 — 이 리포트는 수치만 제공한다.")
+    return "\n".join(lines)
+
+
+# ── 사람 검증 확장 택소노미 → 수요 범주 ──────────────────────────────────
+# 자동 택소노미(LlmBucket/RuleBucket)로는 못 담는 세분 실패를 사람이 붙일 수 있다
+# (intent/sub_intent/action/turn_kind 오선택 등). 각 라벨을 결정 게이트 수요로 매핑한다.
+_HUMAN_DEMAND: dict[str, str] = {
+    # L1 — retrieval-critic 이 겨냥하는 검색 품질 실패
+    "INTENT_MISPICK": "L1",
+    "SUB_INTENT_MISPICK": "L1",
+    "DRIFT": "L1",
+    "ZERO_HIT": "L1",
+    "THIN": "L1",
+    "SKEW": "L1",
+    # L2 — 복합 제약(단일 intent 로 표현 불가)
+    "COMPOUND_UNEXPRESSIBLE": "L2",
+    # 상류(triage/intake) — L1/L2 로 안 풀림. TriageAgent action / intake turn_kind 오분류.
+    "ACTION_MISPICK": "UPSTREAM",
+    "TURN_KIND_MISPICK": "UPSTREAM",
+    # 정상 / 검색 미시도
+    "NORMAL": "NORMAL",
+    "NON_RETRIEVE": "EXCLUDED",
+}
+_DEMAND_ORDER = ["L1", "L2", "UPSTREAM", "NORMAL", "EXCLUDED", "UNKNOWN"]
+_DEMAND_LABEL = {
+    "L1": "L1 수요(검색 품질 — retrieval-critic)",
+    "L2": "L2 수요(복합-표현불가 — planner)",
+    "UPSTREAM": "상류 수요(triage/intake 오분류)",
+    "NORMAL": "정상",
+    "EXCLUDED": "제외(검색 미시도)",
+    "UNKNOWN": "미분류(알 수 없는 라벨)",
+}
+
+
+def human_demand_class(bucket: str) -> str:
+    """사람 검증 라벨 → 수요 범주(L1/L2/UPSTREAM/NORMAL/EXCLUDED/UNKNOWN)."""
+    return _HUMAN_DEMAND.get((bucket or "").strip(), "UNKNOWN")
+
+
+def report_labeled_csv(path: Path) -> str:
+    """사람이 human_bucket 을 채운 라벨 CSV 로 최종 분포를 오프라인 산출한다.
+
+    라이브 재조회·LLM 재분류 없이 CSV 만으로 산출(재현 가능·무비용). human_bucket 이
+    빈 행은 미검증으로 두고 수요 분해에서 제외한다. auto_bucket / llm_bucket 컬럼이 있으면
+    자동↔사람 정확도(특히 LLM 의 L2 과다판정)를 함께 보고한다.
+    """
+    path = Path(path)
+    with open(path, encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    labeled = [r for r in rows if (r.get("human_bucket") or "").strip()]
+    base = len(labeled)
+    human_counts = Counter(r["human_bucket"].strip() for r in labeled)
+    demand = Counter(human_demand_class(r["human_bucket"]) for r in labeled)
+
+    lines = [
+        "=== L1 Phase 0 최종 분포 (사람 검증 ground truth) ===",
+        f"파일: {path}",
+        f"총 {len(rows)}행, 검증됨 {base}행 (human_bucket 채움)",
+        "",
+        "[사람 라벨 분포]  (%는 검증행 기준)",
+    ]
+    for k, v in human_counts.most_common():
+        pct = 100 * v / base if base else 0
+        lines.append(f"  {k:24s} {v:5d}  ({pct:5.1f}%)")
+    lines.append("")
+    lines.append("[수요 분해 (사람 ground truth)]")
+    for k in _DEMAND_ORDER:
+        if demand.get(k):
+            lines.append(f"  {_DEMAND_LABEL[k]:34s} {demand[k]:5d}")
+
+    if labeled and "auto_bucket" in labeled[0]:
+        match = sum(
+            1
+            for r in labeled
+            if (r.get("auto_bucket") or "").strip() == r["human_bucket"].strip()
+        )
+        lines.append("")
+        lines.append("[자동 라벨 정확도]  (auto_bucket ↔ human_bucket)")
+        pct = 100 * match / base if base else 0
+        lines.append(f"  전체 일치율: {pct:.1f}%  ({match}/{base})")
+        if "llm_bucket" in labeled[0]:
+            l2_called = [
+                r
+                for r in labeled
+                if (r.get("llm_bucket") or "").strip() == "COMPOUND_UNEXPRESSIBLE"
+            ]
+            if l2_called:
+                over = sum(
+                    1 for r in l2_called if human_demand_class(r["human_bucket"]) != "L2"
+                )
+                op = 100 * over / len(l2_called)
+                lines.append(
+                    f"  LLM COMPOUND(L2) 판정 {len(l2_called)}건 중 "
+                    f"사람이 L2 아님: {over}건 (과다판정 {op:.0f}%)"
+                )
+    lines.append("")
+    lines.append("※ 수요 우선순위(L1/상류/L2) 판단은 사람 몫 — 리포트는 수치만 제공한다.")
     return "\n".join(lines)

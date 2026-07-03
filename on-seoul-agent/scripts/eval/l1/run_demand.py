@@ -35,6 +35,7 @@ from scripts.eval.l1.aggregate import (
     export_human_review,
     format_report,
     load_human_labels,
+    report_labeled_csv,
     sample_for_review,
 )
 from scripts.eval.l1.extract import fetch_live_traces, load_fixture_traces
@@ -63,6 +64,19 @@ def _resolve_output(path_str: str) -> Path:
         p = _EVAL_RESULTS_DIR / p
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _resolve_labeled_input(path_str: str) -> Path:
+    """읽기용 라벨 CSV 경로 resolve — as-given 우선, 없으면 eval_results/ 하위 탐색."""
+    p = Path(path_str)
+    if p.exists():
+        return p
+    alt = p if p.is_absolute() else _EVAL_RESULTS_DIR / p
+    if alt.exists():
+        return alt
+    raise FileNotFoundError(
+        f"라벨 CSV 를 찾을 수 없음: {path_str} (as-given 또는 {_EVAL_RESULTS_DIR}/ 에서 탐색)"
+    )
 
 
 def _rule_label(signals: list[QuerySignals]) -> list[LabeledQuery]:
@@ -158,7 +172,17 @@ def main() -> None:
     )
     p.add_argument("--sample-size", type=int, default=80, help="검증 샘플 건수(50~100 권장)")
     p.add_argument("--seed", type=int, default=42, help="샘플링 시드(재현용)")
+    p.add_argument(
+        "--report-labeled",
+        help="사람이 human_bucket 을 채운 라벨 CSV 로 최종 분포를 오프라인 산출(재조회·"
+        "LLM 재분류 없음). 다른 인자는 무시. 경로는 as-given 우선, 없으면 eval_results/ 탐색.",
+    )
     args = p.parse_args()
+
+    # 오프라인 리포트: 라벨 CSV 만으로 최종 분포 산출(라이브 파이프라인 미실행).
+    if args.report_labeled:
+        print(report_labeled_csv(_resolve_labeled_input(args.report_labeled)))
+        return
 
     asyncio.run(_amain(args))
 

@@ -6,7 +6,9 @@ import json
 from scripts.eval.l1.aggregate import (
     build_distribution,
     export_human_review,
+    human_demand_class,
     load_human_labels,
+    report_labeled_csv,
     sample_for_review,
 )
 from scripts.eval.l1.signals import (
@@ -164,3 +166,48 @@ class TestReviewHarness:
         export_human_review(items, path)
         data = json.loads(path.read_text(encoding="utf-8"))
         assert data[0]["trace_id"] == "1"
+
+
+class TestHumanDemandMapping:
+    def test_extended_taxonomy_maps_to_demand(self):
+        assert human_demand_class("INTENT_MISPICK") == "L1"
+        assert human_demand_class("SUB_INTENT_MISPICK") == "L1"
+        assert human_demand_class("DRIFT") == "L1"
+        assert human_demand_class("COMPOUND_UNEXPRESSIBLE") == "L2"
+        assert human_demand_class("ACTION_MISPICK") == "UPSTREAM"
+        assert human_demand_class("TURN_KIND_MISPICK") == "UPSTREAM"
+        assert human_demand_class("NORMAL") == "NORMAL"
+        assert human_demand_class("NON_RETRIEVE") == "EXCLUDED"
+
+    def test_unknown_label_is_unknown(self):
+        assert human_demand_class("WAT") == "UNKNOWN"
+        assert human_demand_class("") == "UNKNOWN"
+
+
+class TestReportLabeledCsv:
+    def test_offline_report_from_labeled_csv(self, tmp_path):
+        path = tmp_path / "labeled.csv"
+        fields = ["trace_id", "human_bucket", "auto_bucket", "llm_bucket"]
+        rows = [
+            {"trace_id": "1", "human_bucket": "NORMAL",
+             "auto_bucket": "NORMAL", "llm_bucket": "NORMAL"},
+            {"trace_id": "2", "human_bucket": "DRIFT",
+             "auto_bucket": "DRIFT", "llm_bucket": "DRIFT"},
+            {"trace_id": "3", "human_bucket": "ACTION_MISPICK",
+             "auto_bucket": "COMPOUND_UNEXPRESSIBLE",
+             "llm_bucket": "COMPOUND_UNEXPRESSIBLE"},
+            # 미검증(빈 human_bucket) — 집계에서 제외돼야 한다.
+            {"trace_id": "4", "human_bucket": "",
+             "auto_bucket": "NORMAL", "llm_bucket": "NORMAL"},
+        ]
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            w.writerows(rows)
+
+        report = report_labeled_csv(path)
+        assert "검증됨 3행" in report  # 빈 human_bucket 제외
+        assert "L1 수요" in report  # DRIFT
+        assert "상류 수요" in report  # ACTION_MISPICK
+        # LLM COMPOUND 1건인데 사람은 ACTION_MISPICK → L2 아님 → 과다판정 100%
+        assert "과다판정 100%" in report
