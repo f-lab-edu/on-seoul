@@ -196,7 +196,9 @@ class AgentState(TypedDict):
     # 참조 해소 결과: 현재 message 가 지시 참조일 때 바인딩된 service_id 리스트.
     target_service_ids: list[str] | None
     # ── 재시도 제어 (평면) ──
-    # LangGraph 자기 교정(Self-Correction) 루프 카운터.
+    # 단일 retrieval 예산 카운터. self_correction(빈 답변/0건)과 L1 retrieval-critic
+    # (0건·thin·skew)이 *공유*한다 — 별도 카운터를 두지 않아 예산 이중 카운트를 막는다.
+    # 캡 단일 출처는 Settings.max_retrieval_retries(기본 2). 도달 시 하드 백스톱.
     retry_count: int  # 재시도 횟수 (0 = 아직 재시도 없음)
     # 하드 필터 0건으로 인한 완화 재시도 신호. AnswerAgent 가 답변에 명시한다.
     retry_relaxed: bool
@@ -211,6 +213,16 @@ class AgentState(TypedDict):
     forced_intent: IntentType | None
     # MAP 0건 재시도 시 확장 반경(m). 없으면 기본 반경(1000m) 적용.
     retry_radius_m: int | None
+    # ── L1 retrieval-critic 판단 (평면) ──
+    # retrieval_critic_node 가 검색 결과를 보고 정하는 다음 행동. 세 슬롯 모두
+    # None = critic 미진입(명백히 좋은 80% 경로 / critic 실패 fail-open). 스캐폴딩
+    # 단계(Phase 1)라 아직 소비하는 노드/엣지가 없다 — 값은 항상 None(회귀 0).
+    # critic_decision:    "ANSWER"/"REPLAN"/"STOP" (CriticDecision.value).
+    # critic_replan_hint: REPLAN 시 재탐색 방향(ReplanHint.model_dump()). retry_prep 가 소비.
+    # critic_rationale:   decision 이벤트용 근거 1문장(내부 식별자 제거 후).
+    critic_decision: str | None
+    critic_replan_hint: "dict[str, Any] | None"
+    critic_rationale: str | None
     # ── 결과 품질 자각 패스 ──
     # pre_answer_gate_node 가 RETRIEVE 경로에서 산출. answer 가 소비해 톤/제안 조정.
     # 쏠림/빈약 휴리스틱 결과(예: {"skew_field","skew_value","skew_ratio","thin"})

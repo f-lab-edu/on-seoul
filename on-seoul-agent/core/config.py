@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     redis_socket_connect_timeout: int = 2  # 연결 타임아웃(초) — fail-open 대기 상한
     redis_socket_timeout: int = 2  # 명령 타임아웃(초)
 
+    # Agent workflow — L1 retrieval-critic 단일 예산 (계획서 §3-1 D, §3-2)
+    # 0건·thin·skew·self_correction 재시도가 *공유*하는 단일 retrieval 예산 캡.
+    # retry_count 가 이 값에 도달하면 더 이상 재탐색하지 않는다(하드 백스톱).
+    # 스캐폴딩 단계(Phase 1)에서는 이 상수를 정의만 하고 아직 엣지가 소비하지 않는다
+    # (기존 1회 캡 동작 불변). Phase 2/3 에서 correction/critic 엣지가 이 단일 출처를
+    # 소비하도록 배선한다 — 별도 카운터를 두지 않아 예산 이중 카운트를 원천 차단한다.
+    max_retrieval_retries: int = 2
+
     # Answer Cache
     answer_cache_enabled: bool = True
     answer_cache_ttl: int = 900  # 15분 — 수집 스케줄러 주기보다 짧게
