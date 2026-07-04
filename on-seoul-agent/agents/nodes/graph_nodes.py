@@ -37,6 +37,7 @@ from agents.nodes.planning import PlanningNodes
 from agents.nodes.reference import ReferenceNodes
 from agents.nodes.retrieval import RetrievalNodes
 from agents.nodes.title import TitleNodes
+from agents.retrieval_critic import RetrievalCritic
 from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.triage_agent import TriageAgent
@@ -77,6 +78,7 @@ class GraphNodes:
         triage: TriageAgent | None = None,
         ondata: OnDataReader | None = None,
         intake: IntakeAgent | None = None,
+        critic: RetrievalCritic | None = None,
     ) -> None:
         # triage 우선, router는 하위호환 별칭
         self._triage = triage or (router if isinstance(router, TriageAgent) else None)
@@ -107,12 +109,17 @@ class GraphNodes:
         self._planning = PlanningNodes(
             triage=self._triage, router=self._router, redis=self._redis
         )
+        # L1 retrieval-critic — escalation 게이트가 승격하는 판단 노드. 주입 없으면
+        # None 이라 게이트가 결정적 폴백만 탄다(회귀 0). 프로덕션 활성화는
+        # settings.enable_retrieval_critic 플래그가 별도로 게이팅한다.
+        self._critic = critic
         self._retrieval = RetrievalNodes(
             sql=self._sql,
             vector=self._vector,
             analytics=self._analytics,
             hydration=self._hydration,
             ondata=self._ondata,
+            critic=self._critic,
         )
         self._answer_nodes = AnswerNodes(answer=self._answer)
         self._correction = CorrectionNodes(redis=self._redis)
@@ -190,6 +197,12 @@ class GraphNodes:
 
     def route_pre_answer_gate(self, state: AgentState) -> str:
         return self._retrieval.route_pre_answer_gate(state)
+
+    async def retrieval_critic_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._retrieval.retrieval_critic_node(state)
+
+    def route_critic(self, state: AgentState) -> str:
+        return self._retrieval.route_critic(state)
 
     # ------------------------------------------------------------------
     # Answer 페이즈 위임

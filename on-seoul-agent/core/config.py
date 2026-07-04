@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     # 소비하도록 배선한다 — 별도 카운터를 두지 않아 예산 이중 카운트를 원천 차단한다.
     max_retrieval_retries: int = 2
 
+    # L1 retrieval-critic escalation 게이트 롤아웃 플래그 (계획서 §6 Phase 3, §7).
+    # False(기본): pre_answer_gate 후단이 기존 결정적 경로(0건→retry, 유건→answer)로만
+    #   동작한다 — critic 노드는 그래프에 등록되어도 진입 엣지가 이 플래그로 차단되어
+    #   호출되지 않는다(회귀 0, secondary_intent 와 동일한 단계적 롤아웃 패턴).
+    # True: pre_answer_gate 후단 결정적 triage 가 "의심스러움(0건/thin/skew) + 예산 여유"
+    #   일 때만 retrieval_critic_node 로 승격한다(명백히 좋은 80% 경로는 여전히 answer
+    #   직행 = critic 미호출). critic 미결정(fail-open)이면 결정적 경로로 폴백한다.
+    # 활성화 전제: critic 판단 품질 검증(Phase 6 측정) 후 수동 전환.
+    enable_retrieval_critic: bool = False
+
     # Answer Cache
     answer_cache_enabled: bool = True
     answer_cache_ttl: int = 900  # 15분 — 수집 스케줄러 주기보다 짧게

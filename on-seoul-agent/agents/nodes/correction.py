@@ -5,6 +5,7 @@ from typing import Any
 
 from agents._helpers import emit_progress
 from agents.nodes._shared import is_gap_oos
+from schemas.critic import ALLOWED_DROP_FILTERS
 from schemas.search import RESET_CHANNELS
 from schemas.state import ActionType, AgentState, IntentType
 
@@ -108,6 +109,8 @@ class CorrectionNodes:
 
         # 모든 분기 공통 베이스 — 분기별 override 로 검색 슬롯/필터를 덮어쓴다.
         # emit 은 머지 채널이라 부분 키만 보낸다(decision_emitted 보존).
+        # critic 슬롯은 항상 클리어한다(1회성): critic 힌트를 이번 재시도에서 소비했든,
+        # 결정적 폴백으로 왔든, 다음 순회로 이월되지 않아야 한다(L1 §3-3 폴백 층).
         update: dict[str, Any] = {
             "retry_count": new_retry_count,
             "error": None,
@@ -115,10 +118,24 @@ class CorrectionNodes:
             "search_channels": RESET_CHANNELS,
             "node_path": ["retry_prep"],
             "emit": {"searching_emitted": False, "answering_emitted": False},
+            "critic_decision": None,
+            "critic_replan_hint": None,
+            "critic_rationale": None,
             # answer_lock_key 는 보존한다(슬롯 미기록 = LangGraph 머지에서 무변경).
             # 락은 전 요청 수명 동안 K_original 에 유지되고, cache_write 가 저장 후 단독
             # 해제한다. 재진입 cache_check 는 이 슬롯을 보고 즉시 pass-through(재획득 안 함).
         }
+
+        # ── critic REPLAN 힌트 소비(L1 Phase 3, escalation 경로) ──
+        # critic 이 방향을 정했으면(intent 전환/필터 드롭/질의 재구성) 그 힌트를 우선
+        # 소비한다. 힌트가 없으면(critic 미발동/미결정/폴백) 아래 기존 결정적 규칙으로
+        # 내려간다(§3-3 폴백 층). 인젝션 가드: 힌트는 스키마(IntentType enum +
+        # 화이트리스트 필터명 Literal + 자연어 재구성)로만 표현 가능하므로 화이트리스트
+        # 검증을 여기서 다시 하지 않아도 자유 식별자는 애초에 담길 수 없다. 실제
+        # 파라미터화는 router 검증 경로가 수행한다.
+        hint = state.get("critic_replan_hint")
+        if hint:
+            return self._apply_critic_hint(state, update, hint)
         # 전 분기 공통 필터 드롭 페이로드(머지) — ANALYTICS 분기만 부분 드롭.
         _filters_clear = {
             "max_class_name": None,
@@ -221,6 +238,87 @@ class CorrectionNodes:
         )
         return update
 
+    @staticmethod
+    def _apply_critic_hint(
+        state: AgentState,
+        update: dict[str, Any],
+        hint: dict[str, Any],
+    ) -> dict[str, Any]:
+        """critic REPLAN 힌트를 재시도 update 에 반영한다(escalation 경로, §3-3).
+
+        힌트는 세 방향 힌트의 조합이다(모두 선택적):
+          · intent          → forced_intent 전환(router 2회차 재분류 skip). 검색/하이드
+                              슬롯 리셋(전환 경로가 자체 정제).
+          · reformulate_query → plan.refined_query 재설정(벡터 재검색용 자연어).
+          · drop_filters    → 화이트리스트 필터만 None 드롭 + relaxed 기록.
+
+        어느 힌트도 실효가 없으면(빈 hint) 결정적 완화 규칙과 동일한 전체 리셋으로
+        폴백한다(무의미한 동일 재검색 방지). breadcrumb: retry_prep:critic.
+        """
+        update["node_path"] = ["retry_prep:critic"]
+
+        applied = False
+
+        # intent 전환 — 화이트리스트 enum 만(스키마 보장). 파싱 실패는 무시(폴백).
+        intent_raw = hint.get("intent")
+        if intent_raw:
+            try:
+                update["forced_intent"] = IntentType(intent_raw)
+            except ValueError:
+                logger.warning("critic hint intent 무효(무시): %r", intent_raw)
+            else:
+                # 전환 시 검색/하이드 결과는 리셋(전환 경로가 재검색). plan 은 머지로
+                # refined_query 만 아래에서 다룬다(sub_intent/secondary 보존).
+                update["sql"] = {}
+                update["vector"] = {}
+                update["map"] = {}
+                update["hydration"] = {}
+                applied = True
+
+        # 질의 재구성 — plan 머지(refined_query 만). SQL 아님(자연어).
+        reformulate = hint.get("reformulate_query")
+        if reformulate:
+            plan_update = dict(update.get("plan") or {})
+            plan_update["refined_query"] = reformulate
+            update["plan"] = plan_update
+            applied = True
+
+        # 필터 드롭 — 화이트리스트 교차만(스키마 밖 값은 방어적으로 무시).
+        drop_filters = hint.get("drop_filters") or []
+        valid_drops = [
+            f
+            for f in drop_filters
+            if f in ALLOWED_DROP_FILTERS and state["filters"].get(f)
+        ]
+        if valid_drops:
+            update["filters"] = {f: None for f in valid_drops}
+            update["relaxed_filters"] = valid_drops
+            update["relaxed_values"] = {
+                f: state["filters"].get(f) for f in valid_drops
+            }
+            applied = True
+
+        if applied:
+            return update
+
+        # 실효 힌트 없음 — 결정적 완화(전체 리셋)로 폴백해 무의미한 동일 재검색을 막는다.
+        update.update(
+            {
+                "sql": {},
+                "vector": {},
+                "map": {},
+                "hydration": {},
+                "plan": {"refined_query": None},
+                "filters": {
+                    "max_class_name": None,
+                    "area_name": None,
+                    "service_status": None,
+                    "payment_type": None,
+                },
+            }
+        )
+        return update
+
     def self_correction_edge(self, state: AgentState) -> str:
         """answer_node 완료 후 자기 교정 여부를 결정한다.
 
@@ -236,10 +334,21 @@ class CorrectionNodes:
 
         intent 분기는 상호배타라 한 순회에 하나만 평가된다. retry_prep_node 가
         retry_count 를 1 로 올리므로 다음 순회에서는 ①에서 즉시 종료된다.
+
+        L1 critic 상호작용(§3-2, 예산 이중 카운트 금지): critic 이 이번 라운드에
+        결정을 냈으면(critic_decision 세팅) 검색 결과 품질 재시도는 critic 이 이미
+        소유한다(REPLAN 은 route_critic 이 retry_prep 로 보냈고, ANSWER/STOP 은 명시적
+        "재시도 안 함"이다). 따라서 critic 결정이 있으면 self_correction 은 개입하지
+        않는다(end_normal) — critic STOP 을 존중하고 0건 재시도 이중 트리거를 막는다.
+        (critic 미진입/폴백이면 critic_decision 은 None 이라 기존 결정적 경로 그대로.)
         """
         # ⓪ 비-RETRIEVE action은 self-correction 제외
         action = state["triage"].get("action")
         if action is not None and action != ActionType.RETRIEVE:
+            return "end_normal"
+
+        # ⓪-bis critic 이 이번 라운드 결정을 소유했으면 self_correction 미개입.
+        if state.get("critic_decision") is not None:
             return "end_normal"
 
         retry_count = state.get("retry_count", 0)

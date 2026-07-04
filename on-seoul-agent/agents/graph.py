@@ -153,6 +153,8 @@ def _build_graph(nodes: GraphNodes) -> Any:
     builder.add_node("hydration_node", nodes.hydration_node)
     builder.add_node("rrf_fusion_node", nodes.rrf_fusion_node)
     builder.add_node("pre_answer_gate_node", nodes.pre_answer_gate_node)
+    # L1 retrieval-critic — escalation 게이트가 의심스러운 결과(0건/thin/skew)만 승격.
+    builder.add_node("retrieval_critic_node", nodes.retrieval_critic_node)
     builder.add_node("answer_node", nodes.answer_node)
     builder.add_node("search_persist_node", nodes.search_persist_node)
     builder.add_node("trace_node", nodes.trace_node)
@@ -241,10 +243,23 @@ def _build_graph(nodes: GraphNodes) -> Any:
     builder.add_edge("hydration_node", "rrf_fusion_node")
     builder.add_edge("rrf_fusion_node", "pre_answer_gate_node")
 
-    # 0건 게이트: 0건 → retry_prep_node, 유건 → answer_node
+    # escalation 게이트: 명백히 좋음/폴백 → answer, 0건 폴백 → retry_prep,
+    # 의심스러움(0건/thin/skew, critic 활성 시) → retrieval_critic_node.
     builder.add_conditional_edges(
         "pre_answer_gate_node",
         nodes.route_pre_answer_gate,
+        {
+            "answer_node": "answer_node",
+            "retry_prep_node": "retry_prep_node",
+            "retrieval_critic_node": "retrieval_critic_node",
+        },
+    )
+
+    # critic 판단 소비: ANSWER/STOP → answer, REPLAN → retry_prep(예산 여유 시),
+    # critic 미결정(fail-open None) → 결정적 폴백(0건→retry / 유건→answer).
+    builder.add_conditional_edges(
+        "retrieval_critic_node",
+        nodes.route_critic,
         {
             "answer_node": "answer_node",
             "retry_prep_node": "retry_prep_node",
@@ -574,6 +589,7 @@ class AgentGraph:
         redis: Any = None,
         triage: TriageAgent | None = None,
         intake: Any = None,
+        critic: Any = None,
     ) -> None:
         # 입구 단일화 후 action 결정은 intake_node(IntakeAgent)가 담당한다 — 별도
         # triage_node 는 더 이상 그래프에 존재하지 않는다. TriageAgent 인자는 구
@@ -594,6 +610,12 @@ class AgentGraph:
         from agents.intake_agent import IntakeAgent
 
         _intake = intake or IntakeAgent()
+        # L1 retrieval-critic: 명시 주입 시 그대로, 미주입 시 프로덕션 기본 생성(실 LLM).
+        # 게이트 진입은 settings.enable_retrieval_critic 플래그로 별도 게이팅되므로,
+        # 기본 생성해도 플래그 오프 상태에선 critic 이 호출되지 않는다(회귀 0).
+        from agents.retrieval_critic import RetrievalCritic
+
+        _critic = critic or RetrievalCritic()
         self._nodes = GraphNodes(
             router=_router,
             sql_agent=sql_agent or SqlAgent(),
@@ -603,6 +625,7 @@ class AgentGraph:
             redis=redis,
             triage=_triage,
             intake=_intake,
+            critic=_critic,
         )
 
         # 그래프는 인스턴스 단위로 1회 컴파일한다(바운드 메서드 직접 등록).

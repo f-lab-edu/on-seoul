@@ -12,6 +12,7 @@ from agents._search_channel_utils import _to_hits
 from agents.analytics_agent import AnalyticsAgent
 from agents.nodes._shared import is_gap_oos
 from agents.hydration_node import HydrationNode
+from agents.retrieval_critic import RetrievalCritic
 from agents.sql_agent import SqlAgent
 from agents.vector_agent import VectorAgent
 from core.config import settings
@@ -49,12 +50,16 @@ class RetrievalNodes:
         analytics: AnalyticsAgent,
         hydration: HydrationNode,
         ondata: OnDataReader | None = None,
+        critic: RetrievalCritic | None = None,
     ) -> None:
         self._sql = sql
         self._vector = vector
         self._analytics = analytics
         self._hydration = hydration
         self._ondata = ondata or default_reader
+        # L1 retrieval-critic(escalation 게이트 승격 노드). None 이면 critic 경로가
+        # 비활성이라 게이트가 결정적 폴백만 탄다(회귀 0). 주입은 GraphNodes 가 담당.
+        self._critic = critic
 
     async def rrf_fusion_node(self, state: AgentState) -> dict[str, Any]:
         """SQL + VECTOR 병렬 팬아웃 결과를 RRF로 통합한다.
@@ -247,10 +252,19 @@ class RetrievalNodes:
         return state["triage"].get("action") in (ActionType.RETRIEVE, None)
 
     def route_pre_answer_gate(self, state: AgentState) -> str:
-        """0건 게이트 엣지: hydrated_services=[] 시 retry_prep, 그 외 answer_node.
+        """pre-answer 게이트 엣지 — escalation-gated critic 진입 결정 (L1 Phase 3).
+
+        결정 순서(위에서부터, 먼저 매칭되는 하나):
+          ⓪ 비검색 경로 → answer_node(직접 답변, 기존 동작 불변).
+          ① 예산 소진(retry_count >= max_retrieval_retries) → answer_node(하드 백스톱).
+          ② critic 활성 + critic 주입됨:
+             · 의심스러움(0건/thin/skew) → retrieval_critic_node(LLM 1회 승격).
+             · 명백히 좋음 → answer_node(critic 미호출 = 80% 빠른 경로 보존).
+          ③ critic 비활성/미주입(폴백) → 기존 결정적 경로:
+             0건(retry_count==0) → retry_prep_node, 그 외 → answer_node.
 
         gap(attribute_gap/operational_detail, OUT_OF_SCOPE)은 vector 검색을 실제
-        실행하므로 RETRIEVE 와 동일한 0건 처리 대상이다. 그 외 비-RETRIEVE action 은
+        실행하므로 RETRIEVE 와 동일한 검색 경로로 취급한다. 그 외 비-RETRIEVE action 은
         게이트 통과(직접 answer).
         """
         action = state["triage"].get("action")
@@ -258,29 +272,103 @@ class RetrievalNodes:
         # action=None 은 route_intake 의 else→router_node fallback(검색 실행)과
         # 대칭이라 RETRIEVE 와 동일 취급한다. 입구에서 검색을 돌려놓고 이 게이트만
         # 건너뛰면 빈 컨텍스트로 answer_node 에 진입하므로 None 도 검색 경로로 본다.
-        # gap(attribute_gap/operational_detail)은 검색 경로라 0건 체크에 포함한다(중첩 경로).
+        # gap(attribute_gap/operational_detail)은 검색 경로라 의심 체크에 포함한다.
         is_search_path = action in (ActionType.RETRIEVE, None) or (
             action == ActionType.OUT_OF_SCOPE and is_gap_oos(oos_type)
         )
         if not is_search_path:
+            return "answer_node"  # ⓪
+
+        retry_count = state.get("retry_count", 0)
+        # ① 예산 소진 하드 백스톱 — critic·결정적 경로 공히 재시도 불가(무한 루프 차단).
+        # self_correction 과 단일 예산(max_retrieval_retries)을 공유해 이중 카운트 없음.
+        if retry_count >= settings.max_retrieval_retries:
             return "answer_node"
 
-        hydrated = state["hydration"].get("hydrated_services")
-        retry_count = state.get("retry_count", 0)
+        # ② escalation 게이트 — critic 활성 + 주입 시에만 승격 판정.
+        # critic 미주입/비활성이면 ③ 결정적 폴백으로 내려간다(fail-open).
+        if settings.enable_retrieval_critic and self._critic is not None:
+            if self._is_suspicious(state):
+                return "retrieval_critic_node"
+            return "answer_node"  # 명백히 좋음 — critic 미호출(80% 경로).
 
-        # hydrated_services=[] 이면 answer LLM 미호출 + retry_prep 직행
-        # retry_count 캡(>=1) 시에는 answer_node로 통과(무한루프 방지)
-        #
-        # []=검색 실행·0건(→retry) vs None=hydration 미실행(→retry 무의미, 통과)을
-        # 구분한다. hydration_node 는 예외/실패 시에도 hydrated_services 를 []로
-        # 귀결시키므로(hydration_node.py 예외 처리 + 본 모듈 wrapper) 'hydration 실패'와
-        # '진짜 0건'은 동일하게 []→retry_prep 로 묶인다(빈 컨텍스트 answer 진입 없음).
-        # 게이트는 항상 hydration_node 뒤라 라이브 경로에서 None 은 도달하지 않으며,
-        # is not None 가드는 부분-state/방어용이다.
+        # ③ 결정적 폴백(기존 동작 불변): 0건 → retry_prep, 유건 → answer.
+        # []=검색 실행·0건(→retry) vs None=hydration 미실행(→통과)을 구분한다.
+        # 기존 1회 캡 보존을 위해 retry_count==0 을 유지한다(플래그 오프 회귀 0).
+        hydrated = state["hydration"].get("hydrated_services")
         if hydrated is not None and len(hydrated) == 0 and retry_count == 0:
             return "retry_prep_node"
-
         return "answer_node"
+
+    @staticmethod
+    def _is_suspicious(state: AgentState) -> bool:
+        """검색 결과가 "의심스러운지"(critic 승격 대상) 결정적으로 판정한다.
+
+        신호(전부 *결과* 기반, 계획서 §3-1 A):
+          · 0건(hydrated_services 가 명시적 빈 리스트 — 검색 실행 후 0건).
+          · thin(result_quality.thin — pre_answer_gate 가 산출한 빈약 신호).
+          · skew(result_quality.skew_field 존재 — 한 값 쏠림 신호).
+        어느 것도 아니면 "명백히 좋음"으로 보아 critic 을 부르지 않는다(80% 경로).
+        """
+        hydrated = state["hydration"].get("hydrated_services")
+        if hydrated is not None and len(hydrated) == 0:
+            return True
+        quality = state.get("result_quality") or {}
+        if quality.get("thin"):
+            return True
+        if quality.get("skew_field"):
+            return True
+        return False
+
+    def route_critic(self, state: AgentState) -> str:
+        """retrieval_critic_node 직후 엣지 — critic 3택 소비 + fail-open 폴백.
+
+          · ANSWER → answer_node(결과로 답한다).
+          · REPLAN → retry_prep_node(방향 힌트 소비 후 재검색). 단 예산 소진이면 answer.
+          · STOP   → answer_node(정직한 한계 안내).
+          · None(critic 미결정, fail-open §3-1 F) → 기존 결정적 경로:
+              0건 → retry_prep, 유건 → answer.
+        """
+        decision = state.get("critic_decision")
+        retry_count = state.get("retry_count", 0)
+        # critic 루프는 단일 예산 N(max_retrieval_retries=2)을 쓴다(계획서 결정 D). 이는
+        # 레거시 결정적 경로(route_pre_answer_gate 폴백 branch·self_correction_edge 의
+        # retry_count==0 1회 캡)보다 관대하나, 게이트 하드 백스톱(retry_count>=N)이 모든
+        # 재진입에서 잘라내 max N 으로 bounded 하다(무한루프 불가).
+        budget_left = retry_count < settings.max_retrieval_retries
+
+        if decision == "ANSWER":
+            return "answer_node"
+        if decision == "STOP":
+            return "answer_node"
+        if decision == "REPLAN":
+            # 예산 소진 시 REPLAN 은 실행 불가 — answer 직행(하드 백스톱).
+            return "retry_prep_node" if budget_left else "answer_node"
+
+        # decision is None — critic 실패/미결정 fail-open. 기존 결정적 규칙으로.
+        hydrated = state["hydration"].get("hydrated_services")
+        if hydrated is not None and len(hydrated) == 0 and budget_left:
+            return "retry_prep_node"
+        return "answer_node"
+
+    async def retrieval_critic_node(self, state: AgentState) -> dict[str, Any]:
+        """escalation 게이트가 승격한 검색 비평 노드 — RetrievalCritic.critique 위임.
+
+        critic 이 검색 결과 요약을 보고 critic 3슬롯(decision/replan_hint/rationale)을
+        채운다. LLM 예외/미결정은 critic 내부에서 fail-open 처리되어(세 슬롯 None) 상위
+        route_critic 이 결정적 폴백으로 라우팅한다 — 이 노드가 예외로 그래프를 깨지 않는다.
+
+        방어: critic 미주입인데도 이 노드에 도달하면(정상 경로에선 게이트가 차단) fail-open
+        breadcrumb 만 남기고 세 슬롯을 None 으로 둔다.
+        """
+        if self._critic is None:
+            return {
+                "critic_decision": None,
+                "critic_replan_hint": None,
+                "critic_rationale": None,
+                "node_path": ["retrieval_critic:no_critic"],
+            }
+        return await self._critic.critique(state)
 
     async def sql_node(self, state: AgentState) -> dict[str, Any]:
         """SqlAgent.search() 호출 — sql_results + search_channels 설정.
