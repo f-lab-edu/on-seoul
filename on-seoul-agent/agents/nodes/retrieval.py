@@ -4,13 +4,17 @@ import logging
 from typing import Any
 
 from agents import _emit
-from agents._helpers import assess_result_quality, reservation_guide_already_shown
+from agents._helpers import (
+    assess_result_quality,
+    emit_critic_decision,
+    reservation_guide_already_shown,
+)
 from agents._ondata_gateway import OnDataReader, default_reader
 from agents.answer_agent import _DISPLAY_LIMIT, _curate_display, _normalize_card_row
 from agents.detail_excerpt import extract_operational_keywords, prepare_detail_excerpt
 from agents._search_channel_utils import _to_hits
 from agents.analytics_agent import AnalyticsAgent
-from agents.nodes._shared import is_gap_oos
+from agents.nodes._shared import is_gap_oos, sanitize_user_rationale
 from agents.hydration_node import HydrationNode
 from agents.retrieval_critic import RetrievalCritic
 from agents.sql_agent import SqlAgent
@@ -310,15 +314,25 @@ class RetrievalNodes:
           · skew(result_quality.skew_field 존재 — 한 값 쏠림 신호).
         어느 것도 아니면 "명백히 좋음"으로 보아 critic 을 부르지 않는다(80% 경로).
         """
+        return RetrievalNodes._entry_signal(state) is not None
+
+    @staticmethod
+    def _entry_signal(state: AgentState) -> str | None:
+        """critic escalation 을 유발한 결과 신호를 분류한다(관측·SSE 라벨용, L1 Phase 5).
+
+        우선순위(먼저 매칭 하나): "zero"(0건) → "thin"(빈약) → "skew"(쏠림).
+        의심스럽지 않으면(명백히 좋음) None — critic 미진입. 집계 신호 라벨만
+        산출하며 raw 텍스트/식별정보는 담지 않는다(PII 차단).
+        """
         hydrated = state["hydration"].get("hydrated_services")
         if hydrated is not None and len(hydrated) == 0:
-            return True
+            return "zero"
         quality = state.get("result_quality") or {}
         if quality.get("thin"):
-            return True
+            return "thin"
         if quality.get("skew_field"):
-            return True
-        return False
+            return "skew"
+        return None
 
     def route_critic(self, state: AgentState) -> str:
         """retrieval_critic_node 직후 엣지 — critic 3택 소비 + fail-open 폴백.
@@ -360,6 +374,11 @@ class RetrievalNodes:
 
         방어: critic 미주입인데도 이 노드에 도달하면(정상 경로에선 게이트가 차단) fail-open
         breadcrumb 만 남기고 세 슬롯을 None 으로 둔다.
+
+        관측·SSE(L1 Phase 5, best-effort): critic 이 결정을 낸 뒤 그 근거를
+        `critic_decision` SSE 이벤트로 사용자에게 투명하게 노출하고(sanitize_user_rationale
+        로 내부 식별자 제거), Langfuse 에 라운드 스팬(진입 신호·decision·round)을 남긴다.
+        emit/span 실패는 그래프 결과를 막지 않는다(Core rule 8).
         """
         if self._critic is None:
             return {
@@ -368,7 +387,42 @@ class RetrievalNodes:
                 "critic_rationale": None,
                 "node_path": ["retrieval_critic:no_critic"],
             }
-        return await self._critic.critique(state)
+        # escalation 을 유발한 신호(관측·span 라벨). critique 전에 결과 상태로 결정한다.
+        entry_signal = self._entry_signal(state) or "unknown"
+        update = await self._critic.critique(state)
+        self._observe_critic(state, update, entry_signal)
+        return update
+
+    @staticmethod
+    def _observe_critic(
+        state: AgentState,
+        update: dict[str, Any],
+        entry_signal: str,
+    ) -> None:
+        """critic 결정의 SSE 노출 + Langfuse 스팬을 best-effort 로 기록한다 (L1 Phase 5).
+
+        · SSE: critic_rationale 을 sanitize 해 critic_decision 이벤트로 emit(라운드마다
+          1회 — round=retry_count 로 라운드를 구분해 중복 키 충돌 없음). rationale 이 없거나
+          sanitize 후 비면 emit 을 건너뛴다(triage decision 의 rationale=None 가드와 동일).
+        · Langfuse: 라운드 스팬(진입 신호·decision·round) 집계 메타데이터만 기록.
+        관측 실패가 그래프/답변을 막지 않는다(Core rule 8): SSE emit 은 자체 try 로
+        격리하고, span 기록은 emit 실패와 독립적으로 수행한다(record_critic_span 이
+        내부적으로 client no-op·예외 삼킴하는 best-effort). 지연 import·state 읽기는
+        타입이 보증돼 예외가 나지 않는다.
+        """
+        # 지연 import: agents.graph 는 이 모듈(agents.nodes.retrieval)을 간접 import 하므로
+        # 모듈 상단 import 시 순환이 된다 — 노드 실행 시점에만 끌어온다.
+        from agents.graph import record_critic_span
+
+        round_index = state.get("retry_count", 0)
+        decision = update.get("critic_decision")
+        try:
+            rationale = sanitize_user_rationale(update.get("critic_rationale"))
+            if decision is not None and rationale:
+                emit_critic_decision(decision, round_index, rationale)
+        except Exception:
+            logger.warning("critic_decision SSE emit 실패(무시)", exc_info=True)
+        record_critic_span(entry_signal, decision, round_index)
 
     async def sql_node(self, state: AgentState) -> dict[str, Any]:
         """SqlAgent.search() 호출 — sql_results + search_channels 설정.

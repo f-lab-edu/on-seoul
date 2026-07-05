@@ -7,9 +7,11 @@
     → SSE StreamingResponse 반환
 
 SSE 이벤트:
-    event: progress       — 워크플로우 진행 단계 안내 (routing / searching / answering)
-    event: title          — 첫 턴 대화 제목 (generate_title_node 독립 emit, payload type:"title")
-    event: final          — 워크플로우 정상 완료 (cache_hit 플래그 포함)
+    event: progress        — 워크플로우 진행 단계 안내 (routing / searching / answering / re_searching)
+    event: decision        — triage 판단 근거 (전체 실행 1회)
+    event: critic_decision — retrieval-critic 라운드 판단 근거 (L1, 플래그 온 + 의심 결과일 때만, 라운드마다)
+    event: title           — 첫 턴 대화 제목 (generate_title_node 독립 emit, payload type:"title")
+    event: final           — 워크플로우 정상 완료 (cache_hit 플래그 포함)
     event: workflow_error — 워크플로우 내부 에러 (fallback 답변 포함)
     event: error          — 세션/DB 레벨 예외
 """
@@ -312,6 +314,9 @@ async def _stream(
 
                 elif event_type == "decision":
                     yield sse_frame("decision", data)
+
+                elif event_type == "critic_decision":
+                    yield sse_frame("critic_decision", data)
 
                 elif event_type == "title":
                     yield sse_frame("title", data)

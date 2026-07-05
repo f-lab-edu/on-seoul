@@ -74,7 +74,7 @@ from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
-from schemas.events import DecisionEvent, SourcesUpdateEvent
+from schemas.events import CriticDecisionEvent, DecisionEvent, SourcesUpdateEvent
 from schemas.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -440,6 +440,48 @@ def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def record_critic_span(
+    entry_signal: str,
+    decision: str | None,
+    round_index: int,
+) -> None:
+    """retrieval-critic 라운드 스팬/메타데이터를 best-effort 로 기록한다 (L1 Phase 5).
+
+    critic 노드가 결정을 낸 직후 호출한다. 활성 Langfuse client 가 있으면 root span
+    (_langfuse_trace 의 "chat") 컨텍스트 안에 자식 span("retrieval_critic")을 하나
+    열고 즉시 닫으며 집계 메타데이터만 부착한다:
+      · entry_signal — 어느 신호로 escalation 됐는지("zero"/"thin"/"skew").
+      · decision     — critic 3택("ANSWER"/"REPLAN"/"STOP") 또는 None(미결정 fail-open).
+      · round        — critic 라운드 인덱스(retry_count 와 정렬).
+    raw 텍스트/식별정보는 싣지 않는다(집계 신호만 — PII 차단).
+
+    best-effort(Core rule 8): client 미활성/예외면 조용히 no-op 한다 — 관측 실패가
+    그래프 결과나 SSE 를 막지 않는다. 지연 import 로 core.config import 사이클을 피한다.
+    """
+    try:
+        from core.langfuse_client import get_langfuse_client
+
+        client = get_langfuse_client()
+        if client is None:
+            return
+        with client.start_as_current_observation(
+            as_type="span",
+            name="retrieval_critic",
+        ) as span:
+            span.update(
+                metadata={
+                    "entry_signal": entry_signal,
+                    "decision": decision,
+                    "round": round_index,
+                }
+            )
+    except Exception:
+        logger.warning(
+            "Langfuse retrieval_critic span 기록 실패 — 그래프는 정상 진행합니다.",
+            exc_info=True,
+        )
+
+
 def _update_root_span(root_span: Any, result: dict[str, Any]) -> None:
     """완료 후 root span 갱신(output=답변 + metadata)을 best-effort 로 수행한다.
 
@@ -670,7 +712,8 @@ class AgentGraph:
 
         Yields:
             ("progress", {"step": str, "message": str}) — 각 단계 전환 시점
-            ("decision", DecisionEvent dict)            — 판단 근거 (조건부)
+            ("decision", DecisionEvent dict)            — triage 판단 근거 (조건부)
+            ("critic_decision", CriticDecisionEvent dict) — critic 라운드 근거 (조건부, L1)
             ("result", AgentState)                      — 최종 완료 상태
 
         emit 위치(노드 측, agents/nodes/)와 타이밍:
@@ -726,6 +769,16 @@ class AgentGraph:
                         DecisionEvent(
                             action=chunk["action"],
                             routes=chunk["routes"],
+                            user_rationale=chunk["user_rationale"],
+                        ).model_dump(),
+                    )
+                elif evt == "critic_decision":
+                    # L1 retrieval-critic 라운드 결정 — triage decision 과 별개 프레임.
+                    yield (
+                        "critic_decision",
+                        CriticDecisionEvent(
+                            decision=chunk["decision"],
+                            round=chunk["round"],
                             user_rationale=chunk["user_rationale"],
                         ).model_dump(),
                     )
