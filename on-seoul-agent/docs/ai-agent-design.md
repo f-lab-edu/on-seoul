@@ -38,6 +38,7 @@ flowchart TD
     HYDRATION["hydration_node<br/>(service_id → 원본 hydration)"]
     RRF["rrf_fusion_node<br/>(secondary_intent 팬아웃<br/>RRF 통합, 기본은 우회)"]
     GATE{{"pre_answer_gate_node<br/>hydrated 0건?<br/>+ result_quality 자각<br/>+ 운영-상세 발췌"}}
+    CRITIC["retrieval_critic_node<br/>(Retrieval Critic)<br/>결과 요약 관찰 →<br/>ANSWER / REPLAN / STOP<br/>(enable_retrieval_critic 온일 때만)"]
     ANSWER["answer_node<br/>(Answer Agent)"]
     SELF_CORR{{"self_correction<br/>빈 답변/intent별 0건?<br/>(retry=0 캡, RETRIEVE만 대상)"}}
     RETRY_PREP["retry_prep_node<br/>(intent별 분기:<br/>forced_intent 전환 /<br/>ANALYTICS 필터 드롭 /<br/>MAP 반경 확장 , <br/>search_channels 리셋)"]
@@ -77,8 +78,13 @@ flowchart TD
     VECTOR --> HYDRATION
     HYDRATION --> RRF
     RRF --> GATE
-    GATE -- "결과 있음" --> ANSWER
-    GATE -- "0건" --> RETRY_PREP
+    GATE -- "명백히 좋음 / 폴백 / 예산 소진" --> ANSWER
+    GATE -- "0건(플래그 오프 폴백)" --> RETRY_PREP
+    GATE -- "의심스러움: 0건/thin/skew<br/>(플래그 온 + 예산 여유)" --> CRITIC
+    CRITIC -- "ANSWER" --> ANSWER
+    CRITIC -- "REPLAN(예산 여유)" --> RETRY_PREP
+    CRITIC -- "STOP" --> ANSWER
+    CRITIC -- "미결정(fail-open): 0건 폴백" --> RETRY_PREP
     MAP --> ANSWER
     ANALYTICS --> ANSWER
 
@@ -94,7 +100,9 @@ flowchart TD
     SEARCH_PERSIST --> TRACE
 ```
 
-각 노드는 공유 상태인 **`AgentState`** 를 입력받아 바뀐 부분만 담은 dict를 반환한다. 상태를 합치는 일은 LangGraph가 맡으므로 노드 안에서 상태를 직접 고치지 않는다. 그래프 전체에는 진행 단계(super-step)를 50으로 제한(`recursion_limit=50`)하고 재시도는 1회로 묶어(`retry_count==0`) 무한 반복을 막는다. 가장 긴 경로(RETRIEVE + secondary 팬아웃 + 재시도 1회)가 약 23 super-step이고, 여유를 더해 50으로 잡았다.
+각 노드는 공유 상태인 **`AgentState`** 를 입력받아 바뀐 부분만 담은 dict를 반환한다. 상태를 합치는 일은 LangGraph가 맡으므로 노드 안에서 상태를 직접 고치지 않는다. 그래프 전체에는 진행 단계(super-step)를 50으로 제한(`recursion_limit=50`)하고, 재검색은 self-correction과 retrieval-critic이 함께 쓰는 단일 예산(`max_retrieval_retries`, 기본 2)으로 묶어 무한 반복을 막는다. 가장 긴 경로(RETRIEVE + secondary 팬아웃 + 재시도)가 약 23 super-step이고, 여유를 더해 50으로 잡았다.
+
+> **retrieval_critic_node는 기본 꺼져 있다(`enable_retrieval_critic`, 옵트인).** 플래그가 꺼진 기본 상태에서는 `pre_answer_gate_node` 뒤가 예전과 똑같은 결정적 경로만 탄다 — 0건이면 재시도, 결과가 있으면 답변으로 간다(위 흐름도의 CRITIC 노드는 진입 엣지가 차단되어 호출되지 않는다). 플래그를 켜면 그 결정적 경로 위에 "결과를 보고 다음 행동을 정하는" 관찰→판단 루프가 얹힌다(아래 3-9). 측정으로 판단 품질을 확인한 뒤 기본 활성을 검토하는 단계적 롤아웃이다.
 
 > **참고사항**
 > - **수신 단일화 (intake_node)**: 예전에는 직전 답변 지시 여부를 규칙으로 판정하는 `reference_resolution_node`와 행동을 LLM으로 정하는 `triage_node`가 따로 있었다. 지금은 둘을 **단일 LLM 노드 `intake_node`** 로 합쳤다. 한 번의 구조화 출력 호출로 **턴 성격(`turn_kind`)과 행동(`action`)을 동시에** 판정하고, 직전 결과를 가리키는 지시 참조도 함께 해소한다.
@@ -205,6 +213,32 @@ SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬
 
 발췌, 정제는 모두 상류가 담당하고 Answer Agent는 준비된 문자열만 소비한다. 단건 원본 조회는 `tools/fetch_detail_content.py`가, 노출 전 정제와 키워드 발췌는 `agents/detail_excerpt.py`(DB/LLM 무관 순수 함수)가 맡는다. 정제 파이프라인은 본문에서 질의 키워드(동의어 그룹 포함, 예: "폭염"이 본문의 "무더위"도 잡도록) 주변을 발췌하고, 휴대폰 번호 같은 PII를 마스킹하며, 프롬프트 경계 마커를 중화한다. 질의 키워드가 본문에 없거나 발췌가 너무 짧으면 `None`을 반환해 거짓 발췌와 환각을 막는다 — 이 경우 Answer Agent는 운영-상세 실답변 대신 `attribute_gap`과 동일한 정직한 리다이렉트로 폴백한다. raw 블롭은 일반 hydration과 분리되어 절대 카드나 답변에 실리지 않는다.
 
+### 3-9. Retrieval Critic — 검색 결과를 보고 다음 행동을 정한다 (옵트인)
+
+지금까지의 검색 경로는 결과가 약할 때(0건, 빈약, 쏠림) 무엇을 할지를 **규칙**으로 정했다 — 0건이면 재시도, 결과가 있으면(빈약, 쏠림이어도) 답변으로 간다. `RetrievalCritic`(`agents/retrieval_critic.py`)은 그 위에 한 겹을 더한다. 검색이 이미 한 번 돈 *뒤* 그 결과가 약해 보이면, LLM이 원인을 추론해 **다음 행동을 스스로 정한다**. on-seoul-agent에서 워크플로우(고정 규칙)를 넘어 에이전트(관찰→판단)로 가는 첫 루프다.
+
+이 루프는 `enable_retrieval_critic` 플래그로 게이팅되며 **기본은 꺼져 있다(옵트인)**. 꺼진 상태에서는 위 결정적 경로가 그대로 유지되고 critic 노드는 호출되지 않는다(회귀 0). 측정으로 판단 품질을 확인한 뒤 기본 활성을 검토한다. 아래 설명은 플래그를 켠 상태의 동작이다.
+
+**escalation 게이트 — 대부분의 경로는 critic에 들어가지 않는다.** `pre_answer_gate_node` 뒤에서 결과가 "의심스러운" 경우(검색 후 0건, 빈약(thin), 쏠림(skew))에만 critic으로 승격한다. 명백히 좋은 결과는 예전처럼 곧장 답변으로 가므로(critic 미호출), 흔한 경로의 지연과 비용이 늘지 않는다. 예산을 이미 소진했으면(단일 예산 아래) 의심스러워도 승격하지 않고 답변으로 간다(하드 백스톱).
+
+**입력은 결과 *요약*뿐이다.** critic은 원본 행(hydrated rows) 전체를 보지 않는다. 총/채널별 건수, 적용된 필터, 상위 라벨 몇 개(상한 있음), 빈약, 쏠림 신호, 원 질의, 대화 이력만 요약해 넘긴다(토큰, 비용 통제). 요약, 이력 텍스트는 경계 마커로 감싸 데이터로만 취급하고 지시로 실행하지 않는다(다른 노드와 같은 프롬프트 인젝션 방어). DB 세션은 쓰지 않는다.
+
+**출력은 세 갈래로만 제약된다.**
+
+- **ANSWER** — 지금 결과로 답한다. 빈약, 쏠림이어도 재검색이 무의미하다고 보면 이쪽이다(이때 Answer Agent가 톤을 조정한다, 아래 6장).
+- **REPLAN** — 방향을 바꿔 다시 찾는다. 이때만 재탐색 방향 힌트(`replan_hint`)가 의미를 갖는다.
+- **STOP** — 개선이 어렵거나 예산이 없으면 정직한 한계 안내로 종료한다.
+
+**REPLAN 힌트는 화이트리스트만 담는다(인젝션 가드).** critic은 자유 SQL, 컬럼, 식별자를 만들 수 없다. 힌트는 스키마 레벨에서 **검색 intent(허용 목록 enum)** 전환, **드롭할 post-filter 이름(화이트리스트 Literal)**, **벡터 재검색용 자연어 재구성 질의**로만 표현 가능하다(`schemas/critic.py`). 자유 식별자는 애초에 이 타입에 담기지 않으며, 실제 파라미터화는 뒤이어 Router 검증 경로가 수행한다. `retry_prep_node`가 이 힌트를 소비해 방향을 바꿔 재검색한다(위 3-3, 아래 6장).
+
+**fail-open — critic이 그래프를 깨지 않는다.** LLM 예외, 빈 출력, 파싱 실패면 세 판단 슬롯을 모두 비운 채(미결정) 상위로 넘긴다. 그러면 그래프는 예전 결정적 규칙으로 폴백한다(0건이면 재시도, 아니면 답변). critic 실패가 답변을 막지 않는다.
+
+**단일 예산을 공유한다.** critic의 REPLAN 재검색과 self-correction의 0건, 빈 답변 재시도는 별도 카운터를 두지 않고 하나의 예산(`max_retrieval_retries`)을 함께 쓴다(이중 카운트 없음). 어느 경로로 들어오든 예산에 도달하면 재검색을 멈춘다.
+
+> **질의 변화(drift) 흡수**: 후속 대화에서 조건이 조금씩 바뀌어 결과가 약해진 경우, critic은 REPLAN의 재구성 질의(`reformulate_query`)로 방향을 다시 잡을 수 있다. 규칙만으로는 "0건"이 아니라서 놓치던 신호를, 관찰→판단 루프가 흡수한다.
+
+**관측(투명성)**: critic이 한 라운드를 판단하면 그 근거를 `critic_decision` SSE 이벤트로 사용자에게 노출한다(triage의 `decision` 이벤트와 같은 판단 투명성 철학, 단 critic은 라운드마다 발행될 수 있어 `round`로 구분한다 — `schemas/events.py`의 `CriticDecisionEvent`). 근거 문장은 내부 식별자가 새지 않도록 다듬는다(`sanitize_user_rationale`). 함께 Langfuse에 `retrieval_critic` 스팬을 남겨 어떤 신호로 승격됐는지(0건/thin/skew), 판단(decision), 라운드를 집계 메타데이터로만 기록한다(원본 텍스트, 식별정보 미포함). SSE, 스팬 기록은 모두 best-effort라 실패해도 그래프, 답변을 막지 않는다.
+
 ---
 
 ## 4. 도구 (Tools)
@@ -243,27 +277,32 @@ SQL-VECTOR 경계가 모호하면 `secondary_intent`로 두 경로를 병렬 팬
 | `sql.results` / `vector.results` / `map.results` / `analytics.results` | 검색 노드 | intent별 검색 결과 |
 | `hydration.hydrated_services` | hydration_node / rehydrate_node | `service_id`로 재조회한 최신 원본. AnswerAgent가 검색 경로와 무관하게 보는 단일 슬롯 |
 | `result_quality` | pre_answer_gate_node | RETRIEVE 결과의 쏠림/빈약 휴리스틱 자각(없으면 None). answer가 톤, 제안 조정에 소비 |
+| `critic_decision`, `critic_replan_hint`, `critic_rationale` | retrieval_critic_node | Retrieval Critic 판단(위 3-9) — 다음 행동(ANSWER/REPLAN/STOP), REPLAN 시 재탐색 방향 힌트(화이트리스트만), 근거 한 문장. 세 슬롯 모두 None = critic 미진입(명백히 좋은 경로 / 플래그 오프 / fail-open). REPLAN 힌트는 retry_prep_node가 소비 |
 | `detail_excerpt` | pre_answer_gate_node | 운영-상세 turn에서 focal 단건 상세 본문 발췌(없으면 None = 폴백 신호). answer가 소비 |
 | `curated_display`, `curated_extra_count`, `curated_alt_count` | pre_answer_gate_node | 카드형 턴의 큐레이션 산출 — 적합도 정렬된 상위 카드, 표시되지 않은 잔여 건수, 부족분을 채운 대안 수. answer가 슬라이스, 잔여 건수 계산 없이 그대로 렌더링(카드형 아니면 None) |
 | `output.{answer, title, service_cards}` | answer_node / action 노드 | 최종 자연어 답변 / 대화 제목 / 카드 UI용 상위 N건 |
-| `trace`, `error`, `retry_count` | trace_node / 각 노드 / retry_prep_node | 관측 메타데이터, 오류 메시지, 재시도 횟수(최대 1) |
+| `trace`, `error`, `retry_count` | trace_node / 각 노드 / retry_prep_node | 관측 메타데이터, 오류 메시지, 단일 재검색 예산 카운터 — self-correction과 retrieval-critic이 공유한다(캡 `max_retrieval_retries`, 기본 2) |
 | **그 외** | — | `forced_intent`, `retry_radius_m`, `retry_relaxed`, `relaxed_filters`, `relaxed_values`(완화로 드롭된 필터의 원래 값 — 큐레이션이 원 요청 조건을 복원할 때 소비), `reservation_guide_shown`, `rrf_merged_ids`, `node_path`, `search_channels`, `cache_hit`, `answer_lock_key`, `emit.*`(SSE emit-once 가드) 등 라우팅 세부, 관측, 재시도 제어용 보조 슬롯 |
 
 ---
 
 ## 6. 그래프 실행
 
-`AgentGraph.run(state)` 한 번 호출로 intake → 분기 → (검색 또는 직접 답변) → answer → self-correction → 종단 체인 적재가 끝난다. `AgentGraph.stream(state)`은 같은 실행을 `(event_type, data)` 튜플 스트림(`progress` / `decision` / `sources_update` / `result`)으로 흘려보내 SSE 릴레이에 쓴다. DB 세션은 인자로 받지 않고 각 노드가 실행 시점에 풀에서 잡고 즉시 반납한다(acquire-use-release). 각 에이전트는 생성자 주입으로 교체할 수 있어 테스트에서 Mock으로 대체한다.
+`AgentGraph.run(state)` 한 번 호출로 intake → 분기 → (검색 또는 직접 답변) → answer → self-correction → 종단 체인 적재가 끝난다. `AgentGraph.stream(state)`은 같은 실행을 `(event_type, data)` 튜플 스트림(`progress` / `decision` / `critic_decision` / `sources_update` / `result`)으로 흘려보내 SSE 릴레이에 쓴다(`critic_decision`은 retrieval-critic이 켜져 승격된 라운드에서만 발행된다, 위 3-9). DB 세션은 인자로 받지 않고 각 노드가 실행 시점에 풀에서 잡고 즉시 반납한다(acquire-use-release). 각 에이전트는 생성자 주입으로 교체할 수 있어 테스트에서 Mock으로 대체한다.
 
 설계의 핵심은 네 가지다.
 
-**상태와 제어의 분리** — 노드는 `AgentState`를 읽어 부분 업데이트 dict를 반환할 뿐, 다음 노드를 직접 지목하지 않는다. 전이는 그래프 빌드 시점에 무조건 엣지와 조건부 엣지로 선언되고, 조건부 엣지의 분기 함수는 state만 읽는 순수 함수다. "어디로 갈지"를 결정하는 신호(`turn_kind`, `action`, `intent`, `cache_hit`, `hydrated_services` 등)는 모두 앞선 노드가 state에 써 둔 값이다. 분기를 코드가 아니라 데이터로 다루므로 경로를 추적, 테스트하기 쉽다. 조건부 엣지는 수신 분기(`route_intake`), 캐시 적중(`post_cache_check`), 범위 밖 처리(`_out_of_scope_route`), 0건 게이트(`route_pre_answer_gate`), 자기 교정(`self_correction_edge`) 다섯 곳에서 state 신호만 읽어 다음 노드를 정한다. 그중 `route_intake`는 `turn_kind` 1차 분기와 `NEW`의 `action` 2차 분기를 한 함수가 모두 처리하는 단일 수신 라우터다.
+**상태와 제어의 분리** — 노드는 `AgentState`를 읽어 부분 업데이트 dict를 반환할 뿐, 다음 노드를 직접 지목하지 않는다. 전이는 그래프 빌드 시점에 무조건 엣지와 조건부 엣지로 선언되고, 조건부 엣지의 분기 함수는 state만 읽는 순수 함수다. "어디로 갈지"를 결정하는 신호(`turn_kind`, `action`, `intent`, `cache_hit`, `hydrated_services` 등)는 모두 앞선 노드가 state에 써 둔 값이다. 분기를 코드가 아니라 데이터로 다루므로 경로를 추적, 테스트하기 쉽다. 조건부 엣지는 수신 분기(`route_intake`), 캐시 적중(`post_cache_check`), 범위 밖 처리(`_out_of_scope_route`), pre-answer 게이트(`route_pre_answer_gate` — 0건, 그리고 플래그가 켜졌으면 의심스러운 결과의 critic 승격까지), critic 판단 소비(`route_critic` — ANSWER/REPLAN/STOP + fail-open 폴백), 자기 교정(`self_correction_edge`) 여섯 곳에서 state 신호만 읽어 다음 노드를 정한다. 그중 `route_intake`는 `turn_kind` 1차 분기와 `NEW`의 `action` 2차 분기를 한 함수가 모두 처리하는 단일 수신 라우터다.
 
 **자기 교정(Self-Correction)** — 검색이 0건이거나 답변이 비면 한 번만 다시 시도한다. 단순히 조건을 푸는 게 아니라 방향을 바꾼다 — 정형 검색(SQL)이 비면 의미 검색(VECTOR)으로 강제 전환하고, 지도 검색이 비면 반경을 넓히는 식이다. 빈 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 0건을 감지하면 답변 생성 전에 곧장 재시도로 보낸다(0건 게이트, `route_pre_answer_gate`). 무한 루프는 재시도 1회 캡(`retry_count`)과 `recursion_limit=50`으로 막는다. **왜 하필 1회인가**: 0회면 SQL→VECTOR 전환, 반경 확장 같은 방향 전환의 복구 기회를 통째로 잃고, 2회 이상이면 검색, LLM 호출이 누적되어 지연과 비용이 커지는 데 비해 추가 복구율은 미미하다. 빈 결과의 대부분이 한 번의 방향 전환으로 해소된다고 보고, 복구 가능성과 응답 지연 사이에서 1회를 택했다. 재시도는 intake를 거치지 않고 `router_node`로 재진입한다(action은 이미 RETRIEVE로 확정). intent별 재시도 동작은 `retry_prep_node`가 분기한다 — SQL은 VECTOR로 강제 전환, ANALYTICS는 가장 제약이 큰 필터 1개를 드롭, MAP은 반경을 넓히고, `attribute_gap`/`operational_detail` 검색은 0건을 유발한 필터를 완화한다. self-correction은 RETRIEVE 경로 전용이라 비-RETRIEVE action(DIRECT_ANSWER/AMBIGUOUS/OUT_OF_SCOPE의 domain_outside)은 평가에서 제외된다.
 
 **카드 큐레이션과 결과 품질 자각(전진 패스)** — `pre_answer_gate_node`는 답변 생성 직전, RETRIEVE 결과를 두고 정해진 순서로 일을 한다. ① 먼저 0건이면 답변 LLM을 부르지 않고 곧장 재시도로 보낸다(0건 게이트). ② 0건이 아니고 카드형 턴이면 결과를 **결정적으로 큐레이션**한다 — 사용자가 요청한 조건(지역 > 카테고리 > 요금 > 예약 가능 상태 순)에 대한 적합도로 안정 정렬하고, 마감된 항목은 목록에서 빼지 않고 뒤로 강등만 한다. 동점은 기존 검색 순서를 보존한다. 요금 매칭은 정형 검색(`sql_search`)과 같은 의미로 비교하고(무료는 정확 일치, 유료는 접두 매칭), 완화 재시도로 필터가 드롭됐어도 원래 요청 조건(`relaxed_values`로 스냅샷한 값)을 되살려 적합도를 잰다. 큐레이션 결과는 상위 카드(`curated_display`), 잔여 건수(`curated_extra_count`), 부족분을 채운 대안 수(`curated_alt_count`)로 슬롯에 적재돼 Answer Agent가 그대로 렌더링한다(위 3-7). ③ 그다음 결과 품질을 **큐레이션된 카드 기준으로** 점검한다 — 결과가 1~2건이면 빈약(thin), 충분한데도(3건 이상) 자치구 한 곳에 임계 이상 몰려 있으면 쏠림(skew)으로 보고 `result_quality` 슬롯에 적재한다. 품질 점검을 큐레이션 *뒤*에 두는 것은, 자각 신호가 실제로 사용자에게 보일 카드와 어긋나지 않게 하기 위해서다.
 
-이 전진 패스는 **재검색을 트리거하지 않는다**(라우팅 불변, 전진 1회). 재시도가 0건만 다룬다면, "결과는 있지만 빈약하거나 한쪽으로 쏠려 있는" 경우는 자기 교정 대상이 아니므로 Answer Agent가 `result_quality` 신호를 읽어 답변의 톤과 후속 제안만 조정한다(예: "결과가 많지 않습니다", "대부분 OO구에 있습니다"). 큐레이션, 품질 점검이 실패해도 슬롯은 모두 `None`으로 격리되어 답변을 막지 않으며(best-effort), 이 경우 Answer Agent는 기존 슬라이스 경로로 폴백한다. 카드형이 아닌 턴(상세형, 운영-상세, MAP, ANALYTICS)은 큐레이션 대상이 아니라 슬롯이 비어 있다. 같은 노드가 운영-상세 turn이면 `detail_excerpt`도 함께 준비한다(위 3-8).
+이 전진 패스 자체는 재검색을 트리거하지 않는다(라우팅 불변, 전진 1회). **retrieval-critic이 꺼진 기본 상태**에서는, 결정적 재시도가 0건만 다루므로 "결과는 있지만 빈약하거나 한쪽으로 쏠려 있는" 경우는 자기 교정 대상이 아니다 — 이때 Answer Agent가 `result_quality` 신호를 읽어 답변의 톤과 후속 제안만 조정한다(예: "결과가 많지 않습니다", "대부분 OO구에 있습니다").
+
+**retrieval-critic을 켜면** 이 흐름이 달라진다(위 3-9). 빈약, 쏠림, 질의 변화(drift)는 더 이상 톤 조정만으로 끝나지 않고, `pre_answer_gate_node` 뒤 escalation 게이트가 이런 결과를 critic으로 승격해 LLM 판단을 받는다. critic이 **REPLAN**을 택하면 방향을 바꿔 재탐색하고(retry_prep_node가 힌트 소비), **ANSWER**를 택하면 지금 결과로 답하되 위와 똑같이 톤을 조정한다. 즉 톤 조정은 critic이 ANSWER를 택한 경우에 적용되고, 재탐색은 critic이 REPLAN을 택한 경우에 일어난다. critic의 재탐색은 self-correction과 단일 예산(`max_retrieval_retries`)을 공유하므로 두 경로를 합쳐도 재검색 횟수가 예산으로 묶인다(무한 루프 없음). critic이 미결정(fail-open)이면 위 기본 결정적 경로로 폴백한다.
+
+큐레이션, 품질 점검이 실패해도 슬롯은 모두 `None`으로 격리되어 답변을 막지 않으며(best-effort), 이 경우 Answer Agent는 기존 슬라이스 경로로 폴백한다. 카드형이 아닌 턴(상세형, 운영-상세, MAP, ANALYTICS)은 큐레이션 대상이 아니라 슬롯이 비어 있다. 같은 노드가 운영-상세 turn이면 `detail_excerpt`도 함께 준비한다(위 3-8).
 
 **맥락 활용** — 멀티턴 후속 질문(직전 결과를 가리키거나 직전 판단을 묻는 등)은 API 서비스가 실어 준 맥락에 의존한다. AI는 무상태이므로 대화 이력(history), 직전 워킹셋(`prev_working_set`: 직전 결과 시설, 정제 질의, 적용 필터, 판단 근거), 직전 결과 정체성(`prev_entities`)을 요청으로 받는다. 맥락이 필요한 답변/분류 생성 노드는 이 맥락을 선별 없이 전부 활용한다 — 예컨대 설명형(EXPLAIN)은 직전 근거 한 줄만이 아니라 실제 사용자 질문, 대화 이력, 직전 결과를 함께 본다. 대화 이력을 몇 턴 실을지 같은 맥락의 양은 API 서비스가 정하고, AI는 받은 만큼 쓴다(스스로 잘라내지 않는다). 다만 이 원칙은 대화를 이해해 답이나 분류를 생성하는 노드에 적용하며, 새 제약만 뽑아내는 결정적 추출 단계는 오히려 직전 발화에 좁게 한정해 엉뚱한 맥락이 섞이지 않게 한다. 외부에서 들어온 맥락 텍스트는 경계 마커로 감싸 데이터로만 취급하고 지시로 실행하지 않는다.
 
