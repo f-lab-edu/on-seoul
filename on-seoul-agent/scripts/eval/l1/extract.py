@@ -42,6 +42,7 @@ from scripts.eval.l1.signals import QuerySignals
 
 _FIXTURE_DEFAULT = Path(__file__).parent / "fixtures" / "sample_traces.json"
 _ROOT_SPAN_NAME = "chat"
+_CRITIC_SPAN_NAME = "retrieval_critic"
 
 
 def _extract_query(trace_input: Any) -> str:
@@ -110,6 +111,38 @@ def pick_root_span(trace: Any, *, span_name: str = _ROOT_SPAN_NAME) -> Any | Non
     return None
 
 
+def pick_critic_spans(trace: Any, *, span_name: str = _CRITIC_SPAN_NAME) -> list[Any]:
+    """트레이스 상세에서 critic 자식 스팬("retrieval_critic") 관측을 모두 모은다.
+
+    Phase 5 계약(agents/graph.py::record_critic_span): critic 노드가 결정을 낼 때마다
+    root "chat" span 컨텍스트 안에 자식 SPAN(name="retrieval_critic")을 하나 열고 즉시
+    닫으며 metadata {entry_signal, decision, round} 를 부착한다. 라운드가 여러 번이면
+    스팬도 여러 개다.
+
+    반환: name 이 일치하는 SPAN observation 리스트를 metadata["round"] 오름차순으로
+    정렬(round 미가용이면 뒤로). critic 미발동 트레이스(자식 스팬 없음)는 빈 리스트.
+    관대 원칙: observations 가 없거나 조회 실패로 비어 있어도 빈 리스트.
+    """
+    observations = getattr(trace, "observations", None) or []
+
+    def _is_span(o: Any) -> bool:
+        t = getattr(o, "type", None)
+        return t is None or str(t).upper() == "SPAN"
+
+    spans = [
+        o
+        for o in observations
+        if _is_span(o) and getattr(o, "name", None) == span_name
+    ]
+
+    def _round(o: Any) -> int:
+        meta = getattr(o, "metadata", None) or {}
+        r = meta.get("round")
+        return r if isinstance(r, int) else 1_000_000
+
+    return sorted(spans, key=_round)
+
+
 class _ObsView:
     """dict 픽스처의 observation 을 pick_root_span/trace_to_signals 가 기대하는
     속성 접근 형태로 감싼다(langfuse ObservationsView 부분 모방)."""
@@ -123,6 +156,11 @@ class _ObsView:
         self.input = d.get("input")
         self.output = d.get("output")
         self.metadata = d.get("metadata")
+        # 타이밍(critic 지연 측정용) — 라이브 ObservationsView 필드명과 동일.
+        # 픽스처는 start_time/end_time(ISO8601) 또는 latency(초)를 실을 수 있다.
+        self.start_time = d.get("start_time")
+        self.end_time = d.get("end_time")
+        self.latency = d.get("latency")
 
 
 class _DictTrace:
