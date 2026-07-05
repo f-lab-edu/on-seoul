@@ -433,7 +433,7 @@ class AnswerAgent:
                     state["filters"].get("area_name"),
                     retry_relaxed=bool(state.get("retry_relaxed")),
                     relaxed_filters=state.get("relaxed_filters"),
-                    result_quality=state.get("result_quality"),
+                    result_quality=self._effective_result_quality(state),
                     reservation_guide_shown=bool(state.get("reservation_guide_shown")),
                     alt_count=state.get("curated_alt_count") or 0,
                 )
@@ -471,6 +471,33 @@ class AnswerAgent:
     # ------------------------------------------------------------------
     # 내부 헬퍼
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _effective_result_quality(state: AgentState) -> "dict | None":
+        """카드형 톤 조정(thin/skew)에 실제 적용할 result_quality 를 결정한다 (L1 Phase 4).
+
+        L1 retrieval-critic 이 활성일 때 thin/skew 는 더 이상 "규칙으로 무조건 톤만"이
+        아니라 critic 의 케이스별 판단(REPLAN=재탐색 / ANSWER=톤 조정)으로 대체된다
+        (계획서 §3-3). 따라서 톤 조정은 **critic 이 ANSWER 를 택했거나 critic 이 아예
+        진입하지 않았을 때만**(= 최종 라운드 결과로 답하는 게 확정된 순간에만) 적용한다.
+
+          · critic_decision is None : critic 미진입(명백히 좋음 / 플래그 오프 / fail-open /
+            REPLAN 후 retry_prep 가 슬롯을 클리어한 뒤 예산 소진으로 answer 직행) →
+            기존 동작대로 result_quality 그대로 적용.
+          · critic_decision == "ANSWER" : critic 이 "이 결과로 답하라" → 톤 조정 적용.
+          · critic_decision == "STOP" : 정직한 한계 안내 프레이밍이 우선이라 thin/skew
+            톤 조정(캐비엇·쏠림 제안)은 적용하지 않는다(None 반환).
+
+        REPLAN 라운드는 answer_node 에 도달하지 않고 retry_prep 로 가므로(예산 있으면)
+        여기서 다룰 대상이 아니다 — 다음 라운드 결과로 재평가된다.
+
+        플래그 오프(enable_retrieval_critic=False) 불변: critic 이 절대 진입하지 않아
+        critic_decision 은 항상 None → 기존 톤 조정 동작이 완전히 그대로다(회귀 0).
+        """
+        decision = state.get("critic_decision")
+        if decision in (None, "ANSWER"):
+            return state.get("result_quality")
+        return None
 
     def _collect_results(self, state: AgentState) -> list[dict]:
         """검색 결과를 단일 목록으로 합친다.
