@@ -8,6 +8,8 @@ import dev.jazzybyte.onseoul.chat.port.in.SendQueryUseCase.PrepareResult;
 import dev.jazzybyte.onseoul.chat.port.in.UpdateRoomTitleUseCase;
 import dev.jazzybyte.onseoul.chat.port.out.AiServiceStreamPort;
 import dev.jazzybyte.onseoul.chat.port.out.AiStreamEvent;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -48,16 +50,19 @@ public class ChatStreamService implements QueryAndStreamUseCase {
     private final AiServiceStreamPort aiServiceStreamPort;
     private final ChatConcurrencyGuard concurrencyGuard;
     private final UpdateRoomTitleUseCase updateRoomTitleUseCase;
+    private final MeterRegistry meterRegistry;
     private final Duration backgroundTimeout;
 
     public ChatStreamService(SendQueryUseCase sendQueryUseCase,
                              AiServiceStreamPort aiServiceStreamPort,
                              ChatConcurrencyGuard concurrencyGuard,
-                             UpdateRoomTitleUseCase updateRoomTitleUseCase) {
+                             UpdateRoomTitleUseCase updateRoomTitleUseCase,
+                             MeterRegistry meterRegistry) {
         this.sendQueryUseCase = sendQueryUseCase;
         this.aiServiceStreamPort = aiServiceStreamPort;
         this.concurrencyGuard = concurrencyGuard;
         this.updateRoomTitleUseCase = updateRoomTitleUseCase;
+        this.meterRegistry = meterRegistry;
         this.backgroundTimeout = concurrencyGuard.backgroundTimeout();
     }
 
@@ -131,6 +136,13 @@ public class ChatStreamService implements QueryAndStreamUseCase {
                 })
                 .doOnComplete(relaySink::tryEmitComplete)
                 .doFinally(signal -> {
+                    // 질의 처리 성공률 지표(SigNoz). final answer 실제 수신 = success, 아니면 failed
+                    // (에러/타임아웃/무응답). DB 저장 성공과 무관 — 질의 성공은 답변 생성 자체로 판정.
+                    // increment는 no-throw라 저장·permit 경로에 영향 없다.
+                    Counter.builder("chat.query.attempts")
+                            .tag("result", finalAnswer.get() != null ? "success" : "failed")
+                            .register(meterRegistry)
+                            .increment();
                     // 모든 종료 경로(complete/error/timeout/cancel)에서 저장 시도 + permit 해제.
                     // 저장 구독은 detach되어 cancel은 사실상 발생하지 않지만, 방어적으로 동일하게 저장한다.
                     try {
