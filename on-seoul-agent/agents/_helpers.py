@@ -31,7 +31,7 @@ _RESERVATION_GUIDE_MARKER = "통합회원 가입"
 def assess_result_quality(
     rows: list[dict[str, Any]],
     *,
-    area_filter: str | None,
+    area_filter: list[str] | None,
 ) -> dict[str, Any] | None:
     """결과 품질 자각 패스 — hydration 결과의 성격(쏠림·빈약)을 경량 점검한다.
 

@@ -69,7 +69,7 @@ def _curate_score(row: dict, intended: dict[str, str | None]) -> tuple[int, ...]
         if key == "payment_type":
             score.append(0 if _payment_matches(row.get(key), want) else 1)
         else:
-            score.append(0 if row.get(key) == want else 1)
+            score.append(0 if _dim_matches(row.get(key), want) else 1)
     score.append(_STATUS_RANK.get(row.get("service_status"), _STATUS_RANK_DEFAULT))
     return tuple(score)
 
@@ -87,9 +87,20 @@ def _is_exact_match(row: dict, intended: dict[str, str | None]) -> bool:
         if key == "payment_type":
             if not _payment_matches(row.get(key), want):
                 return False
-        elif row.get(key) != want:
+        elif not _dim_matches(row.get(key), want):
             return False
     return True
+
+
+def _dim_matches(row_value: object, want: object) -> bool:
+    """area_name/max_class_name 적합도 비교 — want 가 리스트면 멤버십, 아니면 동등.
+
+    area_name 은 다중 지역 리스트(["성동구","광진구"])가 될 수 있으므로, 리스트일 때는
+    행 값이 그 안에 포함되는지로 만족을 판정한다(list==str 오비교 방지).
+    """
+    if isinstance(want, (list, tuple)):
+        return row_value in want
+    return row_value == want
 
 
 def _curate_display(

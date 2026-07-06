@@ -281,7 +281,7 @@ class TestRouterNodeStatePropagation:
         assert update["plan"]["intent"] == IntentType.SQL_SEARCH
         assert update["plan"]["refined_query"] == "마포구 풋살장"
         assert update["filters"]["max_class_name"] == "체육시설"
-        assert update["filters"]["area_name"] == "마포구"
+        assert update["filters"]["area_name"] == ["마포구"]
         assert update["plan"]["secondary_intent"] == IntentType.VECTOR_SEARCH
 
     async def test_router_node_omits_none_fields(self):

@@ -142,6 +142,7 @@ class CorrectionNodes:
             "area_name": None,
             "service_status": None,
             "payment_type": None,
+            "target_audience": None,
         }
         # 큐레이션 의도 복원용 — 전체 드롭 직전 원래(비-None) 필터값 스냅샷.
         # filters 채널이 None 으로 비워진 뒤에도 pre_answer_gate 가 원 요청 제약을
@@ -314,6 +315,7 @@ class CorrectionNodes:
                     "area_name": None,
                     "service_status": None,
                     "payment_type": None,
+                    "target_audience": None,
                 },
             }
         )

@@ -146,7 +146,7 @@ class Settings(BaseSettings):
     llm_provider: str = "gemini"  # gemini | openai
 
     google_api_key: str | None = None
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.5-flash"
     # 모델 티어 fallback — primary 모델이 일시적 오류로 실패하면 이 모델로 재시도한다.
     # 벤더(provider) fallback과 별개의 "모델 티어 fallback"이며 항상 Gemini provider로 빌드한다.
     gemini_fallback_model: str = "gemini-3.1-flash-lite"

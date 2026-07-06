@@ -49,10 +49,14 @@ class TestCardTurnCuration:
         )
         out = await nodes.pre_answer_gate_node(state)
         display = out["curated_display"]
-        # 광진구+체육시설(딱맞음)이 상단, 서초구는 강등.
-        assert display[0]["service_id"] == "EXACT"
+        # post-RRF 게이트가 area 불일치(서초구)를 제거하므로 EXACT(광진구)만 남는다.
+        # 게이트가 행을 제거했으므로 hydration 슬롯도 교정 결과로 재기록된다.
+        assert [r["service_id"] for r in display] == ["EXACT"]
         assert out["curated_extra_count"] == 0
-        assert out["curated_alt_count"] == 1  # 서초구 1건 대안
+        assert out["curated_alt_count"] == 0  # 대안(서초구)은 게이트에서 제거됨
+        assert out["hydration"]["hydrated_services"] == [
+            r for r in rows if r["service_id"] == "EXACT"
+        ]
 
     async def test_extra_count_is_curated_remainder(self):
         nodes = _make_nodes()
@@ -144,3 +148,75 @@ class TestNonCardTurnsSkipCuration:
         )
         out = await nodes.pre_answer_gate_node(state)
         assert out["curated_display"] is None
+
+
+class TestStructuredGateInPreAnswer:
+    """post-RRF 게이트가 hydration 슬롯을 교정하는지 확인(계획서 P1+P2 통합 지점)."""
+
+    async def test_gate_removes_leaked_district_and_rewrites_hydration(self):
+        """행23: area 활성 시 타지역 누출 행이 게이트에서 하드 제거되고
+        hydration 슬롯이 축소셋으로 재기록된다(alt 카드 승격 아님)."""
+        nodes = _make_nodes()
+        rows = [
+            _row("KEEP", area="강서구", klass="체육시설"),
+            _row("LEAK", area="강동구", klass="체육시설"),
+        ]
+        state = make_agent_state(
+            intent=IntentType.SQL_SEARCH,
+            action=ActionType.RETRIEVE,
+            area_name=["강서구"],
+            hydrated_services=rows,
+        )
+        out = await nodes.pre_answer_gate_node(state)
+        assert "hydration" in out
+        kept = out["hydration"]["hydrated_services"]
+        assert [r["service_id"] for r in kept] == ["KEEP"]
+        # 강동구는 alt 카드로도 남지 않는다(active area = 하드 제거).
+        assert all(r["service_id"] != "LEAK" for r in out["curated_display"])
+
+    async def test_gate_emptying_all_rows_rewrites_empty_slot(self):
+        """Fail-safe 진입점(anchor 7): 게이트가 전부 비우면 hydration 슬롯을
+        []로 재기록 → route_pre_answer_gate 가 0건 게이트로 retry 를 태운다."""
+        nodes = _make_nodes()
+        rows = [_row("LEAK", area="강동구", klass="체육시설")]
+        state = make_agent_state(
+            intent=IntentType.SQL_SEARCH,
+            action=ActionType.RETRIEVE,
+            area_name=["강서구"],
+            hydrated_services=rows,
+        )
+        out = await nodes.pre_answer_gate_node(state)
+        assert out["hydration"] == {"hydrated_services": []}
+        # 0건이므로 큐레이션 스킵.
+        assert out["curated_display"] is None
+
+    async def test_no_active_filter_leaves_hydration_untouched(self):
+        """필터 미적용이면 게이트 no-op — hydration 슬롯을 건드리지 않는다."""
+        nodes = _make_nodes()
+        rows = [_row("A", area="강동구", klass="체육시설")]
+        state = make_agent_state(
+            intent=IntentType.SQL_SEARCH,
+            action=ActionType.RETRIEVE,
+            hydrated_services=rows,
+        )
+        out = await nodes.pre_answer_gate_node(state)
+        assert "hydration" not in out
+
+    async def test_audience_gate_drops_conflicting_target_in_pre_answer(self):
+        """행20/25/30: 대상 명시 시 상충 대상 행이 게이트에서 제거된다."""
+        nodes = _make_nodes()
+        rows = [
+            {"service_id": "KID", "service_name": "KID", "area_name": "강서구",
+             "target_info": "초등학생", "max_class_name": "교육"},
+            {"service_id": "ADULT", "service_name": "ADULT", "area_name": "강서구",
+             "target_info": "성인", "max_class_name": "교육"},
+        ]
+        state = make_agent_state(
+            intent=IntentType.SQL_SEARCH,
+            action=ActionType.RETRIEVE,
+            target_audience="CHILD",
+            hydrated_services=rows,
+        )
+        out = await nodes.pre_answer_gate_node(state)
+        kept = out["hydration"]["hydrated_services"]
+        assert [r["service_id"] for r in kept] == ["KID"]

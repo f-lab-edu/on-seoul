@@ -56,6 +56,7 @@ _FLAT_TO_NESTED: dict[str, tuple[str, str]] = {
     "area_name": ("filters", "area_name"),
     "service_status": ("filters", "service_status"),
     "payment_type": ("filters", "payment_type"),
+    "target_audience": ("filters", "target_audience"),
     # triage
     "action": ("triage", "action"),
     "out_of_scope_type": ("triage", "out_of_scope_type"),

@@ -148,11 +148,14 @@ class TestHybridAFewExactBehaviorPin:
     """
 
     async def test_many_raw_few_exact_uses_alt_label_not_thin(self):
+        # post-RRF 게이트는 area(하드)로만 거른다. max_class_name 은 게이트 대상이
+        # 아니라 큐레이션 강등(대안)으로만 다룬다 — 따라서 "raw 많음/딱맞음 적음"은
+        # 게이트를 통과하는 축(카테고리)으로 재현한다(area 불일치는 게이트에서 제거됨).
         nodes = _nodes()
         rows = [
             _row("E1", area="광진구", klass="체육시설"),
             _row("E2", area="광진구", klass="체육시설"),
-        ] + [_row(f"O{i}", area="서초구", klass="문화행사") for i in range(7)]
+        ] + [_row(f"O{i}", area="광진구", klass="문화행사") for i in range(7)]
         state = make_agent_state(
             intent=IntentType.SQL_SEARCH,
             action=ActionType.RETRIEVE,

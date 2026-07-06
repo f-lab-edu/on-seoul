@@ -386,6 +386,7 @@ class TestRetryPrepGroupResetPerCase:
             "area_name": None,
             "service_status": None,
             "payment_type": None,
+            "target_audience": None,
         }
         # 평면 forced_intent 세팅, emit progress 만 리셋.
         assert "forced_intent" in update and update["forced_intent"] is not None
@@ -440,6 +441,7 @@ class TestRetryPrepGroupResetPerCase:
             "area_name": None,
             "service_status": None,
             "payment_type": None,
+            "target_audience": None,
         }
         # 전환이 아니므로 forced_intent 는 세팅하지 않는다.
         assert "forced_intent" not in update

@@ -82,11 +82,13 @@ def _count(rows: Any) -> int:
 def _applied_filters_text(state: AgentState) -> str:
     """적용된 post-filter 를 "키=값" 나열로 요약한다(값 없는 키는 생략)."""
     filters = state.get("filters") or {}
-    parts = [
-        f"{key}={value}"
-        for key, value in filters.items()
-        if value not in (None, "")
-    ]
+    parts = []
+    for key, value in filters.items():
+        if value in (None, "", []):
+            continue
+        # area_name 은 리스트 — join 해 표시(["성동구","광진구"] → "성동구·광진구").
+        display = "·".join(value) if isinstance(value, list) else value
+        parts.append(f"{key}={display}")
     return ", ".join(parts) if parts else "없음"
 
 

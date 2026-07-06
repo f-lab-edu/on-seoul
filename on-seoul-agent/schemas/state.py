@@ -90,9 +90,13 @@ class FilterState(TypedDict, total=False):
     """post-filter — dict_merge 채널 (retry_prep 부분 드롭)."""
 
     max_class_name: str | None
-    area_name: str | None
+    # 다중 지역 필터 — SQL 은 area_name = ANY(:areas), gate 는 교집합 매칭.
+    # 단일 지역도 리스트로 담는다(["강남구"]). None/[] 이면 미적용.
+    area_name: list[str] | None
     service_status: str | None
     payment_type: str | None
+    # 대상 그룹 필터 — CHILD/ADULT/SENIOR/FAMILY. tools.target_audience 토큰맵 소비.
+    target_audience: str | None
 
 
 class SqlState(TypedDict, total=False):

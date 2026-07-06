@@ -40,6 +40,7 @@ DropFilterName = Literal[
     "area_name",
     "service_status",
     "payment_type",
+    "target_audience",
 ]
 
 # 런타임 검증/테스트용 튜플(계약 정합 확인). Literal 인자를 그대로 노출한다.

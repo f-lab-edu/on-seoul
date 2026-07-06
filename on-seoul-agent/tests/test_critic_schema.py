@@ -52,6 +52,12 @@ class TestReplanHintWhitelist:
         hint = ReplanHint(drop_filters=["area_name", "service_status"], reason="완화")
         assert hint.drop_filters == ["area_name", "service_status"]
 
+    def test_target_audience_is_droppable(self):
+        # P1+P2: target_audience 도 critic/retry 가 완화할 수 있어야 한다.
+        assert "target_audience" in ALLOWED_DROP_FILTERS
+        hint = ReplanHint(drop_filters=["target_audience"], reason="대상 완화")
+        assert hint.drop_filters == ["target_audience"]
+
     def test_drop_filters_rejects_free_identifier(self):
         # 자유 컬럼/식별자(화이트리스트 밖)는 거부 — SQL 인젝션 가드.
         with pytest.raises(ValidationError):

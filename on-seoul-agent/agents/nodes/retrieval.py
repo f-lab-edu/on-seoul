@@ -14,7 +14,11 @@ from agents.answer_agent import _DISPLAY_LIMIT, _curate_display, _normalize_card
 from agents.detail_excerpt import extract_operational_keywords, prepare_detail_excerpt
 from agents._search_channel_utils import _to_hits
 from agents.analytics_agent import AnalyticsAgent
-from agents.nodes._shared import is_gap_oos, sanitize_user_rationale
+from agents.nodes._shared import (
+    apply_structured_gate,
+    is_gap_oos,
+    sanitize_user_rationale,
+)
 from agents.hydration_node import HydrationNode
 from agents.retrieval_critic import RetrievalCritic
 from agents.sql_agent import SqlAgent
@@ -139,9 +143,26 @@ class RetrievalNodes:
         curated_display: list[dict[str, Any]] | None = None
         curated_extra_count: int | None = None
         curated_alt_count: int | None = None
+        gated_hydration: dict[str, Any] | None = None
         if self._is_retrieve_path(state):
             try:
                 rows = state["hydration"].get("hydrated_services") or []
+                # post-RRF 구조화 게이트 — 채널 누출 차단(계획서 P1+P2). 벡터의
+                # summary/question/bm25 채널로 들어온 타 지역·상충 대상 행을 원본
+                # area_name/target_info 로 최종 교정한다. SQL 경로는 WHERE 로 이미
+                # 걸려 있어 이 게이트를 다시 통과해도 불변이라 무해하다.
+                filters = state.get("filters") or {}
+                gated = apply_structured_gate(
+                    rows,
+                    area_names=filters.get("area_name"),
+                    target_audience=filters.get("target_audience"),
+                )
+                if len(gated) != len(rows):
+                    # 게이트가 행을 제거했을 때만 hydration 슬롯을 재기록한다. 0건이
+                    # 되면 route_pre_answer_gate 가 0건 게이트→critic/retry 로 완화
+                    # 재검색을 태운다(무한루프 없음, retry 캡).
+                    gated_hydration = {"hydrated_services": gated}
+                    rows = gated
                 # 카드 큐레이션 — 카드형 턴에서만, result_quality *이전*에 실행한다.
                 # curated/display 산출 후 그 기준으로 품질을 점검해 정합을
                 # 맞춘다. 비카드형/0건은 큐레이션 스킵(슬롯 None 유지).
@@ -175,7 +196,7 @@ class RetrievalNodes:
                 curated_alt_count = None
 
         detail_excerpt = await self._prepare_operational_detail(state)
-        return {
+        update: dict[str, Any] = {
             "result_quality": result_quality,
             "reservation_guide_shown": reservation_shown,
             "curated_display": curated_display,
@@ -184,6 +205,11 @@ class RetrievalNodes:
             "detail_excerpt": detail_excerpt,
             "node_path": ["pre_answer_gate"],
         }
+        # 게이트가 행을 제거했으면 hydration 슬롯을 교정 결과로 덮어쓴다(후속 엣지·
+        # answer 가 동일 축소셋을 본다). 미제거면 슬롯을 건드리지 않는다(무변경).
+        if gated_hydration is not None:
+            update["hydration"] = gated_hydration
+        return update
 
     @staticmethod
     def _is_card_turn(state: AgentState) -> bool:
@@ -204,7 +230,7 @@ class RetrievalNodes:
         return True
 
     @staticmethod
-    def _intended_constraints(state: AgentState) -> dict[str, str | None]:
+    def _intended_constraints(state: AgentState) -> dict[str, Any]:
         """큐레이션 적합도 정렬용 의도 제약을 복원한다(5.1).
 
         effective(완화 후) filters 채널의 비-None 값에, 완화로 드롭된 원래 값

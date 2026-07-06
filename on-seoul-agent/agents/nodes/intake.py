@@ -28,7 +28,13 @@ _ACTION_MAP: dict[IntakeAction, ActionType] = {
 }
 
 # 검색 머지 필터 키(working_set_refine 머지 대상).
-_FILTER_KEYS = ("max_class_name", "area_name", "service_status", "payment_type")
+_FILTER_KEYS = (
+    "max_class_name",
+    "area_name",
+    "service_status",
+    "payment_type",
+    "target_audience",
+)
 
 # no_base 폴백 — 직전 검색 발화 후보에서 제외할 "필터 추가/잡담" 신호.
 # 이런 토큰만으로 이뤄진 빈약한 후속은 토픽 base 가 아니라 델타이므로 건너뛴다.

@@ -246,6 +246,7 @@ class TestGapOosHomomorphismAdversarial:
             "area_name": None,
             "service_status": None,
             "payment_type": None,
+            "target_audience": None,
         }
         # 기존 완화는 plan.refined_query 를 리셋한다(gap 분기는 plan 미터치).
         assert update["plan"] == {"refined_query": None}
