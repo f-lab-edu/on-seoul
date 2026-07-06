@@ -105,6 +105,10 @@ async def sql_search(
 
     # area_name 다중값: area_name = ANY(:areas) 로 여러 자치구를 OR 매칭한다.
     # 사용자 값은 리스트째 bind 파라미터로만 전달(인젝션 방지). 빈 리스트는 미적용.
+    # 방어: 스칼라 str 이 새어들어와도 chars 로 쪼개지지 않게 감싼다
+    # (_shared.py:115 와 동일 패턴, 계약상 리스트지만 상류 오주입 belt-and-suspenders).
+    if isinstance(area_name, str):
+        area_name = [area_name]
     if area_name:
         conditions.append("area_name = ANY(:areas)")
         bind["areas"] = list(area_name)

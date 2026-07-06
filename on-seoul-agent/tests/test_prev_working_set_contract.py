@@ -24,6 +24,7 @@ class TestPrevWorkingSetInjection:
                 intent=IntentType.SQL_SEARCH,
                 reasoning="수영장 검색",
                 refined_query="강남 수영장",
+                # 하위호환: 옛 워킹셋 스칼라 str 입력은 validator 가 list 로 정규화한다.
                 applied_filters={"area_name": "강남구"},
                 relaxed=True,
                 relaxed_filters=["payment_type"],
@@ -34,7 +35,7 @@ class TestPrevWorkingSetInjection:
         assert ws["entities"] == [{"service_id": "S1", "label": "강남 수영장"}]
         assert ws["intent"] == IntentType.SQL_SEARCH
         assert ws["refined_query"] == "강남 수영장"
-        assert ws["applied_filters"] == {"area_name": "강남구"}
+        assert ws["applied_filters"] == {"area_name": ["강남구"]}
         assert ws["relaxed"] is True
         assert ws["relaxed_filters"] == ["payment_type"]
 
@@ -110,7 +111,8 @@ class TestEmitWorkingSet:
         )
         ws = _build_prev_working_set(next_req)
         assert ws["intent"] == IntentType.SQL_SEARCH
-        assert ws["applied_filters"] == {"area_name": "마포구"}
+        # emit 은 state.filters(스칼라 픽스처)를 패스스루하고, 재주입 시 validator 가 list 정규화.
+        assert ws["applied_filters"] == {"area_name": ["마포구"]}
         assert ws["entities"] == [{"service_id": "S1", "label": "L1"}]
 
 
@@ -342,3 +344,57 @@ class TestEmitWorkingSetCarryForwardNodeShapes:
         assert ws["refined_query"] == "한강공원 주차 가능 여부"
         assert ws["applied_filters"] == {"area_name": "영등포구"}
         assert ws["entities"] == [{"service_id": "S9", "label": "한강공원 주차장"}]
+
+
+class TestAppliedFiltersAreaNameNormalization:
+    """PrevWorkingSetPayload.applied_filters area_name 정규화(422 회귀 방지).
+
+    area_name 신 계약 = list[str]. 옛 워킹셋/구클라의 스칼라 str 유입점만 정규화한다.
+    """
+
+    def test_accepts_list(self):
+        p = PrevWorkingSetPayload(applied_filters={"area_name": ["성동구", "광진구"]})
+        assert p.applied_filters == {"area_name": ["성동구", "광진구"]}
+
+    def test_scalar_normalized_to_list(self):
+        p = PrevWorkingSetPayload(applied_filters={"area_name": "성동구"})
+        assert p.applied_filters == {"area_name": ["성동구"]}
+
+    def test_empty_string_to_empty_list(self):
+        # "" → [](=[""] 오매칭 금지, 축 미적용).
+        p = PrevWorkingSetPayload(applied_filters={"area_name": ""})
+        assert p.applied_filters == {"area_name": []}
+
+    def test_none_preserved(self):
+        p = PrevWorkingSetPayload(applied_filters={"area_name": None})
+        assert p.applied_filters == {"area_name": None}
+
+    def test_other_keys_untouched(self):
+        p = PrevWorkingSetPayload(applied_filters={"service_status": "접수중"})
+        assert p.applied_filters == {"service_status": "접수중"}
+
+    def test_two_turn_list_roundtrip_no_422(self):
+        """신 계약 다중값 회귀: emit 이 list 를 내면 재주입에서 422 없이 그대로 통과.
+
+        원 버그(스칼라 str→list 라운드트립 불일치)의 대칭 케이스 — state.filters 가
+        신 계약대로 list 를 담을 때 emit→Spring 패스스루→재주입이 손상 없이 라운드트립.
+        """
+        result = {
+            "plan": {"intent": IntentType.SQL_SEARCH, "refined_query": "q"},
+            "filters": {"area_name": ["성동구", "광진구"]},
+            "output": {"service_cards": [{"service_id": "S1", "service_name": "L1"}]},
+            "triage": {"user_rationale": "r"},
+            "retry_relaxed": False,
+            "relaxed_filters": [],
+        }
+        emitted = _emit_working_set(result)
+        assert emitted["applied_filters"] == {"area_name": ["성동구", "광진구"]}
+        # Spring 이 emitted 를 그대로 회신 → 재주입 (422 나면 여기서 ValidationError).
+        next_req = ChatRequest(
+            room_id=1,
+            message_id=3,
+            message="그 중 무료만",
+            prev_working_set=PrevWorkingSetPayload(**emitted),
+        )
+        ws = _build_prev_working_set(next_req)
+        assert ws["applied_filters"] == {"area_name": ["성동구", "광진구"]}

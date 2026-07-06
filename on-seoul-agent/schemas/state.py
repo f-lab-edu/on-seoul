@@ -169,7 +169,7 @@ class PrevWorkingSet(TypedDict, total=False):
     intent: "IntentType | None"
     reasoning: str | None
     refined_query: str | None
-    applied_filters: "dict[str, str | None] | None"
+    applied_filters: "dict[str, str | list[str] | None] | None"
     relaxed: bool
     relaxed_filters: "list[str] | None"
 

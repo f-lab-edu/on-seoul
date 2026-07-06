@@ -100,6 +100,14 @@ class TestSqlSearchFilters:
         bind = session.execute.call_args[0][1]
         assert bind["areas"] == ["성동구", "광진구"]
 
+    async def test_scalar_area_not_char_split(self):
+        """스칼라 str 이 새어들어와도 areas bind 가 ['성','동','구']로 쪼개지지 않는다."""
+        session = _make_session([])
+        # 타입 계약상 list 지만 상류 오주입 방어 가드를 검증한다.
+        await sql_search(session, area_name="성동구")  # type: ignore[arg-type]
+        bind = session.execute.call_args[0][1]
+        assert bind["areas"] == ["성동구"]
+
     async def test_empty_area_list_omits_condition(self):
         """area_name=[] 는 필터 미적용(areas bind 없음)."""
         session = _make_session([])

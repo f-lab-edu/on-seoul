@@ -56,9 +56,27 @@ class PrevWorkingSetPayload(BaseModel):
     reasoning: str | None = Field(default=None, max_length=500)
     refined_query: str | None = Field(default=None, max_length=500)
     # effective(완화 후) 필터. 키: max_class_name/area_name/service_status/payment_type.
-    applied_filters: dict[str, str | None] = Field(default_factory=dict)
+    # area_name 은 신 계약상 list[str](다중 자치구). 옛 워킹셋/구클라의 스칼라도
+    # validator 로 정규화하되, 정규화된 list 가 타입 검증에 다시 걸리지 않도록 타입도 확대.
+    applied_filters: dict[str, str | list[str] | None] = Field(default_factory=dict)
     relaxed: bool = Field(default=False)
     relaxed_filters: list[str] = Field(default_factory=list)
+
+    @field_validator("applied_filters", mode="before")
+    @classmethod
+    def _normalize_area_name(cls, v: Any) -> Any:
+        """area_name 키만 list 로 정규화(하위호환: 옛 워킹셋 스칼라 str 유입점).
+
+        스칼라 str→[str], 빈 문자열 ""→[](=[""] 오매칭 금지), list/None 은 그대로.
+        나머지 키(max_class_name/service_status/payment_type)는 손대지 않는다.
+        dict 가 아니면 그대로 통과(Pydantic 후속 검증에 위임).
+        """
+        if not isinstance(v, dict):
+            return v
+        area = v.get("area_name")
+        if isinstance(area, str):
+            return {**v, "area_name": [area] if area else []}
+        return v
 
     @field_validator("intent", mode="before")
     @classmethod
