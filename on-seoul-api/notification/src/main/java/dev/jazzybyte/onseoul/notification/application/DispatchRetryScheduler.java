@@ -9,6 +9,8 @@ import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
 import dev.jazzybyte.onseoul.notification.port.out.NotificationContentSerializerPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -44,6 +46,7 @@ public class DispatchRetryScheduler {
     private final PushNotificationPort pushNotificationPort;
     private final NotificationTxHelper txHelper;
     private final NotificationContentSerializerPort contentSerializer;
+    private final MeterRegistry meterRegistry;
 
     /**
      * FAILED dispatch staleness 임계값. createdAt 으로부터 이 기간을 초과하면 재시도하지 않고
@@ -59,6 +62,7 @@ public class DispatchRetryScheduler {
             final PushNotificationPort pushNotificationPort,
             final NotificationTxHelper txHelper,
             final NotificationContentSerializerPort contentSerializer,
+            final MeterRegistry meterRegistry,
             @Value("${notification.retry-scheduler.max-age-hours:12}") final int maxAgeHours) {
         this.loadDispatchPort = loadDispatchPort;
         this.loadSubscriptionPort = loadSubscriptionPort;
@@ -66,6 +70,7 @@ public class DispatchRetryScheduler {
         this.pushNotificationPort = pushNotificationPort;
         this.txHelper = txHelper;
         this.contentSerializer = contentSerializer;
+        this.meterRegistry = meterRegistry;
         this.maxAgeHours = maxAgeHours;
         this.maxAge = Duration.ofHours(maxAgeHours);
     }
@@ -157,6 +162,11 @@ public class DispatchRetryScheduler {
                         dispatch.getId(), e.getMessage());
             }
 
+            Counter.builder("notification.dispatch.attempts")
+                    .tag("result", "success")
+                    .register(meterRegistry)
+                    .increment();
+
             log.info("[DispatchRetryScheduler] 재시도 성공: dispatchId={}, subscriptionId={}",
                     dispatch.getId(), subscriptionId);
 
@@ -181,6 +191,11 @@ public class DispatchRetryScheduler {
                 log.error("[DispatchRetryScheduler] TX RetryFailure 실패: dispatchId={}, error={}",
                         dispatch.getId(), e.getMessage());
             }
+
+            Counter.builder("notification.dispatch.attempts")
+                    .tag("result", "failed")
+                    .register(meterRegistry)
+                    .increment();
         }
     }
 

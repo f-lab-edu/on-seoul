@@ -14,6 +14,7 @@ import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadUserContactPort;
 import dev.jazzybyte.onseoul.notification.port.out.NotificationContentSerializerPort;
 import dev.jazzybyte.onseoul.notification.port.out.PushNotificationPort;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,6 +51,7 @@ class DispatchRetrySchedulerTest {
             new NotificationContentSerializer(new ObjectMapper());
 
     private DispatchRetryScheduler scheduler;
+    private SimpleMeterRegistry meterRegistry;
 
     private static final Long SUB_ID = 10L;
     private static final Long USER_ID = 1L;
@@ -59,9 +61,10 @@ class DispatchRetrySchedulerTest {
 
     @BeforeEach
     void setUp() {
+        meterRegistry = new SimpleMeterRegistry();
         scheduler = new DispatchRetryScheduler(
                 loadDispatchPort, loadSubscriptionPort, loadUserContactPort,
-                pushNotificationPort, txHelper, contentSerializer, MAX_AGE_HOURS);
+                pushNotificationPort, txHelper, contentSerializer, meterRegistry, MAX_AGE_HOURS);
     }
 
     private NotificationDispatch failedDispatch(Long id, int attemptCount) {
@@ -124,6 +127,9 @@ class DispatchRetrySchedulerTest {
         verify(txHelper).txBRetrySuccess(dispatchCaptor.capture(), subCaptor.capture(), any(Instant.class));
         assertThat(dispatchCaptor.getValue().getId()).isEqualTo(100L);
         assertThat(subCaptor.getValue().getId()).isEqualTo(SUB_ID);
+
+        assertThat(meterRegistry.get("notification.dispatch.attempts")
+                .tag("result", "success").counter().count()).isEqualTo(1.0);
     }
 
     // ── payload 존재 → 구조화 콘텐츠 복원 후 무손실 재발송 ──────────────
@@ -201,6 +207,9 @@ class DispatchRetrySchedulerTest {
 
         verify(txHelper).txBRetryFailure(eq(dispatch));
         verify(txHelper, never()).txBRetrySuccess(any(), any(), any());
+
+        assertThat(meterRegistry.get("notification.dispatch.attempts")
+                .tag("result", "failed").counter().count()).isEqualTo(1.0);
     }
 
     // ── 재시도 실패 (attempt_count → 5 = DEAD) ─────────────────────────
@@ -286,7 +295,7 @@ class DispatchRetrySchedulerTest {
     void injectedMaxAge_isHonored() {
         DispatchRetryScheduler shortScheduler = new DispatchRetryScheduler(
                 loadDispatchPort, loadSubscriptionPort, loadUserContactPort,
-                pushNotificationPort, txHelper, contentSerializer, 6);
+                pushNotificationPort, txHelper, contentSerializer, meterRegistry, 6);
 
         Instant created = Instant.now().minus(java.time.Duration.ofHours(7));
         NotificationDispatch dispatch = failedDispatch(100L, 1, null, created);
