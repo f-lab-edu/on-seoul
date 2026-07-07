@@ -18,7 +18,10 @@ Singleflight (0-3-2):
   락 키: answer_cache:{digest}:lock  (캐시 키 + ":lock" 접미사)
   획득:  SET NX EX lock_ttl — True면 이 호출자가 락 보유, False면 대기.
   대기:  miss + 락 미획득 → poll_for_answer()로 캐시 키를 retries×interval 초 주기 재조회.
-  해제:  CacheWriteNode가 set_cached_answer 완료 후 DEL → 대기자 즉시 hit.
+  해제:  CacheWriteNode가 저장(set_cached_answer_by_key) 완료 후 DEL → 대기자 즉시 hit.
+         락은 최초 cache_check 획득 시점부터 cache_write 저장까지 K_original 에 유지되며
+         (self-correction 재시도 재진입에서도 재획득·해제하지 않는다), cache_write 가
+         K_original(= answer_lock_key)로 저장·해제해 저장 키 ↔ 락 키 정합을 맞춘다.
   fail-open: Redis 장애 또는 poll 윈도우(retries×interval) 초과 → 각자 LLM 호출
              (중복 허용, 안전한 퇴행).
   폴 윈도우: poll_window(≈p95 답변 생성시간, ~10s) < lock_ttl(worst-case 30s).
@@ -433,6 +436,39 @@ async def set_cached_answer(
         )
     except Exception:
         logger.warning("answer cache SET 오류 — 캐싱 건너뜀", exc_info=True)
+
+
+async def set_cached_answer_by_key(
+    key: str,
+    payload: dict[str, Any],
+    state: dict[str, Any],
+    redis: aioredis.Redis,
+) -> None:
+    """미리 계산된 키로 envelope({payload, state})를 저장(set_cached_answer 대칭).
+
+    set_cached_answer 는 refined_query+filters+routes 로 키를 *재계산*하지만, 이 변형은
+    호출 측이 미리 계산해 둔 키(= 최초 cache_check 시점 키)에 그대로 저장한다.
+    self-correction 재시도로 filters/intent 가 완화(K_relaxed)되어도 저장은 사용자
+    원 질의가 다음에 조회할 키(K_original)로 이뤄져, 동일 질의 재요청이 hit 한다.
+    empty-state TTL 로직(빈 검색 결과 → answer_cache_empty_ttl)은 보존한다.
+    장애 시 무시(get_cached_answer_by_key 대칭 fail-open).
+    """
+    if not settings.answer_cache_enabled:
+        return
+    ttl = (
+        settings.answer_cache_empty_ttl
+        if _is_empty_state(state)
+        else settings.answer_cache_ttl
+    )
+    envelope = {"payload": payload, "state": state}
+    try:
+        await redis.set(
+            key,
+            json.dumps(envelope, ensure_ascii=False, default=str),
+            ex=ttl,
+        )
+    except Exception:
+        logger.warning("answer cache SET 오류(by_key) — 캐싱 건너뜀", exc_info=True)
 
 
 async def flush_answer_cache(redis: aioredis.Redis) -> int:

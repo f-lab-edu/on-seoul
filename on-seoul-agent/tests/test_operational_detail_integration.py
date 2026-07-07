@@ -1,4 +1,4 @@
-"""P5 통합 테스트 — 사례 162-163 재현 (§8 D-5).
+"""운영-상세 통합 테스트 — 사례 162-163 재현.
 
 "마루공원 테니스장 폭염철 이용안내" + 해당 service detail_content 에 폭염 텍스트
 (섹션4) 존재 → 거짓 단정/도메인 거절 미발생, 섹션4 포함 발췌 기반 안내 도달.
@@ -109,7 +109,7 @@ async def test_162_163_reproduction_reaches_excerpt_answer():
 
 
 async def test_no_heat_text_falls_back_honestly():
-    """detail_content 에 폭염 텍스트 부재 → 발췌 None → P4 interim 정직 폴백."""
+    """detail_content 에 폭염 텍스트 부재 → 발췌 None → interim 정직 폴백."""
     intake = _op_detail_intake()
     vrows = [{"service_id": "V1", "service_name": "마루공원 테니스장", "similarity": 0.9}]
     hydrated = [

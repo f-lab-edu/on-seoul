@@ -47,6 +47,12 @@ dev = [
     "ruff>=0.15.10",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# pytest 픽스처를 _chat_router_support 에서 import 해 테스트 인자로 사용하면
+# ruff 가 import 와 인자명을 재정의(F811)로 오인한다. 픽스처 공유의 정상 패턴이다.
+"tests/test_chat_router_stream.py" = ["F811"]
+"tests/test_chat_router_integration.py" = ["F811"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 # 전체 테스트 세션에 하나의 이벤트 루프를 공유한다.

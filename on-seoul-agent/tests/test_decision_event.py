@@ -520,7 +520,7 @@ class TestDecisionEmitOnceAcrossRetry:
             action=IntakeAction.RETRIEVE,
             user_rationale="수영장 검색입니다.",
         )
-        # VECTOR_SEARCH 0건 → 케이스 C 완화 재시도 → router_node 재진입.
+        # VECTOR_SEARCH 0건 → 기존 완화 재시도 → router_node 재진입.
         router = make_router(IntentType.VECTOR_SEARCH)
 
         with patch(

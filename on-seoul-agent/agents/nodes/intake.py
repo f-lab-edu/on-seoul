@@ -1,9 +1,9 @@
 """입구 페이즈 — intake_node(분류·참조) + working_set_refine_node + route_intake.
 
 reference_resolution(규칙) + triage(LLM)를 단일 LLM intake_node 로 병합한다(병합 근거:
-docs intake-node-merge §1.2 index-return). LLM 은 prev_entities 의 1-based 인덱스만
-선택하고(_intake_indexing 순수 함수가 service_id 로 매핑), 같은 호출에서 turn_kind/
-action 을 판정한다. SQL/DB 는 손대지 않는다.
+LLM 이 service_id 를 생성하지 않고 인덱스만 반환하게 해 ID 환각을 차단). LLM 은
+prev_entities 의 1-based 인덱스만 선택하고(_intake_indexing 순수 함수가 service_id 로
+매핑), 같은 호출에서 turn_kind/action 을 판정한다. SQL/DB 는 손대지 않는다.
 """
 
 import logging
@@ -28,7 +28,13 @@ _ACTION_MAP: dict[IntakeAction, ActionType] = {
 }
 
 # 검색 머지 필터 키(working_set_refine 머지 대상).
-_FILTER_KEYS = ("max_class_name", "area_name", "service_status", "payment_type")
+_FILTER_KEYS = (
+    "max_class_name",
+    "area_name",
+    "service_status",
+    "payment_type",
+    "target_audience",
+)
 
 # no_base 폴백 — 직전 검색 발화 후보에서 제외할 "필터 추가/잡담" 신호.
 # 이런 토큰만으로 이뤄진 빈약한 후속은 토픽 base 가 아니라 델타이므로 건너뛴다.
@@ -88,7 +94,7 @@ class IntakeNodes:
     async def intake_node(self, state: AgentState) -> dict[str, Any]:
         """입구 단일화 노드 — turn_kind + action + ref_indices 한 번에 판정.
 
-        폴백 두 층위(intake-node-merge §2.5):
+        폴백 두 층위:
           (A) 분류 모호(파싱 실패/미지·누락) → turn_kind 기본 NEW + action 기본 RETRIEVE.
               기존 0건 게이트·self-correction 이 강등하므로 새 폴백 경로를 만들지 않는다.
               조작 ID 바인딩 금지. node_path 에 breadcrumb(silent no-op 금지).
@@ -202,7 +208,7 @@ class IntakeNodes:
         return update
 
     async def working_set_refine_node(self, state: AgentState) -> dict[str, Any]:
-        """REFINE 경로의 "주방"(P1-3) — 직전 워킹셋 + 이번 발화 신규 제약 머지 → 재검색.
+        """REFINE 경로의 "주방" — 직전 워킹셋 + 이번 발화 신규 제약 머지 → 재검색.
 
         carryover 철학(스냅샷 아님): 직전 레시피(applied_filters)에 *이번 발화의 신규
         제약*을 더해 재검색한다. 신규 제약을 추출하지 않으면("그 중 무료만"의

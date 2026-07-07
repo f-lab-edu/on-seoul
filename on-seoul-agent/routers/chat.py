@@ -7,9 +7,11 @@
     → SSE StreamingResponse 반환
 
 SSE 이벤트:
-    event: progress       — 워크플로우 진행 단계 안내 (routing / searching / answering)
-    event: title          — 첫 턴 대화 제목 (generate_title_node 독립 emit, payload type:"title")
-    event: final          — 워크플로우 정상 완료 (cache_hit 플래그 포함)
+    event: progress        — 워크플로우 진행 단계 안내 (routing / searching / answering / re_searching)
+    event: decision        — triage 판단 근거 (전체 실행 1회)
+    event: critic_decision — retrieval-critic 라운드 판단 근거 (L1, 플래그 온 + 의심 결과일 때만, 라운드마다)
+    event: title           — 첫 턴 대화 제목 (generate_title_node 독립 emit, payload type:"title")
+    event: final           — 워크플로우 정상 완료 (cache_hit 플래그 포함)
     event: workflow_error — 워크플로우 내부 에러 (fallback 답변 포함)
     event: error          — 세션/DB 레벨 예외
 """
@@ -87,7 +89,7 @@ def _resolve_graph(request: Request) -> AgentGraph:
 
 
 def _build_prev_working_set(request: ChatRequest) -> dict[str, Any] | None:
-    """ChatRequest → prev_working_set 중첩 채널 (P1).
+    """ChatRequest → prev_working_set 중첩 채널.
 
     신규 채널(request.prev_working_set) 우선. 미전송 시 평면 슬롯(prev_entities/
     prev_intent/prev_reasoning)으로 폴백한다(하위호환). 폴백 시 신규 필드
@@ -134,10 +136,10 @@ _SEARCH_INTENTS = frozenset(
 
 
 def _emit_working_set(result: dict[str, Any]) -> dict[str, Any]:
-    """result(최종 AgentState) → 다음 턴 carryover 용 prev_working_set (P1-2/P1-4).
+    """result(최종 AgentState) → 다음 턴 carryover 용 prev_working_set.
 
     applied_filters 는 result["filters"] (dict_merge 채널)에서 읽는다 — retry_prep 의
-    완화 드롭이 머지로 반영된 *effective(완화 후)* 필터다(요청 필터가 아님, P1-4).
+    완화 드롭이 머지로 반영된 *effective(완화 후)* 필터다(요청 필터가 아님).
     entities 는 노출된 service_cards 의 (service_id, label) 정체성만 담는다(레시피·정체성
     운반, 결과 스냅샷 아님).
 
@@ -257,10 +259,15 @@ async def _stream(
         prev_reasoning=ws_reasoning,
         prev_working_set=prev_working_set,
         target_service_ids=None,
-        # ── 결과 품질 자각 패스(P2-B) — pre_answer_gate_node 가 채운다 ──
+        # ── L1 retrieval-critic — retrieval_critic_node 가 채운다(Phase 2/3) ──
+        # 스캐폴딩 단계라 아직 채우는 노드가 없다 → 전 요청에서 None(동작 불변).
+        critic_decision=None,
+        critic_replan_hint=None,
+        critic_rationale=None,
+        # ── 결과 품질 자각 패스 — pre_answer_gate_node 가 채운다 ──
         result_quality=None,
         reservation_guide_shown=False,
-        # ── 운영-상세 발췌(P5) — pre_answer_gate_node 가 operational_detail turn 에 채운다 ──
+        # ── 운영-상세 발췌 — pre_answer_gate_node 가 operational_detail turn 에 채운다 ──
         detail_excerpt=None,
         # ── 재시도 제어 (평면) ──
         retry_count=0,
@@ -308,6 +315,9 @@ async def _stream(
                 elif event_type == "decision":
                     yield sse_frame("decision", data)
 
+                elif event_type == "critic_decision":
+                    yield sse_frame("critic_decision", data)
+
                 elif event_type == "title":
                     yield sse_frame("title", data)
 
@@ -325,7 +335,7 @@ async def _stream(
                         "intent": intent.value if intent is not None else None,
                         "cache_hit": bool(result.get("cache_hit")),
                         "service_cards": output.get("service_cards") or [],
-                        # P1-2/P1-4: 다음 턴 carryover 용 워킹셋(effective 필터 포함).
+                        # 다음 턴 carryover 용 워킹셋(effective 필터 포함).
                         "prev_working_set": _emit_working_set(result),
                     }
                     if result.get("error"):

@@ -4,8 +4,8 @@ import { cn } from "@/lib/utils";
 
 const EXAMPLE_QUESTIONS = [
   "지금 접수 중인 체육시설 관련 서비스 알려줘",
-  "자연 속에서 할 수 있는 활동 찾아줘",
-  "마포구에서 아이들과 참여할 수 있는 무료 프로그램 알려줘",
+  "서울에 대해 소개할만한 문화행사가 있을까?",
+  "마포구에서 가족과 참여할 수 있는 무료 프로그램 알려줘",
 ] as const;
 
 interface WelcomeMessageProps {

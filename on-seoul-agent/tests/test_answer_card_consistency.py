@@ -1,4 +1,4 @@
-"""A/B-3 — answer 카드형 경로가 상태의 curated 슬롯을 렌더링만 한다.
+"""answer 카드형 경로가 상태의 curated 슬롯을 렌더링만 한다.
 
 answer 는 자체 all_results[:5] 슬라이스·extra_count 계산을 하지 않고 pre_answer_gate
 가 적재한 curated_display/curated_extra_count 를 읽는다. service_cards=display,

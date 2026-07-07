@@ -27,6 +27,7 @@ _REFINE_FILTER_FIELDS: tuple[str, ...] = (
     "area_name",
     "service_status",
     "payment_type",
+    "target_audience",
 )
 
 
@@ -54,6 +55,8 @@ def _build_router_update(result: Any) -> dict[str, Any]:
         filters["service_status"] = result.service_status
     if result.payment_type is not None:
         filters["payment_type"] = result.payment_type
+    if result.target_audience is not None:
+        filters["target_audience"] = result.target_audience
 
     update: dict[str, Any] = {"plan": plan}
     if filters:

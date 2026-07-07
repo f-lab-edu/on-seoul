@@ -90,9 +90,13 @@ class FilterState(TypedDict, total=False):
     """post-filter — dict_merge 채널 (retry_prep 부분 드롭)."""
 
     max_class_name: str | None
-    area_name: str | None
+    # 다중 지역 필터 — SQL 은 area_name = ANY(:areas), gate 는 교집합 매칭.
+    # 단일 지역도 리스트로 담는다(["강남구"]). None/[] 이면 미적용.
+    area_name: list[str] | None
     service_status: str | None
     payment_type: str | None
+    # 대상 그룹 필터 — CHILD/ADULT/SENIOR/FAMILY. tools.target_audience 토큰맵 소비.
+    target_audience: str | None
 
 
 class SqlState(TypedDict, total=False):
@@ -148,7 +152,7 @@ class EmitState(TypedDict, total=False):
 
 
 class PrevWorkingSet(TypedDict, total=False):
-    """직전 턴 대화 워킹셋(P1) — 입력 전용 중첩 채널(그래프 내 갱신 없음, 리듀서 불필요).
+    """직전 턴 대화 워킹셋 — 입력 전용 중첩 채널(그래프 내 갱신 없음, 리듀서 불필요).
 
     "검색 레시피"지 "결과 스냅샷"이 아니다 — 후속은 레시피에 제약을 더해 재검색한다
     (carryover 철학: 정체성만 운반, 사실은 rehydrate 재조회).
@@ -165,7 +169,7 @@ class PrevWorkingSet(TypedDict, total=False):
     intent: "IntentType | None"
     reasoning: str | None
     refined_query: str | None
-    applied_filters: "dict[str, str | None] | None"
+    applied_filters: "dict[str, str | list[str] | None] | None"
     relaxed: bool
     relaxed_filters: "list[str] | None"
 
@@ -196,11 +200,13 @@ class AgentState(TypedDict):
     # 참조 해소 결과: 현재 message 가 지시 참조일 때 바인딩된 service_id 리스트.
     target_service_ids: list[str] | None
     # ── 재시도 제어 (평면) ──
-    # LangGraph 자기 교정(Self-Correction) 루프 카운터.
+    # 단일 retrieval 예산 카운터. self_correction(빈 답변/0건)과 L1 retrieval-critic
+    # (0건·thin·skew)이 *공유*한다 — 별도 카운터를 두지 않아 예산 이중 카운트를 막는다.
+    # 캡 단일 출처는 Settings.max_retrieval_retries(기본 2). 도달 시 하드 백스톱.
     retry_count: int  # 재시도 횟수 (0 = 아직 재시도 없음)
     # 하드 필터 0건으로 인한 완화 재시도 신호. AnswerAgent 가 답변에 명시한다.
     retry_relaxed: bool
-    # 완화 재시도 시 retry_prep_node 가 드롭한 필터 키 목록(M1-b).
+    # 완화 재시도 시 retry_prep_node 가 드롭한 필터 키 목록.
     # AnswerAgent 가 사용자 라벨로 변환해 "무엇을 완화했는지" 답변에 명시한다.
     relaxed_filters: list[str] | None
     # 완화로 드롭된 필터의 *원래 값*(키→값). 큐레이션이 의도 제약을 복원할 때 쓴다 —
@@ -211,21 +217,31 @@ class AgentState(TypedDict):
     forced_intent: IntentType | None
     # MAP 0건 재시도 시 확장 반경(m). 없으면 기본 반경(1000m) 적용.
     retry_radius_m: int | None
+    # ── L1 retrieval-critic 판단 (평면) ──
+    # retrieval_critic_node 가 검색 결과를 보고 정하는 다음 행동. 세 슬롯 모두
+    # None = critic 미진입(명백히 좋은 80% 경로 / critic 실패 fail-open). 스캐폴딩
+    # 단계(Phase 1)라 아직 소비하는 노드/엣지가 없다 — 값은 항상 None(회귀 0).
+    # critic_decision:    "ANSWER"/"REPLAN"/"STOP" (CriticDecision.value).
+    # critic_replan_hint: REPLAN 시 재탐색 방향(ReplanHint.model_dump()). retry_prep 가 소비.
+    # critic_rationale:   decision 이벤트용 근거 1문장(내부 식별자 제거 후).
+    critic_decision: str | None
+    critic_replan_hint: "dict[str, Any] | None"
+    critic_rationale: str | None
     # ── 결과 품질 자각 패스 ──
-    # pre_answer_gate_node 가 RETRIEVE 경로에서 산출. answer 가 소비해 톤/제안 조정(P3).
+    # pre_answer_gate_node 가 RETRIEVE 경로에서 산출. answer 가 소비해 톤/제안 조정.
     # 쏠림/빈약 휴리스틱 결과(예: {"skew_field","skew_value","skew_ratio","thin"})
     # 또는 점검할 게 없거나 실패 시 None(현행 조립 그대로, 완전 하위호환). 리듀서 불필요.
     result_quality: "dict[str, Any] | None"
     # 직전 assistant 발화에 통합회원 안내가 이미 나갔는지(상류 history 파싱 결과).
-    # answer 는 raw history 가 아니라 이 bool 만 소비한다(§2.3 책임 경계). True 면 생략.
+    # answer 는 raw history 가 아니라 이 bool 만 소비한다(책임 경계). True 면 생략.
     reservation_guide_shown: bool
-    # ── 운영-상세 발췌(P5, 평면) ──
+    # ── 운영-상세 발췌(평면) ──
     # operational_detail turn 에서 pre_answer prep 이 focal detail_content 를 fetch +
     # 발췌해 적재한다. answer 는 이 문자열만 소비한다(fetch·정제·발췌는 상류). 키워드
-    # 부재/raw 없음/길이<게이트 → None(= P4 attribute_gap interim 리다이렉트 폴백 신호).
+    # 부재/raw 없음/길이<게이트 → None(= attribute_gap interim 리다이렉트 폴백 신호).
     # raw 블롭은 절대 싣지 않는다(focal 단건 발췌 완료 문자열만). 리듀서 불필요.
     detail_excerpt: str | None
-    # ── 카드 큐레이션(B, 평면) ──
+    # ── 카드 큐레이션(평면) ──
     # pre_answer_gate_node 가 카드형 턴에서 _curate_display 로 산출. answer 는 슬라이스·
     # extra_count 계산을 하지 않고 이 슬롯을 읽어 렌더링만 한다(생성 전용 유지).
     # curated_display: 카드 단일 출처(정규화·적합도 정렬 완료, 상위 _DISPLAY_LIMIT 건).
@@ -238,9 +254,12 @@ class AgentState(TypedDict):
     # ── 오류/캐시 (평면) ──
     error: str | None  # 오류 메시지 (있을 경우)
     cache_hit: bool  # cache_check_node 결과 (기본값 False)
-    # singleflight 락 키 — cache_check_node 가 락을 획득한 패스에서 기록한다.
-    # 락 해제(retry_prep / cache_write)가 획득 시점과 동일 키를 쓰도록 보관해
-    # C2 0건 게이트(cache_write 우회) 경로에서도 락이 누수되지 않게 한다.
+    # singleflight 락 키 겸 answer 저장 타깃 — 최초 cache_check_node 가 락을 획득한
+    # 패스에서 K_original(= 사용자 원 질의가 산출하는 키)로 1회 기록하고, 이후 재시도
+    # 재진입에서도 보존한다(cache_check 가드가 슬롯 존재 시 재획득·덮어쓰기 skip). 락은
+    # 전 요청 수명 동안 K_original 에 유지되고 cache_write 가 이 키로 저장·해제한다.
+    # self-correction 완화(K_relaxed)가 있어도 저장 키를 K_original 로 고정해, 동일 원
+    # 질의 재요청이 hit 하고 K_original 을 폴링하던 singleflight 대기자도 hit 한다.
     answer_lock_key: str | None
     # ── 인프라/관측 (평면) ──
     # 노드 실행 경로 누적 (관측용). node_path_reducer 가 부분 리스트를 append 병합한다.

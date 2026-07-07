@@ -1,4 +1,4 @@
-"""답변 가능 속성 카탈로그 확장 (결정 A) 테스트.
+"""답변 가능 속성 카탈로그 확장 테스트.
 
 hydration 이 끌어오는 보유 정형 컬럼 중 use_time_start/end, cancel_std_type/days,
 tel_no 를 _normalize 가 카드/LLM 컨텍스트로 노출하는지 검증한다.

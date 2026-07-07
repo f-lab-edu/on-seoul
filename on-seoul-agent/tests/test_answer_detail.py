@@ -225,7 +225,7 @@ class TestSemanticDetailRegressionGuard:
 
 
 class TestDetailRelaxedNotice:
-    """M1 gap #4: DETAIL 분기는 _build_card_system 을 미경유하므로, 완화 재시도
+    """DETAIL 분기는 _build_card_system 을 미경유하므로, 완화 재시도
     (attribute_gap) 결과를 상세형으로 답할 때도 _relaxed_notice 가 system 에
     직접 덧붙는지 단언한다(누락 시 환각·오안내 위험). E2E 회귀를 unit 스코프로 고정.
     """

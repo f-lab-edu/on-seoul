@@ -1,0 +1,386 @@
+[
+  {
+    "id": "cx-good-1",
+    "observations": [
+      {
+        "id": "obs-cx-good-1-root",
+        "trace_id": "cx-good-1",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "start_time": "2026-07-04T10:00:00.000Z",
+        "end_time": "2026-07-04T10:00:02.400Z",
+        "latency": 2.4,
+        "input": "강남구 수영장 알려줘",
+        "output": "강남구 수영장 6곳을 안내합니다...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "turn_kind": "NEW",
+          "retry_count": 0,
+          "total_hits": 6,
+          "sql_hits": 6,
+          "result_quality": {"thin": false}
+        }
+      }
+    ]
+  },
+  {
+    "id": "cx-good-2",
+    "observations": [
+      {
+        "id": "obs-cx-good-2-root",
+        "trace_id": "cx-good-2",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "start_time": "2026-07-04T10:01:00.000Z",
+        "end_time": "2026-07-04T10:01:02.000Z",
+        "latency": 2.0,
+        "input": "지금 예약 가능한 문화행사",
+        "output": "예약 가능한 문화행사 8건...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "turn_kind": "NEW",
+          "retry_count": 0,
+          "total_hits": 8,
+          "sql_hits": 8,
+          "result_quality": {"thin": false}
+        }
+      }
+    ]
+  },
+  {
+    "id": "cx-good-3",
+    "observations": [
+      {
+        "id": "obs-cx-good-3-root",
+        "trace_id": "cx-good-3",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "start_time": "2026-07-04T10:02:00.000Z",
+        "end_time": "2026-07-04T10:02:01.800Z",
+        "latency": 1.8,
+        "input": "무료 전시 추천",
+        "output": "무료 전시 5건...",
+        "metadata": {
+          "intent": "VECTOR_SEARCH",
+          "action": "RETRIEVE",
+          "turn_kind": "NEW",
+          "retry_count": 0,
+          "total_hits": 5,
+          "vector_hits": 5,
+          "result_quality": {"thin": false}
+        }
+      }
+    ]
+  },
+  {
+    "id": "cx-good-4",
+    "observations": [
+      {
+        "id": "obs-cx-good-4-root",
+        "trace_id": "cx-good-4",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "start_time": "2026-07-04T10:03:00.000Z",
+        "end_time": "2026-07-04T10:03:02.200Z",
+        "latency": 2.2,
+        "input": "종로구 도서관 대관",
+        "output": "종로구 시설대관 4건...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "turn_kind": "NEW",
+          "retry_count": 0,
+          "total_hits": 4,
+          "sql_hits": 4,
+          "result_quality": {"thin": false}
+        }
+      }
+    ]
+  },
+  {
+    "id": "cx-recover-zero",
+    "observations": [
+      {
+        "id": "obs-cx-recover-zero-root",
+        "trace_id": "cx-recover-zero",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "start_time": "2026-07-04T10:04:00.000Z",
+        "end_time": "2026-07-04T10:04:05.500Z",
+        "latency": 5.5,
+        "input": "은평구 승마 강습 예약",
+        "output": "은평구 인근 승마 관련 시설 3곳...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "turn_kind": "NEW",
+          "retry_count": 1,
+          "forced_intent": "VECTOR_SEARCH",
+          "total_hits": 3,
+          "vector_hits": 3,
+          "result_quality": {"thin": false}
+        }
+      },
+      {
+        "id": "obs-cx-recover-zero-critic-1",
+        "trace_id": "cx-recover-zero",
+        "type": "SPAN",
+        "name": "retrieval_critic",
+        "parent_observation_id": "obs-cx-recover-zero-root",
+        "start_time": "2026-07-04T10:04:02.000Z",
+        "end_time": "2026-07-04T10:04:02.900Z",
+        "latency": 0.9,
+        "input": null,
+        "output": null,
+        "metadata": {
+          "entry_signal": "zero",
+          "decision": "REPLAN",
+          "round": 1
+        }
+      }
+    ]
+  },
+  {
+    "id": "cx-recover-thin-multiround",
+    "observations": [
+      {
+        "id": "obs-cx-recover-thin-mr-root",
+        "trace_id": "cx-recover-thin-multiround",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "start_time": "2026-07-04T10:05:00.000Z",
+        "end_time": "2026-07-04T10:05:06.800Z",
+        "latency": 6.8,
+        "input": "한강 근처 야간 클라이밍장",
+        "output": "야간 개장 실내 클라이밍장 4곳...",
+        "metadata": {
+          "intent": "VECTOR_SEARCH",
+          "action": "RETRIEVE",
+          "turn_kind": "NEW",
+          "retry_count": 2,
+          "total_hits": 4,
+          "vector_hits": 4,
+          "result_quality": {"thin": false}
+        }
+      },
+      {
+        "id": "obs-cx-recover-thin-mr-critic-1",
+        "trace_id": "cx-recover-thin-multiround",
+        "type": "SPAN",
+        "name": "retrieval_critic",
+        "parent_observation_id": "obs-cx-recover-thin-mr-root",
+        "start_time": "2026-07-04T10:05:02.000Z",
+        "end_time": "2026-07-04T10:05:02.700Z",
+        "latency": 0.7,
+        "metadata": {
+          "entry_signal": "thin",
+          "decision": "REPLAN",
+          "round": 1
+        }
+      },
+      {
+        "id": "obs-cx-recover-thin-mr-critic-2",
+        "trace_id": "cx-recover-thin-multiround",
+        "type": "SPAN",
+        "name": "retrieval_critic",
+        "parent_observation_id": "obs-cx-recover-thin-mr-root",
+        "start_time": "2026-07-04T10:05:04.000Z",
+        "end_time": "2026-07-04T10:05:04.800Z",
+        "latency": 0.8,
+        "metadata": {
+          "entry_signal": "thin",
+          "decision": "ANSWER",
+          "round": 2
+        }
+      }
+    ]
+  },
+  {
+    "id": "cx-norecover-thin",
+    "observations": [
+      {
+        "id": "obs-cx-norecover-thin-root",
+        "trace_id": "cx-norecover-thin",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "start_time": "2026-07-04T10:06:00.000Z",
+        "end_time": "2026-07-04T10:06:05.100Z",
+        "latency": 5.1,
+        "input": "강남 무료 실내 수영장 주차 가능 주말 개장",
+        "output": "조건에 맞는 곳 1곳...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "turn_kind": "NEW",
+          "retry_count": 1,
+          "total_hits": 1,
+          "sql_hits": 1,
+          "result_quality": {"thin": true}
+        }
+      },
+      {
+        "id": "obs-cx-norecover-thin-critic-1",
+        "trace_id": "cx-norecover-thin",
+        "type": "SPAN",
+        "name": "retrieval_critic",
+        "parent_observation_id": "obs-cx-norecover-thin-root",
+        "start_time": "2026-07-04T10:06:02.000Z",
+        "end_time": "2026-07-04T10:06:02.850Z",
+        "latency": 0.85,
+        "metadata": {
+          "entry_signal": "thin",
+          "decision": "REPLAN",
+          "round": 1
+        }
+      }
+    ]
+  },
+  {
+    "id": "cx-stop-zero",
+    "observations": [
+      {
+        "id": "obs-cx-stop-zero-root",
+        "trace_id": "cx-stop-zero",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "start_time": "2026-07-04T10:07:00.000Z",
+        "end_time": "2026-07-04T10:07:04.900Z",
+        "latency": 4.9,
+        "input": "심야 승마 예약 지금 가능한 곳",
+        "output": "조건에 맞는 예약을 찾지 못했습니다...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "turn_kind": "NEW",
+          "retry_count": 1,
+          "total_hits": 0,
+          "sql_hits": 0,
+          "result_quality": {"thin": false}
+        }
+      },
+      {
+        "id": "obs-cx-stop-zero-critic-1",
+        "trace_id": "cx-stop-zero",
+        "type": "SPAN",
+        "name": "retrieval_critic",
+        "parent_observation_id": "obs-cx-stop-zero-root",
+        "start_time": "2026-07-04T10:07:02.000Z",
+        "end_time": "2026-07-04T10:07:02.600Z",
+        "latency": 0.6,
+        "metadata": {
+          "entry_signal": "zero",
+          "decision": "STOP",
+          "round": 1
+        }
+      }
+    ]
+  },
+  {
+    "id": "cx-answer-skew",
+    "observations": [
+      {
+        "id": "obs-cx-answer-skew-root",
+        "trace_id": "cx-answer-skew",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "start_time": "2026-07-04T10:08:00.000Z",
+        "end_time": "2026-07-04T10:08:03.300Z",
+        "latency": 3.3,
+        "input": "서울 무료 전시 추천",
+        "output": "무료 전시 5건(종로구 다수)...",
+        "metadata": {
+          "intent": "VECTOR_SEARCH",
+          "action": "RETRIEVE",
+          "turn_kind": "NEW",
+          "retry_count": 0,
+          "total_hits": 5,
+          "vector_hits": 5,
+          "result_quality": {"skew_field": "area_name", "skew_value": "종로구", "skew_ratio": 0.8, "thin": false}
+        }
+      },
+      {
+        "id": "obs-cx-answer-skew-critic-1",
+        "trace_id": "cx-answer-skew",
+        "type": "SPAN",
+        "name": "retrieval_critic",
+        "parent_observation_id": "obs-cx-answer-skew-root",
+        "start_time": "2026-07-04T10:08:01.500Z",
+        "end_time": "2026-07-04T10:08:02.200Z",
+        "latency": 0.7,
+        "metadata": {
+          "entry_signal": "skew",
+          "decision": "ANSWER",
+          "round": 1
+        }
+      }
+    ]
+  },
+  {
+    "id": "cx-notiming-answer",
+    "observations": [
+      {
+        "id": "obs-cx-notiming-answer-root",
+        "trace_id": "cx-notiming-answer",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "input": "체육시설 예약 목록",
+        "output": "체육시설 7건...",
+        "metadata": {
+          "intent": "SQL_SEARCH",
+          "action": "RETRIEVE",
+          "turn_kind": "NEW",
+          "retry_count": 0,
+          "total_hits": 7,
+          "sql_hits": 7,
+          "result_quality": {"thin": false}
+        }
+      },
+      {
+        "id": "obs-cx-notiming-answer-critic-1",
+        "trace_id": "cx-notiming-answer",
+        "type": "SPAN",
+        "name": "retrieval_critic",
+        "parent_observation_id": "obs-cx-notiming-answer-root",
+        "metadata": {
+          "entry_signal": "thin",
+          "decision": "ANSWER",
+          "round": 1
+        }
+      }
+    ]
+  },
+  {
+    "id": "cx-nonretrieve-1",
+    "observations": [
+      {
+        "id": "obs-cx-nonretrieve-1-root",
+        "trace_id": "cx-nonretrieve-1",
+        "type": "SPAN",
+        "name": "chat",
+        "parent_observation_id": null,
+        "start_time": "2026-07-04T10:09:00.000Z",
+        "end_time": "2026-07-04T10:09:00.400Z",
+        "latency": 0.4,
+        "input": "안녕하세요",
+        "output": "안녕하세요! 서울시 공공서비스 예약을 도와드립니다...",
+        "metadata": {
+          "action": "DIRECT_ANSWER",
+          "turn_kind": "NEW",
+          "retry_count": 0
+        }
+      }
+    ]
+  }
+]

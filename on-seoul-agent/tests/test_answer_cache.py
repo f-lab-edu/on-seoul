@@ -297,6 +297,92 @@ class TestSetCachedAnswer:
         assert card["fee"] == "3000.50"
 
 
+class TestSetCachedAnswerByKey:
+    """set_cached_answer_by_key — 미리 계산된 키로 저장(get_cached_answer_by_key 대칭)."""
+
+    async def test_stores_at_exact_given_key_without_recompute(
+        self, mock_redis, sample_payload, sample_state
+    ):
+        """키를 재계산하지 않고 인자로 받은 키에 그대로 저장한다."""
+        from core.cache import set_cached_answer_by_key
+
+        await set_cached_answer_by_key(
+            "answer_cache:deadbeef", sample_payload, sample_state, mock_redis
+        )
+        mock_redis.set.assert_called_once()
+        assert mock_redis.set.call_args.args[0] == "answer_cache:deadbeef"
+        body = json.loads(mock_redis.set.call_args.args[1])
+        assert body["payload"] == sample_payload
+        assert body["state"] == sample_state
+
+    async def test_empty_results_uses_short_ttl(self, mock_redis, sample_payload):
+        """empty-state TTL 로직 보존 — 빈 검색 결과는 짧은 TTL."""
+        empty_state = {"refined_query": "x", "vector_results": [], "sql_results": []}
+        from core.cache import set_cached_answer_by_key
+        from core.config import settings
+
+        await set_cached_answer_by_key(
+            "answer_cache:abc", sample_payload, empty_state, mock_redis
+        )
+        assert mock_redis.set.call_args.kwargs["ex"] == settings.answer_cache_empty_ttl
+
+    async def test_non_empty_uses_normal_ttl(
+        self, mock_redis, sample_payload, sample_state
+    ):
+        from core.cache import set_cached_answer_by_key
+        from core.config import settings
+
+        await set_cached_answer_by_key(
+            "answer_cache:abc", sample_payload, sample_state, mock_redis
+        )
+        assert mock_redis.set.call_args.kwargs["ex"] == settings.answer_cache_ttl
+
+    async def test_disabled_skips_set(self, mock_redis, sample_payload, sample_state):
+        from core.cache import set_cached_answer_by_key
+        from core.config import settings
+
+        with patch.object(settings, "answer_cache_enabled", False):
+            await set_cached_answer_by_key(
+                "answer_cache:abc", sample_payload, sample_state, mock_redis
+            )
+        mock_redis.set.assert_not_called()
+
+    async def test_redis_error_does_not_raise(
+        self, mock_redis, sample_payload, sample_state
+    ):
+        mock_redis.set.side_effect = RuntimeError("redis down")
+        from core.cache import set_cached_answer_by_key
+
+        await set_cached_answer_by_key(
+            "answer_cache:abc", sample_payload, sample_state, mock_redis
+        )  # no raise
+
+    async def test_round_trip_with_get_cached_answer_by_key(
+        self, sample_payload, sample_state
+    ):
+        """set_cached_answer_by_key ↔ get_cached_answer_by_key 라운드트립 정합(계약)."""
+        from core.cache import get_cached_answer_by_key, set_cached_answer_by_key
+
+        store: dict[str, str] = {}
+        redis = AsyncMock()
+
+        async def _set(key, value, *, nx=False, ex=None):  # noqa: ANN001
+            store[key] = value
+            return True
+
+        async def _get(key):  # noqa: ANN001
+            return store.get(key)
+
+        redis.set.side_effect = _set
+        redis.get.side_effect = _get
+
+        await set_cached_answer_by_key(
+            "answer_cache:roundtrip", sample_payload, sample_state, redis
+        )
+        envelope = await get_cached_answer_by_key("answer_cache:roundtrip", redis)
+        assert envelope == {"payload": sample_payload, "state": sample_state}
+
+
 class TestEmptyStateTTL:
     async def test_both_none_uses_empty_ttl(self, mock_redis, sample_payload):
         """vector_results=None, sql_results=None 도 empty 로 인식."""

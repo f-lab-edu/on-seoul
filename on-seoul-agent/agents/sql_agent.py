@@ -41,9 +41,10 @@ class _SqlParams(BaseModel):
         description="날짜 표현이 있을 때 오늘 기준 계산 과정 (내부 CoT용, 검색 쿼리에는 미사용)",
     )
     max_class_name: str | None = None
-    area_name: str | None = None
+    area_name: list[str] | None = None
     service_status: str | None = None
     payment_type: str | None = None
+    target_audience: str | None = None
     keyword: str | None = None
     receipt_date_from: date | None = None
     receipt_date_to: date | None = None
@@ -57,10 +58,14 @@ class _SqlParams(BaseModel):
 
     @field_validator("area_name", mode="before")
     @classmethod
-    def _validate_area_name(cls, v: object) -> str | None:
+    def _validate_area_name(cls, v: object) -> list[str] | None:
         if v is None:
             return None
-        return v if v in SEOUL_DISTRICTS else None  # type: ignore[return-value]
+        candidates = [v] if isinstance(v, str) else v
+        if not isinstance(candidates, (list, tuple)):
+            return None
+        valid = [c for c in candidates if isinstance(c, str) and c in SEOUL_DISTRICTS]
+        return valid or None
 
     @field_validator("service_status", mode="before")
     @classmethod
@@ -145,11 +150,13 @@ class SqlAgent:
             area_name = filters.get("area_name")
             service_status = filters.get("service_status")
             payment_type = filters.get("payment_type")
+            target_audience = filters.get("target_audience")
         else:
             max_class_name = params.max_class_name
             area_name = params.area_name
             service_status = params.service_status
             payment_type = params.payment_type
+            target_audience = params.target_audience
 
         rows = await sql_search(
             session,
@@ -157,6 +164,7 @@ class SqlAgent:
             area_name=area_name,
             service_status=service_status,
             payment_type=payment_type,
+            target_audience=target_audience,
             keyword=params.keyword,
             receipt_date_from=params.receipt_date_from,
             receipt_date_to=params.receipt_date_to,

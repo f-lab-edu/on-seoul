@@ -1,6 +1,6 @@
 """그래프 통합 — route_intake 분기 (REFINE 재검색 / 폴백-NEW) E2E.
 
-검증(intake-node-merge §6 통합):
+검증:
 - REFINE → working_set_refine_node → router(forced_intent) → 머지 필터 재검색.
 - 폴백-NEW(분류 모호): 미지 turn_kind 주입 → NEW+RETRIEVE 경로 + breadcrumb.
 - META → explain_node.
@@ -33,9 +33,15 @@ class TestRefineReSearch:
         직전 area_name=강남구 + 이번 발화 신규 payment_type=무료 가 effective filters 에
         둘 다 반영돼야 한다(MUST-FIX: 신규 제약 소실 회귀 방지).
         """
-        rows = [{"service_id": "S1", "service_name": "강남 무료 수영장"}]
+        # 원본 행에는 area_name 이 포함된다(hydration 컬럼셋) — post-RRF 게이트가
+        # area 교집합을 확인하므로 실제 컬럼을 채워야 게이트를 통과한다.
+        rows = [
+            {"service_id": "S1", "service_name": "강남 무료 수영장", "area_name": "강남구"}
+        ]
         sql_agent, data_session = make_sql_agent(rows)
-        hydrated = [{"service_id": "S1", "service_name": "강남 무료 수영장"}]
+        hydrated = [
+            {"service_id": "S1", "service_name": "강남 무료 수영장", "area_name": "강남구"}
+        ]
 
         ws = {
             "entities": [{"service_id": "S0", "label": "강남 수영장"}],
@@ -89,7 +95,7 @@ class TestMetaPath:
 
 class TestClassificationAmbiguityFallback:
     async def test_unknown_turn_kind_degrades_to_new_retrieve(self):
-        """분류 모호(§2.5-A): 미지 turn_kind 주입 → NEW+RETRIEVE + breadcrumb.
+        """분류 모호: 미지 turn_kind 주입 → NEW+RETRIEVE + breadcrumb.
 
         intake LLM 이 IntakeOutput 스키마 밖 값을 낼 수는 없으나, _build_update 의
         방어 분기가 NEW 로 강등하는지 확인한다(미지 enum 시뮬레이션).

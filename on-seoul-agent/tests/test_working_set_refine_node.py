@@ -1,4 +1,4 @@
-"""working_set_refine_node 단위 테스트 (P1-3) — 신규 제약 머지 + forced_intent.
+"""working_set_refine_node 단위 테스트 — 신규 제약 머지 + forced_intent.
 
 검증:
 - prev applied_filters{area_name:강남} + 이번 발화 신규 제약(payment_type=무료)을
@@ -62,7 +62,7 @@ class TestWorkingSetRefine:
 
         state = make_agent_state(message="마포구로 바꿔줘", prev_working_set=ws)
         update = await _node(router).working_set_refine_node(state)
-        assert update["filters"]["area_name"] == "마포구"
+        assert update["filters"]["area_name"] == ["마포구"]
 
     async def test_refined_query_carried_to_plan(self):
         """router 가 산출한 refined_query 가 plan 채널로 흐른다(재검색 질의 반영)."""

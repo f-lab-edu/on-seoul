@@ -20,6 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tools._result_columns import PUBLIC_SERVICE_RESERVATIONS_COLUMNS
+from tools.target_audience import build_audience_sql
 
 TOP_K: int = 10
 _LIKE_ESCAPE_TABLE = str.maketrans(
@@ -47,9 +48,10 @@ async def sql_search(
     session: AsyncSession,
     *,
     max_class_name: str | None = None,
-    area_name: str | None = None,
+    area_name: list[str] | None = None,
     service_status: str | None = None,
     payment_type: str | None = None,
+    target_audience: str | None = None,
     keyword: str | None = None,
     receipt_date_from: date | None = None,
     receipt_date_to: date | None = None,
@@ -66,9 +68,13 @@ async def sql_search(
     max_class_name:
         대분류 카테고리 필터 (체육시설·문화행사·시설대관·교육·진료). None이면 미적용.
     area_name:
-        서울 자치구 이름 필터 (예: 강남구). None이면 미적용.
+        서울 자치구 이름 리스트 필터 (예: ["강남구"] 또는 ["성동구","광진구"]).
+        area_name = ANY(:areas) 로 다중 지역 OR 매칭. None/빈 리스트면 미적용.
     service_status:
         예약 상태 필터 (접수중·예약마감·접수종료·예약일시중지·안내중). None이면 미적용.
+    target_audience:
+        대상 그룹 필터 (CHILD/ADULT/SENIOR/FAMILY). 토큰맵 기반 OR-LIKE 술어로
+        target_info 를 부분문자열 매칭한다(제한없음/가족은 항상 통과). None이면 미적용.
     payment_type:
         결제 유형 필터. "무료"이면 payment_type = '무료' 정확 매칭.
         "유료"이면 payment_type LIKE '유료%' 접두 매칭(원천 데이터의
@@ -97,13 +103,26 @@ async def sql_search(
         conditions.append("max_class_name = :max_class_name")
         bind["max_class_name"] = max_class_name
 
-    if area_name is not None:
-        conditions.append("area_name = :area_name")
-        bind["area_name"] = area_name
+    # area_name 다중값: area_name = ANY(:areas) 로 여러 자치구를 OR 매칭한다.
+    # 사용자 값은 리스트째 bind 파라미터로만 전달(인젝션 방지). 빈 리스트는 미적용.
+    # 방어: 스칼라 str 이 새어들어와도 chars 로 쪼개지지 않게 감싼다
+    # (_shared.py:115 와 동일 패턴, 계약상 리스트지만 상류 오주입 belt-and-suspenders).
+    if isinstance(area_name, str):
+        area_name = [area_name]
+    if area_name:
+        conditions.append("area_name = ANY(:areas)")
+        bind["areas"] = list(area_name)
 
     if service_status is not None:
         conditions.append("service_status = :service_status")
         bind["service_status"] = service_status
+
+    # target_audience: 토큰맵에서 파생한 OR-LIKE 술어(제한없음/가족 항상 통과).
+    # 토큰은 서버측 고정맵이지만 전부 bind 파라미터로 전달한다(값 삽입 금지).
+    audience_sql, audience_bind = build_audience_sql(target_audience)
+    if audience_sql is not None:
+        conditions.append(audience_sql)
+        bind.update(audience_bind)
 
     # payment_type: 무료=정확 매칭, 유료=접두("유료%") 매칭.
     # 접두는 "유료"·"유료(요금안내문의)" 변형을 모두 포괄한다. bind only(인젝션 방지).

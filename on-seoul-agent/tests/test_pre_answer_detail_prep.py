@@ -1,4 +1,4 @@
-"""pre_answer prep — operational_detail focal fetch + 발췌 적재 테스트 (P5 §8 C-1).
+"""pre_answer prep — operational_detail focal fetch + 발췌 적재 테스트.
 
 pre_answer_gate_node 가 operational_detail turn 에서 focal service_id 의
 detail_content 를 fetch 하고 prepare_detail_excerpt 로 발췌해 state detail_excerpt

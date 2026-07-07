@@ -25,7 +25,7 @@ agents/
 │   ├── graph_nodes.py        # GraphNodes composition root (페이즈 인스턴스 보유 + 위임 facade)
 │   ├── reference.py          # ReferenceNodes (reference_resolution/rehydrate/describe/route_after_reference)
 │   ├── planning.py           # PlanningNodes (triage/router/route_by_*/post_cache_check + refine 직렬화 helpers)
-│   ├── retrieval.py          # RetrievalNodes (sql/vector/map/analytics/hydration/rrf/pre_answer_gate)
+│   ├── retrieval.py          # RetrievalNodes (sql/vector/map/analytics/hydration/rrf/pre_answer_gate/retrieval_critic + route_critic)
 │   ├── answer.py             # AnswerNodes (answer/direct_answer/ambiguous/out_of_scope/explain)
 │   ├── correction.py         # CorrectionNodes (retry_prep/self_correction_edge/zero-hit)
 │   ├── observability.py      # ObservabilityNodes (search_persist/trace) + INSERT SQL
@@ -34,6 +34,7 @@ agents/
 ├── _reference_resolution.py # 지시 참조 규칙 (LLM 미사용)
 ├── triage_agent.py          # action 결정 (TriageAgent) — 무엇을 할지
 ├── router_agent.py          # 검색 계획 (RouterAgent) — retrieval_intent + 파라미터, RETRIEVE 경로 전용
+├── retrieval_critic.py      # 검색 결과 요약 관찰 → ANSWER/REPLAN/STOP (RetrievalCritic) — enable_retrieval_critic 게이트, 기본 오프
 ├── sql_agent.py             # LLM 파라미터 추출 + 파라미터화 SQL 조회
 ├── vector_agent.py          # 질의 정제 + BM25/vector 하이브리드 검색 (RRF 결합)
 ├── analytics_agent.py       # 집계/분포 질의 (GROUP BY / DISTINCT)
@@ -111,8 +112,9 @@ DB를 쓰는 노드는 노드 내부에서 `data_session_ctx()` / `ai_session_ct
 - **RouterAgent(검색 계획)** — `intent`/`secondary_intent`/`refined_query`/`vector_sub_intent` + post-filter(`max_class_name`/`area_name`/`service_status`/`payment_type`), 방향성 재시도 신호(`forced_intent`/`retry_radius_m`).
 - **검색 결과 슬롯** — `sql_results`/`sql_keyword`/`vector_results`/`map_results`/`analytics_*`, 팬아웃 통합 `rrf_merged_ids`.
 - **hydration·카드·답변** — `hydrated_services`/`service_cards`/`answer`/`cache_hit`. (대화 제목은 공유 state에 없음 — `generate_title_node`가 별도 SSE 이벤트로 fire-and-emit.)
+- **retrieval-critic 판단(옵트인)** — `critic_decision`(ANSWER/REPLAN/STOP)/`critic_replan_hint`(REPLAN 시 재탐색 방향, 화이트리스트만 — `retry_prep_node`가 소비)/`critic_rationale`(근거 1문장). 세 슬롯 모두 None = critic 미진입(명백히 좋은 경로 / 플래그 오프 / fail-open).
 - **관측** — `node_path`(reducer append)/`started_at`/`trace`/`error`.
-- **재시도** — `retry_count`(최대 1)/`retry_relaxed`.
+- **재시도** — `retry_count`(단일 재검색 예산 — self-correction과 retrieval-critic이 공유, 캡 `max_retrieval_retries` 기본 2)/`retry_relaxed`.
 - **search_channels** — 채널별 입력(query)+출력(hits)를 reducer 누적. 명시적 리셋은 `RESET_CHANNELS` sentinel만 유효하다(**빈 dict 는 리셋이 아니라 no-op** — UNIQUE 위반 방지 계약).
 - **SSE emit-once 가드** — `decision_emitted`(전체 실행 1회, **재시도 재진입에도 유지**)/`searching_emitted`/`answering_emitted`(progress 단계별 1회, **`retry_prep_node`가 리셋**해 재검색 시 다시 흐름).
 
@@ -156,7 +158,7 @@ graph = AgentGraph(router=mock_router, sql_agent=mock_sql)
 
 ### 조건부 엣지 (상태 → 제어)
 
-LangGraph는 데이터(상태)와 제어(엣지)를 분리합니다. 노드는 `AgentState`를 읽어 부분 업데이트를 반환할 뿐 다음 노드를 직접 지목하지 않습니다. 전이는 무조건 엣지(`add_edge`)와 조건부 엣지(`add_conditional_edges`)로 선언되며, 조건부 엣지의 분기 함수는 state만 읽는 순수 함수입니다. 현재 조건부 엣지는 6개입니다.
+LangGraph는 데이터(상태)와 제어(엣지)를 분리합니다. 노드는 `AgentState`를 읽어 부분 업데이트를 반환할 뿐 다음 노드를 직접 지목하지 않습니다. 전이는 무조건 엣지(`add_edge`)와 조건부 엣지(`add_conditional_edges`)로 선언되며, 조건부 엣지의 분기 함수는 state만 읽는 순수 함수입니다.
 
 | source | 분기 함수 | 제어 신호 | 분기 |
 |---|---|---|---|
@@ -164,8 +166,9 @@ LangGraph는 데이터(상태)와 제어(엣지)를 분리합니다. 노드는 `
 | `triage_node` | `route_by_action` | `action`, `error`, `answer` | `RETRIEVE` → `router_node`(→ `cache_check_node`). 그 외 action → 동명 노드. error+answer → `answer_node`. |
 | `out_of_scope_node` | `_out_of_scope_route` | `out_of_scope_type` | `attribute_gap` → `vector_node`. `domain_outside` → `search_persist_node`. |
 | `cache_check_node` | `post_cache_check` | `cache_hit`, `intent` | hit → `search_persist_node`. miss → `intent`로 sql/vector/map/analytics 분기. |
-| `pre_answer_gate_node` | `route_pre_answer_gate` | `action`, `hydrated_services`, `retry_count` | hydrated 0건(retry=0) → `retry_prep_node`. 그 외 → `answer_node`. |
-| `answer_node` | `self_correction_edge` | `action`, `retry_count`, `answer`, `*_results` | 재시도 필요 시 `retry_prep_node`, 아니면 `cache_write_node`. |
+| `pre_answer_gate_node` | `route_pre_answer_gate` | `action`, `hydrated_services`, `result_quality`, `retry_count` | 예산 소진, 명백히 좋음 → `answer_node`. 플래그 오프 폴백: 0건 → `retry_prep_node`. `enable_retrieval_critic` 온 + 예산 여유 + 의심스러움(0건/thin/skew) → `retrieval_critic_node`. |
+| `retrieval_critic_node` | `route_critic` | `critic_decision`, `retry_count` | ANSWER/STOP → `answer_node`. REPLAN(예산 여유) → `retry_prep_node`. 미결정(fail-open) → 결정적 폴백(0건→`retry_prep_node`, 그 외→`answer_node`). |
+| `answer_node` | `self_correction_edge` | `action`, `critic_decision`, `retry_count`, `answer`, `*_results` | 재시도 필요 시 `retry_prep_node`, 아니면 `cache_write_node`. critic이 이번 라운드를 판단했으면 self-correction은 개입하지 않는다(예산 이중 트리거 방지). |
 
 노드 함수와 분기 함수는 `GraphNodes`의 **바운드 메서드**로 `_build_graph(nodes)`에서 그래프에 직접 등록됩니다(`builder.add_node(..., nodes.xxx)`). `_out_of_scope_route`만 graph.py 모듈 수준 순수 함수입니다. `GraphNodes`는 무상태 싱글톤이고 `AgentGraph`를 역참조하지 않으므로 순환 참조가 없으며, `_dispatch_*` 우회 함수나 `_ACTIVE_NODES` ContextVar 같은 회피 계층은 없습니다. 그래프는 `AgentGraph.__init__`에서 인스턴스 단위로 1회 컴파일됩니다(`self._compiled_graph = _build_graph(self._nodes)` — 컴파일 비용이 저렴해 클래스 수준 캐시는 두지 않습니다).
 
@@ -182,7 +185,9 @@ LangGraph는 데이터(상태)와 제어(엣지)를 분리합니다. 노드는 `
 | `ANALYTICS` | 제약 큰 필터 1개 드롭 (status→area, `max_class_name` 유지) | `ANALYTICS` |
 | `MAP` | 반경 확장 (`retry_radius_m=3000`) | `MAP` |
 
-빈 검색 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 hydrated 0건이면 답변 생성 전에 곧장 재시도로 보냅니다(0건 게이트). `forced_intent`는 `router_node`가 honor 후 즉시 None으로 소비(1회성)하므로 무한 전환이 없고, 재시도는 `retry_count` 캡으로 최대 1회(`recursion_limit=50`)입니다. 재시도 시 `retry_relaxed=True`로 `AnswerAgent`가 완화 사실을 답변에 명시합니다.
+빈 검색 결과로 답변 LLM을 낭비하지 않도록, 검색 직후 `pre_answer_gate_node`가 hydrated 0건이면 답변 생성 전에 곧장 재시도로 보냅니다(0건 게이트). `forced_intent`는 `router_node`가 honor 후 즉시 None으로 소비(1회성)하므로 무한 전환이 없고, 재검색은 단일 예산(`max_retrieval_retries`, 기본 2 — self-correction과 retrieval-critic이 공유)에 도달하면 멈춥니다(`recursion_limit=50`). 재시도 시 `retry_relaxed=True`로 `AnswerAgent`가 완화 사실을 답변에 명시합니다.
+
+**retrieval_critic_node (옵트인, `enable_retrieval_critic` 게이트, 기본 오프)** — 플래그가 꺼진 기본 상태에서는 `pre_answer_gate_node` 뒤가 위 결정적 경로만 탑니다(critic 노드는 진입 엣지가 차단되어 미호출, 회귀 0). 켜면 escalation 게이트가 "의심스러운 결과(검색 후 0건/thin/skew) + 예산 여유"일 때만 `retrieval_critic_node`로 승격합니다(명백히 좋은 결과는 여전히 answer 직행 = critic 미호출). critic(`RetrievalCritic`, `agents/retrieval_critic.py`)은 검색 결과 *요약*(원본 rows 아님)을 LLM에 보여 ANSWER/REPLAN/STOP을 정합니다. REPLAN이면 화이트리스트 힌트(검색 intent 전환/드롭 필터/재구성 질의만 — 자유 SQL, 식별자 불가)를 `retry_prep_node`가 소비해 방향을 바꿔 재검색하고, ANSWER/STOP이면 `answer_node`로 갑니다. critic 미결정(LLM 예외/빈 출력, fail-open)이면 세 슬롯을 비운 채 결정적 경로로 폴백합니다. critic의 REPLAN 재검색은 self-correction과 같은 단일 예산을 공유하며, `self_correction_edge`는 critic이 이번 라운드를 판단했으면 개입하지 않습니다(예산 이중 트리거 방지). 판단 근거는 `critic_decision` SSE 이벤트와 Langfuse `retrieval_critic` 스팬으로 관측합니다(best-effort). 설계 상세는 `docs/ai-agent-design.md` 3-9 참조.
 
 `pre_answer_gate_node`는 카드형 턴(SQL/VECTOR 비-identification)에서 결정적 카드 큐레이션도 수행합니다(내부 순서: 0건 게이트 → `_curate_display` → `result_quality`). `_curate_display`는 LLM/DB/추가검색 없이 의도 적합도(area_name,max_class_name,payment_type,예약가능 상태)로 정렬해 `curated_display`(상위 5건)/`curated_extra_count`(잔여)/`curated_alt_count`(대안 수)를 상태에 적재합니다. 마감 항목은 제외하지 않고 강등만 하며, 완화로 드롭된 의도 제약은 `relaxed_values`로 복원합니다. `result_quality`(빈약/쏠림)는 큐레이션된 display 기준으로 산출되어 카드와 정합합니다. `AnswerAgent`(카드형 경로)는 이 슬롯들을 읽어 렌더링만 하므로(자체 슬라이스/extra_count 계산 없음) 답변 문구=카드=display 개수, "외 N건"=curated 잔여가 구조적으로 일치합니다.
 

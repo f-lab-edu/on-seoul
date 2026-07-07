@@ -5,6 +5,9 @@
 """
 
 import re
+from typing import Any
+
+from tools.target_audience import matches_audience
 
 # ---------------------------------------------------------------------------
 # user_rationale sanitize
@@ -53,7 +56,7 @@ def sanitize_user_rationale(text: str | None) -> str | None:
 
 
 # LLM 예외 / 빈 답변 시 공유 폴백 문구.
-# direct_answer_node 의 except 블록과 빈 답변 가드(S1)가 같은 출처를 재사용한다(drift 방지).
+# direct_answer_node 의 except 블록과 빈 답변 가드가 같은 출처를 재사용한다(drift 방지).
 _FALLBACK_ANSWER = (
     "죄송합니다, 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 )
@@ -66,7 +69,7 @@ _FALLBACK_ANSWER = (
 # 검색(vector)을 돌리고 0건 게이트·retry·종료를 공유한다. domain_outside(진짜 범위 밖)만
 # 전면 거절한다. 이 predicate 는 "식별 검색이 필요한가"를 묻는 단일 출처다.
 #
-# P5 승격(분기 지점): 검색은 동형이되 *답변 경로*는 갈린다. out_of_scope_node 가
+# 분기 지점: 검색은 동형이되 *답변 경로*는 갈린다. out_of_scope_node 가
 # operational_detail 에는 전용 vector_sub_intent="operational_detail" 을 세팅하고,
 # pre_answer prep 이 focal detail_content 를 발췌해 detail_excerpt 를 적재하면 answer 가
 # 운영-상세 발췌 실답변을 생성한다(사례 162-163 근본 해소). 발췌가 없으면(키워드 부재 등)
@@ -80,6 +83,45 @@ def is_gap_oos(oos_type: str | None) -> bool:
     """식별 검색이 필요한 동형 그룹(attribute_gap/operational_detail) 판정.
 
     domain_outside(진짜 범위 밖, 전면 거절)와 구분하는 단일 출처 predicate 다. *검색
-    routing* 만 동형이며, 답변 경로는 P5 에서 out_of_scope_type 원본으로 분기한다.
+    routing* 만 동형이며, 답변 경로는 out_of_scope_type 원본으로 분기한다.
     """
     return oos_type in _GAP_OOS_TYPES
+
+
+# ---------------------------------------------------------------------------
+# post-RRF 구조화 게이트 (채널 누출 차단, 계획서 P1+P2)
+# ---------------------------------------------------------------------------
+
+
+def apply_structured_gate(
+    rows: list[dict[str, Any]],
+    *,
+    area_names: list[str] | None,
+    target_audience: str | None,
+) -> list[dict[str, Any]]:
+    """hydrated 행을 구조화 필터(area_name 교집합 + target_audience)로 거른다.
+
+    벡터 검색은 identity(Track A) 채널에만 area post-filter 가 걸리므로, summary/
+    question/bm25 채널로 들어온 타 지역·상충 대상 행이 RRF 병합 상위에 생존한다
+    (행23 강동구 누출). hydration 이후 원본 area_name/target_info 로 최종 교정한다.
+
+    · area_names 지정 시: 행.area_name 이 area_names 집합에 없으면 drop.
+    · target_audience 지정 시: matches_audience 로 drop(제한없음/가족 항상 통과).
+    두 필터 모두 None/[] 이면 해당 축은 미적용(no-op). SQL 경로는 WHERE 로 이미
+    걸리므로 이 게이트를 다시 통과해도 결과 불변이라 무해하다(matches_audience 공용).
+    """
+    # 방어: area_names 가 단일 문자열로 새어들어와도 chars 로 쪼개지지 않게 감싼다
+    # (계약상 리스트지만 상류 오주입 시 char-set 오필터를 막는다).
+    if isinstance(area_names, str):
+        area_names = [area_names]
+    area_set = set(area_names) if area_names else None
+    if area_set is None and not target_audience:
+        return rows
+    kept: list[dict[str, Any]] = []
+    for row in rows:
+        if area_set is not None and row.get("area_name") not in area_set:
+            continue
+        if not matches_audience(row.get("target_info"), target_audience):
+            continue
+        kept.append(row)
+    return kept

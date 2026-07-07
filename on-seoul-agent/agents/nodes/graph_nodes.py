@@ -37,6 +37,7 @@ from agents.nodes.planning import PlanningNodes
 from agents.nodes.reference import ReferenceNodes
 from agents.nodes.retrieval import RetrievalNodes
 from agents.nodes.title import TitleNodes
+from agents.retrieval_critic import RetrievalCritic
 from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.triage_agent import TriageAgent
@@ -55,7 +56,7 @@ class GraphNodes:
       - 시작 시각 → AgentState["started_at"].
     따라서 동시 요청이 같은 GraphNodes 를 공유해도 세션/경로 교차가 발생하지 않는다.
 
-    구조(C2): god-class 를 6개 페이즈 클래스(Reference/Planning/Retrieval/Answer/
+    구조: god-class 를 6개 페이즈 클래스(Reference/Planning/Retrieval/Answer/
     Correction/Observability)로 분해하고, GraphNodes 는 각 페이즈 인스턴스를 보유한
     composition root + 위임 facade 로 남는다. graph.py 가 등록하는 노드명·테스트가
     직접 호출하는 메서드명을 위임 메서드로 그대로 노출해 외부 표면을 보존한다.
@@ -77,6 +78,7 @@ class GraphNodes:
         triage: TriageAgent | None = None,
         ondata: OnDataReader | None = None,
         intake: IntakeAgent | None = None,
+        critic: RetrievalCritic | None = None,
     ) -> None:
         # triage 우선, router는 하위호환 별칭
         self._triage = triage or (router if isinstance(router, TriageAgent) else None)
@@ -107,12 +109,17 @@ class GraphNodes:
         self._planning = PlanningNodes(
             triage=self._triage, router=self._router, redis=self._redis
         )
+        # L1 retrieval-critic — escalation 게이트가 승격하는 판단 노드. 주입 없으면
+        # None 이라 게이트가 결정적 폴백만 탄다(회귀 0). 프로덕션 활성화는
+        # settings.enable_retrieval_critic 플래그가 별도로 게이팅한다.
+        self._critic = critic
         self._retrieval = RetrievalNodes(
             sql=self._sql,
             vector=self._vector,
             analytics=self._analytics,
             hydration=self._hydration,
             ondata=self._ondata,
+            critic=self._critic,
         )
         self._answer_nodes = AnswerNodes(answer=self._answer)
         self._correction = CorrectionNodes(redis=self._redis)
@@ -190,6 +197,12 @@ class GraphNodes:
 
     def route_pre_answer_gate(self, state: AgentState) -> str:
         return self._retrieval.route_pre_answer_gate(state)
+
+    async def retrieval_critic_node(self, state: AgentState) -> dict[str, Any]:
+        return await self._retrieval.retrieval_critic_node(state)
+
+    def route_critic(self, state: AgentState) -> str:
+        return self._retrieval.route_critic(state)
 
     # ------------------------------------------------------------------
     # Answer 페이즈 위임

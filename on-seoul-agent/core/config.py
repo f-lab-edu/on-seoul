@@ -26,6 +26,24 @@ class Settings(BaseSettings):
     redis_socket_connect_timeout: int = 2  # 연결 타임아웃(초) — fail-open 대기 상한
     redis_socket_timeout: int = 2  # 명령 타임아웃(초)
 
+    # Agent workflow — L1 retrieval-critic 단일 예산 (계획서 §3-1 D, §3-2)
+    # 0건·thin·skew·self_correction 재시도가 *공유*하는 단일 retrieval 예산 캡.
+    # retry_count 가 이 값에 도달하면 더 이상 재탐색하지 않는다(하드 백스톱).
+    # 스캐폴딩 단계(Phase 1)에서는 이 상수를 정의만 하고 아직 엣지가 소비하지 않는다
+    # (기존 1회 캡 동작 불변). Phase 2/3 에서 correction/critic 엣지가 이 단일 출처를
+    # 소비하도록 배선한다 — 별도 카운터를 두지 않아 예산 이중 카운트를 원천 차단한다.
+    max_retrieval_retries: int = 2
+
+    # L1 retrieval-critic escalation 게이트 롤아웃 플래그 (계획서 §6 Phase 3, §7).
+    # False(기본): pre_answer_gate 후단이 기존 결정적 경로(0건→retry, 유건→answer)로만
+    #   동작한다 — critic 노드는 그래프에 등록되어도 진입 엣지가 이 플래그로 차단되어
+    #   호출되지 않는다(회귀 0, secondary_intent 와 동일한 단계적 롤아웃 패턴).
+    # True: pre_answer_gate 후단 결정적 triage 가 "의심스러움(0건/thin/skew) + 예산 여유"
+    #   일 때만 retrieval_critic_node 로 승격한다(명백히 좋은 80% 경로는 여전히 answer
+    #   직행 = critic 미호출). critic 미결정(fail-open)이면 결정적 경로로 폴백한다.
+    # 활성화 전제: critic 판단 품질 검증(Phase 6 측정) 후 수동 전환.
+    enable_retrieval_critic: bool = False
+
     # Answer Cache
     answer_cache_enabled: bool = True
     answer_cache_ttl: int = 900  # 15분 — 수집 스케줄러 주기보다 짧게
@@ -128,7 +146,12 @@ class Settings(BaseSettings):
     llm_provider: str = "gemini"  # gemini | openai
 
     google_api_key: str | None = None
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.5-flash"
+    # 모델 티어 fallback — primary 모델이 일시적 오류로 실패하면 이 모델로 재시도한다.
+    # 벤더(provider) fallback과 별개의 "모델 티어 fallback"이며 항상 Gemini provider로 빌드한다.
+    gemini_fallback_model: str = "gemini-3.1-flash-lite"
+    # False면 get_chat_model이 fallback 없이 raw primary 모델을 그대로 반환(하위호환·테스트·eval 안전장치).
+    llm_fallback_enabled: bool = True
 
     openai_api_key: str | None = None
     gpt_model: str = "gpt-4o-mini"
@@ -189,7 +212,7 @@ class Settings(BaseSettings):
 
     # VectorSubIntent 활성화 단계
     # False(기본): 항상 vector_default_sub_intent 프로파일 사용.
-    # True 전환 조건: Router의 sub_intent 분류 정확도 ≥ 80% 검증 후 수동 전환. (Phase 3)
+    # True 전환 조건: Router의 sub_intent 분류 정확도 ≥ 80% 검증 후 수동 전환.
     vector_sub_intent_enabled: bool = False
     # rrf_weight_profiles에 반드시 존재하는 키여야 한다 (없으면 equal-weight로 폴백).
     vector_default_sub_intent: str = "semantic"
@@ -218,8 +241,8 @@ class Settings(BaseSettings):
         "semantic": {"track_a": 0.15, "track_b": 0.35, "track_c": 0.5, "bm25": 0.3},
     }
 
-    # Phase 1 baseline 모드: True → 모든 채널 가중치 1.0 (비가중치 RRF).
-    # False 전환 조건: recall@k baseline 측정 완료 후 가중치 활성화. (Phase 2)
+    # baseline 모드: True → 모든 채널 가중치 1.0 (비가중치 RRF).
+    # False 전환 조건: recall@k baseline 측정 완료 후 가중치 활성화.
     rrf_unweighted_baseline: bool = True
 
 

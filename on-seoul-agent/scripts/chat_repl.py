@@ -168,7 +168,7 @@ class CarryoverState:
     """턴 간 맥락을 누적해 다음 ChatRequest 필드로 조립한다.
 
     Spring 릴레이가 chat_messages / 영속 service_cards 에서 조립하는 것을
-    클라이언트 측에서 흉내낸다. 슬롯 추가(예: 향후 P1 의 prev_working_set)는
+    클라이언트 측에서 흉내낸다. 슬롯 추가(예: prev_working_set)는
     이 클래스 한 곳만 확장하면 되도록 추출/조립을 모은다.
 
     계약(schemas/chat.py):
@@ -525,7 +525,7 @@ _SCENARIOS: dict[str, dict[str, Any]] = {
         ],
     },
     "followup_filter": {
-        "desc": "워킹셋 후속 (P1 전엔 재검색될 것) — '그 중 무료인 것만'",
+        "desc": "워킹셋 후속 — '그 중 무료인 것만'",
         "messages": ["강남구 체육시설 알려줘", "그 중 무료인 것만"],
     },
 }

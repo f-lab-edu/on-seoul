@@ -41,14 +41,14 @@ class PrevEntity(BaseModel):
 
 
 class PrevWorkingSetPayload(BaseModel):
-    """직전 턴 대화 워킹셋(P1) — 단일 중첩 채널.
+    """직전 턴 대화 워킹셋 — 단일 중첩 채널.
 
-    Spring 이 영속·중계하고 AI 가 소비한다(옵션 A). emit 측 `final` 의 prev_working_set
+    Spring 이 영속·중계하고 AI 가 소비한다. emit 측 `final` 의 prev_working_set
     을 거울처럼 반영한다. 미전송 시 ChatRequest 가 평면 슬롯(prev_entities/prev_intent/
     prev_reasoning)으로 폴백한다(하위호환).
 
     철학: "검색 레시피"지 "결과 스냅샷"이 아니다. applied_filters 는 effective(완화 후)
-    필터여야 후속이 올바른 베이스에 얹힌다(P1-4).
+    필터여야 후속이 올바른 베이스에 얹힌다.
     """
 
     entities: list[PrevEntity] = Field(default_factory=list, max_length=10)
@@ -56,9 +56,27 @@ class PrevWorkingSetPayload(BaseModel):
     reasoning: str | None = Field(default=None, max_length=500)
     refined_query: str | None = Field(default=None, max_length=500)
     # effective(완화 후) 필터. 키: max_class_name/area_name/service_status/payment_type.
-    applied_filters: dict[str, str | None] = Field(default_factory=dict)
+    # area_name 은 신 계약상 list[str](다중 자치구). 옛 워킹셋/구클라의 스칼라도
+    # validator 로 정규화하되, 정규화된 list 가 타입 검증에 다시 걸리지 않도록 타입도 확대.
+    applied_filters: dict[str, str | list[str] | None] = Field(default_factory=dict)
     relaxed: bool = Field(default=False)
     relaxed_filters: list[str] = Field(default_factory=list)
+
+    @field_validator("applied_filters", mode="before")
+    @classmethod
+    def _normalize_area_name(cls, v: Any) -> Any:
+        """area_name 키만 list 로 정규화(하위호환: 옛 워킹셋 스칼라 str 유입점).
+
+        스칼라 str→[str], 빈 문자열 ""→[](=[""] 오매칭 금지), list/None 은 그대로.
+        나머지 키(max_class_name/service_status/payment_type)는 손대지 않는다.
+        dict 가 아니면 그대로 통과(Pydantic 후속 검증에 위임).
+        """
+        if not isinstance(v, dict):
+            return v
+        area = v.get("area_name")
+        if isinstance(area, str):
+            return {**v, "area_name": [area] if area else []}
+        return v
 
     @field_validator("intent", mode="before")
     @classmethod
@@ -97,7 +115,7 @@ class ChatRequest(BaseModel):
     prev_intent: IntentType | None = Field(default=None)
     # 직전 턴 판단 근거(user_rationale). 미전송 시 None. EXPLAIN action 이 소비.
     prev_reasoning: str | None = Field(default=None, max_length=500)
-    # ─── 대화 워킹셋(P1) — 단일 중첩 채널 ───
+    # ─── 대화 워킹셋 — 단일 중첩 채널 ───
     # Spring 이 영속·중계. 미전송 시 위 평면 슬롯으로 폴백한다(하위호환).
     prev_working_set: PrevWorkingSetPayload | None = Field(default=None)
 

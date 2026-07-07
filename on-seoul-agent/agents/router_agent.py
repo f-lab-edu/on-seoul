@@ -22,6 +22,7 @@ from agents._intake_indexing import neutralize_fence
 from llm.client import get_chat_model
 from llm.prompts.router import ROUTER_FEW_SHOT, ROUTER_SYSTEM
 from schemas.state import IntentType
+from tools.target_audience import ALLOWED_AUDIENCES
 
 # Router가 산출하는 post-filter 허용 enum.
 # 자유 텍스트가 들어오면 None으로 강제 대체하여 검색 도구 호출 안정성을 보장한다.
@@ -84,10 +85,14 @@ class _IntentOutput(BaseModel):
     # LLM이 enum을 벗어난 값을 반환하면 검색 도구의 SQL 파라미터로 흘러갈 수 있으므로
     # field_validator에서 None으로 정규화하여 도메인 안전성을 보장한다.
     max_class_name: str | None = None
-    area_name: str | None = None
+    # 다중 지역 — "여러 지역이면 배열"("성동구나 광진구"→["성동구","광진구"]).
+    # 단일 지역도 리스트로 담는다. 자치구 화이트리스트 밖 값은 걸러낸다.
+    area_name: list[str] | None = None
     service_status: str | None = None
     # 결제 유형 post-filter — "무료"/"유료" 정규값 또는 None.
     payment_type: str | None = None
+    # 대상 그룹 enum — CHILD/ADULT/SENIOR/FAMILY 또는 None(미명시/허용 밖).
+    target_audience: str | None = None
     # VECTOR_SEARCH 전용 서브 의도 — RRF 가중치 프로파일 선택에 사용.
     # intent가 VECTOR_SEARCH가 아니면 None. 허용 값 외 → None으로 정규화.
     vector_sub_intent: Literal["identification", "detail", "semantic"] | None = None
@@ -119,11 +124,30 @@ class _IntentOutput(BaseModel):
 
     @field_validator("area_name", mode="before")
     @classmethod
-    def _validate_area_name(cls, v: object) -> str | None:
+    def _validate_area_name(cls, v: object) -> list[str] | None:
+        """area_name 을 자치구 화이트리스트 리스트로 정규화한다.
+
+        LLM 이 단일 문자열/배열 어느 쪽을 반환해도 흡수하고, 화이트리스트 밖 값은
+        제거한다. 유효 자치구가 없으면 None(필터 미적용)으로 정규화한다.
+        """
         if v is None:
             return None
-        if v in SEOUL_DISTRICTS:
-            return v  # type: ignore[return-value]
+        candidates = [v] if isinstance(v, str) else v
+        if not isinstance(candidates, (list, tuple)):
+            return None
+        valid = [c for c in candidates if isinstance(c, str) and c in SEOUL_DISTRICTS]
+        return valid or None
+
+    @field_validator("target_audience", mode="before")
+    @classmethod
+    def _validate_target_audience(cls, v: object) -> str | None:
+        """target_audience 를 허용 enum(CHILD/ADULT/SENIOR/FAMILY)으로 강제한다.
+
+        service_status 검증기와 동일 패턴 — 허용 밖/자유텍스트는 None 으로 정규화해
+        인젝션·오값을 차단한다.
+        """
+        if isinstance(v, str) and v in ALLOWED_AUDIENCES:
+            return v
         return None
 
     @field_validator("service_status", mode="before")
