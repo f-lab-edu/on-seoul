@@ -14,7 +14,11 @@ from langchain_core.prompts import ChatPromptTemplate, FewShotChatMessagePromptT
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agents.router_agent import _ALLOWED_PAYMENT_TYPES, SEOUL_DISTRICTS
+from agents.router_agent import (
+    _ALLOWED_PAYMENT_TYPES,
+    SEOUL_DISTRICTS,
+    normalize_max_class_name,
+)
 from llm.client import get_chat_model
 from llm.prompts.sql_extraction import (
     SQL_EXTRACTION_FEW_SHOT_EXAMPLES,
@@ -25,10 +29,8 @@ from schemas.state import AgentState
 from tools.sql_search import TOP_K as _TOP_K
 from tools.sql_search import sql_search
 
-# Router와 동일한 화이트리스트 — LLM이 벗어난 값을 반환하면 None 정규화
-_ALLOWED_MAX_CLASS_NAMES: frozenset[str] = frozenset(
-    ["체육시설", "문화체험", "공간시설", "교육강좌", "진료복지"]
-)
+# Router와 동일한 화이트리스트 — LLM이 벗어난 값을 반환하면 None 정규화.
+# max_class_name 은 router_agent.normalize_max_class_name 단일 출처를 재사용한다.
 _ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(
     ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
 )
@@ -40,7 +42,9 @@ class _SqlParams(BaseModel):
         default=None,
         description="날짜 표현이 있을 때 오늘 기준 계산 과정 (내부 CoT용, 검색 쿼리에는 미사용)",
     )
-    max_class_name: str | None = None
+    # 다중 카테고리 — router 와 동일 정규화(단일/배열 흡수, 5종 밖 제거). 제외 표현은
+    # 여집합 배열로 프롬프트가 산출한다. sql_search 는 max_class_name = ANY(:classes).
+    max_class_name: list[str] | None = None
     area_name: list[str] | None = None
     service_status: str | None = None
     payment_type: str | None = None
@@ -51,10 +55,8 @@ class _SqlParams(BaseModel):
 
     @field_validator("max_class_name", mode="before")
     @classmethod
-    def _validate_max_class_name(cls, v: object) -> str | None:
-        if v is None:
-            return None
-        return v if v in _ALLOWED_MAX_CLASS_NAMES else None  # type: ignore[return-value]
+    def _validate_max_class_name(cls, v: object) -> list[str] | None:
+        return normalize_max_class_name(v)
 
     @field_validator("area_name", mode="before")
     @classmethod

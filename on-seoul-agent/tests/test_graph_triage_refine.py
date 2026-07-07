@@ -75,7 +75,7 @@ class TestCacheKeyWithRoutes:
             ActionType.OUT_OF_SCOPE,
             ActionType.EXPLAIN,
         ):
-            assert asyncio.get_event_loop().run_until_complete(_check(action)) is False
+            assert asyncio.run(_check(action)) is False
 
     def test_cache_write_excludes_non_retrieve(self):
         """비-RETRIEVE action이면 CacheWriteNode가 빈 dict를 반환한다."""
@@ -95,7 +95,7 @@ class TestCacheKeyWithRoutes:
             return await node(state)
 
         for action in (ActionType.DIRECT_ANSWER, ActionType.AMBIGUOUS):
-            result = asyncio.get_event_loop().run_until_complete(_write(action))
+            result = asyncio.run(_write(action))
             assert result == {}
 
 

@@ -159,7 +159,7 @@ class TestRouterRefinedQueryPropagation:
         graph = AgentGraph(router=router, answer_agent=_answer_agent())
         update = await graph._nodes.router_node(_state(message="강남구 체육시설"))
 
-        assert update["filters"]["max_class_name"] == "체육시설"
+        assert update["filters"]["max_class_name"] == ["체육시설"]
         assert update["filters"]["area_name"] == ["강남구"]
         assert update["filters"]["service_status"] == "접수중"
 

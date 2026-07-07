@@ -89,7 +89,10 @@ class PlanState(TypedDict, total=False):
 class FilterState(TypedDict, total=False):
     """post-filter — dict_merge 채널 (retry_prep 부분 드롭)."""
 
-    max_class_name: str | None
+    # 다중 카테고리 필터 — SQL 은 max_class_name = ANY(:classes), gate 는 멤버십 매칭.
+    # "체육시설 말고" 같은 제외 표현은 여집합(닫힌 5종 − X)을 리스트로 담는다.
+    # 단일 카테고리도 리스트로 담는다(["체육시설"]). None/[] 이면 미적용(area_name 정합).
+    max_class_name: list[str] | None
     # 다중 지역 필터 — SQL 은 area_name = ANY(:areas), gate 는 교집합 매칭.
     # 단일 지역도 리스트로 담는다(["강남구"]). None/[] 이면 미적용.
     area_name: list[str] | None

@@ -115,7 +115,8 @@ class TestRouterAgent:
         result = await agent.classify("접수 중인 체육시설 카테고리별로 몇 개야?")
 
         assert result.intent == IntentType.ANALYTICS
-        assert result.max_class_name == "체육시설"
+        # 단일 문자열 입력도 validator 가 리스트로 정규화한다(닫힌 5종).
+        assert result.max_class_name == ["체육시설"]
         assert result.service_status == "접수중"
         assert result.vector_sub_intent is None
 

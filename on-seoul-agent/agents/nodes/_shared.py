@@ -99,16 +99,20 @@ def apply_structured_gate(
     area_names: list[str] | None,
     target_audience: str | None,
 ) -> list[dict[str, Any]]:
-    """hydrated 행을 구조화 필터(area_name 교집합 + target_audience)로 거른다.
+    """hydrated 행을 구조화 필터(area_name 멤버십 + target_audience)로 거른다.
 
-    벡터 검색은 identity(Track A) 채널에만 area post-filter 가 걸리므로, summary/
-    question/bm25 채널로 들어온 타 지역·상충 대상 행이 RRF 병합 상위에 생존한다
-    (행23 강동구 누출). hydration 이후 원본 area_name/target_info 로 최종 교정한다.
+    벡터 검색은 identity(Track A) 채널에만 area post-filter 가 걸리므로,
+    summary/question/bm25 채널로 들어온 타 지역·상충 대상 행이 RRF 병합 상위에
+    생존한다(행23 강동구 누출). hydration 이후 원본 area_name/target_info 로 최종 교정한다.
 
     · area_names 지정 시: 행.area_name 이 area_names 집합에 없으면 drop.
     · target_audience 지정 시: matches_audience 로 drop(제한없음/가족 항상 통과).
-    두 필터 모두 None/[] 이면 해당 축은 미적용(no-op). SQL 경로는 WHERE 로 이미
-    걸리므로 이 게이트를 다시 통과해도 결과 불변이라 무해하다(matches_audience 공용).
+    둘 다 None/[] 이면 해당 축은 미적용(no-op). SQL 경로는 WHERE 로 이미 걸리므로 이
+    게이트를 다시 통과해도 결과 불변이라 무해하다(matches_audience 공용).
+
+    max_class_name 은 여기서 하드 게이트하지 않는다: 배제("체육시설 말고")는 SQL WHERE
+    의 여집합 ANY 로 이미 하드 처리되고, 카테고리는 큐레이션에서 soft 강등(대안 라벨)
+    으로 다뤄 few-exact 시 빈약 대신 대안으로 표면화한다(_curate_display 계약).
     """
     # 방어: area_names 가 단일 문자열로 새어들어와도 chars 로 쪼개지지 않게 감싼다
     # (계약상 리스트지만 상류 오주입 시 char-set 오필터를 막는다).

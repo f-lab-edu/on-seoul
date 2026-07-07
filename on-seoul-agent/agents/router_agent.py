@@ -24,11 +24,37 @@ from llm.prompts.router import ROUTER_FEW_SHOT, ROUTER_SYSTEM
 from schemas.state import IntentType
 from tools.target_audience import ALLOWED_AUDIENCES
 
-# Router가 산출하는 post-filter 허용 enum.
-# 자유 텍스트가 들어오면 None으로 강제 대체하여 검색 도구 호출 안정성을 보장한다.
-_ALLOWED_MAX_CLASS_NAMES: frozenset[str] = frozenset(
-    ["체육시설", "문화체험", "공간시설", "교육강좌", "진료복지"]
+# Router가 산출하는 post-filter 허용 enum(닫힌 5종). "체육시설 말고" 같은 제외
+# 표현은 여집합(5종 − X)으로 표현하므로 결정적 순서를 위해 튜플로 둔다(complement 안정).
+# 자유 텍스트가 들어오면 걸러내 검색 도구 호출 안정성을 보장한다.
+MAX_CLASS_NAMES: tuple[str, ...] = (
+    "체육시설",
+    "문화체험",
+    "공간시설",
+    "교육강좌",
+    "진료복지",
 )
+_ALLOWED_MAX_CLASS_NAMES: frozenset[str] = frozenset(MAX_CLASS_NAMES)
+
+
+def normalize_max_class_name(v: object) -> list[str] | None:
+    """max_class_name 을 닫힌 5종 화이트리스트 리스트로 정규화한다(단일/배열 흡수).
+
+    LLM 이 단일 문자열/배열 어느 쪽을 반환해도 흡수하고, 5종 밖 값은 제거한다.
+    "체육시설 말고" 같은 제외는 프롬프트가 여집합 리스트로 산출하므로 여기서는
+    화이트리스트 검증만 한다(닫힌 5값 유지). 유효 값이 없으면 None(필터 미적용).
+    중복은 첫 등장 순서로 제거한다(결정적).
+    """
+    if v is None:
+        return None
+    candidates = [v] if isinstance(v, str) else v
+    if not isinstance(candidates, (list, tuple)):
+        return None
+    valid: list[str] = []
+    for c in candidates:
+        if isinstance(c, str) and c in _ALLOWED_MAX_CLASS_NAMES and c not in valid:
+            valid.append(c)
+    return valid or None
 _ALLOWED_SERVICE_STATUSES: frozenset[str] = frozenset(
     ["접수중", "예약마감", "접수종료", "예약일시중지", "안내중"]
 )
@@ -84,7 +110,9 @@ class _IntentOutput(BaseModel):
     # Post-filter — SQL_SEARCH / VECTOR_SEARCH 경로에서만 의미가 있다.
     # LLM이 enum을 벗어난 값을 반환하면 검색 도구의 SQL 파라미터로 흘러갈 수 있으므로
     # field_validator에서 None으로 정규화하여 도메인 안전성을 보장한다.
-    max_class_name: str | None = None
+    # 다중 카테고리 — 항상 배열. 긍정 "체육시설"→["체육시설"], 제외 "체육시설 말고"는
+    # 프롬프트가 여집합(5종−X)을 배열로 산출한다. 5종 밖 값은 걸러 None.
+    max_class_name: list[str] | None = None
     # 다중 지역 — "여러 지역이면 배열"("성동구나 광진구"→["성동구","광진구"]).
     # 단일 지역도 리스트로 담는다. 자치구 화이트리스트 밖 값은 걸러낸다.
     area_name: list[str] | None = None
@@ -115,12 +143,8 @@ class _IntentOutput(BaseModel):
 
     @field_validator("max_class_name", mode="before")
     @classmethod
-    def _validate_max_class_name(cls, v: object) -> str | None:
-        if v is None:
-            return None
-        if v in _ALLOWED_MAX_CLASS_NAMES:
-            return v  # type: ignore[return-value]
-        return None
+    def _validate_max_class_name(cls, v: object) -> list[str] | None:
+        return normalize_max_class_name(v)
 
     @field_validator("area_name", mode="before")
     @classmethod

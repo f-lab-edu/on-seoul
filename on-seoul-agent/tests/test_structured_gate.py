@@ -7,8 +7,15 @@ hydration 이후 원본 area_name/target_info 로 최종 교정한다(행23 강�
 from agents.nodes._shared import apply_structured_gate
 
 
-def _row(sid: str, area: str, target: str = "제한없음") -> dict:
-    return {"service_id": sid, "area_name": area, "target_info": target}
+def _row(
+    sid: str, area: str, target: str = "제한없음", max_class: str = "체육시설"
+) -> dict:
+    return {
+        "service_id": sid,
+        "area_name": area,
+        "target_info": target,
+        "max_class_name": max_class,
+    }
 
 
 class TestApplyStructuredGate:

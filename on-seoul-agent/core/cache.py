@@ -95,11 +95,22 @@ _DIGEST_HEX_LEN = 32
 _WS_RE = re.compile(r"\s+")
 
 
+def _multi_key(value: "list[str] | str | None") -> str:
+    """멀티값 필터(list) 를 정렬·조인해 순서 무관 안정 키로 만든다.
+
+    max_class_name/area_name 은 list[str] 로 넘어온다. 정렬해 조인하면 추출 순서가
+    달라도 동일 키가 나온다(추출이 이미 결정적 순서지만 방어). 스칼라/None 은 하위호환.
+    """
+    if isinstance(value, list):
+        return ",".join(sorted(value))
+    return value or ""
+
+
 def _cache_key(
     query: str,
     *,
-    max_class_name: str | None = None,
-    area_name: str | None = None,
+    max_class_name: "list[str] | None" = None,
+    area_name: "list[str] | None" = None,
     service_status: str | None = None,
     payment_type: str | None = None,
     routes: str | None = None,
@@ -116,8 +127,8 @@ def _cache_key(
     """
     parts = [
         query.strip().lower(),
-        f"max={max_class_name or ''}",
-        f"area={area_name or ''}",
+        f"max={_multi_key(max_class_name)}",
+        f"area={_multi_key(area_name)}",
         f"status={service_status or ''}",
         f"pay={payment_type or ''}",
         f"routes={routes or ''}",
@@ -130,8 +141,8 @@ def _cache_key(
 def build_answer_cache_key(
     query: str,
     *,
-    max_class_name: str | None = None,
-    area_name: str | None = None,
+    max_class_name: "list[str] | None" = None,
+    area_name: "list[str] | None" = None,
     service_status: str | None = None,
     payment_type: str | None = None,
     routes: str | None = None,
