@@ -124,7 +124,7 @@ def _build_prev_working_set(request: ChatRequest) -> dict[str, Any] | None:
 
 _WS_FILTER_KEYS = ("max_class_name", "area_name", "service_status", "payment_type")
 
-# 실제 검색 레시피를 산출하는 intent — FALLBACK 은 대화형 분기 신호일 뿐 제외한다(버그 D).
+# 실제 검색 구성을 산출하는 intent — FALLBACK 은 대화형 분기 신호일 뿐 제외한다(버그 D).
 _SEARCH_INTENTS = frozenset(
     {
         IntentType.SQL_SEARCH,
@@ -140,28 +140,28 @@ def _emit_working_set(result: dict[str, Any]) -> dict[str, Any]:
 
     applied_filters 는 result["filters"] (dict_merge 채널)에서 읽는다 — retry_prep 의
     완화 드롭이 머지로 반영된 *effective(완화 후)* 필터다(요청 필터가 아님).
-    entities 는 노출된 service_cards 의 (service_id, label) 정체성만 담는다(레시피·정체성
+    entities 는 노출된 service_cards 의 (service_id, label) 정체성만 담는다(구성·정체성
     운반, 결과 스냅샷 아님).
 
-    버그 D carry-forward: 이번 턴이 *새 검색 레시피를 만들지 않은* 비검색/무결과
+    버그 D carry-forward: 이번 턴이 *새 검색 구성을 만들지 않은* 비검색/무결과
     턴(META/EXPLAIN, 결과 없는 DIRECT_ANSWER/AMBIGUOUS/domain_outside)이면, 빈 워킹셋을
-    내보내 직전 레시피를 덮지 않고 들어온 prev_working_set 을 그대로 carry-forward 한다.
-    Spring opaque 패스스루는 last-message 를 저장·회신하므로, 비검색 턴이 직전 레시피를
+    내보내 직전 구성을 덮지 않고 들어온 prev_working_set 을 그대로 carry-forward 한다.
+    Spring opaque 패스스루는 last-message 를 저장·회신하므로, 비검색 턴이 직전 구성을
     다시 emit 해야 후속(REFINE 등)이 올바른 base 를 받는다.
 
-    판정 기준(silent 추정 금지): 이번 턴이 *새 레시피·결과를 산출했는가* —
+    판정 기준(silent 추정 금지): 이번 턴이 *새 구성·결과를 산출했는가* —
     plan.intent 가 *실제 검색 의도*(SQL_SEARCH/VECTOR_SEARCH/MAP/ANALYTICS)이거나
     output.service_cards(새 노출 카드)가 있으면 "검색·결과 턴"으로 보고 result 기반
-    생성(현행). 둘 다 없으면 "레시피 미생성 턴"으로 보고 carry-forward. 이 신호는 노드
+    생성(현행). 둘 다 없으면 "구성 미생성 턴"으로 보고 carry-forward. 이 신호는 노드
     산출에서 직접 관측되며(explain/domain_outside 은 output.answer 만, RETRIEVE/REFINE 은
     검색 intent+cards, DRILL/RELEVANCE 은 cards), turn_kind 열거에 의존하지 않아 미래
     turn_kind 추가에도 안전하다.
 
     FALLBACK 보정(버그 D): direct_answer_node(answer.py:48)는 dict_merge 채널에
     plan.intent=FALLBACK 을 기록한다(EXPLAIN→direct_answer 폴백, answer.py:174 동일).
-    FALLBACK 은 실제 검색 의도가 아니라 대화형 답변 분기 신호일 뿐이므로 *레시피로 치지
+    FALLBACK 은 실제 검색 의도가 아니라 대화형 답변 분기 신호일 뿐이므로 *구성으로 치지
     않는다*. intent is not None 만으로 판정하면 결과 없는 DIRECT_ANSWER/EXPLAIN폴백 턴이
-    '레시피 생성'으로 오인돼 직전 워킹셋을 빈 값으로 덮는다(버그 D 증상). _SEARCH_INTENTS
+    '구성 생성'으로 오인돼 직전 워킹셋을 빈 값으로 덮는다(버그 D 증상). _SEARCH_INTENTS
     멤버십으로 한정해 이를 차단한다.
 
     하위호환: prev_working_set 이 없으면(첫 턴/구 클라이언트) carry 대상이 없으므로
@@ -173,9 +173,9 @@ def _emit_working_set(result: dict[str, Any]) -> dict[str, Any]:
     intent = plan.get("intent")
     cards = output.get("service_cards") or []
 
-    # 레시피 미생성 턴(비검색·무결과) + 들어온 직전 워킹셋 있음 → carry-forward.
+    # 구성 미생성 턴(비검색·무결과) + 들어온 직전 워킹셋 있음 → carry-forward.
     prev = result.get("prev_working_set")
-    # FALLBACK(대화형 분기) 은 레시피로 치지 않는다 — 실제 검색 intent 일 때만 인정.
+    # FALLBACK(대화형 분기) 은 구성으로 치지 않는다 — 실제 검색 intent 일 때만 인정.
     # IntentType 은 str Enum 이라 enum/문자열 양쪽 모두 frozenset 멤버십이 성립한다.
     produced_recipe = intent in _SEARCH_INTENTS or bool(cards)
     if not produced_recipe and prev:

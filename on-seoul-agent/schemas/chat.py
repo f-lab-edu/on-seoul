@@ -47,7 +47,7 @@ class PrevWorkingSetPayload(BaseModel):
     을 거울처럼 반영한다. 미전송 시 ChatRequest 가 평면 슬롯(prev_entities/prev_intent/
     prev_reasoning)으로 폴백한다(하위호환).
 
-    철학: "검색 레시피"지 "결과 스냅샷"이 아니다. applied_filters 는 effective(완화 후)
+    철학: "검색 구성"이지 "결과 스냅샷"이 아니다. applied_filters 는 effective(완화 후)
     필터여야 후속이 올바른 베이스에 얹힌다.
     """
 

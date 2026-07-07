@@ -157,7 +157,7 @@ class EmitState(TypedDict, total=False):
 class PrevWorkingSet(TypedDict, total=False):
     """직전 턴 대화 워킹셋 — 입력 전용 중첩 채널(그래프 내 갱신 없음, 리듀서 불필요).
 
-    "검색 레시피"지 "결과 스냅샷"이 아니다 — 후속은 레시피에 제약을 더해 재검색한다
+    "검색 구성"이지 "결과 스냅샷"이 아니다 — 후속은 검색 구성에 제약을 더해 재검색한다
     (carryover 철학: 정체성만 운반, 사실은 rehydrate 재조회).
 
     entities: 직전 노출 결과 [{service_id, label}, ...] (= 기존 prev_entities).
@@ -196,7 +196,7 @@ class AgentState(TypedDict):
     prev_intent: IntentType | None
     # 직전 턴의 판단 근거(user_rationale). EXPLAIN action 이 소비한다.
     prev_reasoning: str | None
-    # 대화 워킹셋 — 직전 검색 레시피. 입력 전용 중첩 채널(리듀서 없음).
+    # 대화 워킹셋 — 직전 검색 구성. 입력 전용 중첩 채널(리듀서 없음).
     # 신규 채널 우선, 미전송 시 평면 슬롯(prev_entities/prev_intent/prev_reasoning)
     # 으로 폴백한다(routers/chat.py 조립). 첫 턴/구 클라이언트면 전부 None(하위호환).
     prev_working_set: "PrevWorkingSet | None"

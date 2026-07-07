@@ -208,9 +208,9 @@ class IntakeNodes:
         return update
 
     async def working_set_refine_node(self, state: AgentState) -> dict[str, Any]:
-        """REFINE 경로의 "주방" — 직전 워킹셋 + 이번 발화 신규 제약 머지 → 재검색.
+        """REFINE 경로 — 직전 워킹셋 + 이번 발화 신규 제약 머지 → 재검색.
 
-        carryover 철학(스냅샷 아님): 직전 레시피(applied_filters)에 *이번 발화의 신규
+        carryover 철학(스냅샷 아님): 직전 검색 구성(applied_filters)에 *이번 발화의 신규
         제약*을 더해 재검색한다. 신규 제약을 추출하지 않으면("그 중 무료만"의
         payment_type=무료) 직전 베이스로만 돌아 사용자 의도가 소실된다(MUST-FIX).
 
@@ -242,7 +242,7 @@ class IntakeNodes:
         forced = prev_intent if isinstance(prev_intent, IntentType) else None
 
         # no_base 판정: applied_filters 와 refined_query 가 모두 없을 때만 carryover 할
-        # 직전 레시피가 없는 것이다(C — refined_query 만 운반하는 VECTOR refine 오판 방지).
+        # 직전 검색 구성이 없는 것이다(C — refined_query 만 운반하는 VECTOR refine 오판 방지).
         no_base = not filters_base and not prev_refined
 
         if no_base:

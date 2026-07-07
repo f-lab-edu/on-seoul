@@ -120,8 +120,8 @@ class TestEmitWorkingSetCarryForward:
     """버그 D — 비검색 턴이 멀티턴 워킹셋(carryover)을 지우지 않는다.
 
     비검색/무결과 턴(META/EXPLAIN, 결과 없는 DIRECT_ANSWER/AMBIGUOUS/
-    domain_outside)은 새 검색 레시피를 만들지 않으므로, 빈 워킹셋으로 직전
-    레시피를 덮지 않고 들어온 prev_working_set 을 carry-forward 한다.
+    domain_outside)은 새 검색 구성을 만들지 않으므로, 빈 워킹셋으로 직전
+    구성을 덮지 않고 들어온 prev_working_set 을 carry-forward 한다.
     """
 
     # 직전 검색(예: turn 192)이 남긴 워킹셋 — 다음 비검색 턴이 보존해야 한다.
@@ -250,7 +250,7 @@ class TestEmitWorkingSetCarryForwardNodeShapes:
 
     QA 발견: 기존 carry-forward 테스트는 비검색 턴 result 를 plan={} 로 모델링하나,
     direct_answer_node 는 실제로 plan.intent=FALLBACK 을 dict_merge 채널에 기록한다.
-    produced_recipe = (intent is not None) 판정은 이 FALLBACK 을 '레시피 생성'으로
+    produced_recipe = (intent is not None) 판정은 이 FALLBACK 을 '구성 생성'으로
     오인해 carry-forward 를 건너뛰고 직전 워킹셋을 빈 값으로 덮는다(바로 버그 D 의
     증상). 노드의 실제 반환 shape 로 회귀를 고정한다.
     """
@@ -267,7 +267,7 @@ class TestEmitWorkingSetCarryForwardNodeShapes:
 
     def test_direct_answer_node_shape_carries_forward(self):
         """결과 없는 DIRECT_ANSWER — direct_answer_node 는 plan.intent=FALLBACK 을
-        반환한다(answer.py:48). 이 turn 은 새 검색 레시피가 아니므로 직전 워킹셋을
+        반환한다(answer.py:48). 이 turn 은 새 검색 구성이 아니므로 직전 워킹셋을
         carry-forward 해야 한다(덮어쓰면 안 됨)."""
         result = {
             # direct_answer_node 의 실제 반환(dict_merge 후 result["plan"]).
@@ -316,7 +316,7 @@ class TestEmitWorkingSetCarryForwardNodeShapes:
     def test_oos_attribute_gap_node_shape_generates_recipe(self):
         """버그 D 역방향 회귀 — attribute_gap/operational_detail OUT_OF_SCOPE 는
         domain_outside 와 달리 plan.intent=VECTOR_SEARCH 를 세팅(answer.py:144)하고
-        실제 식별 검색을 수행한다. 이는 *진짜 검색 레시피*이므로 carry 가 아니라
+        실제 식별 검색을 수행한다. 이는 *진짜 검색 구성*이므로 carry 가 아니라
         result 기반 생성이어야 한다(직전 워킹셋을 덮는 게 정상). membership 룰이
         VECTOR_SEARCH 를 검색으로 인정하는지 고정한다."""
         result = {
@@ -339,7 +339,7 @@ class TestEmitWorkingSetCarryForwardNodeShapes:
             "prev_working_set": self.PREV_WS,
         }
         ws = _emit_working_set(result)
-        # 이번 턴 검색 레시피로 갱신 — 직전(VECTOR/강남구/S1) 을 carry 하지 않는다.
+        # 이번 턴 검색 구성으로 갱신 — 직전(VECTOR/강남구/S1) 을 carry 하지 않는다.
         assert ws["intent"] == "VECTOR_SEARCH"
         assert ws["refined_query"] == "한강공원 주차 가능 여부"
         assert ws["applied_filters"] == {"area_name": "영등포구"}
