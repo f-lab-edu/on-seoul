@@ -175,13 +175,13 @@ class TestAnalyticsSearchFilters:
             session,
             group_by="min_class_name",
             metric="count",
-            max_class_name="체육시설",
-            area_name="강남구",
+            max_class_name=["체육시설"],
+            area_name=["강남구"],
             service_status="접수중",
         )
         bind = session.execute.call_args[0][1]
-        assert bind["max_class_name"] == "체육시설"
-        assert bind["area_name"] == "강남구"
+        assert bind["classes"] == ["체육시설"]
+        assert bind["areas"] == ["강남구"]
         assert bind["service_status"] == "접수중"
 
     async def test_no_filters_bind_only_top_k(self):
@@ -200,7 +200,8 @@ class TestAnalyticsSearchFilters:
         assert "deleted_at IS NULL" in sql_text
         assert "area_name IS NOT NULL" in sql_text
         # 필터 바인드 플레이스홀더는 등장하지 않는다.
-        assert ":max_class_name" not in sql_text
+        assert ":classes" not in sql_text
+        assert ":areas" not in sql_text
         assert ":service_status" not in sql_text
         assert ":keyword" not in sql_text
 
@@ -212,14 +213,14 @@ class TestAnalyticsSearchFilters:
             session,
             group_by="min_class_name",
             metric="count",
-            max_class_name="체육시설",
-            area_name=evil_area,
+            max_class_name=["체육시설"],
+            area_name=[evil_area],
             service_status="접수중",
         )
         sql_text = executed[0]
         # WHERE 절은 플레이스홀더만 사용 — 사용자 값 리터럴 미삽입.
-        assert "max_class_name = :max_class_name" in sql_text
-        assert "area_name = :area_name" in sql_text
+        assert "max_class_name = ANY(:classes)" in sql_text
+        assert "area_name = ANY(:areas)" in sql_text
         assert "service_status = :service_status" in sql_text
         assert evil_area not in sql_text
         assert "OR '1'='1" not in sql_text

@@ -38,6 +38,17 @@ class CacheCheckNode:
         if action is not None and action != ActionType.RETRIEVE:
             return {"cache_hit": False}
 
+        # 재시도 재진입 가드 — answer_lock_key 가 이미 있으면(최초 패스에서 기록)
+        # 이 패스는 락 보유자로서 K_original 에 저장할 책임을 이미 확정한 상태다.
+        # self-correction 재시도가 filters/intent 를 완화(K_relaxed)해도 여기서
+        # 완화된 plan 으로 키를 재계산·재획득하지 않는다: 그러면 저장 키(K_original)와
+        # 갈려 (1) 동일 원 질의가 계속 miss, (2) K_original 을 폴링하던 singleflight
+        # 대기자가 고아가 된다. 저장 타깃 = 사용자 원 질의가 최초에 산출하는 키로
+        # 고정하기 위해 재진입 시 슬롯을 보존하고 즉시 pass-through(miss)한다.
+        # (락은 최초 획득 시점부터 cache_write 저장까지 K_original 에 걸린 채 유지된다.)
+        if state.get("answer_lock_key"):
+            return {"cache_hit": False}
+
         plan = state["plan"]
         intent = plan.get("intent")
         refined = plan.get("refined_query")
@@ -73,9 +84,12 @@ class CacheCheckNode:
                 key, self._redis, ttl=settings.answer_cache_lock_ttl
             )
             if acquired:
-                # 이 패스가 락 보유자 — 해제 책임을 위해 키를 state 에 기록한다.
-                # cache_write 정상 종료 또는 0건 게이트의 retry_prep 우회 경로
-                # 양쪽이 이 키로 release 한다(획득 시점 키와 일치 → SET NX 락 해제).
+                # 이 패스가 락 보유자 — 획득 시점 키(K_original)를 state 에 기록한다.
+                # 이 키는 (1) singleflight 락 해제 대상이자 (2) cache_write 의 저장
+                # 타깃(= 사용자 원 질의가 다음에 조회할 키)을 겸한다. 재시도 재진입 시
+                # 위 answer_lock_key 가드가 이 슬롯을 보존하므로, 완화(K_relaxed)가 있어도
+                # 락은 K_original 에 걸린 채 유지되고 저장도 K_original 로 이뤄진다.
+                # 해제는 cache_write 가 단독으로 수행한다(retry_prep 는 더 이상 해제 안 함).
                 lock_key = key
             if not acquired:
                 logger.info(
@@ -185,7 +199,14 @@ class CacheWriteNode:
         payment_type = filters.get("payment_type")
         routes = CacheCheckNode._build_routes_key(intent, plan.get("secondary_intent"))
 
-        key = _redis_gateway.build_answer_cache_key(
+        # 저장 키: 최초 cache_check 시점 키(K_original) 우선.
+        # self-correction 재시도로 filters/intent 가 완화되면 현재 state 로 재계산한
+        # 키(K_relaxed)는 사용자 원 질의가 다음에 산출하는 키와 갈린다. answer_lock_key
+        # (= 최초 check 시점 키)로 저장해 (1) 동일 원 질의 재요청이 hit 하고,
+        # (2) 그 키를 폴링하던 singleflight 대기자가 hit 하도록 정합을 맞춘다.
+        # 없으면(구 경로/poll-timeout fail-open 으로 락 미보유) 재계산 키로 폴백해
+        # 정상(비재시도) 경로 동작을 불변으로 유지한다(K_original == K_final).
+        store_key = state.get("answer_lock_key") or _redis_gateway.build_answer_cache_key(
             refined,
             max_class_name=max_class_name,
             area_name=area_name,
@@ -218,23 +239,17 @@ class CacheWriteNode:
             # HydrationNode 가 채운 통합 슬롯 — cache hit 시 hydration 라운드트립 절감.
             "hydrated_services": state["hydration"].get("hydrated_services"),
         }
-        await _redis_gateway.set_cached_answer(
-            refined,
+        await _redis_gateway.set_cached_answer_by_key(
+            store_key,
             payload,
             snap,
             self._redis,
-            max_class_name=max_class_name,
-            area_name=area_name,
-            service_status=service_status,
-            payment_type=payment_type,
-            routes=routes,
         )
         # singleflight 락 조기 해제 — waiter가 poll 주기를 기다리지 않고 즉시 hit.
-        # cache_check 가 기록한 키(answer_lock_key)를 우선 사용해 획득 시점과 정확히
-        # 정합되게 해제한다. 없으면(구 경로/락 미보유) 재계산 키로 폴백(DEL 멱등).
-        await _redis_gateway.release_answer_lock(
-            state.get("answer_lock_key") or key, self._redis
-        )
+        # 저장 키(store_key = answer_lock_key 우선)와 동일 키로 해제해 획득·저장·해제가
+        # 모두 K_original 에 정합된다(락 키 ↔ 저장 키 일치 → 대기자 hit). retry_prep 는
+        # 더 이상 락을 해제하지 않으므로(락은 전 요청 수명 유지) cache_write 가 단독 해제한다.
+        await _redis_gateway.release_answer_lock(store_key, self._redis)
         empty = not snap["vector_results"] and not snap["sql_results"]
         logger.info("cache.write intent=%s empty=%s", intent.value, empty)
         return {"answer_lock_key": None}

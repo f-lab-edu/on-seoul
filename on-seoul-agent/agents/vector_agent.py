@@ -24,6 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import core.concurrency as _concurrency
 from agents._search_channel_utils import _to_hits
+from agents.router_agent import SEOUL_DISTRICTS, normalize_max_class_name
+from tools.target_audience import ALLOWED_AUDIENCES
 from core.config import settings
 from core.database import ai_session_ctx
 from core.rrf import reciprocal_rank_fusion
@@ -45,9 +47,10 @@ _REFINE_SYSTEM = """\
 한국어로 2-3 문장 이내로 작성하세요.
 
 질의에서 다음 필터 정보를 추출할 수 있으면 함께 반환하세요. 명시되지 않은 경우 null로 설정하세요.
-- max_class_name: 대분류 카테고리. 체육시설·문화체험·공간시설·교육강좌·진료복지 중 하나. 질의에 명확한 카테고리가 없으면 null.
-- area_name: 지역구 이름 (예: 강남구, 마포구). 질의에 지역이 없으면 null.
+- max_class_name: 대분류 카테고리 배열. 체육시설·문화체험·공간시설·교육강좌·진료복지 중에서 고른다. 항상 배열로 반환하고, 없으면 null. "체육시설 말고/빼고/제외" 같은 부정 표현이면 그 카테고리를 뺀 나머지 4종을 모두 배열에 담는다(예: "체육시설 말고" → ["문화체험","공간시설","교육강좌","진료복지"]).
+- area_name: 지역구 이름 배열 (예: ["강남구"], 여러 지역이면 ["성동구","광진구"]). 항상 배열로 반환하고, 질의에 지역이 없으면 null.
 - service_status: 예약 상태 (접수중·예약마감·접수종료·예약일시중지·안내중 중 하나). 질의에 상태가 없으면 null.
+- target_audience: 대상 그룹. CHILD/ADULT/SENIOR/FAMILY 중 하나. 대상(아이·성인·어르신·가족)이 명시되면 매핑하고, 없으면 null. 자유 텍스트 금지.
 """
 
 _REFINE_HUMAN = "사용자 질의: {message}"
@@ -80,9 +83,17 @@ _BM25_STOPWORDS: frozenset[str] = frozenset(
 
 class _RefinedQuery(BaseModel):
     refined_query: str
-    max_class_name: str | None = None
-    area_name: str | None = None
+    # 다중 카테고리 — "체육시설 말고"는 여집합(5종−X) 배열. router 와 동일 정규화.
+    max_class_name: list[str] | None = None
+    area_name: list[str] | None = None
     service_status: str | None = None
+    target_audience: str | None = None
+
+    @field_validator("max_class_name", mode="before")
+    @classmethod
+    def _validate_max_class_name(cls, v: object) -> list[str] | None:
+        """max_class_name 을 닫힌 5종 리스트로 정규화한다(router 와 단일 출처 공유)."""
+        return normalize_max_class_name(v)
 
     @field_validator("service_status", mode="before")
     @classmethod
@@ -92,6 +103,26 @@ class _RefinedQuery(BaseModel):
             return None
         if v in _ALLOWED_SERVICE_STATUSES:
             return v  # type: ignore[return-value]
+        return None
+
+    @field_validator("area_name", mode="before")
+    @classmethod
+    def _validate_area_name(cls, v: object) -> list[str] | None:
+        """area_name 을 자치구 화이트리스트 리스트로 정규화한다(단일/배열 흡수)."""
+        if v is None:
+            return None
+        candidates = [v] if isinstance(v, str) else v
+        if not isinstance(candidates, (list, tuple)):
+            return None
+        valid = [c for c in candidates if isinstance(c, str) and c in SEOUL_DISTRICTS]
+        return valid or None
+
+    @field_validator("target_audience", mode="before")
+    @classmethod
+    def _validate_target_audience(cls, v: object) -> str | None:
+        """target_audience 를 허용 enum(CHILD/ADULT/SENIOR/FAMILY)으로 강제한다."""
+        if isinstance(v, str) and v in ALLOWED_AUDIENCES:
+            return v
         return None
 
 
@@ -180,8 +211,8 @@ async def run_parallel_channels(
     query_vector: list[float],
     bm25_tokens: list[str],
     *,
-    max_class_name: str | None = None,
-    area_name: str | None = None,
+    max_class_name: list[str] | None = None,
+    area_name: list[str] | None = None,
     service_status: str | None = None,
 ) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     """4채널 retrieval 팬아웃을 채널별 독립 세션 + asyncio.gather로 병렬 실행한다.
@@ -274,6 +305,12 @@ class VectorAgent:
                 service_status=filters.get("service_status"),
             )
         else:
+            # 폴백/강제-재검색 경로(plan.refined_query 없음 — 완화 retry 등). refine-chain 이
+            # max_class/area/status 를 재추출해 Track A post-filter 로만 넘긴다(아래 gather).
+            # ponytail: 이 경로는 refined.target_audience 를 state["filters"] 로 반영하지
+            # 않는다(post-RRF gate 미발동, no-op) — 의도적이다. 대상 필터 적용은 1차 경로
+            # (router 가 state["filters"] 채움)가 담당하고, 이 경로는 완화 재검색이라 직전에
+            # 드롭됐을 수 있는 대상 제약을 message 에서 되살려 완화를 되돌리면 안 된다.
             refined = await self._refine_chain.ainvoke({"message": state["message"]})
 
         query_vector = await self._embeddings.aembed_query(refined.refined_query)

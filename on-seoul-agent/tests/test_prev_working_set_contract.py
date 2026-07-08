@@ -24,6 +24,7 @@ class TestPrevWorkingSetInjection:
                 intent=IntentType.SQL_SEARCH,
                 reasoning="수영장 검색",
                 refined_query="강남 수영장",
+                # 하위호환: 옛 워킹셋 스칼라 str 입력은 validator 가 list 로 정규화한다.
                 applied_filters={"area_name": "강남구"},
                 relaxed=True,
                 relaxed_filters=["payment_type"],
@@ -34,7 +35,7 @@ class TestPrevWorkingSetInjection:
         assert ws["entities"] == [{"service_id": "S1", "label": "강남 수영장"}]
         assert ws["intent"] == IntentType.SQL_SEARCH
         assert ws["refined_query"] == "강남 수영장"
-        assert ws["applied_filters"] == {"area_name": "강남구"}
+        assert ws["applied_filters"] == {"area_name": ["강남구"]}
         assert ws["relaxed"] is True
         assert ws["relaxed_filters"] == ["payment_type"]
 
@@ -110,7 +111,8 @@ class TestEmitWorkingSet:
         )
         ws = _build_prev_working_set(next_req)
         assert ws["intent"] == IntentType.SQL_SEARCH
-        assert ws["applied_filters"] == {"area_name": "마포구"}
+        # emit 은 state.filters(스칼라 픽스처)를 패스스루하고, 재주입 시 validator 가 list 정규화.
+        assert ws["applied_filters"] == {"area_name": ["마포구"]}
         assert ws["entities"] == [{"service_id": "S1", "label": "L1"}]
 
 
@@ -118,8 +120,8 @@ class TestEmitWorkingSetCarryForward:
     """버그 D — 비검색 턴이 멀티턴 워킹셋(carryover)을 지우지 않는다.
 
     비검색/무결과 턴(META/EXPLAIN, 결과 없는 DIRECT_ANSWER/AMBIGUOUS/
-    domain_outside)은 새 검색 레시피를 만들지 않으므로, 빈 워킹셋으로 직전
-    레시피를 덮지 않고 들어온 prev_working_set 을 carry-forward 한다.
+    domain_outside)은 새 검색 구성을 만들지 않으므로, 빈 워킹셋으로 직전
+    구성을 덮지 않고 들어온 prev_working_set 을 carry-forward 한다.
     """
 
     # 직전 검색(예: turn 192)이 남긴 워킹셋 — 다음 비검색 턴이 보존해야 한다.
@@ -248,7 +250,7 @@ class TestEmitWorkingSetCarryForwardNodeShapes:
 
     QA 발견: 기존 carry-forward 테스트는 비검색 턴 result 를 plan={} 로 모델링하나,
     direct_answer_node 는 실제로 plan.intent=FALLBACK 을 dict_merge 채널에 기록한다.
-    produced_recipe = (intent is not None) 판정은 이 FALLBACK 을 '레시피 생성'으로
+    produced_recipe = (intent is not None) 판정은 이 FALLBACK 을 '구성 생성'으로
     오인해 carry-forward 를 건너뛰고 직전 워킹셋을 빈 값으로 덮는다(바로 버그 D 의
     증상). 노드의 실제 반환 shape 로 회귀를 고정한다.
     """
@@ -265,7 +267,7 @@ class TestEmitWorkingSetCarryForwardNodeShapes:
 
     def test_direct_answer_node_shape_carries_forward(self):
         """결과 없는 DIRECT_ANSWER — direct_answer_node 는 plan.intent=FALLBACK 을
-        반환한다(answer.py:48). 이 turn 은 새 검색 레시피가 아니므로 직전 워킹셋을
+        반환한다(answer.py:48). 이 turn 은 새 검색 구성이 아니므로 직전 워킹셋을
         carry-forward 해야 한다(덮어쓰면 안 됨)."""
         result = {
             # direct_answer_node 의 실제 반환(dict_merge 후 result["plan"]).
@@ -314,7 +316,7 @@ class TestEmitWorkingSetCarryForwardNodeShapes:
     def test_oos_attribute_gap_node_shape_generates_recipe(self):
         """버그 D 역방향 회귀 — attribute_gap/operational_detail OUT_OF_SCOPE 는
         domain_outside 와 달리 plan.intent=VECTOR_SEARCH 를 세팅(answer.py:144)하고
-        실제 식별 검색을 수행한다. 이는 *진짜 검색 레시피*이므로 carry 가 아니라
+        실제 식별 검색을 수행한다. 이는 *진짜 검색 구성*이므로 carry 가 아니라
         result 기반 생성이어야 한다(직전 워킹셋을 덮는 게 정상). membership 룰이
         VECTOR_SEARCH 를 검색으로 인정하는지 고정한다."""
         result = {
@@ -337,8 +339,62 @@ class TestEmitWorkingSetCarryForwardNodeShapes:
             "prev_working_set": self.PREV_WS,
         }
         ws = _emit_working_set(result)
-        # 이번 턴 검색 레시피로 갱신 — 직전(VECTOR/강남구/S1) 을 carry 하지 않는다.
+        # 이번 턴 검색 구성으로 갱신 — 직전(VECTOR/강남구/S1) 을 carry 하지 않는다.
         assert ws["intent"] == "VECTOR_SEARCH"
         assert ws["refined_query"] == "한강공원 주차 가능 여부"
         assert ws["applied_filters"] == {"area_name": "영등포구"}
         assert ws["entities"] == [{"service_id": "S9", "label": "한강공원 주차장"}]
+
+
+class TestAppliedFiltersAreaNameNormalization:
+    """PrevWorkingSetPayload.applied_filters area_name 정규화(422 회귀 방지).
+
+    area_name 신 계약 = list[str]. 옛 워킹셋/구클라의 스칼라 str 유입점만 정규화한다.
+    """
+
+    def test_accepts_list(self):
+        p = PrevWorkingSetPayload(applied_filters={"area_name": ["성동구", "광진구"]})
+        assert p.applied_filters == {"area_name": ["성동구", "광진구"]}
+
+    def test_scalar_normalized_to_list(self):
+        p = PrevWorkingSetPayload(applied_filters={"area_name": "성동구"})
+        assert p.applied_filters == {"area_name": ["성동구"]}
+
+    def test_empty_string_to_empty_list(self):
+        # "" → [](=[""] 오매칭 금지, 축 미적용).
+        p = PrevWorkingSetPayload(applied_filters={"area_name": ""})
+        assert p.applied_filters == {"area_name": []}
+
+    def test_none_preserved(self):
+        p = PrevWorkingSetPayload(applied_filters={"area_name": None})
+        assert p.applied_filters == {"area_name": None}
+
+    def test_other_keys_untouched(self):
+        p = PrevWorkingSetPayload(applied_filters={"service_status": "접수중"})
+        assert p.applied_filters == {"service_status": "접수중"}
+
+    def test_two_turn_list_roundtrip_no_422(self):
+        """신 계약 다중값 회귀: emit 이 list 를 내면 재주입에서 422 없이 그대로 통과.
+
+        원 버그(스칼라 str→list 라운드트립 불일치)의 대칭 케이스 — state.filters 가
+        신 계약대로 list 를 담을 때 emit→Spring 패스스루→재주입이 손상 없이 라운드트립.
+        """
+        result = {
+            "plan": {"intent": IntentType.SQL_SEARCH, "refined_query": "q"},
+            "filters": {"area_name": ["성동구", "광진구"]},
+            "output": {"service_cards": [{"service_id": "S1", "service_name": "L1"}]},
+            "triage": {"user_rationale": "r"},
+            "retry_relaxed": False,
+            "relaxed_filters": [],
+        }
+        emitted = _emit_working_set(result)
+        assert emitted["applied_filters"] == {"area_name": ["성동구", "광진구"]}
+        # Spring 이 emitted 를 그대로 회신 → 재주입 (422 나면 여기서 ValidationError).
+        next_req = ChatRequest(
+            room_id=1,
+            message_id=3,
+            message="그 중 무료만",
+            prev_working_set=PrevWorkingSetPayload(**emitted),
+        )
+        ws = _build_prev_working_set(next_req)
+        assert ws["applied_filters"] == {"area_name": ["성동구", "광진구"]}

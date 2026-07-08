@@ -113,8 +113,8 @@ class TestVectorAgentRouterPostFilter:
 
         state = _make_state()
         state["plan"]["refined_query"] = "강남구 체육시설"
-        state["filters"]["max_class_name"] = "체육시설"
-        state["filters"]["area_name"] = "강남구"
+        state["filters"]["max_class_name"] = ["체육시설"]
+        state["filters"]["area_name"] = ["강남구"]
         state["filters"]["service_status"] = "접수중"
 
         with (
@@ -140,8 +140,8 @@ class TestVectorAgentRouterPostFilter:
             )
             assert identity_call is not None, "identity row_kind 호출이 없음"
             kwargs = identity_call[1]
-            assert kwargs.get("max_class_name") == "체육시설"
-            assert kwargs.get("area_name") == "강남구"
+            assert kwargs.get("max_class_name") == ["체육시설"]
+            assert kwargs.get("area_name") == ["강남구"]
             assert kwargs.get("service_status") == "접수중"
 
         # router가 산출하면 fallback _refine_chain은 호출되지 않는다.
@@ -184,7 +184,7 @@ class TestVectorAgentPostFilter:
         mock_chain.ainvoke = AsyncMock(
             return_value=_RefinedQuery(
                 refined_query="체육 시설",
-                max_class_name="체육",
+                max_class_name="체육시설",
                 area_name="강남구",
                 service_status="접수중",
             )
@@ -216,8 +216,9 @@ class TestVectorAgentPostFilter:
             )
             assert identity_call is not None
             kwargs = identity_call[1]
-            assert kwargs.get("max_class_name") == "체육"
-            assert kwargs.get("area_name") == "강남구"
+            # 단일 문자열도 validator 가 리스트로 정규화한다.
+            assert kwargs.get("max_class_name") == ["체육시설"]
+            assert kwargs.get("area_name") == ["강남구"]
             assert kwargs.get("service_status") == "접수중"
 
     async def test_none_filters_not_forwarded_when_absent(self):

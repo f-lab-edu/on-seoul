@@ -68,19 +68,106 @@ class TestSqlSearchBasic:
 
 
 class TestSqlSearchFilters:
-    async def test_max_class_name_in_bind(self):
-        """max_class_name 필터가 bind 파라미터에 포함된다."""
-        session = _make_session([])
-        await sql_search(session, max_class_name="체육시설")
-        bind = session.execute.call_args[0][1]
-        assert bind["max_class_name"] == "체육시설"
+    async def test_max_class_name_single_uses_any(self):
+        """max_class_name 단일 카테고리도 classes 리스트 bind + ANY 술어로 매칭한다."""
+        executed_sqls: list[str] = []
 
-    async def test_area_name_in_bind(self):
-        """area_name 필터가 bind 파라미터에 포함된다."""
-        session = _make_session([])
-        await sql_search(session, area_name="마포구")
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.keys.return_value = []
+            m.fetchall.return_value = []
+            return m
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+        await sql_search(session, max_class_name=["체육시설"])
         bind = session.execute.call_args[0][1]
-        assert bind["area_name"] == "마포구"
+        assert bind["classes"] == ["체육시설"]
+        assert "max_class_name = ANY(:classes)" in executed_sqls[0]
+
+    async def test_max_class_name_complement_multi(self):
+        """제외 여집합(4종)이 classes 리스트로 전달되어 ANY 로 OR 매칭된다."""
+        session = _make_session([])
+        await sql_search(
+            session,
+            max_class_name=["문화체험", "공간시설", "교육강좌", "진료복지"],
+        )
+        bind = session.execute.call_args[0][1]
+        assert bind["classes"] == ["문화체험", "공간시설", "교육강좌", "진료복지"]
+
+    async def test_scalar_max_class_not_char_split(self):
+        """스칼라 str 이 새어들어와도 classes bind 가 ['체','육',...]로 쪼개지지 않는다."""
+        session = _make_session([])
+        await sql_search(session, max_class_name="체육시설")  # type: ignore[arg-type]
+        bind = session.execute.call_args[0][1]
+        assert bind["classes"] == ["체육시설"]
+
+    async def test_empty_class_list_omits_condition(self):
+        """max_class_name=[] 는 필터 미적용(classes bind 없음)."""
+        session = _make_session([])
+        await sql_search(session, max_class_name=[])
+        bind = session.execute.call_args[0][1]
+        assert "classes" not in bind
+
+    async def test_area_name_single_uses_any(self):
+        """area_name 단일 지역도 areas 리스트 bind + ANY 술어로 매칭한다."""
+        executed_sqls: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.keys.return_value = []
+            m.fetchall.return_value = []
+            return m
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+        await sql_search(session, area_name=["마포구"])
+        bind = session.execute.call_args[0][1]
+        assert bind["areas"] == ["마포구"]
+        assert "area_name = ANY(:areas)" in executed_sqls[0]
+
+    async def test_area_name_multi_region_any(self):
+        """다중 지역이 areas 리스트로 전달되어 ANY 로 OR 매칭된다."""
+        session = _make_session([])
+        await sql_search(session, area_name=["성동구", "광진구"])
+        bind = session.execute.call_args[0][1]
+        assert bind["areas"] == ["성동구", "광진구"]
+
+    async def test_scalar_area_not_char_split(self):
+        """스칼라 str 이 새어들어와도 areas bind 가 ['성','동','구']로 쪼개지지 않는다."""
+        session = _make_session([])
+        # 타입 계약상 list 지만 상류 오주입 방어 가드를 검증한다.
+        await sql_search(session, area_name="성동구")  # type: ignore[arg-type]
+        bind = session.execute.call_args[0][1]
+        assert bind["areas"] == ["성동구"]
+
+    async def test_empty_area_list_omits_condition(self):
+        """area_name=[] 는 필터 미적용(areas bind 없음)."""
+        session = _make_session([])
+        await sql_search(session, area_name=[])
+        bind = session.execute.call_args[0][1]
+        assert "areas" not in bind
+
+    async def test_target_audience_or_like_parameterized(self):
+        """target_audience 는 토큰맵 OR-LIKE 술어 + bind 로 적용된다(값 삽입 금지)."""
+        executed_sqls: list[str] = []
+
+        async def _capture(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            m = MagicMock()
+            m.keys.return_value = []
+            m.fetchall.return_value = []
+            return m
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=_capture)
+        await sql_search(session, target_audience="CHILD")
+        bind = session.execute.call_args[0][1]
+        assert "target_info LIKE :aud_0" in executed_sqls[0]
+        assert "%초등학생%" in bind.values()
+        assert "%제한없음%" in bind.values()
 
     async def test_service_status_in_bind(self):
         """service_status 필터가 bind 파라미터에 포함된다."""
@@ -128,8 +215,8 @@ class TestSqlSearchFilters:
         session = _make_session([])
         await sql_search(session)
         bind = session.execute.call_args[0][1]
-        assert "max_class_name" not in bind
-        assert "area_name" not in bind
+        assert "classes" not in bind
+        assert "areas" not in bind
         assert "service_status" not in bind
         assert "keyword" not in bind
 
@@ -222,14 +309,14 @@ class TestSqlSearchAllFilters:
         session = _make_session([])
         await sql_search(
             session,
-            max_class_name="체육시설",
-            area_name="강남구",
+            max_class_name=["체육시설"],
+            area_name=["강남구"],
             service_status="접수중",
             keyword="수영",
         )
         bind = session.execute.call_args[0][1]
-        assert bind["max_class_name"] == "체육시설"
-        assert bind["area_name"] == "강남구"
+        assert bind["classes"] == ["체육시설"]
+        assert bind["areas"] == ["강남구"]
         assert bind["service_status"] == "접수중"
         assert bind["keyword"] == "%수영%"
 
@@ -249,8 +336,8 @@ class TestSqlSearchAllFilters:
 
         await sql_search(
             session,
-            max_class_name="체육시설",
-            area_name="강남구",
+            max_class_name=["체육시설"],
+            area_name=["강남구"],
             service_status="접수중",
             keyword="수영",
         )
@@ -316,14 +403,14 @@ class TestSqlSearchDateFilters:
         session = _make_session([])
         await sql_search(
             session,
-            max_class_name="문화행사",
-            area_name="마포구",
+            max_class_name=["문화체험"],
+            area_name=["마포구"],
             receipt_date_from=date(2026, 5, 1),
             receipt_date_to=date(2026, 5, 31),
         )
         bind = session.execute.call_args[0][1]
-        assert bind["max_class_name"] == "문화행사"
-        assert bind["area_name"] == "마포구"
+        assert bind["classes"] == ["문화체험"]
+        assert bind["areas"] == ["마포구"]
         assert bind["receipt_date_from"] == date(2026, 5, 1)
         assert bind["receipt_date_to"] == date(2026, 5, 31)
 

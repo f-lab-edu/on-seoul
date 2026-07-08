@@ -13,6 +13,8 @@ import dev.jazzybyte.onseoul.collection.port.out.SaveCollectionHistoryPort;
 import dev.jazzybyte.onseoul.collection.port.out.SavePublicServicePort;
 import dev.jazzybyte.onseoul.collection.port.out.SaveServiceChangeLogPort;
 import dev.jazzybyte.onseoul.collection.port.out.SeoulDatasetFetchPort;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -34,6 +36,7 @@ public class CollectDatasetService implements CollectDatasetUseCase {
     private final UpsertService upsertService;
     private final GeocodingService geocodingService;
     private final SaveServiceChangeLogPort saveServiceChangeLogPort;
+    private final MeterRegistry meterRegistry;
 
     @Override
     public void collectAll() {
@@ -94,6 +97,12 @@ public class CollectDatasetService implements CollectDatasetUseCase {
             history.complete(entities.size(), result.newCount(), result.updatedCount(), 0, durationMs);
             history = historyPort.save(history);
 
+            Counter.builder("collection.job")
+                    .tag("result", "success")
+                    .tag("dataset", source.getDatasetId())
+                    .register(meterRegistry)
+                    .increment();
+
             log.info("소스 수집 완료 — datasetId={}, total={}, new={}, updated={}, unchanged={}",
                     source.getDatasetId(), entities.size(),
                     result.newCount(), result.updatedCount(), result.unchangedCount());
@@ -104,6 +113,11 @@ public class CollectDatasetService implements CollectDatasetUseCase {
             // 일관성을 위해 반환값을 재할당(기존 행 update). 이후 history는 사용되지 않는다.
             history.fail(e.getMessage(), durationMs);
             history = historyPort.save(history);
+            Counter.builder("collection.job")
+                    .tag("result", "failure")
+                    .tag("dataset", source.getDatasetId())
+                    .register(meterRegistry)
+                    .increment();
             log.error("소스 수집 실패 — datasetId={}, error={}", source.getDatasetId(), e.getMessage(), e);
             return null;
         }

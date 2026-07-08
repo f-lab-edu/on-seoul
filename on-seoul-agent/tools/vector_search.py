@@ -47,8 +47,8 @@ async def vector_search(
     row_kind: Literal["identity", "summary"] = "identity",
     top_k: int | None = None,
     min_similarity: float | None = None,
-    max_class_name: str | None = None,
-    area_name: str | None = None,
+    max_class_name: list[str] | None = None,
+    area_name: list[str] | None = None,
     service_status: str | None = None,
 ) -> list[dict]:
     """row_kind 파라미터로 트랙을 지정하는 벡터 유사도 검색.
@@ -69,6 +69,8 @@ async def vector_search(
         None이면 row_kind별 config 값 사용 (vector_min_similarity_*).
     max_class_name, area_name, service_status:
         post-filter 파라미터. identity row에만 적용.
+        max_class_name 은 카테고리 리스트로 metadata->>'max_class_name' = ANY(:classes) 매칭.
+        area_name 은 자치구 리스트로 metadata->>'area_name' = ANY(:areas) 매칭.
         summary row는 metadata가 NULL이므로 파라미터를 전달해도 무시한다.
 
     Returns
@@ -106,12 +108,16 @@ async def vector_search(
     # asyncpg 파라미터 타입 추론 문제(AmbiguousParameterError) 방지:
     # None을 바인드 파라미터로 전달하면 PostgreSQL이 $N의 타입을 결정할 수 없다.
     post_filters: list[str] = []
-    if max_class_name is not None:
-        post_filters.append("metadata->>'max_class_name' = :max_class_name")
-        bind["max_class_name"] = max_class_name
-    if area_name is not None:
-        post_filters.append("metadata->>'area_name' = :area_name")
-        bind["area_name"] = area_name
+    if isinstance(max_class_name, str):
+        max_class_name = [max_class_name]
+    if max_class_name:
+        # 다중 카테고리: metadata->>'max_class_name' = ANY(:classes). 값은 리스트째 bind.
+        post_filters.append("metadata->>'max_class_name' = ANY(:classes)")
+        bind["classes"] = list(max_class_name)
+    if area_name:
+        # 다중 지역: metadata->>'area_name' = ANY(:areas). 값은 리스트째 bind(인젝션 방지).
+        post_filters.append("metadata->>'area_name' = ANY(:areas)")
+        bind["areas"] = list(area_name)
     if service_status is not None:
         post_filters.append("metadata->>'service_status' = :service_status")
         bind["service_status"] = service_status

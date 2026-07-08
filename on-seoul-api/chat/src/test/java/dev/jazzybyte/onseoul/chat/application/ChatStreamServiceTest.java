@@ -11,6 +11,7 @@ import dev.jazzybyte.onseoul.chat.port.out.AiServiceStreamPort;
 import dev.jazzybyte.onseoul.chat.port.out.AiStreamEvent;
 import dev.jazzybyte.onseoul.exception.ErrorCode;
 import dev.jazzybyte.onseoul.exception.OnSeoulApiException;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,11 +38,13 @@ class ChatStreamServiceTest {
 
     private ChatStreamService service;
     private ChatConcurrencyGuard guard;
+    private SimpleMeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
         guard = new ChatConcurrencyGuard(new ChatConcurrencyProperties(2, 50, 5));
-        service = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, guard, updateRoomTitleUseCase);
+        meterRegistry = new SimpleMeterRegistry();
+        service = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, guard, updateRoomTitleUseCase, meterRegistry);
     }
 
     @Test
@@ -60,6 +63,10 @@ class ChatStreamServiceTest {
                 .expectNext("{\"step\":\"routing\"}")
                 .expectNext("{\"message_id\":84,\"answer\":\"안녕하세요\"}")
                 .verifyComplete();
+
+        // final 수신 → 질의 처리 성공 카운터. saveAnswer 이후에 doFinally가 끝났음을 gating.
+        verify(sendQueryUseCase, timeout(2000)).saveAnswer(anyLong(), anyString(), any(), any(), any(), any());
+        assertThat(meterRegistry.get("chat.query.attempts").tag("result", "success").counter().count()).isEqualTo(1.0);
     }
 
     @Test
@@ -239,6 +246,8 @@ class ChatStreamServiceTest {
                 .verify(Duration.ofSeconds(2));
 
         verify(sendQueryUseCase, timeout(2000)).saveAnswer(3L, "", null, (String) null, (String) null, (String) null);
+        // final 미수신 → 질의 처리 실패 카운터.
+        assertThat(meterRegistry.get("chat.query.attempts").tag("result", "failed").counter().count()).isEqualTo(1.0);
     }
 
     @Test
@@ -714,7 +723,7 @@ class ChatStreamServiceTest {
     @DisplayName("cap — 스트림이 정상 완료되면 permit이 해제되어 다시 생성할 수 있다(누수 없음)")
     void streamAndSave_completes_releasesPermit() throws InterruptedException {
         ChatConcurrencyGuard tight = new ChatConcurrencyGuard(new ChatConcurrencyProperties(1, 50, 5));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase, meterRegistry);
 
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
@@ -742,7 +751,7 @@ class ChatStreamServiceTest {
     @DisplayName("cap — 업스트림 에러로 끝나도 permit이 해제된다(누수 없음)")
     void streamAndSave_error_releasesPermit() throws InterruptedException {
         ChatConcurrencyGuard tight = new ChatConcurrencyGuard(new ChatConcurrencyProperties(1, 50, 5));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase, meterRegistry);
 
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
@@ -794,7 +803,7 @@ class ChatStreamServiceTest {
     void streamAndSave_backgroundTimeout_relayErrorsAndSavesEmptyString() {
         // backgroundTimeout=1s. final이 그보다 늦게(2s) 오므로 timeout이 먼저 발화한다.
         ChatConcurrencyGuard timed = new ChatConcurrencyGuard(new ChatConcurrencyProperties(2, 50, 1));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, timed, updateRoomTitleUseCase);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, timed, updateRoomTitleUseCase, meterRegistry);
 
         SendQueryCommand cmd = new SendQueryCommand(1L, 5L, "느린 질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
@@ -818,7 +827,7 @@ class ChatStreamServiceTest {
     @DisplayName("타임아웃 — timeout 후 permit이 해제되어 cap이 막혔던 사용자가 다시 생성할 수 있다(누수 없음, QA 보강)")
     void streamAndSave_timeout_releasesPermit() {
         ChatConcurrencyGuard tight = new ChatConcurrencyGuard(new ChatConcurrencyProperties(1, 50, 1));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase, meterRegistry);
 
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "느린 질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));
@@ -839,7 +848,7 @@ class ChatStreamServiceTest {
     @DisplayName("permit 누수 — prepare 예외(구독 와이어 전 실패)에서도 permit이 해제되어 재획득 가능하다(QA 보강)")
     void streamAndSave_prepareThrows_releasesPermitNoLeak() {
         ChatConcurrencyGuard tight = new ChatConcurrencyGuard(new ChatConcurrencyProperties(1, 1, 5));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, tight, updateRoomTitleUseCase, meterRegistry);
 
         SendQueryCommand cmd = new SendQueryCommand(7L, null, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd))
@@ -861,7 +870,7 @@ class ChatStreamServiceTest {
     @DisplayName("획득 순서 — cap 초과로 거부되면 prepare/stream을 전혀 호출하지 않는다(acquire가 prepare/AI보다 먼저, 비용 단락, QA 보강)")
     void streamAndSave_capRejected_doesNotCallPrepareOrStream() {
         ChatConcurrencyGuard full = new ChatConcurrencyGuard(new ChatConcurrencyProperties(1, 50, 5));
-        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, full, updateRoomTitleUseCase);
+        ChatStreamService svc = new ChatStreamService(sendQueryUseCase, aiServiceStreamPort, full, updateRoomTitleUseCase, meterRegistry);
 
         SendQueryCommand cmd = new SendQueryCommand(7L, 5L, "질문", null, null);
         when(sendQueryUseCase.prepare(cmd)).thenReturn(new PrepareResult(5L, 2L, false, List.of(), Carryover.empty()));

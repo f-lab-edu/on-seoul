@@ -74,7 +74,7 @@ from agents.router_agent import RouterAgent
 from agents.sql_agent import SqlAgent
 from agents.triage_agent import TriageAgent
 from agents.vector_agent import VectorAgent
-from schemas.events import DecisionEvent, SourcesUpdateEvent
+from schemas.events import CriticDecisionEvent, DecisionEvent, SourcesUpdateEvent
 from schemas.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -153,6 +153,8 @@ def _build_graph(nodes: GraphNodes) -> Any:
     builder.add_node("hydration_node", nodes.hydration_node)
     builder.add_node("rrf_fusion_node", nodes.rrf_fusion_node)
     builder.add_node("pre_answer_gate_node", nodes.pre_answer_gate_node)
+    # L1 retrieval-critic — escalation 게이트가 의심스러운 결과(0건/thin/skew)만 승격.
+    builder.add_node("retrieval_critic_node", nodes.retrieval_critic_node)
     builder.add_node("answer_node", nodes.answer_node)
     builder.add_node("search_persist_node", nodes.search_persist_node)
     builder.add_node("trace_node", nodes.trace_node)
@@ -241,10 +243,23 @@ def _build_graph(nodes: GraphNodes) -> Any:
     builder.add_edge("hydration_node", "rrf_fusion_node")
     builder.add_edge("rrf_fusion_node", "pre_answer_gate_node")
 
-    # 0건 게이트: 0건 → retry_prep_node, 유건 → answer_node
+    # escalation 게이트: 명백히 좋음/폴백 → answer, 0건 폴백 → retry_prep,
+    # 의심스러움(0건/thin/skew, critic 활성 시) → retrieval_critic_node.
     builder.add_conditional_edges(
         "pre_answer_gate_node",
         nodes.route_pre_answer_gate,
+        {
+            "answer_node": "answer_node",
+            "retry_prep_node": "retry_prep_node",
+            "retrieval_critic_node": "retrieval_critic_node",
+        },
+    )
+
+    # critic 판단 소비: ANSWER/STOP → answer, REPLAN → retry_prep(예산 여유 시),
+    # critic 미결정(fail-open None) → 결정적 폴백(0건→retry / 유건→answer).
+    builder.add_conditional_edges(
+        "retrieval_critic_node",
+        nodes.route_critic,
         {
             "answer_node": "answer_node",
             "retry_prep_node": "retry_prep_node",
@@ -324,6 +339,66 @@ def _build_sources(state: dict[str, Any]) -> list[dict[str, Any]]:
     return sources
 
 
+# turn_kind 중 "직전 결과 대상 후속 턴"으로 간주하는 값(NEW/META 제외).
+# followup_reask 신호는 이 집합 소속 여부로 도출한다(전용 슬롯 부재 — turn_kind 재사용).
+_FOLLOWUP_TURN_KINDS: frozenset[str] = frozenset({"REFINE", "DRILL", "RELEVANCE"})
+
+
+def _channel_hits(result: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
+    """채널별·총 결과 건수를 집계한다 — L1 규칙 라벨(ZERO_HIT/THIN/SKEW) 근거.
+
+    - sql/vector: results 리스트 길이. 채널 미실행(빈 dict / results 키 없음)이면 None.
+    - map: GeoJSON features 길이(features 부재 시 dict 존재를 1로 간주, _build_sources 동형).
+    - analytics: results 리스트 길이.
+    - total_hits: 실행된 채널의 합. 어느 채널도 안 돌면 None(0건과 구별 — 추출기가
+      is_zero_hit 판정 시 total 미가용 vs total==0 을 다르게 다룬다).
+
+    건수(집계 신호)만 산출하며 raw row/텍스트는 절대 싣지 않는다(PII 금지).
+    """
+
+    def _list_hits(channel: str) -> int | None:
+        rows = (result.get(channel) or {}).get("results")
+        return len(rows) if rows is not None else None
+
+    sql_hits = _list_hits("sql")
+    vector_hits = _list_hits("vector")
+    analytics_hits = _list_hits("analytics")
+
+    map_res = (result.get("map") or {}).get("results")
+    if map_res is None:
+        map_hits: int | None = None
+    elif isinstance(map_res, dict):
+        features = map_res.get("features")
+        map_hits = len(features) if features is not None else 1
+    else:
+        map_hits = None
+
+    parts = [h for h in (sql_hits, vector_hits, map_hits, analytics_hits) if h is not None]
+    total_hits = sum(parts) if parts else None
+    return sql_hits, vector_hits, total_hits
+
+
+def _applied_filter_count(result: dict[str, Any]) -> int:
+    """router 가 적용한 post-filter 수 — filters 채널의 비-None 값 개수.
+
+    완화 재시도로 None 드롭된 필터는 세지 않는다(effective 필터만). LLM 분류기가
+    질의 제약 수 대비 추출 필터 수를 비교할 때 쓴다.
+    """
+    filters = result.get("filters") or {}
+    return sum(1 for v in filters.values() if v is not None)
+
+
+def _followup_reask(result: dict[str, Any]) -> bool:
+    """세션 내 후속 재질의 신호 — turn_kind(REFINE/DRILL/RELEVANCE) 에서 도출.
+
+    전용 슬롯은 없다. intake_node 가 산출한 turn_kind 가 "직전 결과에 얹은 후속 턴"
+    (제약 추가·상세·적합성)이면 True, 신규 질문(NEW)/메타(META)면 False. turn_kind
+    부재 시 False(안전 기본).
+    """
+    turn_kind = (result.get("triage") or {}).get("turn_kind")
+    return turn_kind in _FOLLOWUP_TURN_KINDS
+
+
 def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
     """그래프 완료 후 root span 에 부착할 메타데이터를 result state 에서 추출한다.
 
@@ -331,18 +406,80 @@ def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
     retry_relaxed/cache_hit/error)는 평면 슬롯이라 직접 읽는다. v4 propagate_attributes
     의 tags 는 진입 시점에만 설정 가능하고(post-hoc 태그 API 미지원), intent/retried/
     cache_hit 는 그래프 완료 후에야 확정되므로 모두 metadata 로만 노출한다(폴백).
+
+    L1 Phase 0 측정 확장(scripts/eval/l1/extract.py 계약 일치, 키명 정확 일치):
+      turn_kind(원본 TurnKind — 분모 스코핑/L2 prior), sql_hits/vector_hits/
+      total_hits, result_quality(thin/skew passthrough), forced_intent(enum→str),
+      applied_filter_count, followup_reask.
+    turn_kind 는 followup_reask(bool)로 뭉개기 전 원본이라, 추출기가 NON_RETRIEVE
+    분모 스코핑(META 제외)과 DRILL/REFINE 세그먼트(L2 수요 prior)에 쓴다.
+    모두 집계 신호(건수·플래그·enum)만 싣는다 — raw 텍스트/식별정보 금지(PII 차단).
     """
     intent = (result.get("plan") or {}).get("intent")
     action = (result.get("triage") or {}).get("action")
+    turn_kind = (result.get("triage") or {}).get("turn_kind")
+    forced_intent = result.get("forced_intent")
+    sql_hits, vector_hits, total_hits = _channel_hits(result)
     return {
         "intent": intent.value if intent is not None else None,
         "action": action.value if action is not None else None,
+        "turn_kind": getattr(turn_kind, "value", turn_kind),
         "node_path": result.get("node_path"),
         "retry_count": result.get("retry_count"),
         "retry_relaxed": result.get("retry_relaxed"),
         "cache_hit": result.get("cache_hit"),
         "error": result.get("error"),
+        # ── L1 Phase 0 측정 신호 (추출기 계약 키명) ──
+        "sql_hits": sql_hits,
+        "vector_hits": vector_hits,
+        "total_hits": total_hits,
+        "result_quality": result.get("result_quality"),
+        "forced_intent": forced_intent.value if forced_intent is not None else None,
+        "applied_filter_count": _applied_filter_count(result),
+        "followup_reask": _followup_reask(result),
     }
+
+
+def record_critic_span(
+    entry_signal: str,
+    decision: str | None,
+    round_index: int,
+) -> None:
+    """retrieval-critic 라운드 스팬/메타데이터를 best-effort 로 기록한다 (L1 Phase 5).
+
+    critic 노드가 결정을 낸 직후 호출한다. 활성 Langfuse client 가 있으면 root span
+    (_langfuse_trace 의 "chat") 컨텍스트 안에 자식 span("retrieval_critic")을 하나
+    열고 즉시 닫으며 집계 메타데이터만 부착한다:
+      · entry_signal — 어느 신호로 escalation 됐는지("zero"/"thin"/"skew").
+      · decision     — critic 3택("ANSWER"/"REPLAN"/"STOP") 또는 None(미결정 fail-open).
+      · round        — critic 라운드 인덱스(retry_count 와 정렬).
+    raw 텍스트/식별정보는 싣지 않는다(집계 신호만 — PII 차단).
+
+    best-effort(Core rule 8): client 미활성/예외면 조용히 no-op 한다 — 관측 실패가
+    그래프 결과나 SSE 를 막지 않는다. 지연 import 로 core.config import 사이클을 피한다.
+    """
+    try:
+        from core.langfuse_client import get_langfuse_client
+
+        client = get_langfuse_client()
+        if client is None:
+            return
+        with client.start_as_current_observation(
+            as_type="span",
+            name="retrieval_critic",
+        ) as span:
+            span.update(
+                metadata={
+                    "entry_signal": entry_signal,
+                    "decision": decision,
+                    "round": round_index,
+                }
+            )
+    except Exception:
+        logger.warning(
+            "Langfuse retrieval_critic span 기록 실패 — 그래프는 정상 진행합니다.",
+            exc_info=True,
+        )
 
 
 def _update_root_span(root_span: Any, result: dict[str, Any]) -> None:
@@ -494,6 +631,7 @@ class AgentGraph:
         redis: Any = None,
         triage: TriageAgent | None = None,
         intake: Any = None,
+        critic: Any = None,
     ) -> None:
         # 입구 단일화 후 action 결정은 intake_node(IntakeAgent)가 담당한다 — 별도
         # triage_node 는 더 이상 그래프에 존재하지 않는다. TriageAgent 인자는 구
@@ -514,6 +652,12 @@ class AgentGraph:
         from agents.intake_agent import IntakeAgent
 
         _intake = intake or IntakeAgent()
+        # L1 retrieval-critic: 명시 주입 시 그대로, 미주입 시 프로덕션 기본 생성(실 LLM).
+        # 게이트 진입은 settings.enable_retrieval_critic 플래그로 별도 게이팅되므로,
+        # 기본 생성해도 플래그 오프 상태에선 critic 이 호출되지 않는다(회귀 0).
+        from agents.retrieval_critic import RetrievalCritic
+
+        _critic = critic or RetrievalCritic()
         self._nodes = GraphNodes(
             router=_router,
             sql_agent=sql_agent or SqlAgent(),
@@ -523,6 +667,7 @@ class AgentGraph:
             redis=redis,
             triage=_triage,
             intake=_intake,
+            critic=_critic,
         )
 
         # 그래프는 인스턴스 단위로 1회 컴파일한다(바운드 메서드 직접 등록).
@@ -567,7 +712,8 @@ class AgentGraph:
 
         Yields:
             ("progress", {"step": str, "message": str}) — 각 단계 전환 시점
-            ("decision", DecisionEvent dict)            — 판단 근거 (조건부)
+            ("decision", DecisionEvent dict)            — triage 판단 근거 (조건부)
+            ("critic_decision", CriticDecisionEvent dict) — critic 라운드 근거 (조건부, L1)
             ("result", AgentState)                      — 최종 완료 상태
 
         emit 위치(노드 측, agents/nodes/)와 타이밍:
@@ -623,6 +769,16 @@ class AgentGraph:
                         DecisionEvent(
                             action=chunk["action"],
                             routes=chunk["routes"],
+                            user_rationale=chunk["user_rationale"],
+                        ).model_dump(),
+                    )
+                elif evt == "critic_decision":
+                    # L1 retrieval-critic 라운드 결정 — triage decision 과 별개 프레임.
+                    yield (
+                        "critic_decision",
+                        CriticDecisionEvent(
+                            decision=chunk["decision"],
+                            round=chunk["round"],
                             user_rationale=chunk["user_rationale"],
                         ).model_dump(),
                     )

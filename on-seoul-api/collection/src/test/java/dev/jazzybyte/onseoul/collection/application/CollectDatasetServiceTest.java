@@ -13,6 +13,7 @@ import dev.jazzybyte.onseoul.collection.domain.ServiceChangeLog;
 import dev.jazzybyte.onseoul.collection.port.out.SavePublicServicePort;
 import dev.jazzybyte.onseoul.collection.port.out.SaveServiceChangeLogPort;
 import dev.jazzybyte.onseoul.collection.port.out.SeoulDatasetFetchPort;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -41,12 +42,14 @@ class CollectDatasetServiceTest {
     @Mock private SaveServiceChangeLogPort saveServiceChangeLogPort;
 
     private CollectDatasetService service;
+    private SimpleMeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
+        meterRegistry = new SimpleMeterRegistry();
         service = new CollectDatasetService(
                 catalogPort, historyPort, loadPublicServicePort, savePublicServicePort,
-                fetchPort, upsertService, geocodingService, saveServiceChangeLogPort);
+                fetchPort, upsertService, geocodingService, saveServiceChangeLogPort, meterRegistry);
     }
 
     /** 영속성 어댑터처럼 생성된 PK가 담긴 새 도메인 객체를 반환하도록 mock한다. */
@@ -127,6 +130,9 @@ class CollectDatasetServiceTest {
 
         CollectionHistory finalHistory = historyCaptor.getAllValues().get(1);
         assertThat(finalHistory.getStatus()).isEqualTo(CollectionStatus.SUCCESS);
+
+        assertThat(meterRegistry.get("collection.job")
+                .tags("result", "success", "dataset", "OA-2266").counter().count()).isEqualTo(1.0);
     }
 
     @Test
@@ -146,6 +152,9 @@ class CollectDatasetServiceTest {
         assertThat(failHistory.getErrorMessage()).contains("서울시 API 응답 없음");
         // 실패 저장도 생성된 id를 유지해 RUNNING 행을 update해야 한다 (중복 INSERT 방지).
         assertThat(failHistory.getId()).isEqualTo(500L);
+
+        assertThat(meterRegistry.get("collection.job")
+                .tags("result", "failure", "dataset", "OA-2266").counter().count()).isEqualTo(1.0);
     }
 
     @Test

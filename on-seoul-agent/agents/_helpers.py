@@ -31,7 +31,7 @@ _RESERVATION_GUIDE_MARKER = "통합회원 가입"
 def assess_result_quality(
     rows: list[dict[str, Any]],
     *,
-    area_filter: str | None,
+    area_filter: list[str] | None,
 ) -> dict[str, Any] | None:
     """결과 품질 자각 패스 — hydration 결과의 성격(쏠림·빈약)을 경량 점검한다.
 
@@ -140,6 +140,26 @@ def emit_decision(action: str, routes: list[str], user_rationale: str) -> None:
             "_evt": "decision",
             "action": action,
             "routes": routes,
+            "user_rationale": user_rationale,
+        }
+    )
+
+
+def emit_critic_decision(decision: str, round_index: int, user_rationale: str) -> None:
+    """retrieval-critic 라운드 결정 이벤트를 custom stream 으로 흘려보낸다 (L1 Phase 5).
+
+    triage `decision`(단일 1회)과 별개 `_evt` 타입("critic_decision")으로 흘려보내
+    두 이벤트가 같은 프레임에서 서로 덮어쓰지 않게 한다. critic 은 라운드마다 1회
+    호출되므로 round_index(0-base)로 라운드를 구분한다. 컨텍스트 밖이면 no-op.
+    """
+    writer = _writer()
+    if writer is None:
+        return
+    writer(
+        {
+            "_evt": "critic_decision",
+            "decision": decision,
+            "round": round_index,
             "user_rationale": user_rationale,
         }
     )

@@ -33,9 +33,15 @@ class TestRefineReSearch:
         직전 area_name=강남구 + 이번 발화 신규 payment_type=무료 가 effective filters 에
         둘 다 반영돼야 한다(MUST-FIX: 신규 제약 소실 회귀 방지).
         """
-        rows = [{"service_id": "S1", "service_name": "강남 무료 수영장"}]
+        # 원본 행에는 area_name 이 포함된다(hydration 컬럼셋) — post-RRF 게이트가
+        # area 교집합을 확인하므로 실제 컬럼을 채워야 게이트를 통과한다.
+        rows = [
+            {"service_id": "S1", "service_name": "강남 무료 수영장", "area_name": "강남구"}
+        ]
         sql_agent, data_session = make_sql_agent(rows)
-        hydrated = [{"service_id": "S1", "service_name": "강남 무료 수영장"}]
+        hydrated = [
+            {"service_id": "S1", "service_name": "강남 무료 수영장", "area_name": "강남구"}
+        ]
 
         ws = {
             "entities": [{"service_id": "S0", "label": "강남 수영장"}],

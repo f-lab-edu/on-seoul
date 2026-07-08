@@ -169,8 +169,8 @@ class TestRouterContextInjection:
 
         result = await agent.classify("강남구 지금 접수 중인 체육시설")
 
-        assert result.max_class_name == "체육시설"
-        assert result.area_name == "강남구"
+        assert result.max_class_name == ["체육시설"]
+        assert result.area_name == ["강남구"]
         assert result.service_status == "접수중"
 
     async def test_metadata_postfilter_defaults_to_none(self):
@@ -196,7 +196,7 @@ class TestRouterContextInjection:
     async def test_valid_max_class_name_preserved(self):
         """허용된 max_class_name 값은 그대로 유지된다."""
         rq = _IntentOutput(intent=IntentType.SQL_SEARCH, max_class_name="진료복지")
-        assert rq.max_class_name == "진료복지"
+        assert rq.max_class_name == ["진료복지"]
 
     async def test_invalid_area_name_with_space_normalized_to_none(self):
         """공백이 포함된 자치구명("강 남구")은 None으로 정규화된다."""
@@ -216,7 +216,7 @@ class TestRouterContextInjection:
     async def test_valid_area_name_preserved(self):
         """허용된 자치구명("강남구")은 그대로 유지된다."""
         rq = _IntentOutput(intent=IntentType.SQL_SEARCH, area_name="강남구")
-        assert rq.area_name == "강남구"
+        assert rq.area_name == ["강남구"]
 
     async def test_none_area_name_preserved(self):
         """area_name=None은 None으로 유지된다."""
@@ -227,7 +227,7 @@ class TestRouterContextInjection:
     async def test_all_25_districts_pass_validator(self, district: str):
         """서울 25개 자치구 전체가 field_validator를 통과한다."""
         rq = _IntentOutput(intent=IntentType.SQL_SEARCH, area_name=district)
-        assert rq.area_name == district
+        assert rq.area_name == [district]
 
     async def test_payment_type_free_normalized(self):
         """무료/공짜/free 류는 payment_type="무료"로 정규화된다."""

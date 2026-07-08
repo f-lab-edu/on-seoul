@@ -4,33 +4,47 @@
 
 ---
 ## AI Service (FastAPI)
-> 멀티에이전트 오케스트레이션과 LLM 기반 추론을 담당한다. 자연어 답변에 포함될 데이터 조회(SQL, 벡터, 지도)는 에이전트가 호출하는 tool로 구축한다.
+> 멀티에이전트 워크플로우와 LLM 기반 추론을 담당한다. 자연어 답변에 포함될 데이터 조회(SQL, 벡터, BM25, 지도, 집계)는 에이전트가 호출하는 tool로 구축한다.
 
 ``` 
 ai-service/
 ├── routers/
-│   └── chat.py                    # POST /chat/stream — SSE 스트리밍 진입점
+│   ├── chat.py                    # POST /chat/stream — SSE 스트리밍 진입점
+│   └── notification.py            # POST /notification/template — 알림 메시지 생성
 ├── agents/
-│   ├── graph.py                   # LangGraph 워크플로우 조립 (Phase 2)
-│   ├── router_agent.py            # 사용자 의도 분류 (SQL_SEARCH / VECTOR_SEARCH / MAP / FALLBACK)
+│   ├── graph.py                   # LangGraph StateGraph 조립·실행 (조건부 엣지 라우팅)
+│   ├── nodes/                     # 노드 구현 (intake, planning, retrieval, correction, cache, observability, answer)
+│   ├── intake_agent.py            # 맥락 유형(turn_kind) + 행동(action) 판정 + 지시 참조 해소
+│   ├── router_agent.py            # RETRIEVE 시 검색 의도(intent: SQL/VECTOR/MAP/ANALYTICS)와 조건 결정
 │   ├── sql_agent.py               # sql_search tool 호출 → 정형 데이터 조회
-│   ├── vector_agent.py            # 질의 정제 → vector_search tool 호출 → 유사도 검색
-│   └── answer_agent.py            # 조회 결과 → 자연어 답변 + 시설 카드 가공, URL 미존재 시 fallback 링크 처리
+│   ├── vector_agent.py            # 질의 정제 → 4채널 하이브리드 검색(vector+bm25+question) RRF
+│   ├── analytics_agent.py         # 집계·통계성 질의 처리
+│   ├── answer_agent.py            # 조회 결과 → 자연어 답변 + 시설 카드, URL 미존재 시 fallback 링크
+│   ├── hydration_node.py          # RRF 결과 → 원본 서비스 hydration
+│   └── retrieval_critic.py        # (옵션) 결과 관찰 → 다음 행동 판단
 ├── tools/
 │   ├── sql_search.py              # PostgreSQL 정형 조회 (카테고리, 상태, 지역, 날짜 필터)
-│   ├── vector_search.py           # pgvector 임베딩 유사도 검색
+│   ├── vector_search.py           # pgvector 임베딩 유사도 검색 (post-filter)
 │   ├── question_search.py         # 예상 질문 임베딩 검색, service_id별 dedup (Track C)
-│   └── map_search.py              # earthdistance + cube 반경 검색, GeoJSON 반환
+│   ├── bm25_search.py             # ParadeDB BM25 전문 검색
+│   ├── map_search.py              # earthdistance + cube 반경 검색, GeoJSON 반환
+│   ├── analytics_search.py        # GROUP BY / DISTINCT 집계 조회
+│   └── hydrate_services.py        # service_id 원본 재조회
 ├── llm/
 │   ├── client.py                  # LLM API 호출 추상화 (Gemini / GPT)
-│   └── embedder.py                # 텍스트 → 벡터 변환 (임베딩 모델 호출)
+│   ├── embedder.py                # 텍스트 → 벡터 변환 (임베딩 모델 호출)
+│   ├── extractor.py               # 상세내용 구조화 추출 (임베딩 파이프라인)
+│   └── hyqe.py                    # HyQE 예상 질문 생성
 ├── schemas/
 │   ├── state.py                   # AgentState — LangGraph 공유 상태 정의
-│   ├── events.py                  # SSE 이벤트 타입 (agent_start, tool_call, token, done 등)
+│   ├── intake.py                  # Intake 출력 스키마 (turn_kind / action 등)
+│   ├── critic.py                  # Retrieval Critic 판단 스키마
+│   ├── events.py                  # SSE 이벤트 타입 (decision, tool_call, token, done 등)
 │   └── chat.py                    # ChatRequest / ChatResponse
 ├── core/
 │   ├── config.py                  # 환경변수, DB 접속 정보, LLM API 키
 │   ├── database.py                # async SQLAlchemy 세션 (PostgreSQL 접속)
+│   ├── cache.py                   # 응답/정제 질의 캐시 (Redis)
 │   └── rrf.py                     # 가중 RRF (reciprocal_rank_fusion)
 ├── scripts/
 │   └── embed_metadata.py          # 시설 메타데이터 → 임베딩 → pgvector 적재 (배치)
@@ -41,11 +55,11 @@ ai-service/
 ### 주요 설계 사항
 **pgvector 단일 인스턴스**: 별도 벡터DB(Qdrant) 대신 PostgreSQL pgvector 확장을 사용한다. 1000건 미만의 데이터에서 별도 인프라를 운영할 이유가 없고, SQL 조회와 벡터 검색이 동일 DB에서 가능하므로 복합 질의(벡터 → SQL 필터 조합)가 단순해진다.
 
-**tool 3종 분리**: `sql_search`, `vector_search`, `map_search`는 각각 입력 파라미터와 반환 형태가 다르므로 별도 tool로 분리한다. Router Agent가 의도에 따라 적절한 tool을 선택하고, 결과는 Answer Agent에서 통합 가공한다.
+**tool 분리**: `sql_search`, `vector_search`, `bm25_search`, `map_search`, `analytics_search` 등은 입력 파라미터와 반환 형태가 다르므로 별도 tool로 분리한다. Router Agent가 분류한 검색 의도(intent)에 따라 적절한 tool을 선택하고, 결과는 Answer Agent에서 통합 가공한다.
 
 **fallback_link를 별도 tool에서 제거**: URL 미존재 시 서울시 공공예약 메인 링크로 대체하는 로직은 Answer Agent 내부에서 조건 분기로 처리한다. 별도 tool로 분리할 만큼 복잡하지 않다.
 
-**Triple-Track 임베딩 + RRF**: `service_embeddings` 통합 테이블에 Track A(identity) / Track B(summary) / Track C(question) 세 종류 임베딩을 적재하고, 4채널(Track A/B/C + BM25) RRF(Reciprocal Rank Fusion)로 결합한다. Phase 1은 비가중치 baseline. Phase 3에서 `vector_sub_intent` 분류 정확도 ≥ 80% 검증 후 가중치 활성화 예정.
+**Triple-Track 임베딩 + RRF**: `service_embeddings` 통합 테이블에 Track A(identity) / Track B(summary) / Track C(question) 세 종류 임베딩을 적재하고, 4채널(Track A/B/C + BM25) RRF(Reciprocal Rank Fusion)로 결합한다. 현재 운영값은 비가중치 baseline이며, `vector_sub_intent` 분류 품질을 측정한 뒤 채널 가중치 활성화를 검토한다.
 
 ---
 

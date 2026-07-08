@@ -94,16 +94,16 @@ class TestSqlAgent:
         )
         state = _make_state("마포구 체육시설")
         state["plan"]["refined_query"] = "마포구 체육시설"
-        state["filters"]["max_class_name"] = "체육시설"
-        state["filters"]["area_name"] = "마포구"
+        state["filters"]["max_class_name"] = ["체육시설"]
+        state["filters"]["area_name"] = ["마포구"]
         state["filters"]["service_status"] = "접수중"
 
         await agent.search(state, session)
 
         bind = session.execute.call_args[0][1]
         # LLM 반환값(교육/관악구)이 아닌 state 값(체육시설/마포구)을 사용해야 한다
-        assert bind.get("max_class_name") == "체육시설"
-        assert bind.get("area_name") == "마포구"
+        assert bind.get("classes") == ["체육시설"]
+        assert bind.get("areas") == ["마포구"]
         assert bind.get("service_status") == "접수중"
 
     async def test_payment_type_from_state_when_refined_present(self):
@@ -145,7 +145,7 @@ class TestSqlAgent:
         bind = call_args[0][1]
 
         assert "max_class_name" in sql_str
-        assert bind.get("max_class_name") == "체육시설"
+        assert bind.get("classes") == ["체육시설"]
 
     async def test_query_builds_area_filter(self):
         """area_name 파라미터가 있으면 WHERE에 포함된다."""
@@ -153,7 +153,7 @@ class TestSqlAgent:
         await agent.search(_make_state(), session)
 
         bind = session.execute.call_args[0][1]
-        assert bind.get("area_name") == "마포구"
+        assert bind.get("areas") == ["마포구"]
 
     async def test_query_builds_keyword_filter(self):
         """keyword 파라미터가 있으면 ILIKE 패턴으로 변환된다."""
@@ -270,7 +270,7 @@ class TestSqlParamsValidators:
     def test_valid_max_class_name_preserved(self):
         """화이트리스트에 있는 max_class_name은 그대로 반환된다."""
         p = _SqlParams(max_class_name="체육시설")
-        assert p.max_class_name == "체육시설"
+        assert p.max_class_name == ["체육시설"]
 
     def test_invalid_area_name_coerced_to_none(self):
         """25개 자치구가 아닌 area_name은 None으로 정규화된다."""
@@ -280,7 +280,7 @@ class TestSqlParamsValidators:
     def test_valid_area_name_preserved(self):
         """정확한 자치구명은 그대로 반환된다."""
         p = _SqlParams(area_name="마포구")
-        assert p.area_name == "마포구"
+        assert p.area_name == ["마포구"]
 
     def test_invalid_service_status_coerced_to_none(self):
         """화이트리스트에 없는 service_status는 None으로 정규화된다."""

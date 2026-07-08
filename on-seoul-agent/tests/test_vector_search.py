@@ -123,16 +123,16 @@ class TestVectorSearchRowKind:
             await vector_search(session, _SAMPLE_VECTOR, row_kind="question")  # type: ignore[arg-type]
 
     async def test_identity_applies_post_filter(self):
-        """row_kind='identity' + max_class_name 전달 시 bind에 max_class_name이 포함된다."""
+        """row_kind='identity' + max_class_name 전달 시 bind에 classes 가 포함된다."""
         session, texts, binds = _capture_session()
         await vector_search(
             session,
             _SAMPLE_VECTOR,
             row_kind="identity",
-            max_class_name="체육시설",
+            max_class_name=["체육시설"],
         )
         assert "max_class_name" in texts[0]
-        assert binds[0]["max_class_name"] == "체육시설"
+        assert binds[0]["classes"] == ["체육시설"]
 
     async def test_summary_without_filter_omits_postfilter_from_sql(self):
         """row_kind='summary' + 필터 없으면 post-filter WHERE 절이 SQL에 없다.
@@ -148,7 +148,7 @@ class TestVectorSearchRowKind:
         )
         # None인 필터는 SQL/bind 모두 제외
         assert "max_class_name" not in texts[0]
-        assert "max_class_name" not in binds[0]
+        assert "classes" not in binds[0]
         assert "area_name" not in binds[0]
         assert "service_status" not in binds[0]
 
@@ -226,7 +226,7 @@ class TestPostFilterStructure:
     async def test_filter_applied_outside_subquery(self):
         """area_name 필터가 서브쿼리(candidates) 외부에 적용된다."""
         session, texts, _ = _capture_session()
-        await vector_search(session, _SAMPLE_VECTOR, area_name="강남구")
+        await vector_search(session, _SAMPLE_VECTOR, area_name=["강남구"])
         sql = texts[0]
         candidates_pos = sql.find("candidates")
         area_name_pos = sql.rfind("area_name")  # 외부 WHERE 기준 마지막 등장
@@ -252,15 +252,25 @@ class TestPostFilterBindParams:
 
     async def test_postfilter_max_class_name_in_bind(self):
         session, _, binds = _capture_session()
-        await vector_search(session, _SAMPLE_VECTOR, max_class_name="체육시설")
-        assert "max_class_name" in binds[0]
-        assert binds[0]["max_class_name"] == "체육시설"
+        await vector_search(session, _SAMPLE_VECTOR, max_class_name=["체육시설"])
+        assert "classes" in binds[0]
+        assert binds[0]["classes"] == ["체육시설"]
+
+    async def test_postfilter_max_class_complement_multi(self):
+        """제외 여집합(4종)이 classes 리스트로 bind 된다."""
+        session, _, binds = _capture_session()
+        await vector_search(
+            session,
+            _SAMPLE_VECTOR,
+            max_class_name=["문화체험", "공간시설", "교육강좌", "진료복지"],
+        )
+        assert binds[0]["classes"] == ["문화체험", "공간시설", "교육강좌", "진료복지"]
 
     async def test_postfilter_area_name_in_bind(self):
         session, _, binds = _capture_session()
-        await vector_search(session, _SAMPLE_VECTOR, area_name="강남구")
-        assert "area_name" in binds[0]
-        assert binds[0]["area_name"] == "강남구"
+        await vector_search(session, _SAMPLE_VECTOR, area_name=["강남구", "서초구"])
+        assert "areas" in binds[0]
+        assert binds[0]["areas"] == ["강남구", "서초구"]
 
     async def test_postfilter_service_status_in_bind(self):
         session, _, binds = _capture_session()
@@ -275,8 +285,8 @@ class TestPostFilterBindParams:
         """
         session, _, binds = _capture_session()
         await vector_search(session, _SAMPLE_VECTOR)
-        assert "max_class_name" not in binds[0]
-        assert "area_name" not in binds[0]
+        assert "classes" not in binds[0]
+        assert "areas" not in binds[0]
         assert "service_status" not in binds[0]
 
     async def test_all_three_postfilters_present_in_bind(self):
@@ -284,12 +294,12 @@ class TestPostFilterBindParams:
         await vector_search(
             session,
             _SAMPLE_VECTOR,
-            max_class_name="체육시설",
-            area_name="강남구",
+            max_class_name=["체육시설"],
+            area_name=["강남구"],
             service_status="접수중",
         )
-        assert binds[0]["max_class_name"] == "체육시설"
-        assert binds[0]["area_name"] == "강남구"
+        assert binds[0]["classes"] == ["체육시설"]
+        assert binds[0]["areas"] == ["강남구"]
         assert binds[0]["service_status"] == "접수중"
 
     async def test_all_three_postfilters_appear_in_sql_text(self):
@@ -297,8 +307,8 @@ class TestPostFilterBindParams:
         await vector_search(
             session,
             _SAMPLE_VECTOR,
-            max_class_name="체육시설",
-            area_name="강남구",
+            max_class_name=["체육시설"],
+            area_name=["강남구"],
             service_status="접수중",
         )
         sql_text = texts[0]

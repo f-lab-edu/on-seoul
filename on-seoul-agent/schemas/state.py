@@ -89,10 +89,17 @@ class PlanState(TypedDict, total=False):
 class FilterState(TypedDict, total=False):
     """post-filter — dict_merge 채널 (retry_prep 부분 드롭)."""
 
-    max_class_name: str | None
-    area_name: str | None
+    # 다중 카테고리 필터 — SQL 은 max_class_name = ANY(:classes), gate 는 멤버십 매칭.
+    # "체육시설 말고" 같은 제외 표현은 여집합(닫힌 5종 − X)을 리스트로 담는다.
+    # 단일 카테고리도 리스트로 담는다(["체육시설"]). None/[] 이면 미적용(area_name 정합).
+    max_class_name: list[str] | None
+    # 다중 지역 필터 — SQL 은 area_name = ANY(:areas), gate 는 교집합 매칭.
+    # 단일 지역도 리스트로 담는다(["강남구"]). None/[] 이면 미적용.
+    area_name: list[str] | None
     service_status: str | None
     payment_type: str | None
+    # 대상 그룹 필터 — CHILD/ADULT/SENIOR/FAMILY. tools.target_audience 토큰맵 소비.
+    target_audience: str | None
 
 
 class SqlState(TypedDict, total=False):
@@ -150,7 +157,7 @@ class EmitState(TypedDict, total=False):
 class PrevWorkingSet(TypedDict, total=False):
     """직전 턴 대화 워킹셋 — 입력 전용 중첩 채널(그래프 내 갱신 없음, 리듀서 불필요).
 
-    "검색 레시피"지 "결과 스냅샷"이 아니다 — 후속은 레시피에 제약을 더해 재검색한다
+    "검색 구성"이지 "결과 스냅샷"이 아니다 — 후속은 검색 구성에 제약을 더해 재검색한다
     (carryover 철학: 정체성만 운반, 사실은 rehydrate 재조회).
 
     entities: 직전 노출 결과 [{service_id, label}, ...] (= 기존 prev_entities).
@@ -165,7 +172,7 @@ class PrevWorkingSet(TypedDict, total=False):
     intent: "IntentType | None"
     reasoning: str | None
     refined_query: str | None
-    applied_filters: "dict[str, str | None] | None"
+    applied_filters: "dict[str, str | list[str] | None] | None"
     relaxed: bool
     relaxed_filters: "list[str] | None"
 
@@ -189,14 +196,16 @@ class AgentState(TypedDict):
     prev_intent: IntentType | None
     # 직전 턴의 판단 근거(user_rationale). EXPLAIN action 이 소비한다.
     prev_reasoning: str | None
-    # 대화 워킹셋 — 직전 검색 레시피. 입력 전용 중첩 채널(리듀서 없음).
+    # 대화 워킹셋 — 직전 검색 구성. 입력 전용 중첩 채널(리듀서 없음).
     # 신규 채널 우선, 미전송 시 평면 슬롯(prev_entities/prev_intent/prev_reasoning)
     # 으로 폴백한다(routers/chat.py 조립). 첫 턴/구 클라이언트면 전부 None(하위호환).
     prev_working_set: "PrevWorkingSet | None"
     # 참조 해소 결과: 현재 message 가 지시 참조일 때 바인딩된 service_id 리스트.
     target_service_ids: list[str] | None
     # ── 재시도 제어 (평면) ──
-    # LangGraph 자기 교정(Self-Correction) 루프 카운터.
+    # 단일 retrieval 예산 카운터. self_correction(빈 답변/0건)과 L1 retrieval-critic
+    # (0건·thin·skew)이 *공유*한다 — 별도 카운터를 두지 않아 예산 이중 카운트를 막는다.
+    # 캡 단일 출처는 Settings.max_retrieval_retries(기본 2). 도달 시 하드 백스톱.
     retry_count: int  # 재시도 횟수 (0 = 아직 재시도 없음)
     # 하드 필터 0건으로 인한 완화 재시도 신호. AnswerAgent 가 답변에 명시한다.
     retry_relaxed: bool
@@ -211,6 +220,16 @@ class AgentState(TypedDict):
     forced_intent: IntentType | None
     # MAP 0건 재시도 시 확장 반경(m). 없으면 기본 반경(1000m) 적용.
     retry_radius_m: int | None
+    # ── L1 retrieval-critic 판단 (평면) ──
+    # retrieval_critic_node 가 검색 결과를 보고 정하는 다음 행동. 세 슬롯 모두
+    # None = critic 미진입(명백히 좋은 80% 경로 / critic 실패 fail-open). 스캐폴딩
+    # 단계(Phase 1)라 아직 소비하는 노드/엣지가 없다 — 값은 항상 None(회귀 0).
+    # critic_decision:    "ANSWER"/"REPLAN"/"STOP" (CriticDecision.value).
+    # critic_replan_hint: REPLAN 시 재탐색 방향(ReplanHint.model_dump()). retry_prep 가 소비.
+    # critic_rationale:   decision 이벤트용 근거 1문장(내부 식별자 제거 후).
+    critic_decision: str | None
+    critic_replan_hint: "dict[str, Any] | None"
+    critic_rationale: str | None
     # ── 결과 품질 자각 패스 ──
     # pre_answer_gate_node 가 RETRIEVE 경로에서 산출. answer 가 소비해 톤/제안 조정.
     # 쏠림/빈약 휴리스틱 결과(예: {"skew_field","skew_value","skew_ratio","thin"})
@@ -238,9 +257,12 @@ class AgentState(TypedDict):
     # ── 오류/캐시 (평면) ──
     error: str | None  # 오류 메시지 (있을 경우)
     cache_hit: bool  # cache_check_node 결과 (기본값 False)
-    # singleflight 락 키 — cache_check_node 가 락을 획득한 패스에서 기록한다.
-    # 락 해제(retry_prep / cache_write)가 획득 시점과 동일 키를 쓰도록 보관해
-    # 0건 게이트(cache_write 우회) 경로에서도 락이 누수되지 않게 한다.
+    # singleflight 락 키 겸 answer 저장 타깃 — 최초 cache_check_node 가 락을 획득한
+    # 패스에서 K_original(= 사용자 원 질의가 산출하는 키)로 1회 기록하고, 이후 재시도
+    # 재진입에서도 보존한다(cache_check 가드가 슬롯 존재 시 재획득·덮어쓰기 skip). 락은
+    # 전 요청 수명 동안 K_original 에 유지되고 cache_write 가 이 키로 저장·해제한다.
+    # self-correction 완화(K_relaxed)가 있어도 저장 키를 K_original 로 고정해, 동일 원
+    # 질의 재요청이 hit 하고 K_original 을 폴링하던 singleflight 대기자도 hit 한다.
     answer_lock_key: str | None
     # ── 인프라/관측 (평면) ──
     # 노드 실행 경로 누적 (관측용). node_path_reducer 가 부분 리스트를 append 병합한다.

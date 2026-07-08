@@ -28,7 +28,13 @@ _ACTION_MAP: dict[IntakeAction, ActionType] = {
 }
 
 # 검색 머지 필터 키(working_set_refine 머지 대상).
-_FILTER_KEYS = ("max_class_name", "area_name", "service_status", "payment_type")
+_FILTER_KEYS = (
+    "max_class_name",
+    "area_name",
+    "service_status",
+    "payment_type",
+    "target_audience",
+)
 
 # no_base 폴백 — 직전 검색 발화 후보에서 제외할 "필터 추가/잡담" 신호.
 # 이런 토큰만으로 이뤄진 빈약한 후속은 토픽 base 가 아니라 델타이므로 건너뛴다.
@@ -202,9 +208,9 @@ class IntakeNodes:
         return update
 
     async def working_set_refine_node(self, state: AgentState) -> dict[str, Any]:
-        """REFINE 경로의 "주방" — 직전 워킹셋 + 이번 발화 신규 제약 머지 → 재검색.
+        """REFINE 경로 — 직전 워킹셋 + 이번 발화 신규 제약 머지 → 재검색.
 
-        carryover 철학(스냅샷 아님): 직전 레시피(applied_filters)에 *이번 발화의 신규
+        carryover 철학(스냅샷 아님): 직전 검색 구성(applied_filters)에 *이번 발화의 신규
         제약*을 더해 재검색한다. 신규 제약을 추출하지 않으면("그 중 무료만"의
         payment_type=무료) 직전 베이스로만 돌아 사용자 의도가 소실된다(MUST-FIX).
 
@@ -236,21 +242,57 @@ class IntakeNodes:
         forced = prev_intent if isinstance(prev_intent, IntentType) else None
 
         # no_base 판정: applied_filters 와 refined_query 가 모두 없을 때만 carryover 할
-        # 직전 레시피가 없는 것이다(C — refined_query 만 운반하는 VECTOR refine 오판 방지).
+        # 직전 검색 구성이 없는 것이다(C — refined_query 만 운반하는 VECTOR refine 오판 방지).
         no_base = not filters_base and not prev_refined
 
         if no_base:
             # 폴백 — Spring 이 prev_working_set 을 회신 안 한 경우. history 의 직전 검색성
             # 발화를 토픽 base 로 삼아 재정제(빈약한 후속을 그대로 검색하지 않는다).
-            new_filters, refined_query = await self._parse_with_history_base(state)
+            new_filters, refined_query, parsed_intent = (
+                await self._parse_with_history_base(state)
+            )
         else:
             # 이번 발화의 신규 제약만 추출(history 미전달로 bleed 차단 — B).
-            new_filters, this_refined = await self._parse_new_constraints(
-                state["message"]
+            new_filters, this_refined, parsed_intent = (
+                await self._parse_new_constraints(state["message"])
             )
             # C — 직전 토픽 보존: base 가 있으면 순수 필터 추가 후속으로 보고 prev_refined
             # 를 유지한다. prev_refined 가 없을 때만 이번 정제값으로 채운다.
             refined_query = prev_refined or this_refined
+            # P4-b — 신규 의미 제약("주말") 소실 방지. 이번 발화가 정형 필터로 표현되지
+            # 않는 의미 제약을 담으면(new_filters 는 비었는데 this_refined 는 새 의미를
+            # 실었음) prev_refined 순수 보존이 아니라 병합해 refined_query 를 갱신한다
+            # (예: "강남 수영장" + "주말" → "강남 수영장 주말"). 벡터 랭킹에 반영되고
+            # 동일 재검색(dup)을 막는다. SQL 은 hard-filter 못 하지만 무해하다. 이미
+            # this_refined 내용이 prev_refined 에 들어있으면 중복 병합을 건너뛴다.
+            if (
+                prev_refined
+                and this_refined
+                and not new_filters
+                and this_refined not in prev_refined
+            ):
+                refined_query = f"{prev_refined} {this_refined}"
+
+        # P4-a — REFINE-after-DRILL topic clobber 방지. prev_intent 가 null 이면
+        # (직전이 DRILL 이라 working_set.intent 미기록) forced 가 None 이라 router_node 가
+        # 맨 발화를 재분류해 재구성 refined_query 를 topic-less 값으로 덮는다. 재구성
+        # refined_query 를 산출/운반할 때는 forced_intent 를 세워 router 의 forced 분기
+        # (intent 만 set → refined_query dict_merge 보존)를 타게 한다. 운반할 intent 는
+        # 파싱이 분류한 intent(history base 발화의 intent 포함), 없으면 재구성 의미
+        # 질의이므로 VECTOR_SEARCH 를 기본으로 둔다. 단 파싱 결과가 검색 intent 가
+        # 아니면(FALLBACK/MAP — 맨 발화만으론 잡담·지도로 분류될 수 있다) forced 로 세우면
+        # router 가 재검색을 answer/map 으로 돌려버리므로, 검색 intent 로 clamp 한다.
+        if forced is None and refined_query is not None:
+            forced = (
+                parsed_intent
+                if parsed_intent
+                in (
+                    IntentType.SQL_SEARCH,
+                    IntentType.VECTOR_SEARCH,
+                    IntentType.ANALYTICS,
+                )
+                else IntentType.VECTOR_SEARCH
+            )
 
         # 머지: base 위에 신규를 얹어 신규가 우선(동일 키 충돌 시 이번 발화가 이긴다).
         # B 로 new_filters 에서 환각 필터가 제거됐으므로 이 규칙은 안전하다(base 토픽/
@@ -289,16 +331,18 @@ class IntakeNodes:
 
     async def _parse_new_constraints(
         self, message: str
-    ) -> tuple[dict[str, Any], str | None]:
-        """이번 발화에서 신규 post-filter + refined_query 만 추출한다(intent 는 버림).
+    ) -> tuple[dict[str, Any], str | None, IntentType | None]:
+        """이번 발화에서 신규 post-filter + refined_query + intent 를 추출한다.
 
         history 를 *전달하지 않는다*(B) — 빈약한 후속을 history 와 통째로 재분류시키면
         발화에 없는 필터를 지어내는 bleed 가 발생한다. 이 함수는 message 단독으로만
         정제해 발화에 근거 있는 델타만 남긴다.
 
         RouterAgent.classify 가 enum 정규화(area_name/payment_type 등)를 이미 수행하므로
-        그 결과의 non-None 필터만 골라 dict 로 반환한다. LLM/네트워크 실패는 best-effort
-        로 흡수해 base 필터만으로 재검색을 계속한다(REFINE 흐름을 막지 않음).
+        그 결과의 non-None 필터만 골라 dict 로 반환한다. intent 는 P4-a 의 forced_intent
+        운반용으로 함께 반환한다(prev_intent 가 null 인 REFINE-after-DRILL 에서 router
+        재분류 clobber 를 막는다). LLM/네트워크 실패는 best-effort 로 흡수해 base 필터만
+        으로 재검색을 계속한다(REFINE 흐름을 막지 않음).
         """
         try:
             result = await self._router.classify(message)
@@ -306,17 +350,17 @@ class IntakeNodes:
             logger.exception(
                 "working_set_refine 신규 제약 정제 실패 — base 필터만 사용"
             )
-            return {}, None
+            return {}, None, None
         new_filters = {
             k: getattr(result, k)
             for k in _FILTER_KEYS
             if getattr(result, k, None) is not None
         }
-        return new_filters, result.refined_query
+        return new_filters, result.refined_query, result.intent
 
     async def _parse_with_history_base(
         self, state: AgentState
-    ) -> tuple[dict[str, Any], str | None]:
+    ) -> tuple[dict[str, Any], str | None, IntentType | None]:
         """no_base 폴백 — history 직전 검색 발화를 토픽 base 로 삼아 델타만 더한다.
 
         prev_working_set 이 비어 carryover 베이스가 없을 때, 빈약한 후속을 그대로
@@ -325,7 +369,8 @@ class IntakeNodes:
 
         직전 검색 발화를 못 찾으면 이번 발화 단독으로만 정제한다(발화에 없는 필터를
         만들지 않음 — 환각 차단). 토픽 base 가 있으면 "<직전 검색> <이번 발화>" 를
-        합쳐 router 에 던져 토픽을 잇는다.
+        합쳐 router 에 던져 토픽을 잇는다. intent 도 함께 운반한다(P4-a — base 발화의
+        intent 를 forced_intent 로 세워 router 재분류 clobber 를 막는다).
         """
         base_utterance = _last_search_user_turn(state.get("history") or [])
         if base_utterance is None:

@@ -178,17 +178,22 @@ class TestCacheWriteNode:
     async def test_writes_on_success(self, base_state):
         from agents.nodes import CacheWriteNode
 
+        from core.cache import _cache_key
+
         base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         base_state["output"]["answer"] = "신규 답변"
         base_state["vector"]["results"] = [{"service_id": "S1"}]
-        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
+        with patch(
+            "agents._redis_gateway.set_cached_answer_by_key", AsyncMock()
+        ) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
         mock_set.assert_called_once()
         args = mock_set.call_args.args
-        # signature: set_cached_answer(refined, payload, snap, redis)
-        assert args[0] == "서울 테니스장"
+        # signature: set_cached_answer_by_key(store_key, payload, snap, redis)
+        # answer_lock_key 미설정 → 재계산 키(K_original)로 폴백 저장
+        assert args[0] == _cache_key("서울 테니스장", routes="VECTOR_SEARCH")
         assert args[1]["answer"] == "신규 답변"
         assert args[2]["vector_results"] == [{"service_id": "S1"}]
 
@@ -198,7 +203,9 @@ class TestCacheWriteNode:
         base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         base_state["output"]["answer"] = "x"
         base_state["error"] = "boom"
-        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
+        with patch(
+            "agents._redis_gateway.set_cached_answer_by_key", AsyncMock()
+        ) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -210,7 +217,9 @@ class TestCacheWriteNode:
         base_state["plan"]["intent"] = IntentType.VECTOR_SEARCH
         base_state["cache_hit"] = True
         base_state["output"]["answer"] = "x"
-        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
+        with patch(
+            "agents._redis_gateway.set_cached_answer_by_key", AsyncMock()
+        ) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -226,7 +235,9 @@ class TestCacheWriteNode:
             {"service_id": "S1", "service_name": "수영장"},
             {"service_id": "S2", "service_name": "체육관"},
         ]
-        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
+        with patch(
+            "agents._redis_gateway.set_cached_answer_by_key", AsyncMock()
+        ) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -292,7 +303,9 @@ class TestCacheWriteNode:
 
         base_state["plan"]["intent"] = IntentType.MAP
         base_state["output"]["answer"] = "x"
-        with patch("agents._redis_gateway.set_cached_answer", AsyncMock()) as mock_set:
+        with patch(
+            "agents._redis_gateway.set_cached_answer_by_key", AsyncMock()
+        ) as mock_set:
             node = CacheWriteNode(redis=AsyncMock())
             await node(base_state)
 
@@ -405,12 +418,13 @@ class TestGraphRouting:
 
 
 class TestSingleflightLockLeak:
-    """0건 게이트가 cache_write를 우회할 때 첫 패스 락이 해제되는지 검증.
+    """singleflight 락 수명 정합 검증(락 = 저장 타깃 = K_original 통일 후).
 
-    회귀: cache_check가 SET NX로 잡은 락이 cache_write에서만 풀렸는데,
-    0건 게이트(hydrated=[] & retry_count==0)는 cache_write를 우회하고 retry_prep로
-    직행한다. 재진입한 cache_check가 미해제 락을 다시 잡지 못해 poll 타임아웃을
-    소진했다. retry_prep가 직전 패스 락을 해제해야 한다.
+    락은 최초 cache_check 가 K_original 에 획득한 시점부터 cache_write 저장까지
+    유지된다. self-correction 재시도 재진입 시 cache_check 는 answer_lock_key 슬롯이
+    있으면 재획득·덮어쓰기를 skip 하고(락 정합 유지), retry_prep 는 락을 해제하지
+    않는다(락은 전 요청 수명 K_original 유지). cache_write 가 K_original 로 저장·단독
+    해제해 저장 키 ↔ 락 키가 정합된다.
     """
 
     def _eligible_state(self) -> AgentState:
@@ -436,8 +450,14 @@ class TestSingleflightLockLeak:
         # 락이 실제로 SET NX로 잡혔다
         assert f"{key}{_LOCK_SUFFIX}" in redis.store
 
-    async def test_retry_prep_releases_recorded_lock(self):
-        """retry_prep_node가 answer_lock_key로 락을 DEL하고 슬롯을 비운다."""
+    async def test_retry_prep_preserves_recorded_lock(self):
+        """retry_prep_node는 락을 해제하지 않고 answer_lock_key 슬롯도 건드리지 않는다.
+
+        락은 전 요청 수명 동안 K_original 에 유지되어야 한다(대기자 폴 지속) — retry_prep
+        가 미리 풀면 K_original 대기자가 고아가 되고, 재진입 cache_check 가드는 재획득도
+        안 하므로 락 정합이 깨진다. 슬롯 미기록(update 에 answer_lock_key 부재)으로
+        LangGraph 머지에서 K_original 이 보존된다.
+        """
         from agents.nodes import CacheCheckNode
         from agents.nodes.correction import CorrectionNodes
         from core.cache import _LOCK_SUFFIX
@@ -450,19 +470,21 @@ class TestSingleflightLockLeak:
         lock_full = f"{lock_key}{_LOCK_SUFFIX}"
         assert lock_full in redis.store
 
-        # retry_prep로 진입 (state에 lock key 반영)
-        # B3-1: __new__ 우회 + _redis 세팅 대신 CorrectionNodes 정상 생성/주입
-        # (facade _correction_phase 지연 빌더 퇴역).
         state["answer_lock_key"] = lock_key
         nodes = CorrectionNodes(redis=redis)
         retry_update = await nodes.retry_prep_node(state)
 
-        # 첫 패스 락이 해제되고 슬롯이 비워졌다
-        assert lock_full not in redis.store
-        assert retry_update["answer_lock_key"] is None
+        # 락은 유지되고(해제 안 함), answer_lock_key 슬롯은 update 에 기록되지 않는다
+        # (= 머지 무변경 → K_original 보존).
+        assert lock_full in redis.store
+        assert "answer_lock_key" not in retry_update
 
-    async def test_reentry_cache_check_acquires_without_poll(self):
-        """retry_prep 락 해제 후 재진입 cache_check가 SET NX 성공 → poll 미진입."""
+    async def test_reentry_cache_check_preserves_key_without_poll(self):
+        """재진입 cache_check(answer_lock_key 보유)는 재획득·GET·poll 없이 pass-through.
+
+        완화(K_relaxed)가 있어도 저장 타깃 = K_original 로 고정하려면 재진입 cache_check
+        가 슬롯을 덮어쓰지 않고 즉시 miss 로 통과해야 한다. GET/acquire/poll 모두 미호출.
+        """
         from agents.nodes import CacheCheckNode
         from agents.nodes.correction import CorrectionNodes
 
@@ -474,24 +496,34 @@ class TestSingleflightLockLeak:
         first = await check(state)
         lock_key = first["answer_lock_key"]
 
-        # 0건 게이트 → retry_prep 가 락 해제 (CorrectionNodes 정상 생성)
+        # 0건 게이트 → retry_prep (락 유지·슬롯 보존)
         state["answer_lock_key"] = lock_key
         nodes = CorrectionNodes(redis=redis)
         await nodes.retry_prep_node(state)
 
-        # 재진입 cache_check (동일 키): poll을 호출하지 않고 락 재획득해야 한다
+        # 재진입 cache_check: 슬롯 보유 → GET/acquire/poll 미진입, 키 반환 안 함(보존).
+        reentry_state = self._eligible_state()
+        reentry_state["answer_lock_key"] = lock_key
+        # 완화 시뮬레이션: filters 를 바꿔도 저장 타깃은 K_original 이어야 함
+        reentry_state["filters"]["area_name"] = "성동구"
+        get_mock = AsyncMock()
         poll_mock = AsyncMock()
-        with patch("agents._redis_gateway.poll_for_answer", poll_mock):
-            reentry = await check(self._eligible_state())
+        with (
+            patch("agents._redis_gateway.get_cached_answer_by_key", get_mock),
+            patch("agents._redis_gateway.poll_for_answer", poll_mock),
+        ):
+            reentry = await check(reentry_state)
 
+        get_mock.assert_not_called()
         poll_mock.assert_not_called()
         assert reentry["cache_hit"] is False
-        assert reentry["answer_lock_key"] == lock_key
+        # 슬롯을 반환하지 않는다(머지 무변경 → K_original 보존)
+        assert "answer_lock_key" not in reentry
 
-    async def test_cache_write_releases_recorded_lock(self):
-        """cache_write도 answer_lock_key 기준으로 정합되게 해제한다(이중 해제 무해)."""
+    async def test_cache_write_stores_and_releases_at_recorded_key(self):
+        """cache_write는 answer_lock_key(K_original)로 저장하고 같은 키로 락을 해제한다."""
         from agents.nodes import CacheCheckNode, CacheWriteNode
-        from core.cache import _LOCK_SUFFIX
+        from core.cache import _LOCK_SUFFIX, get_cached_answer_by_key
 
         redis = _FakeRedis()
         check = CacheCheckNode(redis=redis)
@@ -506,6 +538,11 @@ class TestSingleflightLockLeak:
         write = CacheWriteNode(redis=redis)
         write_update = await write(state)
 
+        # 저장이 K_original(= lock_key)에 이뤄졌다
+        envelope = await get_cached_answer_by_key(lock_key, redis)
+        assert envelope is not None
+        assert envelope["payload"]["answer"] == "신규 답변"
+        # 같은 키로 락이 해제됐다
         assert f"{lock_key}{_LOCK_SUFFIX}" not in redis.store
         assert write_update["answer_lock_key"] is None
 
@@ -523,7 +560,7 @@ class TestSingleflightLockLeak:
         assert not any(k.endswith(":lock") for k in redis.store)
         assert result["cache_hit"] is False
 
-        # retry_prep도 no-op release (raise 없음) — CorrectionNodes 정상 생성
+        # retry_prep도 no-op(락 미해제, raise 없음) — CorrectionNodes 정상 생성
         state = self._eligible_state()
         state["answer_lock_key"] = result.get("answer_lock_key")
         nodes = CorrectionNodes(redis=redis)
@@ -593,14 +630,14 @@ class TestSingleflightLockLeak:
         # waiter는 락 보유자가 아니므로 키를 넘기지 않는다(잘못된 release 방지)
         assert result.get("answer_lock_key") is None
 
-    async def test_redis_failure_records_key_but_release_swallows(self):
-        """Redis 장애 fail-open: acquire=True로 키 기록되나 release 예외는 삼킨다.
+    async def test_redis_failure_records_key_but_cache_write_release_swallows(self):
+        """Redis 장애 fail-open: acquire=True로 키 기록되나 cache_write release는 예외 삼킴.
 
         acquire가 SET 예외 시 True(fail-open)를 반환 → cache_check가 lock_key를
-        기록한다. 이후 retry_prep의 release가 DEL에서 예외를 던져도 메인 흐름이
-        막히지 않아야 한다(release_answer_lock의 except가 삼킴).
+        기록한다. retry_prep는 락을 건드리지 않는다(예외 미발생). 이후 cache_write의
+        release가 DEL에서 예외를 던져도 메인 흐름이 막히지 않아야 한다.
         """
-        from agents.nodes import CacheCheckNode
+        from agents.nodes import CacheCheckNode, CacheWriteNode
         from agents.nodes.correction import CorrectionNodes
 
         class _RaisingRedis(_FakeRedis):
@@ -616,22 +653,29 @@ class TestSingleflightLockLeak:
         assert check_result["cache_hit"] is False
         assert check_result["answer_lock_key"] is not None
 
-        # retry_prep의 release가 DEL 예외를 삼켜야 한다(메인 흐름 안 막힘)
+        # retry_prep는 락을 건드리지 않는다(DEL 미호출 → 예외 없음)
         state = self._eligible_state()
         state["answer_lock_key"] = check_result["answer_lock_key"]
         nodes = CorrectionNodes(redis=redis)
         retry_update = await nodes.retry_prep_node(state)  # no raise
-        assert retry_update["answer_lock_key"] is None
+        assert "answer_lock_key" not in retry_update
+
+        # cache_write의 저장(SET 예외)·release(DEL 예외)가 삼켜져 메인 흐름이 안 막힘
+        write_state = self._eligible_state()
+        write_state["answer_lock_key"] = check_result["answer_lock_key"]
+        write_state["output"]["answer"] = "답변"
+        write_state["vector"]["results"] = [{"service_id": "S1"}]
+        write_update = await CacheWriteNode(redis=redis)(write_state)  # no raise
+        assert write_update["answer_lock_key"] is None
 
     async def test_double_release_is_harmless(self):
-        """이중 해제 무해성: retry_prep가 해제한 락을 cache_write가 다시 해제해도 안전.
+        """이중 해제 무해성: 동일 락 키에 release가 두 번 호출돼도 DEL은 멱등(no-op).
 
-        2회차 retry_count 캡 도달 등으로 동일 락 키에 대해 release가 두 번
-        호출되어도 DEL은 멱등(이미 없는 키 → no-op)이라 예외/오류가 없다.
+        cache_write 가 K_original 락을 해제한 뒤(정상 종단) 어떤 경로에서 같은 키를
+        다시 release 해도 이미 없는 키 → 예외/오류가 없다.
         """
         from agents.nodes import CacheCheckNode, CacheWriteNode
-        from agents.nodes.correction import CorrectionNodes
-        from core.cache import _LOCK_SUFFIX
+        from core.cache import _LOCK_SUFFIX, release_answer_lock
 
         redis = _FakeRedis()
         check_result = await CacheCheckNode(redis=redis)(self._eligible_state())
@@ -639,28 +683,26 @@ class TestSingleflightLockLeak:
         lock_full = f"{lock_key}{_LOCK_SUFFIX}"
         assert lock_full in redis.store
 
-        # 1차 해제 (retry_prep) — CorrectionNodes 정상 생성
-        state = self._eligible_state()
-        state["answer_lock_key"] = lock_key
-        nodes = CorrectionNodes(redis=redis)
-        await nodes.retry_prep_node(state)
-        assert lock_full not in redis.store
-
-        # 2차 해제 (cache_write가 같은 키로 다시 release) — 멱등, 예외 없음
+        # 1차 해제 (cache_write 저장 후 단독 해제)
         write_state = self._eligible_state()
         write_state["answer_lock_key"] = lock_key
-        write_state["output"]["answer"] = "둘째 패스 답변"
+        write_state["output"]["answer"] = "답변"
         write_state["vector"]["results"] = [{"service_id": "S2"}]
-        write_update = await CacheWriteNode(redis=redis)(write_state)  # no raise
+        write_update = await CacheWriteNode(redis=redis)(write_state)
         assert lock_full not in redis.store
         assert write_update["answer_lock_key"] is None
+
+        # 2차 해제 (같은 키로 다시 release) — 멱등, 예외 없음
+        await release_answer_lock(lock_key, redis)  # no raise
+        assert lock_full not in redis.store
 
     async def test_graph_zero_hit_retry_does_not_enter_poll(self):
         """그래프 레벨 회귀: 0건 1회 재시도 시 poll 타임아웃이 발생하지 않는다.
 
         RETRIEVE → VECTOR_SEARCH(eligible) → 첫 패스 hydration 0건(0건 게이트) →
-        retry_prep(락 해제) → router 재진입 → cache_check 재획득.
-        재진입 cache_check 가 SET NX 성공해야 하므로 poll_for_answer 는 호출되지 않는다.
+        retry_prep(락 유지) → router 재진입 → cache_check 재진입.
+        재진입 cache_check 는 answer_lock_key 슬롯을 보고 즉시 pass-through 하므로
+        재획득도 poll 도 하지 않는다(poll_for_answer 미호출).
         """
         from agents.graph import AgentGraph
         from schemas.state import ActionType
@@ -701,7 +743,7 @@ class TestSingleflightLockLeak:
         from tests.helpers import make_ai_session
 
         # vector_search/bm25_search 모두 0건 → hydration 0건 → 0건 게이트 발동 →
-        # retry_prep(락 해제) → 재진입. retry_count 캡(==1)에 의해 둘째 패스는
+        # retry_prep(락 유지) → 재진입. retry_count 캡(==1)에 의해 둘째 패스는
         # answer_node 로 통과해 정상 답변을 낸다.
         with (
             patch("agents.vector_agent.vector_search", AsyncMock(return_value=[])),
@@ -724,7 +766,161 @@ class TestSingleflightLockLeak:
 
         # 0건 1회 재시도가 발생했고
         assert result["retry_count"] == 1
-        # poll 진입 없이 종료 (재진입 cache_check 가 락을 정상 재획득)
+        # poll 진입 없이 종료 (재진입 cache_check 가드가 즉시 pass-through)
         poll_spy.assert_not_called()
         # 최종 답변이 채워졌다
         assert result["output"]["answer"] == "테니스장 안내입니다."
+
+
+# ---------------------------------------------------------------------------
+# 캐시 키 정합 회귀 (선재 버그): 완화 재시도 후 저장 키 = 최초 질의 키(K_original)
+# ---------------------------------------------------------------------------
+
+
+class TestCacheKeyConsistencyAcrossRetry:
+    """self-correction 완화 재시도로 filters/intent 가 갈려도 저장 키를 K_original 로 고정.
+
+    버그: cache_write 가 현재(완화) state 로 키를 재계산(K_relaxed)해 저장하면
+      (1) 결정적 refine 이 원 질의로 항상 K_original 을 재생성하는데 답변은 K_relaxed 에
+          있어 동일 질의가 계속 miss → 재시도 사이클 반복,
+      (2) K_original 을 폴링하던 singleflight 대기자가 고아가 됨.
+    수정: cache_write 는 answer_lock_key(= 최초 cache_check 시점 K_original)로 저장.
+    """
+
+    def _eligible_state(self) -> AgentState:
+        state = make_agent_state(message="강남 테니스장", refined_query="서울 테니스장")
+        state["plan"]["intent"] = IntentType.VECTOR_SEARCH
+        state["triage"]["action"] = None  # RETRIEVE 게이트 통과
+        return state
+
+    async def test_relaxed_retry_stores_at_original_key_and_same_query_hits(self):
+        """⑴ 완화 재시도(필터 드롭) 후 저장 → 동일 원 질의 재요청이 cache hit.
+
+        1) 최초 cache_check: filters(area_name) 포함 K_original 로 락 획득·키 기록.
+        2) 완화 재시도: filters 를 드롭한 채로 cache_write 도달(K_relaxed 상이).
+        3) cache_write 는 answer_lock_key(K_original)로 저장해야 한다.
+        4) 동일 원 질의(= 최초 filters 재현)로 cache_check 하면 hit.
+        """
+        from agents.nodes import CacheCheckNode, CacheWriteNode
+
+        redis = _FakeRedis()
+        check = CacheCheckNode(redis=redis)
+
+        # 1) 최초 cache_check — area_name 필터 포함 → K_original 획득·기록
+        first_state = self._eligible_state()
+        first_state["filters"]["area_name"] = "강남구"
+        first = await check(first_state)
+        k_original = first["answer_lock_key"]
+        assert k_original is not None
+
+        # 2) 완화 재시도 시뮬레이션: filters 드롭 후 cache_write 도달.
+        #    (retry_prep 가 area_name 을 None 으로 드롭 → 현재 state 재계산 시 K_relaxed)
+        write_state = self._eligible_state()
+        write_state["filters"]["area_name"] = None  # 완화(드롭)
+        write_state["answer_lock_key"] = k_original  # 재진입 가드로 보존된 K_original
+        write_state["output"]["answer"] = "완화 후 테니스장 안내"
+        write_state["vector"]["results"] = [{"service_id": "S1"}]
+        await CacheWriteNode(redis=redis)(write_state)
+
+        # 3) 저장이 K_relaxed 가 아닌 K_original 에 이뤄졌다
+        from core.cache import _cache_key
+
+        k_relaxed = _cache_key("서울 테니스장", routes="VECTOR_SEARCH")  # area 없음
+        assert k_original != k_relaxed  # 두 키가 실제로 갈린다(전제 성립)
+        assert k_relaxed not in redis.store  # 완화 키에는 저장 안 됨
+        assert k_original in redis.store
+
+        # 4) 동일 원 질의(최초 filters 재현)로 cache_check → hit (miss 반복 없음)
+        replay = self._eligible_state()
+        replay["filters"]["area_name"] = "강남구"  # 결정적 refine + 동일 원 요청
+        hit = await CacheCheckNode(redis=redis)(replay)
+        assert hit["cache_hit"] is True
+        assert hit["output"]["answer"] == "완화 후 테니스장 안내"
+
+    async def test_singleflight_waiter_polling_original_key_hits(self):
+        """⑵ K_original 을 폴링하던 singleflight 대기자가 완화 저장 후에도 hit.
+
+        보유자가 완화 재시도를 거쳐 K_original 에 저장·해제하므로, 최초 질의 키를
+        폴링하던 대기자가 그 키에서 결과를 본다(고아 미발생).
+        """
+        from agents.nodes import CacheCheckNode, CacheWriteNode
+        from core.cache import poll_for_answer
+
+        redis = _FakeRedis()
+
+        # 보유자: 최초 cache_check(K_original 획득)
+        holder_state = self._eligible_state()
+        holder_state["filters"]["area_name"] = "강남구"
+        holder = await CacheCheckNode(redis=redis)(holder_state)
+        k_original = holder["answer_lock_key"]
+
+        # 대기자: 같은 원 질의 → K_original 락 점유(acquire 실패). 아직 결과 없음.
+        assert await poll_for_answer(k_original, redis, retries=1, interval=0) is None
+
+        # 보유자가 완화 재시도를 거쳐 cache_write(K_original 저장·해제)
+        write_state = self._eligible_state()
+        write_state["filters"]["area_name"] = None  # 완화
+        write_state["answer_lock_key"] = k_original
+        write_state["output"]["answer"] = "보유자 답변"
+        write_state["vector"]["results"] = [{"service_id": "S1"}]
+        await CacheWriteNode(redis=redis)(write_state)
+
+        # 대기자가 K_original 을 다시 폴하면 이제 hit(envelope 수신)
+        polled = await poll_for_answer(k_original, redis, retries=1, interval=0)
+        assert polled is not None
+        assert polled["payload"]["answer"] == "보유자 답변"
+
+    async def test_normal_path_store_key_equals_recomputed_key(self):
+        """⑶ 정상(비재시도) 경로 동작 불변: K_original == K_final.
+
+        재시도가 없으면 저장 키(answer_lock_key)와 현재 state 재계산 키가 동일하므로
+        저장 위치가 수정 전과 같다(회귀 금지). 재계산 키에서 hit 이 확인된다.
+        """
+        from agents.nodes import CacheCheckNode, CacheWriteNode
+        from core.cache import _cache_key, get_cached_answer_by_key
+
+        redis = _FakeRedis()
+        state = self._eligible_state()
+        state["filters"]["area_name"] = "강남구"
+
+        first = await CacheCheckNode(redis=redis)(state)
+        k_original = first["answer_lock_key"]
+
+        # 완화 없이 그대로 cache_write (동일 filters 유지)
+        state["answer_lock_key"] = k_original
+        state["output"]["answer"] = "정상 답변"
+        state["vector"]["results"] = [{"service_id": "S1"}]
+        await CacheWriteNode(redis=redis)(state)
+
+        # 현재 state 로 재계산한 키와 저장 키가 동일하다
+        recomputed = _cache_key(
+            "서울 테니스장", area_name="강남구", routes="VECTOR_SEARCH"
+        )
+        assert k_original == recomputed
+        envelope = await get_cached_answer_by_key(recomputed, redis)
+        assert envelope is not None
+        assert envelope["payload"]["answer"] == "정상 답변"
+
+    async def test_cache_write_falls_back_to_recomputed_key_without_lock(self):
+        """answer_lock_key 부재(구 경로/poll-timeout fail-open) → 재계산 키로 폴백 저장.
+
+        하위호환: 락 미보유로 슬롯이 None 이면 기존처럼 현재 state 로 키를 재계산해
+        저장한다(정상 경로 동작 보존).
+        """
+        from agents.nodes import CacheWriteNode
+        from core.cache import _cache_key, get_cached_answer_by_key
+
+        redis = _FakeRedis()
+        state = self._eligible_state()
+        state["filters"]["area_name"] = "강남구"
+        # answer_lock_key 미설정(None)
+        state["output"]["answer"] = "폴백 답변"
+        state["vector"]["results"] = [{"service_id": "S1"}]
+        await CacheWriteNode(redis=redis)(state)
+
+        recomputed = _cache_key(
+            "서울 테니스장", area_name="강남구", routes="VECTOR_SEARCH"
+        )
+        envelope = await get_cached_answer_by_key(recomputed, redis)
+        assert envelope is not None
+        assert envelope["payload"]["answer"] == "폴백 답변"

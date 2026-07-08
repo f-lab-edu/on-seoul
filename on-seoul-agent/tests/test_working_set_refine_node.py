@@ -62,7 +62,7 @@ class TestWorkingSetRefine:
 
         state = make_agent_state(message="마포구로 바꿔줘", prev_working_set=ws)
         update = await _node(router).working_set_refine_node(state)
-        assert update["filters"]["area_name"] == "마포구"
+        assert update["filters"]["area_name"] == ["마포구"]
 
     async def test_refined_query_carried_to_plan(self):
         """router 가 산출한 refined_query 가 plan 채널로 흐른다(재검색 질의 반영)."""
@@ -291,6 +291,116 @@ class TestRefineTopicCarryover:
         assert update["filters"]["area_name"] == "강남구"
         # 직전 토픽 유지.
         assert update["plan"]["refined_query"] == "강남 수영장"
+
+
+class TestRefineAfterDrillTopicClobber:
+    """P4-a — REFINE-after-DRILL 에서 재구성 refined_query 가 topic-less 로 안 덮이도록.
+
+    직전이 DRILL 이면 prev_working_set.intent=null → forced 미설정 → router_node 가 맨
+    발화를 재분류해 refined_query 를 덮는다(촬영 topic 소실). working_set_refine 가
+    refined_query 를 운반하면 forced_intent 를 세워 router forced 분기(refined_query 보존)
+    를 타게 한다.
+    """
+
+    async def test_no_base_forces_parsed_intent_to_preserve_refined(self):
+        """prev_intent=null(REFINE-after-DRILL) + no_base 재구성 → parsed intent 로 forced."""
+        # no_base 폴백이 history 검색 발화를 base 로 재구성 → refined_query + intent 산출.
+        router = make_router(
+            IntentType.VECTOR_SEARCH, refined_query="성동구 촬영 장소"
+        )
+        from tests.helpers import make_agent_state
+
+        # prev_working_set 은 DRILL 직후라 intent 미기록(null), base 없음.
+        state = make_agent_state(
+            message="성동구 없는지 다시 찾아봐줘",
+            prev_working_set={},
+            history=[
+                {"role": "user", "content": "성동구 촬영 가능한 장소 알려줘"},
+                {"role": "assistant", "content": "촬영 장소 N건..."},
+            ],
+        )
+        update = await _node(router).working_set_refine_node(state)
+        # 재구성 refined_query 를 산출했고 forced_intent 를 세워 router 재분류 clobber 차단.
+        assert update["plan"]["refined_query"] == "성동구 촬영 장소"
+        assert update["forced_intent"] == IntentType.VECTOR_SEARCH
+
+    async def test_base_present_null_intent_carries_parsed_intent(self):
+        """base 는 있으나 prev_intent=null 이고 prev_refined 운반 시 parsed intent 로 forced.
+
+        직전이 DRILL 이라 intent 는 null 이지만 applied_filters+refined_query 가 남아있는
+        경우. refined_query 를 보존하면서, 이번 발화를 정제한 router intent 를 forced 로
+        세워 topic 이 보존되게 한다(router 재분류 clobber 차단).
+        """
+        # 이번 발화 정제 결과 intent(VECTOR_SEARCH) 를 forced 로 운반.
+        router = make_router(IntentType.VECTOR_SEARCH)  # 신규 필터/refined 없음
+        ws = {
+            # intent 없음(DRILL 직후) — refined_query/applied_filters 는 있음.
+            "refined_query": "촬영 가능한 장소",
+            "applied_filters": {"area_name": ["성동구"]},
+        }
+        from tests.helpers import make_agent_state
+
+        state = make_agent_state(message="다시 찾아봐줘", prev_working_set=ws)
+        update = await _node(router).working_set_refine_node(state)
+        assert update["plan"]["refined_query"] == "촬영 가능한 장소"
+        # prev_intent 가 null 이어도 refined_query 운반 시 parsed intent 로 forced.
+        assert update["forced_intent"] == IntentType.VECTOR_SEARCH
+
+    async def test_parse_failure_defaults_forced_to_vector(self):
+        """파싱 실패로 intent 미상이어도 refined_query 운반 시 VECTOR 기본으로 forced."""
+        router = _failing_router()
+        ws = {
+            "refined_query": "촬영 가능한 장소",
+            "applied_filters": {"area_name": ["성동구"]},
+        }
+        from tests.helpers import make_agent_state
+
+        state = make_agent_state(message="다시 찾아봐줘", prev_working_set=ws)
+        update = await _node(router).working_set_refine_node(state)
+        assert update["plan"]["refined_query"] == "촬영 가능한 장소"
+        assert update["forced_intent"] == IntentType.VECTOR_SEARCH
+
+
+class TestNewSemanticConstraintMerge:
+    """P4-b — 신규 의미 제약("주말")이 refined_query 에 병합되어 재검색에 반영된다."""
+
+    async def test_semantic_constraint_merged_into_refined(self):
+        """정형 필터 부재 + 새 의미 제약이면 prev_refined 에 병합(순수 보존 금지)."""
+        # "주말에 하는걸로 다시 찾아줘" → router 는 정형 필터 없이 refined_query="주말"만.
+        router = make_router(IntentType.VECTOR_SEARCH, refined_query="주말")
+        ws = {
+            "intent": IntentType.VECTOR_SEARCH,
+            "refined_query": "강남 수영장",
+            "applied_filters": {"area_name": ["강남구"]},
+        }
+        from tests.helpers import make_agent_state
+
+        state = make_agent_state(
+            message="주말에 하는걸로 다시 찾아줘", prev_working_set=ws
+        )
+        update = await _node(router).working_set_refine_node(state)
+        # 병합: prev 토픽 + 신규 의미 제약(주말). 순수 보존("강남 수영장")이 아니다.
+        assert update["plan"]["refined_query"] == "강남 수영장 주말"
+        # 정형 필터는 base 만(주말은 정형 필터로 표현 안 됨).
+        assert update["filters"] == {"area_name": ["강남구"]}
+
+    async def test_filter_add_followup_does_not_merge_refined(self):
+        """정형 필터가 추출된 후속(payment_type=무료)은 병합 대상이 아니다(prev 보존)."""
+        router = make_router(
+            IntentType.SQL_SEARCH, payment_type="무료", refined_query="무료"
+        )
+        ws = {
+            "intent": IntentType.SQL_SEARCH,
+            "refined_query": "강남 수영장",
+            "applied_filters": {"area_name": ["강남구"]},
+        }
+        from tests.helpers import make_agent_state
+
+        state = make_agent_state(message="그 중 무료만", prev_working_set=ws)
+        update = await _node(router).working_set_refine_node(state)
+        # new_filters 가 비지 않으므로(payment_type) 병합하지 않고 prev_refined 유지.
+        assert update["plan"]["refined_query"] == "강남 수영장"
+        assert update["filters"]["payment_type"] == "무료"
 
 
 class TestRouterFailureBestEffort:

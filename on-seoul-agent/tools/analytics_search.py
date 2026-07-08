@@ -46,8 +46,8 @@ async def analytics_search(
     *,
     group_by: str,
     metric: Literal["count", "distinct"],
-    max_class_name: str | None = None,
-    area_name: str | None = None,
+    max_class_name: list[str] | None = None,
+    area_name: list[str] | None = None,
     service_status: str | None = None,
     keyword: str | None = None,
     top_k: int = TOP_K,
@@ -63,9 +63,11 @@ async def analytics_search(
     metric:
         "count" → GROUP BY + COUNT(*), "distinct" → SELECT DISTINCT.
     max_class_name:
-        대분류 카테고리 필터. None이면 미적용.
+        대분류 카테고리 리스트 필터. max_class_name = ANY(:classes) 로 다중 OR 매칭.
+        None/빈 리스트면 미적용.
     area_name:
-        서울 자치구 이름 필터. None이면 미적용.
+        서울 자치구 이름 리스트 필터. area_name = ANY(:areas) 로 다중 OR 매칭.
+        None/빈 리스트면 미적용.
     service_status:
         예약 상태 필터. None이면 미적용.
     keyword:
@@ -87,13 +89,19 @@ async def analytics_search(
     conditions: list[str] = ["deleted_at IS NULL"]
     bind: dict = {"top_k": top_k}
 
-    if max_class_name is not None:
-        conditions.append("max_class_name = :max_class_name")
-        bind["max_class_name"] = max_class_name
+    # 다중값 필터 — = ANY(:param) 로 OR 매칭(sql_search 동일 패턴). 스칼라 str 오주입
+    # 방어로 리스트 래핑(char-split 방지). 빈 리스트/None 이면 조건 생략.
+    if isinstance(max_class_name, str):
+        max_class_name = [max_class_name]
+    if max_class_name:
+        conditions.append("max_class_name = ANY(:classes)")
+        bind["classes"] = list(max_class_name)
 
-    if area_name is not None:
-        conditions.append("area_name = :area_name")
-        bind["area_name"] = area_name
+    if isinstance(area_name, str):
+        area_name = [area_name]
+    if area_name:
+        conditions.append("area_name = ANY(:areas)")
+        bind["areas"] = list(area_name)
 
     if service_status is not None:
         conditions.append("service_status = :service_status")
