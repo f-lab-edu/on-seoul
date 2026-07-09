@@ -147,14 +147,16 @@ class RetrievalNodes:
         if self._is_retrieve_path(state):
             try:
                 rows = state["hydration"].get("hydrated_services") or []
-                # post-RRF 구조화 게이트 — 채널 누출 차단(계획서 P1+P2). 벡터의
-                # summary/question/bm25 채널로 들어온 타 지역·상충 대상 행을 원본
-                # area_name/target_info 로 최종 교정한다. SQL 경로는 WHERE 로 이미
-                # 걸려 있어 이 게이트를 다시 통과해도 불변이라 무해하다.
+                # post-RRF 구조화 게이트 — 채널 누출 차단. 벡터의 summary/question/
+                # bm25 채널로 들어온 타 지역·타 카테고리("체육시설 말고" 여집합)·상충
+                # 대상 행을 원본 area_name/max_class_name/target_info 로 최종 교정한다.
+                # SQL 경로는 WHERE 로 이미 걸려 있어 이 게이트를 다시 통과해도
+                # 불변이라 무해하다.
                 filters = state.get("filters") or {}
                 gated = apply_structured_gate(
                     rows,
                     area_names=filters.get("area_name"),
+                    max_class_names=filters.get("max_class_name"),
                     target_audience=filters.get("target_audience"),
                 )
                 if len(gated) != len(rows):

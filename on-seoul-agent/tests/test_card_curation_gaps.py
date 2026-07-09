@@ -140,17 +140,17 @@ class TestExtraCountClamp:
 class TestHybridAFewExactBehaviorPin:
     """many-raw/few-exact 핀(회귀 앵커) — 원본 많지만 적합 적을 때.
 
-    이 경우 하드 제외가 없으므로 빈 슬롯을 대안으로 채운다. 따라서:
-      · curated_display 는 _DISPLAY_LIMIT 로 채워지고(적합 2건뿐이어도),
-      · result_quality.thin 은 display 개수(5)를 보므로 False,
-      · 적합 부족은 alt_count(대안 라벨)로 표면화된다.
-    "빈약 판정"이 아니라 "대안 라벨"이 few-exact 신호다 — 현행 계약을 핀한다.
+    max_class_name 은 이제 post-RRF 게이트에서 area 와 동일한 하드 멤버십 필터다.
+    따라서 off-category(문화행사) 행은 큐레이션 이전에 제거되고, 남은 적합분(체육시설
+    2건)만 표시된다 — 대안 라벨이 아니다(area 하드 동작과 대칭). 그 결과:
+      · curated_display 는 남은 적합분 개수(2)만큼,
+      · off-category 는 대안이 아니라 제거되므로 alt_count == 0,
+      · 남은 2건은 빈약(thin) 신호로 표면화된다(display<=2).
     """
 
-    async def test_many_raw_few_exact_uses_alt_label_not_thin(self):
-        # post-RRF 게이트는 area(하드)로만 거른다. max_class_name 은 게이트 대상이
-        # 아니라 큐레이션 강등(대안)으로만 다룬다 — 따라서 "raw 많음/딱맞음 적음"은
-        # 게이트를 통과하는 축(카테고리)으로 재현한다(area 불일치는 게이트에서 제거됨).
+    async def test_many_raw_few_exact_hard_gate_removes_off_category(self):
+        # max_class_name 하드 게이트: 문화행사 7건은 큐레이션 전에 제거되고 체육시설
+        # 2건만 남는다(area 불일치가 제거되는 것과 대칭).
         nodes = _nodes()
         rows = [
             _row("E1", area="광진구", klass="체육시설"),
@@ -164,13 +164,12 @@ class TestHybridAFewExactBehaviorPin:
             hydrated_services=rows,
         )
         out = await nodes.pre_answer_gate_node(state)
-        assert len(out["curated_display"]) == _DISPLAY_LIMIT
-        # 적합 2건만이라도 thin 으로 빠지지 않는다(display=5).
-        assert out["result_quality"] is None
-        # 적합 부족은 대안 카운트로 표면화(top5: 2 exact + 3 alt).
-        assert out["curated_alt_count"] == 3
-        # 적합 2건이 상단.
-        assert [c["service_id"] for c in out["curated_display"][:2]] == ["E1", "E2"]
+        # off-category 제거 후 적합 2건만 표시(대안 아님).
+        assert [c["service_id"] for c in out["curated_display"]] == ["E1", "E2"]
+        # off-category 는 제거되므로 대안 카운트 0.
+        assert out["curated_alt_count"] == 0
+        # 남은 2건은 빈약(thin)으로 표면화(display<=2).
+        assert out["result_quality"]["thin"] is True
 
 
 class TestStableTieAfterCurationJoin:
