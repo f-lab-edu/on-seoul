@@ -1,8 +1,8 @@
-"""L1 Phase 6 critic 동작 지표 측정 하네스 단위 테스트 — 픽스처 기반(라이브 없음).
+"""L1 critic 동작 지표 측정 하네스 단위 테스트 — 픽스처 기반(라이브 없음).
 
 관측 계약: critic 이 발동하면 root "chat" span 안에 자식 SPAN(name="retrieval_critic")이
-라운드마다 열리고 metadata {entry_signal, decision, round} 를 담는다(Phase 5,
-agents/graph.py::record_critic_span). 이 테스트는 그 중첩 구조를 그대로 모사해
+라운드마다 열리고 metadata {entry_signal, decision, round} 를 담는다
+(agents/graph.py::record_critic_span). 이 테스트는 그 중첩 구조를 그대로 모사해
 pick_critic_spans → trace_to_critic → compute_metrics 파이프라인을 검증한다.
 """
 

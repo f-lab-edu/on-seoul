@@ -1,4 +1,4 @@
-"""L1 Phase 6 측정 — critic-on Langfuse 트레이스에서 critic 동작 지표 산출.
+"""L1 측정 — critic-on Langfuse 트레이스에서 critic 동작 지표 산출.
 
 배포 후(enable_retrieval_critic=true) 실 트래픽 트레이스를 분석해 세 질문에 답한다:
   1. critic 이 실제로 복구를 늘리나? (REPLAN 복구율)
@@ -9,7 +9,7 @@
   · root "chat" span metadata: intent/action/turn_kind/retry_count/total_hits/
     result_quality/... (extract.py 계약, agents/graph.py::_trace_completion_metadata).
   · critic 자식 span(name="retrieval_critic") metadata: {entry_signal(zero/thin/skew),
-    decision(ANSWER/REPLAN/STOP), round} (agents/graph.py::record_critic_span, Phase 5).
+    decision(ANSWER/REPLAN/STOP), round} (agents/graph.py::record_critic_span).
     라운드마다 스팬이 하나씩 열린다. critic 미발동 트레이스는 자식 스팬이 없다.
   · 타이밍: ObservationsView.latency(초) 또는 start_time/end_time(ISO8601). 있으면 쓰고,
     없으면 명시적으로 "타이밍 신호 없음"으로 흡수한다(관대 원칙).
@@ -325,7 +325,7 @@ def format_report(m: CriticMetrics) -> str:
         return f"{100 * x:5.1f}%"
 
     lines = [
-        "=== L1 Phase 6 critic 동작 지표 (critic-on 트레이스) ===",
+        "=== L1 critic 동작 지표 (critic-on 트레이스) ===",
         f"총 트레이스: {m.total}  "
         f"(RETRIEVE: {m.retrieval_total}, NON_RETRIEVE: {m.non_retrieve_total})",
         "",

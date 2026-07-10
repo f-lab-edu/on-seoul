@@ -151,7 +151,7 @@ class TestNonCardTurnsSkipCuration:
 
 
 class TestStructuredGateInPreAnswer:
-    """post-RRF 게이트가 hydration 슬롯을 교정하는지 확인(계획서 P1+P2 통합 지점)."""
+    """post-RRF 게이트가 hydration 슬롯을 교정하는지 확인."""
 
     async def test_gate_removes_leaked_district_and_rewrites_hydration(self):
         """행23: area 활성 시 타지역 누출 행이 게이트에서 하드 제거되고

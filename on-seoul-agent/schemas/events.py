@@ -42,7 +42,7 @@ class DecisionEvent(BaseModel):
 
 
 class CriticDecisionEvent(BaseModel):
-    """Retrieval-critic 라운드 결정 직후 SSE로 방출되는 판단 근거 이벤트 (L1 Phase 5).
+    """Retrieval-critic 라운드 결정 직후 SSE로 방출되는 판단 근거 이벤트 (L1).
 
     검색 결과가 약할 때(0건/thin/skew) critic LLM 이 다음 행동을 정하면 그 근거를
     사용자에게 투명하게 노출한다. 기존 triage `decision` 이벤트(DecisionEvent)와

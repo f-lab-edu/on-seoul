@@ -72,7 +72,7 @@ flowchart TD
 
 | 분기 | 노드 | 동작 |
 |---|---|---|
-| `turn_kind=REFINE` | `working_set_refine_node` | 직전 검색 구성에 신규 제약을 머지해 재검색(아래 3-2 참조) |
+| `turn_kind=REFINE` | `working_set_refine_node` | 직전 검색 구성에 신규 제약을 머지해 재검색 |
 | `turn_kind=DRILL` / `RELEVANCE` | `rehydrate_node → describe_node` | 참조한 시설을 최신 원본으로 재조회 후 설명형 답변. 검색 스킵 |
 | `turn_kind=META` | `explain_node` | 직전 턴의 판단 근거(`prev_reasoning`)를 설명. 근거가 없으면 `DIRECT_ANSWER`로 폴백 |
 | `NEW` + `RETRIEVE` | `router_node` | 검색 계획 단계로 진행 |
@@ -180,9 +180,9 @@ flowchart TD
 
 핵심 규칙은 두 가지다. 시설에 `service_url`이 없으면 서울 예약 포털(`https://yeyak.seoul.go.kr`)로 대신 연결하고, 입력에 이미 `error`와 `answer`가 모두 채워져 있으면(intake 예외 등) LLM을 다시 부르지 않고 그대로 돌려준다. 성능을 위해 내용이 고정된 프롬프트(MAP/ANALYTICS/FALLBACK)는 시작할 때 한 번만 만들어 두고, 매번 내용이 달라지는 카드형(SQL/VECTOR) 프롬프트만 호출하는 순간에 맞춰 조립한다.
 
-검색 경로 외에도 Answer Agent는 몇 가지 전용 산출을 더 소비한다. **결과 품질 자각**(`result_quality`)이 채워져 있으면 답변의 톤과 제안을 조정하고(아래 6장), **운영-상세 발췌**(`detail_excerpt`)가 채워져 있으면 폭염, 휴무, 주차, 우천 같은 운영 질문에 그 발췌를 근거로 실답변을 만든다(아래 3-8). 직전 답변에 통합회원 안내가 이미 나갔으면(`reservation_guide_shown`) 같은 안내를 반복하지 않는다.
+검색 경로 외에도 Answer Agent는 몇 가지 전용 산출을 더 소비한다. **결과 품질 자각**(`result_quality`)이 채워져 있으면 답변의 톤과 제안을 조정하고, **운영-상세 발췌**(`detail_excerpt`)가 채워져 있으면 폭염, 휴무, 주차, 우천 같은 운영 질문에 그 발췌를 근거로 실답변을 만든다. 직전 답변에 통합회원 안내가 이미 나갔으면(`reservation_guide_shown`) 같은 안내를 반복하지 않는다.
 
-**카드형 턴은 렌더링 전용이다** — 시설 목록을 나열하는 카드형(SQL/VECTOR 비-식별) 턴에서 Answer Agent는 어떤 카드를 몇 건 보일지 스스로 정하지 않는다. 무엇을 보일지(`curated_display`), 표시되지 않은 잔여 건수(`curated_extra_count`), 부족분을 조건이 덜 맞는 항목으로 채운 수(`curated_alt_count`)를 모두 상류 `pre_answer_gate_node`가 정해 슬롯에 담고(아래 6장), Answer Agent는 그대로 렌더링한다 — 전달된 카드를 거르지 않고 1:1로 나열하되, 잔여가 있으면 "외 N건"을 붙이고 대안으로 채운 항목은 라벨로 구분한다. 카드형이 아닌 경로(상세형, 운영-상세, MAP, ANALYTICS)와 0건, 예외 폴백은 큐레이션 슬롯이 비어 있어 기존 슬라이스 경로로 처리된다.
+**카드형 턴은 렌더링 전용이다** — 시설 목록을 나열하는 카드형(SQL/VECTOR 비-식별) 턴에서 Answer Agent는 어떤 카드를 몇 건 보일지 스스로 정하지 않는다. 무엇을 보일지(`curated_display`), 표시되지 않은 잔여 건수(`curated_extra_count`), 부족분을 조건이 덜 맞는 항목으로 채운 수(`curated_alt_count`)를 모두 상류 `pre_answer_gate_node`가 정해 슬롯에 담고, Answer Agent는 그대로 렌더링한다 — 전달된 카드를 거르지 않고 1:1로 나열하되, 잔여가 있으면 "외 N건"을 붙이고 대안으로 채운 항목은 라벨로 구분한다. 카드형이 아닌 경로(상세형, 운영-상세, MAP, ANALYTICS)와 0건, 예외 폴백은 큐레이션 슬롯이 비어 있어 기존 슬라이스 경로로 처리된다.
 
 ### 3-8. 상세 내용 발췌 — detail_excerpt
 
@@ -192,7 +192,7 @@ flowchart TD
 
 ### 3-9. Retrieval Critic — 검색 결과를 보고 다음 행동을 정한다
 
-> `enable_retrieval_critic` 플래그로 게이팅되며 **기본은 꺼져 있다**. 꺼져 있으면 critic 노드는 호출되지 않고 6장의 결정적 재시도 경로만 동작한다. 아래는 플래그를 켠 상태의 동작이다.
+> `enable_retrieval_critic` 플래그로 게이팅되며 **기본은 꺼져 있다**. 꺼져 있으면 critic 노드는 호출되지 않고 그래프의 결정적 재시도 경로만 동작한다. 아래는 플래그를 켠 상태의 동작이다.
 
 `RetrievalCritic`(`agents/retrieval_critic.py`)은 검색이 한 번 돈 뒤 결과가 약해 보이면 LLM이 원인을 추론해 **다음 행동을 스스로 정하는** 노드다. 결과가 약할 때(빈약, 쏠림 등) 무엇을 할지 규칙으로 고정하는 대신, 관찰→판단 루프로 다룬다.
 
@@ -202,13 +202,13 @@ flowchart TD
 
 **출력은 세 갈래다.**
 
-- **ANSWER** — 지금 결과로 답한다. 빈약, 쏠림이어도 재검색이 무의미하다고 보면 이쪽이다(Answer Agent가 톤을 조정한다, 아래 6장).
+- **ANSWER** — 지금 결과로 답한다. 빈약, 쏠림이어도 재검색이 무의미하다고 보면 이쪽이다(Answer Agent가 톤을 조정한다).
 - **REPLAN** — 방향을 바꿔 다시 찾는다. 재탐색 방향 힌트(`replan_hint`)를 함께 낸다. 후속 대화에서 조건이 조금씩 바뀌어 결과가 약해진 경우(drift)도 재구성 질의로 방향을 다시 잡는다.
 - **STOP** — 개선이 어렵거나 재시도 횟수가 남지 않았으면 정직한 한계 안내로 종료한다.
 
 **REPLAN 힌트는 화이트리스트만 담는다(인젝션 가드).** critic은 자유 SQL, 컬럼, 식별자를 만들 수 없다. 힌트는 검색 intent(허용 목록 enum) 전환, 드롭할 post-filter 이름(화이트리스트 Literal), 벡터 재검색용 자연어 재구성 질의로만 표현된다(`schemas/critic.py`). 실제 파라미터화는 뒤이어 Router 검증 경로가 수행하고, `retry_prep_node`가 힌트를 소비해 재검색한다.
 
-**단일 재시도 횟수, fail-open.** critic의 REPLAN 재검색은 self-correction의 재시도와 하나의 재시도 횟수 한도(`max_retrieval_retries`)를 공유한다(이중 카운트 없음). LLM 예외, 빈 출력, 파싱 실패면 판단 슬롯을 비운 채(미결정) 넘겨 그래프가 결정적 규칙으로 폴백하므로, critic 실패가 답변을 막지 않는다. critic 판단 근거는 3-1의 `decision 이벤트`와 같은 방식으로 사용자에게 투명하게 노출한다.
+**단일 재시도 횟수, fail-open.** critic의 REPLAN 재검색은 self-correction의 재시도와 하나의 재시도 횟수 한도(`max_retrieval_retries`)를 공유한다(이중 카운트 없음). LLM 예외, 빈 출력, 파싱 실패면 판단 슬롯을 비운 채(미결정) 넘겨 그래프가 결정적 규칙으로 폴백하므로, critic 실패가 답변을 막지 않는다. critic 판단 근거는 Intake의 `decision 이벤트`와 같은 방식으로 사용자에게 투명하게 노출한다.
 
 ---
 
@@ -223,7 +223,7 @@ flowchart TD
 - **위치 반경** (`map_search`) — `earthdistance`로 사용자 좌표를 기준 삼아 반경 안의 시설을 가까운 순서대로 GeoJSON으로 돌려준다. 좌표가 들어오지 않으면 FALLBACK으로 넘어간다.
 - **집계** (`analytics_search`) — GROUP BY COUNT / DISTINCT. 컬럼명은 화이트리스트 dict 값만 삽입한다.
 - **원본 hydration** (`hydrate_services`) — 검색이 끝난 뒤 `service_id`로 원본 테이블 최신 행을 다시 읽는 보조 도구. 임베딩 메타데이터의 stale 값이 답변에 새지 않게 한다.
-- **운영-상세 단건** (`fetch_detail_content`) — 운영-상세(`operational_detail`) 경로에서 지목된 단건 시설의 `detail_content` 원문(최대 수백 KB)을 SELECT한다. 일반 카드 컬럼 목록(`_result_columns`)과 분리해 raw 블롭이 다른 경로로 새지 않게 하며, 노출 전 정제와 발췌는 `agents/detail_excerpt.py`가 담당한다(위 3-8).
+- **운영-상세 단건** (`fetch_detail_content`) — 운영-상세(`operational_detail`) 경로에서 지목된 단건 시설의 `detail_content` 원문(최대 수백 KB)을 SELECT한다. 일반 카드 컬럼 목록(`_result_columns`)과 분리해 raw 블롭이 다른 경로로 새지 않게 하며, 노출 전 정제와 발췌는 `agents/detail_excerpt.py`가 담당한다.
 
 각 도구의 파라미터, 반환 스키마, DB 세션 라우팅 같은 세부는 저장소의 `tools/` 모듈에 코드와 함께 정리돼 있다. 토큰화 동작은 [하이브리드 검색 전략](./hybrid-search-strategy)을 참조한다.
 
@@ -248,7 +248,7 @@ flowchart TD
 | `sql.results` / `vector.results` / `map.results` / `analytics.results` | 검색 노드 | intent별 검색 결과 |
 | `hydration.hydrated_services` | hydration_node / rehydrate_node | `service_id`로 재조회한 최신 원본. AnswerAgent가 검색 경로와 무관하게 보는 단일 슬롯 |
 | `result_quality` | pre_answer_gate_node | RETRIEVE 결과의 쏠림/빈약 휴리스틱 자각(없으면 None). answer가 톤, 제안 조정에 소비 |
-| `critic_decision`, `critic_replan_hint`, `critic_rationale` | retrieval_critic_node | Retrieval Critic 판단(위 3-9) — 다음 행동(ANSWER/REPLAN/STOP), REPLAN 시 재탐색 방향 힌트(화이트리스트만), 근거 한 문장. 세 슬롯 모두 None = critic 미진입(명백히 좋은 경로 / 플래그 오프 / fail-open). REPLAN 힌트는 retry_prep_node가 소비 |
+| `critic_decision`, `critic_replan_hint`, `critic_rationale` | retrieval_critic_node | Retrieval Critic 판단 — 다음 행동(ANSWER/REPLAN/STOP), REPLAN 시 재탐색 방향 힌트(화이트리스트만), 근거 한 문장. 세 슬롯 모두 None = critic 미진입(명백히 좋은 경로 / 플래그 오프 / fail-open). REPLAN 힌트는 retry_prep_node가 소비 |
 | `detail_excerpt` | pre_answer_gate_node | 운영-상세 turn에서 focal 단건 상세 본문 발췌(없으면 None = 폴백 신호). answer가 소비 |
 | `curated_display`, `curated_extra_count`, `curated_alt_count` | pre_answer_gate_node | 카드형 턴의 큐레이션 산출 — 적합도 정렬된 상위 카드, 표시되지 않은 잔여 건수, 부족분을 채운 대안 수. answer가 슬라이스, 잔여 건수 계산 없이 그대로 렌더링(카드형 아니면 None) |
 | `output.{answer, title, service_cards}` | answer_node / action 노드 | 최종 자연어 답변 / 대화 제목 / 카드 UI용 상위 N건 |
@@ -259,7 +259,7 @@ flowchart TD
 
 ## 6. 그래프 실행
 
-`AgentGraph.run(state)` 한 번 호출로 intake → 분기 → (검색 또는 직접 답변) → answer → self-correction → 종단 체인 적재가 끝난다. `AgentGraph.stream(state)`은 같은 실행을 `(event_type, data)` 튜플 스트림(`progress` / `decision` / `critic_decision` / `sources_update` / `result`)으로 흘려보내 SSE 릴레이에 쓴다(`critic_decision`은 retrieval-critic이 켜져 승격된 라운드에서만 발행된다, 위 3-9). DB 세션은 인자로 받지 않고 각 노드가 실행 시점에 풀에서 잡고 즉시 반납한다(acquire-use-release). 각 에이전트는 생성자 주입으로 교체할 수 있어 테스트에서 Mock으로 대체한다.
+`AgentGraph.run(state)` 한 번 호출로 intake → 분기 → (검색 또는 직접 답변) → answer → self-correction → 종단 체인 적재가 끝난다. `AgentGraph.stream(state)`은 같은 실행을 `(event_type, data)` 튜플 스트림(`progress` / `decision` / `critic_decision` / `sources_update` / `result`)으로 흘려보내 SSE 릴레이에 쓴다(`critic_decision`은 retrieval-critic이 켜져 승격된 라운드에서만 발행된다). DB 세션은 인자로 받지 않고 각 노드가 실행 시점에 풀에서 잡고 즉시 반납한다(acquire-use-release). 각 에이전트는 생성자 주입으로 교체할 수 있어 테스트에서 Mock으로 대체한다.
 
 답변 생성 전후의 품질 점검과 재검색 루프는 다음과 같다.
 

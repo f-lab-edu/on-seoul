@@ -223,7 +223,7 @@ class AgentState(TypedDict):
     # ── L1 retrieval-critic 판단 (평면) ──
     # retrieval_critic_node 가 검색 결과를 보고 정하는 다음 행동. 세 슬롯 모두
     # None = critic 미진입(명백히 좋은 80% 경로 / critic 실패 fail-open). 스캐폴딩
-    # 단계(Phase 1)라 아직 소비하는 노드/엣지가 없다 — 값은 항상 None(회귀 0).
+    # 단계라 아직 소비하는 노드/엣지가 없다 — 값은 항상 None(회귀 0).
     # critic_decision:    "ANSWER"/"REPLAN"/"STOP" (CriticDecision.value).
     # critic_replan_hint: REPLAN 시 재탐색 방향(ReplanHint.model_dump()). retry_prep 가 소비.
     # critic_rationale:   decision 이벤트용 근거 1문장(내부 식별자 제거 후).

@@ -1,6 +1,6 @@
 """tools/target_audience.py — matches_audience / build_audience_sql 단위 테스트.
 
-계획서 P1+P2 검증 포인트(비자명 로직):
+검증 포인트(비자명 로직):
   · 제한없음/가족 항상 통과
   · '성인'은 CHILD 에서 drop, ADULT/SENIOR 에서 통과
   · '유아'는 SENIOR 에서 drop, CHILD 에서 통과

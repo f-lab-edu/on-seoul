@@ -1,4 +1,4 @@
-"""L1 retrieval-critic 관측 + SSE 테스트 (Phase 5).
+"""L1 retrieval-critic 관측 + SSE 테스트.
 
 검증 대상:
   1. CriticDecisionEvent 스키마 (필드/타입/event literal 고정).

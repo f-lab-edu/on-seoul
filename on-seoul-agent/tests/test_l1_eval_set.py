@@ -11,7 +11,7 @@ from scripts.eval.l1.eval_set import (
 
 class TestCuratedCases:
     def test_covers_required_failure_families(self):
-        # 계획서 §6: 단순 대표(critic 미발동 가드), thin/skew, 0건, intent오선택, drift.
+        # 단순 대표(critic 미발동 가드), thin/skew, 0건, intent오선택, drift.
         expected = {
             "simple_no_critic",
             "thin",

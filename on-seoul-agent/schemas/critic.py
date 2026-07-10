@@ -7,13 +7,13 @@ LLM 판단 루프다. 출력은 세 가지로만 제약된다:
   - replan_hint: REPLAN 일 때만. 재탐색 *방향* 힌트
   - rationale: decision 이벤트용 근거 1문장(내부 식별자 제거는 상위 노드 책임)
 
-핵심 불변식(인젝션 가드 — 계획서 §5):
+핵심 불변식(인젝션 가드):
     critic 은 자유 SQL/컬럼/식별자를 *생성하지 않는다*. replan_hint 는 스키마 레벨에서
     IntentType enum + 화이트리스트 필터명(Literal) + 자연어 재구성 문자열로만 표현
     가능하다. 자유 컬럼/식별자는 애초에 이 타입으로 담길 수 없다. 실제 파라미터화는
     router 가 검증 후 수행하고, tools/ 는 그대로 파라미터 바인딩 + 화이트리스트로 조회한다.
 
-이 모듈은 스키마 스캐폴딩(Phase 1)이다 — critic 노드 구현/그래프 배선은 Phase 2/3.
+이 모듈은 critic 판단 스키마를 정의한다 — critic 노드 구현과 그래프 배선은 별도 모듈에서 다룬다.
 """
 
 from enum import Enum
@@ -54,7 +54,7 @@ assert set(ALLOWED_DROP_FILTERS) == set(FilterState.__annotations__.keys()), (
 
 
 class ReplanHint(BaseModel):
-    """REPLAN 재탐색 방향 힌트 — retry_prep_node 가 소비한다(Phase 3).
+    """REPLAN 재탐색 방향 힌트 — retry_prep_node 가 소비한다.
 
     인젝션 가드: 모든 필드가 enum / 화이트리스트 Literal / 자연어 문자열로만 제약된다.
     자유 SQL·컬럼·식별자는 이 타입으로 표현 불가하다.
@@ -81,7 +81,7 @@ class CriticOutput(BaseModel):
     """retrieval_critic_node 구조화 출력 — with_structured_output(CriticOutput) 바인딩용.
 
     decision 이 3택 스위치이고, REPLAN 일 때만 replan_hint 가 의미를 갖는다.
-    (REPLAN 인데 replan_hint 가 없으면 상위 노드가 결정적 폴백으로 처리 — Phase 3.)
+    (REPLAN 인데 replan_hint 가 없으면 상위 노드가 결정적 폴백으로 처리.)
     """
 
     decision: CriticDecision = Field(

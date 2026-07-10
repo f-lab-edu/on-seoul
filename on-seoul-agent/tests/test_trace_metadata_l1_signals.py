@@ -1,4 +1,4 @@
-"""_trace_completion_metadata 의 L1 Phase 0 신호 확장 검증.
+"""_trace_completion_metadata 의 L1 신호 확장 검증.
 
 계약 단일 출처: scripts/eval/l1/extract.py::trace_to_signals + signals.py::QuerySignals.
 그래프가 root span metadata 로 emit 하는 키가 추출기가 읽는 키명과 정확히 일치해야

@@ -1,4 +1,4 @@
-"""schemas/critic.py 단위 테스트 (L1 retrieval-critic Phase 1 — 스키마 스캐폴딩).
+"""schemas/critic.py 단위 테스트 (L1 retrieval-critic — 스키마 스캐폴딩).
 
 CriticOutput 구조화 출력 스키마를 검증한다:
   - decision 3택 enum (ANSWER/REPLAN/STOP)
@@ -53,7 +53,7 @@ class TestReplanHintWhitelist:
         assert hint.drop_filters == ["area_name", "service_status"]
 
     def test_target_audience_is_droppable(self):
-        # P1+P2: target_audience 도 critic/retry 가 완화할 수 있어야 한다.
+        # target_audience 도 critic/retry 가 완화할 수 있어야 한다.
         assert "target_audience" in ALLOWED_DROP_FILTERS
         hint = ReplanHint(drop_filters=["target_audience"], reason="대상 완화")
         assert hint.drop_filters == ["target_audience"]

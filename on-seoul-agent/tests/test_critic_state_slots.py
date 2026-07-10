@@ -1,4 +1,4 @@
-"""AgentState critic 슬롯 + 단일 retrieval 예산 스캐폴딩 테스트 (Phase 1).
+"""AgentState critic 슬롯 + 단일 retrieval 예산 스캐폴딩 테스트.
 
 이 단계는 스캐폴딩이라 슬롯을 소비하는 노드가 아직 없다. 슬롯 존재 + 예산
 초기화(_prepare_state)만 검증한다. 기존 그래프 회귀 0(별도 스위트).

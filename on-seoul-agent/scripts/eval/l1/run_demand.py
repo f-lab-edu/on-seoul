@@ -149,7 +149,7 @@ async def _amain(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="L1 Phase 0 수요 측정 파이프라인")
+    p = argparse.ArgumentParser(description="L1 수요 측정 파이프라인")
     p.add_argument("--dry-run", action="store_true", help="라이브 대신 픽스처로 실행")
     p.add_argument("--fixture", help="드라이런 시 사용할 JSON 픽스처 경로(기본: 번들)")
     p.add_argument("--days", type=int, default=14, help="라이브 조회 기간(일)")

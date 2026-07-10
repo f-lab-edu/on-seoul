@@ -1,6 +1,6 @@
 """agents/nodes/_shared.py::apply_structured_gate — post-RRF 구조화 게이트.
 
-계획서 P1+P2: 벡터의 summary/question/bm25 채널로 들어온 타 지역·상충 대상 행을
+: 벡터의 summary/question/bm25 채널로 들어온 타 지역·상충 대상 행을
 hydration 이후 원본 area_name/target_info 로 최종 교정한다(행23 강동구 누출 차단).
 """
 

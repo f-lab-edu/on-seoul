@@ -5,7 +5,7 @@ target_info 는 자유텍스트지만 프로그램이 받는 *모든* 대상을 
 들어있으면 통과" 로 다중값을 자동 흡수한다. `제한없음`·`가족`은 항상 통과.
 
 이 토큰맵을 단일 출처로 두고 Python 헬퍼(matches_audience)와 SQL 술어 빌더
-(build_audience_sql)가 같은 맵에서 파생돼 로직 이중화를 막는다(계획서 P1+P2).
+(build_audience_sql)가 같은 맵에서 파생돼 로직 이중화를 막는다.
 
 비대칭 의도적:
   - SENIOR 는 `성인` 유지, `유아/어린이` 배제(행25: 어르신 질의에 성인 프로그램 유지).
@@ -32,7 +32,7 @@ ALLOWED_AUDIENCES: frozenset[str] = frozenset(AUDIENCE_TOKENS)
 def matches_audience(target_info: str | None, group: str | None) -> bool:
     """target_info 가 질의그룹(group)에 부합하는지 부분문자열 포함 매칭으로 판정한다.
 
-    규칙(계획서 P1+P2):
+    규칙:
       keep IF  '제한없음' 또는 '가족' 포함
             OR 그룹 토큰 중 하나라도 포함
       drop otherwise (상충 대상만 남은 행).

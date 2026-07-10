@@ -1,4 +1,4 @@
-"""L1 retrieval-critic 그래프 배선 테스트 (Phase 3 — escalation 게이트).
+"""L1 retrieval-critic 그래프 배선 테스트 (escalation 게이트).
 
 가장 위험한 단계(라우팅 변경)라 회귀 안전이 최우선이다. 이 파일은:
 

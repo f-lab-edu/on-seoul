@@ -284,7 +284,7 @@ class RetrievalNodes:
         return state["triage"].get("action") in (ActionType.RETRIEVE, None)
 
     def route_pre_answer_gate(self, state: AgentState) -> str:
-        """pre-answer 게이트 엣지 — escalation-gated critic 진입 결정 (L1 Phase 3).
+        """pre-answer 게이트 엣지 — escalation-gated critic 진입 결정 (L1).
 
         결정 순서(위에서부터, 먼저 매칭되는 하나):
           ⓪ 비검색 경로 → answer_node(직접 답변, 기존 동작 불변).
@@ -336,7 +336,7 @@ class RetrievalNodes:
     def _is_suspicious(state: AgentState) -> bool:
         """검색 결과가 "의심스러운지"(critic 승격 대상) 결정적으로 판정한다.
 
-        신호(전부 *결과* 기반, 계획서 §3-1 A):
+        신호(전부 *결과* 기반):
           · 0건(hydrated_services 가 명시적 빈 리스트 — 검색 실행 후 0건).
           · thin(result_quality.thin — pre_answer_gate 가 산출한 빈약 신호).
           · skew(result_quality.skew_field 존재 — 한 값 쏠림 신호).
@@ -346,7 +346,7 @@ class RetrievalNodes:
 
     @staticmethod
     def _entry_signal(state: AgentState) -> str | None:
-        """critic escalation 을 유발한 결과 신호를 분류한다(관측·SSE 라벨용, L1 Phase 5).
+        """critic escalation 을 유발한 결과 신호를 분류한다(관측·SSE 라벨용, L1).
 
         우선순위(먼저 매칭 하나): "zero"(0건) → "thin"(빈약) → "skew"(쏠림).
         의심스럽지 않으면(명백히 좋음) None — critic 미진입. 집계 신호 라벨만
@@ -368,12 +368,12 @@ class RetrievalNodes:
           · ANSWER → answer_node(결과로 답한다).
           · REPLAN → retry_prep_node(방향 힌트 소비 후 재검색). 단 예산 소진이면 answer.
           · STOP   → answer_node(정직한 한계 안내).
-          · None(critic 미결정, fail-open §3-1 F) → 기존 결정적 경로:
+          · None(critic 미결정, fail-open) → 기존 결정적 경로:
               0건 → retry_prep, 유건 → answer.
         """
         decision = state.get("critic_decision")
         retry_count = state.get("retry_count", 0)
-        # critic 루프는 단일 예산 N(max_retrieval_retries=2)을 쓴다(계획서 결정 D). 이는
+        # critic 루프는 단일 예산 N(max_retrieval_retries=2)을 쓴다. 이는
         # 레거시 결정적 경로(route_pre_answer_gate 폴백 branch·self_correction_edge 의
         # retry_count==0 1회 캡)보다 관대하나, 게이트 하드 백스톱(retry_count>=N)이 모든
         # 재진입에서 잘라내 max N 으로 bounded 하다(무한루프 불가).
@@ -403,7 +403,7 @@ class RetrievalNodes:
         방어: critic 미주입인데도 이 노드에 도달하면(정상 경로에선 게이트가 차단) fail-open
         breadcrumb 만 남기고 세 슬롯을 None 으로 둔다.
 
-        관측·SSE(L1 Phase 5, best-effort): critic 이 결정을 낸 뒤 그 근거를
+        관측·SSE(L1, best-effort): critic 이 결정을 낸 뒤 그 근거를
         `critic_decision` SSE 이벤트로 사용자에게 투명하게 노출하고(sanitize_user_rationale
         로 내부 식별자 제거), Langfuse 에 라운드 스팬(진입 신호·decision·round)을 남긴다.
         emit/span 실패는 그래프 결과를 막지 않는다(Core rule 8).
@@ -427,7 +427,7 @@ class RetrievalNodes:
         update: dict[str, Any],
         entry_signal: str,
     ) -> None:
-        """critic 결정의 SSE 노출 + Langfuse 스팬을 best-effort 로 기록한다 (L1 Phase 5).
+        """critic 결정의 SSE 노출 + Langfuse 스팬을 best-effort 로 기록한다 (L1).
 
         · SSE: critic_rationale 을 sanitize 해 critic_decision 이벤트로 emit(라운드마다
           1회 — round=retry_count 로 라운드를 구분해 중복 키 충돌 없음). rationale 이 없거나

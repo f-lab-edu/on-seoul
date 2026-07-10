@@ -259,7 +259,7 @@ async def _stream(
         prev_reasoning=ws_reasoning,
         prev_working_set=prev_working_set,
         target_service_ids=None,
-        # ── L1 retrieval-critic — retrieval_critic_node 가 채운다(Phase 2/3) ──
+        # ── L1 retrieval-critic — retrieval_critic_node 가 채운다 ──
         # 스캐폴딩 단계라 아직 채우는 노드가 없다 → 전 요청에서 None(동작 불변).
         critic_decision=None,
         critic_replan_hint=None,

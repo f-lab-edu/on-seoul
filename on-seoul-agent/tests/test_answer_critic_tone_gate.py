@@ -1,7 +1,7 @@
-"""L1 Phase 4 — critic 결정에 따른 thin/skew 톤 조정 게이팅.
+"""L1 — critic 결정에 따른 thin/skew 톤 조정 게이팅.
 
 `_effective_result_quality`: critic_decision ∈ (None, ANSWER)면 result_quality 를
-그대로 적용, STOP/REPLAN 이면 None(톤 억제). 계획서 §3-3 — thin/skew 는 규칙으로
+그대로 적용, STOP/REPLAN 이면 None(톤 억제). thin/skew 는 규칙으로
 "무조건 톤만"이 아니라 critic 의 케이스별 판단으로 대체된다.
 
 플래그 오프(enable_retrieval_critic=False)에선 critic 이 진입하지 않아 critic_decision

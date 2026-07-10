@@ -474,11 +474,10 @@ class AnswerAgent:
 
     @staticmethod
     def _effective_result_quality(state: AgentState) -> "dict | None":
-        """카드형 톤 조정(thin/skew)에 실제 적용할 result_quality 를 결정한다 (L1 Phase 4).
+        """카드형 톤 조정(thin/skew)에 실제 적용할 result_quality 를 결정한다 (L1).
 
         L1 retrieval-critic 이 활성일 때 thin/skew 는 더 이상 "규칙으로 무조건 톤만"이
-        아니라 critic 의 케이스별 판단(REPLAN=재탐색 / ANSWER=톤 조정)으로 대체된다
-        (계획서 §3-3). 따라서 톤 조정은 **critic 이 ANSWER 를 택했거나 critic 이 아예
+        아니라 critic 의 케이스별 판단(REPLAN=재탐색 / ANSWER=톤 조정)으로 대체된다. 따라서 톤 조정은 **critic 이 ANSWER 를 택했거나 critic 이 아예
         진입하지 않았을 때만**(= 최종 라운드 결과로 답하는 게 확정된 순간에만) 적용한다.
 
           · critic_decision is None : critic 미진입(명백히 좋음 / 플래그 오프 / fail-open /

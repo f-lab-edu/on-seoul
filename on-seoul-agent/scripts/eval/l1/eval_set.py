@@ -1,7 +1,7 @@
 """평가셋 ②(회귀/품질 고정 데이터셋) 스캐폴딩 + Langfuse Dataset 등록.
 
-계획서 §6 Phase 0: 큐레이션 + 합성 케이스를 Langfuse Dataset 으로 고정한다. 각 케이스에
-기대 동작(intent, critic 발동 여부, 최소 결과 건수, 필수 시설) 라벨을 붙여 Phase 6
+큐레이션 + 합성 케이스를 Langfuse Dataset 으로 고정한다. 각 케이스에
+기대 동작(intent, critic 발동 여부, 최소 결과 건수, 필수 시설) 라벨을 붙여
 baseline↔after 채점(결정적 체크 + LLM-as-judge)에 재사용한다.
 
 케이스 패밀리(요구된 유형 전부 최소 1건):
@@ -12,7 +12,7 @@ baseline↔after 채점(결정적 체크 + LLM-as-judge)에 재사용한다.
   - intent_mispick   : intent 오선택 유발(집계 질의 등).
   - drift            : 결과 표류 유발(자연 활동 ↔ 실내 강좌 혼입).
 
-expected_output 스키마가 곧 채점 계약이다 — Phase 6 채점기가 이 dict 를 읽는다.
+expected_output 스키마가 곧 채점 계약이다 — 채점기가 이 dict 를 읽는다.
 """
 
 from __future__ import annotations

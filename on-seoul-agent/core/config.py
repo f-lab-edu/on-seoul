@@ -26,22 +26,22 @@ class Settings(BaseSettings):
     redis_socket_connect_timeout: int = 2  # 연결 타임아웃(초) — fail-open 대기 상한
     redis_socket_timeout: int = 2  # 명령 타임아웃(초)
 
-    # Agent workflow — L1 retrieval-critic 단일 예산 (계획서 §3-1 D, §3-2)
+    # Agent workflow — L1 retrieval-critic 단일 예산
     # 0건·thin·skew·self_correction 재시도가 *공유*하는 단일 retrieval 예산 캡.
     # retry_count 가 이 값에 도달하면 더 이상 재탐색하지 않는다(하드 백스톱).
-    # 스캐폴딩 단계(Phase 1)에서는 이 상수를 정의만 하고 아직 엣지가 소비하지 않는다
-    # (기존 1회 캡 동작 불변). Phase 2/3 에서 correction/critic 엣지가 이 단일 출처를
+    # 스캐폴딩 단계에서는 이 상수를 정의만 하고 아직 엣지가 소비하지 않는다
+    # (기존 1회 캡 동작 불변). 이후 correction/critic 엣지가 이 단일 출처를
     # 소비하도록 배선한다 — 별도 카운터를 두지 않아 예산 이중 카운트를 원천 차단한다.
     max_retrieval_retries: int = 2
 
-    # L1 retrieval-critic escalation 게이트 롤아웃 플래그 (계획서 §6 Phase 3, §7).
+    # L1 retrieval-critic escalation 게이트 롤아웃 플래그.
     # False(기본): pre_answer_gate 후단이 기존 결정적 경로(0건→retry, 유건→answer)로만
     #   동작한다 — critic 노드는 그래프에 등록되어도 진입 엣지가 이 플래그로 차단되어
     #   호출되지 않는다(회귀 0, secondary_intent 와 동일한 단계적 롤아웃 패턴).
     # True: pre_answer_gate 후단 결정적 triage 가 "의심스러움(0건/thin/skew) + 예산 여유"
     #   일 때만 retrieval_critic_node 로 승격한다(명백히 좋은 80% 경로는 여전히 answer
     #   직행 = critic 미호출). critic 미결정(fail-open)이면 결정적 경로로 폴백한다.
-    # 활성화 전제: critic 판단 품질 검증(Phase 6 측정) 후 수동 전환.
+    # 활성화 전제: critic 판단 품질 검증 후 수동 전환.
     enable_retrieval_critic: bool = False
 
     # Answer Cache

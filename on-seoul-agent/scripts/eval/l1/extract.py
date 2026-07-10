@@ -112,9 +112,7 @@ def pick_root_span(trace: Any, *, span_name: str = _ROOT_SPAN_NAME) -> Any | Non
 
 
 def pick_critic_spans(trace: Any, *, span_name: str = _CRITIC_SPAN_NAME) -> list[Any]:
-    """트레이스 상세에서 critic 자식 스팬("retrieval_critic") 관측을 모두 모은다.
-
-    Phase 5 계약(agents/graph.py::record_critic_span): critic 노드가 결정을 낼 때마다
+    """트레이스 상세에서 critic 자식 스팬("retrieval_critic") 관측을 모두 모은다. 계약(agents/graph.py::record_critic_span): critic 노드가 결정을 낼 때마다
     root "chat" span 컨텍스트 안에 자식 SPAN(name="retrieval_critic")을 하나 열고 즉시
     닫으며 metadata {entry_signal, decision, round} 를 부착한다. 라운드가 여러 번이면
     스팬도 여러 개다.

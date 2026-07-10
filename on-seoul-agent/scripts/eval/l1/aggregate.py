@@ -177,7 +177,7 @@ def _is_l1_demand(item: LabeledQuery) -> bool:
 def format_report(dist: BucketDistribution) -> str:
     """분포를 사람이 읽는 리포트 문자열로 포맷(stdout 출력용)."""
     lines = [
-        "=== L1 Phase 0 실패 버킷 분포 ===",
+        "=== L1 실패 버킷 분포 ===",
         f"총 질의: {dist.total}  "
         f"(검색 시도 RETRIEVE: {dist.retrieval_total}, "
         f"검색 미시도 NON_RETRIEVE: {dist.non_retrieve_total})",
@@ -269,7 +269,7 @@ def report_labeled_csv(path: Path) -> str:
     demand = Counter(human_demand_class(r["human_bucket"]) for r in labeled)
 
     lines = [
-        "=== L1 Phase 0 최종 분포 (사람 검증 ground truth) ===",
+        "=== L1 최종 분포 (사람 검증 ground truth) ===",
         f"파일: {path}",
         f"총 {len(rows)}행, 검증됨 {base}행 (human_bucket 채움)",
         "",

@@ -1,6 +1,6 @@
 """평가셋 ②(회귀/품질 고정 데이터셋) Langfuse 등록 CLI.
 
-CURATED_CASES 를 Langfuse Dataset 으로 등록한다. Phase 6 baseline↔after 채점에 재사용.
+CURATED_CASES 를 Langfuse Dataset 으로 등록한다. baseline↔after 채점에 재사용.
 
 사용법 (드라이런 — 자격증명 불필요, 등록 페이로드만 출력):
   uv run python -m scripts.eval.l1.push_eval_set --dry-run

@@ -1,4 +1,4 @@
-"""RetrievalCritic 노드 단위 테스트 (L1 retrieval-critic Phase 2, fake LLM).
+"""RetrievalCritic 노드 단위 테스트 (L1 retrieval-critic, fake LLM).
 
 실 LLM/네트워크 호출 없이 fake structured-output 을 주입해 critic 노드 단독을 검증한다:
   - 3택(ANSWER/REPLAN/STOP) 각 경로가 critic 슬롯에 반영되는지
@@ -131,7 +131,7 @@ class TestFailOpen:
 
 
 class TestResultSummaryInput:
-    """계획서 §3-1 G — 입력은 결과 요약만, 원본 rows 전체는 넣지 않는다."""
+    """입력은 결과 요약만, 원본 rows 전체는 넣지 않는다."""
 
     def test_summary_has_counts_filters_labels_quality(self):
         state = make_agent_state(
@@ -211,7 +211,7 @@ class TestImmutability:
 
 
 class TestFenceNeutralization:
-    """맥락은 데이터로만 — 위조 경계 마커는 무력화되어야 한다(§5)."""
+    """맥락은 데이터로만 — 위조 경계 마커는 무력화되어야 한다."""
 
     @pytest.mark.asyncio
     async def test_forged_fence_in_message_neutralized(self):

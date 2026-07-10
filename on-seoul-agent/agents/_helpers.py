@@ -146,7 +146,7 @@ def emit_decision(action: str, routes: list[str], user_rationale: str) -> None:
 
 
 def emit_critic_decision(decision: str, round_index: int, user_rationale: str) -> None:
-    """retrieval-critic 라운드 결정 이벤트를 custom stream 으로 흘려보낸다 (L1 Phase 5).
+    """retrieval-critic 라운드 결정 이벤트를 custom stream 으로 흘려보낸다 (L1).
 
     triage `decision`(단일 1회)과 별개 `_evt` 타입("critic_decision")으로 흘려보내
     두 이벤트가 같은 프레임에서 서로 덮어쓰지 않게 한다. critic 은 라운드마다 1회

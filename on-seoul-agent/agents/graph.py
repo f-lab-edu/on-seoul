@@ -407,7 +407,7 @@ def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
     의 tags 는 진입 시점에만 설정 가능하고(post-hoc 태그 API 미지원), intent/retried/
     cache_hit 는 그래프 완료 후에야 확정되므로 모두 metadata 로만 노출한다(폴백).
 
-    L1 Phase 0 측정 확장(scripts/eval/l1/extract.py 계약 일치, 키명 정확 일치):
+    L1 측정 확장(scripts/eval/l1/extract.py 계약 일치, 키명 정확 일치):
       turn_kind(원본 TurnKind — 분모 스코핑/L2 prior), sql_hits/vector_hits/
       total_hits, result_quality(thin/skew passthrough), forced_intent(enum→str),
       applied_filter_count, followup_reask.
@@ -429,7 +429,7 @@ def _trace_completion_metadata(result: dict[str, Any]) -> dict[str, Any]:
         "retry_relaxed": result.get("retry_relaxed"),
         "cache_hit": result.get("cache_hit"),
         "error": result.get("error"),
-        # ── L1 Phase 0 측정 신호 (추출기 계약 키명) ──
+        # ── L1 측정 신호 (추출기 계약 키명) ──
         "sql_hits": sql_hits,
         "vector_hits": vector_hits,
         "total_hits": total_hits,
@@ -445,7 +445,7 @@ def record_critic_span(
     decision: str | None,
     round_index: int,
 ) -> None:
-    """retrieval-critic 라운드 스팬/메타데이터를 best-effort 로 기록한다 (L1 Phase 5).
+    """retrieval-critic 라운드 스팬/메타데이터를 best-effort 로 기록한다 (L1).
 
     critic 노드가 결정을 낸 직후 호출한다. 활성 Langfuse client 가 있으면 root span
     (_langfuse_trace 의 "chat") 컨텍스트 안에 자식 span("retrieval_critic")을 하나

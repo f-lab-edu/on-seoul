@@ -110,7 +110,7 @@ class CorrectionNodes:
         # 모든 분기 공통 베이스 — 분기별 override 로 검색 슬롯/필터를 덮어쓴다.
         # emit 은 머지 채널이라 부분 키만 보낸다(decision_emitted 보존).
         # critic 슬롯은 항상 클리어한다(1회성): critic 힌트를 이번 재시도에서 소비했든,
-        # 결정적 폴백으로 왔든, 다음 순회로 이월되지 않아야 한다(L1 §3-3 폴백 층).
+        # 결정적 폴백으로 왔든, 다음 순회로 이월되지 않아야 한다(폴백 층).
         update: dict[str, Any] = {
             "retry_count": new_retry_count,
             "error": None,
@@ -126,10 +126,10 @@ class CorrectionNodes:
             # 해제한다. 재진입 cache_check 는 이 슬롯을 보고 즉시 pass-through(재획득 안 함).
         }
 
-        # ── critic REPLAN 힌트 소비(L1 Phase 3, escalation 경로) ──
+        # ── critic REPLAN 힌트 소비(L1, escalation 경로) ──
         # critic 이 방향을 정했으면(intent 전환/필터 드롭/질의 재구성) 그 힌트를 우선
         # 소비한다. 힌트가 없으면(critic 미발동/미결정/폴백) 아래 기존 결정적 규칙으로
-        # 내려간다(§3-3 폴백 층). 인젝션 가드: 힌트는 스키마(IntentType enum +
+        # 내려간다(폴백 층). 인젝션 가드: 힌트는 스키마(IntentType enum +
         # 화이트리스트 필터명 Literal + 자연어 재구성)로만 표현 가능하므로 화이트리스트
         # 검증을 여기서 다시 하지 않아도 자유 식별자는 애초에 담길 수 없다. 실제
         # 파라미터화는 router 검증 경로가 수행한다.
@@ -245,7 +245,7 @@ class CorrectionNodes:
         update: dict[str, Any],
         hint: dict[str, Any],
     ) -> dict[str, Any]:
-        """critic REPLAN 힌트를 재시도 update 에 반영한다(escalation 경로, §3-3).
+        """critic REPLAN 힌트를 재시도 update 에 반영한다(escalation 경로).
 
         힌트는 세 방향 힌트의 조합이다(모두 선택적):
           · intent          → forced_intent 전환(router 2회차 재분류 skip). 검색/하이드
@@ -337,7 +337,7 @@ class CorrectionNodes:
         intent 분기는 상호배타라 한 순회에 하나만 평가된다. retry_prep_node 가
         retry_count 를 1 로 올리므로 다음 순회에서는 ①에서 즉시 종료된다.
 
-        L1 critic 상호작용(§3-2, 예산 이중 카운트 금지): critic 이 이번 라운드에
+        L1 critic 상호작용(예산 이중 카운트 금지): critic 이 이번 라운드에
         결정을 냈으면(critic_decision 세팅) 검색 결과 품질 재시도는 critic 이 이미
         소유한다(REPLAN 은 route_critic 이 retry_prep 로 보냈고, ANSWER/STOP 은 명시적
         "재시도 안 함"이다). 따라서 critic 결정이 있으면 self_correction 은 개입하지

@@ -1,10 +1,10 @@
-"""질의당 추출 신호 + 버킷 라벨 스키마 — L1 Phase 0 의 단일 계약 출처.
+"""질의당 추출 신호 + 버킷 라벨 스키마 — L1 의 단일 계약 출처.
 
 이 모듈의 Pydantic 모델은 파이프라인 전 구간(extract → rule_labeler → llm_classifier
 → aggregate)이 공유하는 **크로스-스테이지 계약**이다. 신호 필드를 바꾸면 라벨러·집계·
 픽스처를 같은 커밋에서 함께 갱신한다.
 
-버킷 정의는 계획서 §6 Phase 0 를 따른다:
+버킷 정의는 를 따른다:
   - 규칙 자동 라벨(공짜, state 신호): NON_RETRIEVE / ZERO_HIT / THIN / SKEW / RETRIED / NORMAL
   - LLM 판단 라벨: INTENT_MISPICK / DRIFT / COMPOUND_UNEXPRESSIBLE / (판단 불가 시 NORMAL)
 
@@ -52,7 +52,7 @@ class QuerySignals(BaseModel):
     """단일 질의(트레이스)에서 추출한 구조화 신호.
 
     Langfuse 트레이스의 root span metadata + input/output 에서 뽑는다. 프로덕션 트레이스가
-    모든 신호를 담지 않을 수 있으므로(§ Langfuse metadata 갭) 미가용 필드는 None 으로 두고
+    모든 신호를 담지 않을 수 있으므로(Langfuse metadata 갭) 미가용 필드는 None 으로 두고
     라벨러가 관대하게(없으면 NORMAL 로 흡수) 처리한다.
     """
 
@@ -129,7 +129,7 @@ class LabeledQuery(BaseModel):
 class BucketDistribution(BaseModel):
     """최종 버킷 분포 리포트 — 결정 게이트 입력.
 
-    l1_demand / l2_demand 는 계획서 결정 게이트 정의에 따라 파생하며, 분모는
+    l1_demand / l2_demand 는 결정 게이트 정의에 따라 파생하며, 분모는
     retrieval_total(실제 검색을 시도한 RETRIEVE 트레이스)이다. NON_RETRIEVE 는
     투명하게 집계되되 수요 계산에서 제외된다.
     판단 자체(L1 계속 vs L2 우선)는 사람 몫 — 여기선 수치만.

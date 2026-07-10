@@ -1,23 +1,22 @@
-"""Retrieval Critic — 검색 결과가 약할 때 다음 행동을 정하는 LLM 판단 노드 (L1 Phase 2).
+"""Retrieval Critic — 검색 결과가 약할 때 다음 행동을 정하는 LLM 판단 노드 (L1).
 
 on-seoul-agent 를 워크플로우 → 에이전트로 넘기는 최초의 "관찰→판단" 루프다. 검색이
 이미 한 번 실행된 뒤, 그 *결과*가 약할 수 있을 때(0건/thin/skew) LLM 이 원인을 추론해
-ANSWER / REPLAN / STOP 을 정한다(계획서 §3-1 B). LLM 은 with_structured_output 으로
-CriticOutput(Phase 1 스키마)만 산출하므로 자유 SQL/식별자를 만들 수 없다(인젝션 가드).
+ANSWER / REPLAN / STOP 을 정한다. LLM 은 with_structured_output 으로
+CriticOutput(스키마)만 산출하므로 자유 SQL/식별자를 만들 수 없다(인젝션 가드).
 
 DB 세션은 쓰지 않는다 — 입력은 이미 채워진 state 의 검색 결과 *요약*뿐이다.
 
-핵심 설계 결정(계획서 §3-1 G, §5):
+핵심 설계 결정:
   - 입력은 **결과 요약만**: 건수(sql/vector/total)·적용 필터·상위 라벨 ≤N·thin/skew·
     원 질의·history. hydrated rows 등 원본 결과 전체는 넣지 않는다(토큰·비용 통제).
   - **맥락은 데이터로만**: 요약/history 텍스트는 경계 마커로 감싸 지시로 실행되지
     않게 한다(기존 EXPLAIN/operational_detail 패턴 준수). fence 는 neutralize 한다.
-  - **fail-open**(§3-1 F): LLM 예외/빈 출력/파싱 실패면 세 critic 슬롯을 모두 None 으로
-    남긴다(= critic 미결정). 상위(Phase 3 그래프)가 결정적 경로로 폴백한다 — 노드가
+  - **fail-open**: LLM 예외/빈 출력/파싱 실패면 세 critic 슬롯을 모두 None 으로
+    남긴다(= critic 미결정). 상위(그래프)가 결정적 경로로 폴백한다 — 노드가
     예외로 그래프를 깨지 않는다.
 
-이 모듈은 critic 노드(Phase 2)다. 그래프 배선(escalation 게이트·조건부 엣지)은 Phase 3.
-따라서 아직 이 노드를 호출하는 엣지가 없어 기존 동작은 불변이다.
+이 모듈은 critic 노드다. 그래프 배선(escalation 게이트·조건부 엣지)은 그래프 조립 단계에서 이뤄진다.
 """
 
 import logging
@@ -35,7 +34,7 @@ from schemas.state import AgentState
 
 logger = logging.getLogger(__name__)
 
-# 요약에 실을 상위 라벨 개수 상한(토큰 통제 — 원본 rows 전체 금지). 계획서 §3-1 G.
+# 요약에 실을 상위 라벨 개수 상한(토큰 통제 — 원본 rows 전체 금지).
 _TOP_LABEL_CAP = 5
 
 
@@ -143,7 +142,7 @@ class RetrievalCritic:
         """
         try:
             output = await self._invoke(state)
-        except Exception as exc:  # noqa: BLE001 — fail-open (§3-1 F)
+        except Exception as exc:  # noqa: BLE001 — fail-open
             logger.warning("retrieval_critic fail-open (예외 폴백): %s", exc)
             return self._fail_open(state)
 
@@ -169,7 +168,7 @@ class RetrievalCritic:
 
         정적 프리픽스(CRITIC_SYSTEM + few-shot)를 앞에 두고, 동적 요약/질의/history 는
         그 뒤에 경계 마커로 감싼 SystemMessage 로 분리해 붙인다(프리픽스 캐시 보존 +
-        맥락은 데이터로만 — 계획서 §5).
+        맥락은 데이터로만).
         """
         summary = build_result_summary(state)
         message = neutralize_fence(state.get("message") or "")

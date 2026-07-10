@@ -1,4 +1,4 @@
-"""L1 Phase 6 CLI — critic-on 트레이스에서 critic 동작 지표 산출.
+"""L1 CLI — critic-on 트레이스에서 critic 동작 지표 산출.
 
 배포 후(enable_retrieval_critic=true) N일 실 트래픽을 분석해 세 질문에 답한다:
   · critic 이 실제로 복구를 늘리나? (REPLAN 복구율)
@@ -35,7 +35,7 @@ from scripts.eval.l1.critic_metrics import (
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="L1 Phase 6 critic 동작 지표 측정")
+    p = argparse.ArgumentParser(description="L1 critic 동작 지표 측정")
     p.add_argument("--dry-run", action="store_true", help="라이브 대신 픽스처로 실행")
     p.add_argument("--fixture", help="드라이런 시 사용할 JSON 픽스처 경로(기본: 번들 critic_traces)")
     p.add_argument("--days", type=int, default=7, help="라이브 조회 기간(일)")
