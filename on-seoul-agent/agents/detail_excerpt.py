@@ -90,6 +90,84 @@ _OPERATIONAL_SYNONYMS: tuple[tuple[str, ...], ...] = (
 )
 
 
+# 내용 질문 마커(describe/DRILL 전용) — "어떤 프로그램/무슨 내용/뭐 하는" 류 실제
+# 운영·프로그램 내용을 묻는 발화. 운영어(폭염/휴무/주차)와 달리 특정 키워드로 발췌
+# 범위를 좁힐 신호가 없으므로, 매칭 시 키워드 없이 상세내용 앞부분을 발췌한다
+# (prepare_detail_overview). 속성 질문(요금/문의처/접수기간)은 현행 describe 가
+# 결과 JSON 으로 직접 답하므로 여기에 넣지 않는다(불필요한 detail_content fetch 회피).
+# 강한 내용 신호 — 이 어휘가 있으면 곧장 내용 질문으로 본다.
+_CONTENT_QUESTION_MARKERS: tuple[str, ...] = (
+    "프로그램",
+    "무슨 내용",
+    "어떤 내용",
+    "무슨 활동",
+    "어떤 활동",
+    "뭐 하",
+    "뭐하",
+    "뭘 하",
+    "뭘하",
+    "내용 설명",
+)
+
+# 제네릭 신호 — "자세히/상세히"는 속성 심화("요금 자세히")에도 붙으므로, 아래 속성
+# 키워드가 함께 있으면 내용 질문으로 보지 않는다(불필요 fetch·프로그램 서술 드리프트 회피).
+_GENERIC_DETAIL_MARKERS: tuple[str, ...] = ("자세히", "상세히")
+_ATTRIBUTE_KEYWORDS: tuple[str, ...] = (
+    "요금",
+    "얼마",
+    "가격",
+    "무료",
+    "유료",
+    "시간",
+    "언제",
+    "문의",
+    "전화",
+    "번호",
+    "접수",
+    "취소",
+    "주소",
+    "위치",
+)
+
+
+def is_content_question(message: str) -> bool:
+    """발화가 시설의 실제 프로그램/내용을 묻는지 판정한다(describe 발췌 게이트).
+
+    True 면 describe_node 가 focal detail_content 를 fetch 해 앞부분을 발췌한다.
+    속성 질문(요금·문의처 등)은 결과 JSON 으로 답하므로 False(fetch 회피).
+
+    "자세히/상세히"는 속성 심화("요금 자세히")에도 쓰이므로, 속성 키워드가 함께 있으면
+    내용 질문으로 보지 않는다 — 강한 내용 신호가 따로 있으면 그 판정을 우선한다.
+    """
+    if not message:
+        return False
+    if any(marker in message for marker in _CONTENT_QUESTION_MARKERS):
+        return True
+    if any(marker in message for marker in _GENERIC_DETAIL_MARKERS):
+        return not any(attr in message for attr in _ATTRIBUTE_KEYWORDS)
+    return False
+
+
+def prepare_detail_overview(raw: str | None) -> str | None:
+    """내용 질문(describe) 전용 — 키워드 없이 "3. 상세내용" 앞부분을 발췌한다.
+
+    operational_detail 의 키워드 중심 발췌(prepare_detail_excerpt)와 달리, "어떤
+    프로그램/무슨 내용" 류는 좁힐 키워드가 없으므로 상세내용 선두를 상한(_MERGE_CAP)
+    까지 발췌한다. 정제·경계·PII·인젝션 중화는 동일 primitive 를 재사용한다.
+    raw 없음/본문 게이트 미달 → None(현행 describe 폴백 신호).
+    """
+    if not raw:
+        return None
+    body = _apply_boundary(_clean(raw))
+    if len(body) < _MIN_LEN:
+        return None
+    excerpt = _neutralize_boundaries(_mask_pii(body[:_MERGE_CAP]))
+    excerpt = _WS_RE.sub(" ", excerpt).strip()
+    if len(excerpt) < _MIN_LEN:
+        return None
+    return excerpt
+
+
 def extract_operational_keywords(message: str) -> list[str]:
     """사용자 발화에서 운영 주제 키워드(+동의어 그룹)를 추출한다.
 

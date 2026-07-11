@@ -216,9 +216,24 @@ class AnswerAgent:
 
         display = [self._normalize(r) for r in hydrated[:_DISPLAY_LIMIT]]
         results_json = json.dumps(display, ensure_ascii=False, default=str)
+
+        # 내용 질문(DRILL) 발췌 주입 — describe_node 가 focal detail_content 를 발췌해
+        # detail_excerpt 를 적재하면, DESCRIBE 프롬프트에 경계 마커로 감싸 붙여 프로그램
+        # 실내용을 서술하게 한다. RELEVANCE(적합성)는 비대상이고, 발췌 없으면 현행
+        # 서술(카테고리/상태/요금)로 폴백한다.
+        system_prompt = self._static_prompts[prompt_key]
+        detail_excerpt = state.get("detail_excerpt")
+        if prompt_key == "DESCRIBE" and detail_excerpt:
+            system_prompt = prompting._compose(
+                system_prompt,
+                "시설 안내 발췌(detail_excerpt):\n"
+                "---EXCERPT_START---\n"
+                f"{detail_excerpt}\n"
+                "---EXCERPT_END---",
+            )
         answer_text = await self._answer_chain.ainvoke(
             {
-                "system": self._static_prompts[prompt_key],
+                "system": system_prompt,
                 "message": message,
                 "results_json": results_json,
                 "more_notice": prompting._more_notice(0),

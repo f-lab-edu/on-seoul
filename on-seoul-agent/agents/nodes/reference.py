@@ -11,6 +11,8 @@ from typing import Any
 from agents import _emit
 from agents._ondata_gateway import OnDataReader, default_reader
 from agents.answer_agent import AnswerAgent
+from agents.detail_excerpt import is_content_question, prepare_detail_overview
+from schemas.intake import TurnKind
 from schemas.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -66,19 +68,53 @@ class ReferenceNodes:
                 **guard,
             }
 
+    async def _prepare_describe_overview(self, state: AgentState) -> str | None:
+        """내용 질문 DRILL 의 focal detail_content fetch + 앞부분 발췌(best-effort).
+
+        "어떤 프로그램/무슨 내용" 류(is_content_question)일 때만 focal service_id 의
+        detail_content 를 fetch 해 상세내용 앞부분을 발췌한다. 그 외(속성 질문·RELEVANCE·
+        focal 부재)는 즉시 None 을 반환해 fetch 를 태우지 않는다(지연 가드: 모든 DRILL 에
+        DB read 를 붙이지 않는다). fetch/발췌 실패·빈약 → None(현행 describe 폴백).
+        DB 는 on_data SELECT 전용.
+        """
+        if state["triage"].get("turn_kind") == TurnKind.RELEVANCE.value:
+            return None
+        if not is_content_question(state.get("message") or ""):
+            return None
+        rows = state["hydration"].get("hydrated_services") or []
+        if not rows:
+            return None
+        focal_id = rows[0].get("service_id")
+        if not focal_id:
+            return None
+        try:
+            raw = await self._ondata.fetch_detail_content(focal_id)
+            return prepare_detail_overview(raw)
+        except Exception:
+            logger.exception("describe overview 발췌 prep 실패 room=%s", state.get("room_id"))
+            return None
+
     async def describe_node(self, state: AgentState) -> dict[str, Any]:
         """참조 해소 경로 — AnswerAgent.describe() 로 "어떤 곳인지" 서술.
 
         예약 카드 템플릿이 아니라 설명형 답변을 생성한다. 재-hydrate 0건이면
         AnswerAgent.describe 가 정직한 안내 + 재검색 제안을 반환한다.
+
+        내용 질문("어떤 프로그램/무슨 내용")이면 focal detail_content 를 발췌해
+        detail_excerpt 슬롯에 실어 describe 로 넘긴다(발췌 없으면 현행 서술로 폴백).
         """
+        detail_excerpt = await self._prepare_describe_overview(state)
+        describe_state = (
+            state if detail_excerpt is None else {**state, "detail_excerpt": detail_excerpt}
+        )
         try:
-            new_state = await self._answer.describe(state)
+            new_state = await self._answer.describe(describe_state)
             return {
                 "output": {
                     "answer": new_state.get("answer"),
                     "service_cards": new_state.get("service_cards"),
                 },
+                "detail_excerpt": detail_excerpt,
                 "node_path": ["describe_node"],
             }
         except Exception as exc:
