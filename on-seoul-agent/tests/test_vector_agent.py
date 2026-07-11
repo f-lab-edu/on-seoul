@@ -342,6 +342,34 @@ class TestVectorAgent:
             await agent.search(_make_state())
             mock_bm25.assert_not_called()
 
+    async def test_facility_locator_tokens_excluded_from_bm25(self):
+        """시설유형 로케이터("실내/실외/야외")는 bm25 토큰에서 제외되고,
+        의미 토큰("조용")은 유지된다 — 시설명 lexical 스퓨리어스 매칭 방지."""
+        agent = _make_agent("실내에서 조용히 즐기는 프로그램", [0.1])
+
+        with (
+            patch("agents.vector_agent.vector_search", new=AsyncMock(return_value=[])),
+            patch(
+                "agents.vector_agent.question_search", new=AsyncMock(return_value=[])
+            ),
+            patch(
+                "agents.vector_agent.bm25_search", new=AsyncMock(return_value=[])
+            ) as mock_bm25,
+            patch(
+                "agents.vector_agent.atokenize_query",
+                new=AsyncMock(return_value=["실내", "조용", "프로그램"]),
+            ),
+            _mock_ai_session_ctx(),
+        ):
+            await agent.search(_make_state())
+
+        mock_bm25.assert_called_once()
+        bm25_tokens = mock_bm25.call_args.args[0]
+        assert "실내" not in bm25_tokens
+        assert "실외" not in bm25_tokens
+        assert "야외" not in bm25_tokens
+        assert "조용" in bm25_tokens
+
     async def test_bm25_channel_query_text_is_none_when_tokens_empty(self):
         """bm25_tokens 가 빈 리스트일 때 BM25 채널의 query_text 가 None 이다."""
         from schemas.search import SearchChannel
