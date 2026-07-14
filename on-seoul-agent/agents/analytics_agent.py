@@ -7,7 +7,7 @@ LLM 이 SQL 도 group_by 컬럼명도 자유 문자열로 생성하지 않는다
 group_by 는 _AnalyticsParams 의 Literal + field_validator 로 화이트리스트
 (_DIMENSION_COLUMNS 키)에 강제되므로 analytics_search 의 f-string 인젝션 위험이 없다.
 
-필터(max_class_name/area_name/service_status)는 router 산출 state 값을 재사용한다.
+필터(max_class_name/area_name/service_status/payment_type)는 router 산출 state 값을 재사용한다.
 """
 
 from typing import Literal
@@ -116,6 +116,7 @@ class AnalyticsAgent:
         max_class_name = filters.get("max_class_name")
         area_name = filters.get("area_name")
         service_status = filters.get("service_status")
+        payment_type = filters.get("payment_type")
 
         # 정합성 가드: 소분류 그룹핑은 대분류 필터가 있을 때만 허용.
         group_by = params.group_by
@@ -131,6 +132,7 @@ class AnalyticsAgent:
             max_class_name=max_class_name,
             area_name=area_name,
             service_status=service_status,
+            payment_type=payment_type,
             keyword=params.keyword,
             top_k=top_k if top_k is not None else _TOP_K,
         )

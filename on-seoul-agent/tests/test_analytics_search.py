@@ -283,3 +283,43 @@ class TestAnalyticsSearchKeyword:
             session, group_by="area_name", metric="count", keyword=malicious
         )
         assert malicious not in executed[0]
+
+
+class TestAnalyticsSearchPaymentType:
+    async def test_free_exact_match(self):
+        """payment_type='무료' 는 정확 매칭 술어 + bind '무료'."""
+        session, executed = _capturing_session()
+        await analytics_search(
+            session, group_by="area_name", metric="count", payment_type="무료"
+        )
+        assert "payment_type = :payment_type" in executed[0]
+        bind = session.execute.call_args[0][1]
+        assert bind["payment_type"] == "무료"
+
+    async def test_paid_prefix_match(self):
+        """payment_type='유료' 는 접두 LIKE 술어 + bind '유료%' + ESCAPE."""
+        session, executed = _capturing_session()
+        await analytics_search(
+            session, group_by="area_name", metric="count", payment_type="유료"
+        )
+        assert "payment_type LIKE :payment_type ESCAPE '\\'" in executed[0]
+        bind = session.execute.call_args[0][1]
+        assert bind["payment_type"] == "유료%"
+
+    async def test_none_payment_no_condition(self):
+        """payment_type None 이면 조건·bind 미적용."""
+        session, executed = _capturing_session()
+        await analytics_search(session, group_by="area_name", metric="count")
+        assert "payment_type" not in executed[0]
+        bind = session.execute.call_args[0][1]
+        assert "payment_type" not in bind
+
+    async def test_unknown_payment_ignored(self):
+        """알 수 없는 payment_type 값은 술어를 걸지 않는다 (무료/유료만 인식)."""
+        session, executed = _capturing_session()
+        await analytics_search(
+            session, group_by="area_name", metric="count", payment_type="반값"
+        )
+        assert "payment_type" not in executed[0]
+        bind = session.execute.call_args[0][1]
+        assert "payment_type" not in bind

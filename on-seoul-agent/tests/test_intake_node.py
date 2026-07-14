@@ -9,11 +9,12 @@
 - 하위호환: prev_entities 미전송 → 순수 분류
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents.intake_agent import IntakeAgent
 from agents.nodes.intake import IntakeNodes
-from llm.prompts.intake import INTAKE_GROUNDING
+from llm.prompts.intake import INTAKE_FEW_SHOT_EXAMPLES, INTAKE_GROUNDING
 from schemas.intake import IntakeAction, IntakeOutput, TurnKind
 from schemas.state import ActionType
 from tests.helpers import make_agent_state, make_intake
@@ -146,6 +147,62 @@ class TestGroundingPrompt:
         assert "operational_detail" in captured["system"]
         assert INTAKE_GROUNDING.splitlines()[0] in captured["system"]
         assert "1. 남산 숲 체험" in captured["system"]
+
+
+class TestWeatherConditionedFollowUp:
+    """T3 — 기상 조건 하 운영여부 후속은 맥락 후속(REFINE/DRILL), domain_outside 아님."""
+
+    def test_grounding_has_weather_operation_boundary(self):
+        # grounding 에 "폭염에도 운영해?" 맥락 후속 규칙 + 순수 날씨 경계가 있는지.
+        assert "폭염에도 운영해?" in INTAKE_GROUNDING
+        assert "운영여부" in INTAKE_GROUNDING
+        assert "오늘 날씨 어때?" in INTAKE_GROUNDING
+
+    def test_fewshot_weather_followup_not_domain_outside(self):
+        ex = next(
+            (e for e in INTAKE_FEW_SHOT_EXAMPLES if "폭염에도 운영해?" in e["message"]),
+            None,
+        )
+        assert ex is not None
+        out = json.loads(ex["output"])
+        # 분류 결과가 맥락 후속(REFINE/DRILL)이고 OUT_OF_SCOPE/domain_outside 아님.
+        assert out["turn_kind"] in ("REFINE", "DRILL")
+        assert out["action"] != "OUT_OF_SCOPE"
+        assert out["oos_type"] is None
+
+    def test_fewshot_pure_weather_stays_domain_outside(self):
+        # 경계 회귀: 순수 날씨 질의는 여전히 domain_outside few-shot.
+        ex = next(
+            (e for e in INTAKE_FEW_SHOT_EXAMPLES if "오늘 서울 날씨" in e["message"]),
+            None,
+        )
+        assert ex is not None
+        assert "domain_outside" in ex["output"]
+
+    async def test_weather_followup_binds_drill_not_oos(self):
+        # 직전 단건 맥락에서 "폭염에도 운영해?" → DRILL 바인딩, action!=OUT_OF_SCOPE.
+        node = _nodes(make_intake(turn_kind=TurnKind.DRILL, ref_indices=[1]))
+        state = make_agent_state(
+            message="폭염에도 운영해?",
+            prev_entities=[{"service_id": "S1", "label": "마루공원 테니스장"}],
+        )
+        update = await node.intake_node(state)
+        assert update["triage"]["turn_kind"] == "DRILL"
+        assert update["triage"]["action"] != ActionType.OUT_OF_SCOPE
+        assert update["target_service_ids"] == ["S1"]
+
+    async def test_pure_weather_stays_domain_outside(self):
+        # 경계 회귀: 순수 날씨 질의는 NEW + OUT_OF_SCOPE/domain_outside 유지.
+        node = _nodes(
+            make_intake(
+                turn_kind=TurnKind.NEW,
+                action=IntakeAction.OUT_OF_SCOPE,
+                oos_type="domain_outside",
+            )
+        )
+        update = await node.intake_node(make_agent_state(message="오늘 날씨 어때?"))
+        assert update["triage"]["action"] == ActionType.OUT_OF_SCOPE
+        assert update["triage"]["out_of_scope_type"] == "domain_outside"
 
 
 class TestBackwardCompat:

@@ -12,6 +12,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 from agents.router_agent import RouterAgent, _IntentOutput
+from agents.vector_agent import _REFINE_SYSTEM
 from llm.prompts.router import (
     ROUTER_FEW_SHOT_EXAMPLES,
     ROUTER_SYSTEM,
@@ -85,6 +86,39 @@ class TestPromptGuardAnalyticsBoundary:
         )
         assert kind_ex is not None
         assert '"ANALYTICS"' in kind_ex["output"]
+
+
+class TestTargetAudienceAdultVocab:
+    """T2 — ADULT 트리거 어휘 확장(연인·커플·데이트)이 두 추출 프롬프트에 있는지."""
+
+    def test_router_prompt_has_couple_vocab_for_adult(self):
+        # ROUTER_SYSTEM 의 ADULT 항목에 연인·커플·데이트 트리거가 명시됨.
+        assert "연인" in ROUTER_SYSTEM
+        assert "커플" in ROUTER_SYSTEM
+        assert "데이트" in ROUTER_SYSTEM
+
+    def test_vector_refine_prompt_has_couple_vocab_for_adult(self):
+        assert "연인" in _REFINE_SYSTEM
+        assert "커플" in _REFINE_SYSTEM
+        assert "데이트" in _REFINE_SYSTEM
+
+    def test_adult_enum_still_enforced(self):
+        # enum 강제·자유텍스트 금지 유지(회귀).
+        assert "CHILD/ADULT/SENIOR/FAMILY" in ROUTER_SYSTEM
+        assert "자유 텍스트 금지" in _REFINE_SYSTEM
+
+    async def test_couple_query_extracts_adult(self):
+        # 추출이 "연인이랑 가기 좋은 전시" → target_audience=ADULT 산출(passthrough).
+        agent = _make_agent(
+            _IntentOutput(
+                intent=IntentType.VECTOR_SEARCH,
+                refined_query="연인 전시 관람",
+                target_audience="ADULT",
+                vector_sub_intent="semantic",
+            )
+        )
+        result = await agent.classify("연인이랑 가기 좋은 전시 있어?")
+        assert result.target_audience == "ADULT"
 
 
 class TestClassifyBehavior:

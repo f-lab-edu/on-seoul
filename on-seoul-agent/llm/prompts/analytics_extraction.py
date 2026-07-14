@@ -31,7 +31,12 @@ ANALYTICS_EXTRACTION_SYSTEM = """\
    - "몇 개", "개수", "분포", "많아" → count
    - "어떤 유형", "종류", "무엇이 있어" → distinct
 
-3. keyword : 시설명·종목명 등 구체 키워드 (예: "테니스장", "도서관"). 없으면 null.
+3. keyword : 시설의 유형/종목/고유명 텍스트 검색어.
+   - 질의에 구체적인 시설 유형·종목·고유명(예: "테니스장", "수영장", "도서관")이 있는
+     경우 그 단어만 keyword 로 채우세요.
+   - 결제 형용사("무료", "유료")는 payment_type 필터가 담당하므로 keyword 에 넣지 마세요.
+   - 범용어("시설", "프로그램", "서비스", "공공")는 변별력이 없으므로 keyword 에 넣지 마세요.
+   - 위 요소(결제 형용사·범용어)만 있고 구체 유형·종목·고유명이 없는 경우 keyword = null 로 두세요.
 
 # group_by 판단 규칙 (★중요)
 
@@ -54,6 +59,8 @@ ANALYTICS_EXTRACTION_HUMAN = "사용자 메시지: {message}"
 # 예시 2: 대분류 미명시 유형 질의 → max_class_name + distinct
 # 예시 3: 대분류 명시("체육시설") → min_class_name + distinct
 # 예시 4: 대분류 명시("교육") + 개수 → min_class_name + count
+# 예시 5: 결제 형용사+범용어("무료 시설")뿐 → keyword null (payment_type 필터가 담당)
+# 예시 6: 결제 형용사+구체 종목("무료 테니스장") → keyword="테니스장"
 # ---------------------------------------------------------------------------
 ANALYTICS_EXTRACTION_FEW_SHOT_EXAMPLES = [
     {
@@ -77,5 +84,13 @@ ANALYTICS_EXTRACTION_FEW_SHOT_EXAMPLES = [
     {
         "message": "교육에 관련된 서비스 유형별 갯수 알려줘",
         "output": ('{"group_by": "min_class_name", "metric": "count", "keyword": null}'),
+    },
+    {
+        "message": "무료 시설이 제일 많은 구는?",
+        "output": ('{"group_by": "area_name", "metric": "count", "keyword": null}'),
+    },
+    {
+        "message": "무료 테니스장 몇 개야?",
+        "output": ('{"group_by": "max_class_name", "metric": "count", "keyword": "테니스장"}'),
     },
 ]

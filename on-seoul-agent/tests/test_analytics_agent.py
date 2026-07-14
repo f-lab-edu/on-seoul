@@ -143,6 +143,23 @@ class TestAnalyticsAgentRun:
         assert kwargs["area_name"] == "강남구"
         assert kwargs["service_status"] == "접수중"
 
+    async def test_payment_type_filter_reused(self):
+        """router 산출 filters.payment_type 가 analytics_search 로 전달된다."""
+        agent = _make_agent(_AnalyticsParams(group_by="area_name"))
+        state = make_agent_state(
+            intent=IntentType.ANALYTICS,
+            message="무료 시설이 제일 많은 구는?",
+            payment_type="무료",
+        )
+        session = MagicMock()
+
+        with patch(
+            "agents.analytics_agent.analytics_search", AsyncMock(return_value=[])
+        ) as mock_search:
+            await agent.run(state, session)
+
+        assert mock_search.await_args.kwargs["payment_type"] == "무료"
+
     async def test_results_and_metric_returned(self):
         """analytics_search 결과 + 확정 group_by/metric 을 state 로 반환한다."""
         rows = [{"group_value": "강서구", "count": 7}]
@@ -249,6 +266,24 @@ class TestAnalyticsPromptAssembly:
         # 대분류 명시 → min_class_name 분기 규칙
         assert "대분류" in system
         assert "min_class_name" in system
+
+    def test_free_facility_few_shot_yields_keyword_null(self):
+        """'무료 시설이 제일 많은 구' few-shot 은 keyword null 을 시연한다.
+
+        결제 형용사+범용어("무료 시설")는 payment_type 필터가 담당하므로 keyword 에
+        들어가면 안 된다. 이 예시를 지우거나 keyword 를 채우면 실패한다 (회귀 가드).
+        """
+        ex = next(
+            (
+                e
+                for e in ANALYTICS_EXTRACTION_FEW_SHOT_EXAMPLES
+                if e["message"] == "무료 시설이 제일 많은 구는?"
+            ),
+            None,
+        )
+        assert ex is not None, "무료 시설 few-shot 예시 누락"
+        assert '"keyword": null' in ex["output"]
+        assert "무료" not in ex["output"]
 
     async def test_few_shot_examples_render_messages_and_outputs(self):
         """few-shot 예시의 message/output 텍스트가 실제 메시지에 렌더된다."""
