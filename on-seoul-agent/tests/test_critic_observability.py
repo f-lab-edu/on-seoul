@@ -206,13 +206,18 @@ class TestEntrySignal:
         )
         assert self._fn()(state) == "thin"
 
-    def test_skew(self):
+    def test_skew_only_not_escalated(self):
+        """skew-만(0건·thin 아님)은 critic 승격 신호가 아니다 → None.
+
+        skew 는 지역 미지정 시에만 산출되어 재검색으로 교정 불가하므로 answer 톤
+        조정으로만 처리한다(critic 미진입).
+        """
         state = _state(
             intent=IntentType.SQL_SEARCH,
             hydrated_services=[{"service_id": f"S{i}"} for i in range(4)],
             result_quality={"thin": False, "skew_field": "area_name", "skew_ratio": 0.9},
         )
-        assert self._fn()(state) == "skew"
+        assert self._fn()(state) is None
 
     def test_clearly_good_none(self):
         state = _state(

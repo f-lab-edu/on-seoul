@@ -31,13 +31,16 @@ class TestCuratedCases:
             assert isinstance(c.expected_critic_fires, bool)
             assert c.min_results >= 0
 
-    def test_simple_case_is_critic_no_fire_guard(self):
-        simple = [c for c in CURATED_CASES if c.family == "simple_no_critic"]
-        assert simple
-        assert all(c.expected_critic_fires is False for c in simple)
+    def test_critic_no_fire_guard_families(self):
+        # simple_no_critic 과 skew 는 critic 미발동 가드다. skew 는 지역 미지정 시에만
+        # 산출되어 재검색으로 교정 불가하므로 critic 을 부르지 않고 answer 톤으로만 처리한다.
+        for fam in ("simple_no_critic", "skew"):
+            cases = [c for c in CURATED_CASES if c.family == fam]
+            assert cases
+            assert all(c.expected_critic_fires is False for c in cases)
 
     def test_failure_cases_expect_critic_fire(self):
-        for fam in ("thin", "skew", "zero_hit", "drift"):
+        for fam in ("thin", "zero_hit", "drift"):
             cases = [c for c in CURATED_CASES if c.family == fam]
             assert cases
             assert all(c.expected_critic_fires for c in cases)

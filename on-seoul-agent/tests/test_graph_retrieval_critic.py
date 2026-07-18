@@ -2,8 +2,8 @@
 
 가장 위험한 단계(라우팅 변경)라 회귀 안전이 최우선이다. 이 파일은:
 
-  - escalation 게이트 판정: 명백히 좋음 → answer 직행(critic 미호출 = 80% 경로 보존),
-    의심스러움(0건/thin/skew) → retrieval_critic_node.
+  - escalation 게이트 판정: 명백히 좋음(skew-만 포함) → answer 직행(critic 미호출 =
+    80% 경로 보존), 의심스러움(0건/thin) → retrieval_critic_node.
   - route_critic 조건부 엣지: ANSWER→answer / REPLAN→retry_prep / STOP→answer,
     critic 미결정(fail-open None) → 결정적 폴백.
   - retry_prep_node 의 critic_replan_hint 소비(intent 전환/필터 드롭/재구성) +
@@ -114,7 +114,13 @@ class TestEscalationGate:
         with patch.object(settings, "enable_retrieval_critic", True):
             assert nodes.route_pre_answer_gate(state) == "retrieval_critic_node"
 
-    def test_skew_result_escalates_to_critic(self):
+    def test_skew_only_result_bypasses_critic(self):
+        """skew-만(0건·thin 아님) → answer 직행(critic 미호출).
+
+        skew 는 지역 미지정 area 쏠림으로 같은 질의 재검색으로 교정 불가하므로 critic
+        승격 대상이 아니다. answer 가 result_quality.skew 로 톤을 안내한다(실측: critic
+        REPLAN 이 예산까지 헛돌아 순수 지연만 발생하던 문제 제거).
+        """
         nodes = self._nodes(critic=_make_critic())
         state = _state(
             intent=IntentType.SQL_SEARCH,
@@ -128,7 +134,7 @@ class TestEscalationGate:
             },
         )
         with patch.object(settings, "enable_retrieval_critic", True):
-            assert nodes.route_pre_answer_gate(state) == "retrieval_critic_node"
+            assert nodes.route_pre_answer_gate(state) == "answer_node"
 
     def test_budget_exhausted_hard_backstop_no_critic(self):
         """예산 소진(retry_count >= max) → 하드 백스톱: critic 미진입, answer 직행."""

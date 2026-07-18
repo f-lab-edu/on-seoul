@@ -153,7 +153,7 @@ def _build_graph(nodes: GraphNodes) -> Any:
     builder.add_node("hydration_node", nodes.hydration_node)
     builder.add_node("rrf_fusion_node", nodes.rrf_fusion_node)
     builder.add_node("pre_answer_gate_node", nodes.pre_answer_gate_node)
-    # L1 retrieval-critic — escalation 게이트가 의심스러운 결과(0건/thin/skew)만 승격.
+    # L1 retrieval-critic — escalation 게이트가 의심스러운 결과(0건/thin)만 승격.
     builder.add_node("retrieval_critic_node", nodes.retrieval_critic_node)
     builder.add_node("answer_node", nodes.answer_node)
     builder.add_node("search_persist_node", nodes.search_persist_node)
@@ -244,7 +244,8 @@ def _build_graph(nodes: GraphNodes) -> Any:
     builder.add_edge("rrf_fusion_node", "pre_answer_gate_node")
 
     # escalation 게이트: 명백히 좋음/폴백 → answer, 0건 폴백 → retry_prep,
-    # 의심스러움(0건/thin/skew, critic 활성 시) → retrieval_critic_node.
+    # 의심스러움(0건/thin, critic 활성 시) → retrieval_critic_node. skew 는 재검색으로
+    # 교정 불가라 승격 대상이 아니고 answer 가 result_quality 로 톤만 조정한다.
     builder.add_conditional_edges(
         "pre_answer_gate_node",
         nodes.route_pre_answer_gate,
@@ -450,7 +451,7 @@ def record_critic_span(
     critic 노드가 결정을 낸 직후 호출한다. 활성 Langfuse client 가 있으면 root span
     (_langfuse_trace 의 "chat") 컨텍스트 안에 자식 span("retrieval_critic")을 하나
     열고 즉시 닫으며 집계 메타데이터만 부착한다:
-      · entry_signal — 어느 신호로 escalation 됐는지("zero"/"thin"/"skew").
+      · entry_signal — 어느 신호로 escalation 됐는지("zero"/"thin").
       · decision     — critic 3택("ANSWER"/"REPLAN"/"STOP") 또는 None(미결정 fail-open).
       · round        — critic 라운드 인덱스(retry_count 와 정렬).
     raw 텍스트/식별정보는 싣지 않는다(집계 신호만 — PII 차단).

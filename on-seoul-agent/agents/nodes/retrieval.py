@@ -290,8 +290,9 @@ class RetrievalNodes:
           ⓪ 비검색 경로 → answer_node(직접 답변, 기존 동작 불변).
           ① 예산 소진(retry_count >= max_retrieval_retries) → answer_node(하드 백스톱).
           ② critic 활성 + critic 주입됨:
-             · 의심스러움(0건/thin/skew) → retrieval_critic_node(LLM 1회 승격).
-             · 명백히 좋음 → answer_node(critic 미호출 = 80% 빠른 경로 보존).
+             · 의심스러움(0건/thin) → retrieval_critic_node(LLM 1회 승격).
+             · 명백히 좋음(skew-만 포함) → answer_node(critic 미호출 = 80% 빠른 경로
+               보존). skew 는 재검색으로 교정 불가라 answer 톤 조정으로만 처리한다.
           ③ critic 비활성/미주입(폴백) → 기존 결정적 경로:
              0건(retry_count==0) → retry_prep_node, 그 외 → answer_node.
 
@@ -339,8 +340,12 @@ class RetrievalNodes:
         신호(전부 *결과* 기반):
           · 0건(hydrated_services 가 명시적 빈 리스트 — 검색 실행 후 0건).
           · thin(result_quality.thin — pre_answer_gate 가 산출한 빈약 신호).
-          · skew(result_quality.skew_field 존재 — 한 값 쏠림 신호).
-        어느 것도 아니면 "명백히 좋음"으로 보아 critic 을 부르지 않는다(80% 경로).
+        skew(한 값 쏠림)는 승격 대상이 아니다: skew 는 사용자가 지역 미지정일 때만
+        산출되어(assess_result_quality 가 area_filter 지정 시 skew 억제) 같은 질의
+        재검색으로 교정할 수 없다. skew 는 answer 가 result_quality 로 톤을 조정해
+        "한 구 쏠림"을 안내하므로 critic 을 부를 필요가 없다(실측: critic REPLAN 이
+        예산까지 헛돌아 순수 지연만 발생). 어느 신호도 없으면 "명백히 좋음"으로 보아
+        critic 을 부르지 않는다(80% 경로).
         """
         return RetrievalNodes._entry_signal(state) is not None
 
@@ -348,9 +353,11 @@ class RetrievalNodes:
     def _entry_signal(state: AgentState) -> str | None:
         """critic escalation 을 유발한 결과 신호를 분류한다(관측·SSE 라벨용, L1).
 
-        우선순위(먼저 매칭 하나): "zero"(0건) → "thin"(빈약) → "skew"(쏠림).
-        의심스럽지 않으면(명백히 좋음) None — critic 미진입. 집계 신호 라벨만
-        산출하며 raw 텍스트/식별정보는 담지 않는다(PII 차단).
+        우선순위(먼저 매칭 하나): "zero"(0건) → "thin"(빈약).
+        의심스럽지 않으면(명백히 좋음, skew-만 포함) None — critic 미진입. skew 는
+        지역 미지정 시에만 산출되어 재검색으로 교정 불가하므로 critic 승격 신호가
+        아니다(answer 가 result_quality.skew 로 톤 안내). 집계 신호 라벨만 산출하며
+        raw 텍스트/식별정보는 담지 않는다(PII 차단).
         """
         hydrated = state["hydration"].get("hydrated_services")
         if hydrated is not None and len(hydrated) == 0:
@@ -358,8 +365,6 @@ class RetrievalNodes:
         quality = state.get("result_quality") or {}
         if quality.get("thin"):
             return "thin"
-        if quality.get("skew_field"):
-            return "skew"
         return None
 
     def route_critic(self, state: AgentState) -> str:

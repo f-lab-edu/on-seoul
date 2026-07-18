@@ -1,7 +1,7 @@
 """Retrieval Critic — 검색 결과가 약할 때 다음 행동을 정하는 LLM 판단 노드 (L1).
 
 on-seoul-agent 를 워크플로우 → 에이전트로 넘기는 최초의 "관찰→판단" 루프다. 검색이
-이미 한 번 실행된 뒤, 그 *결과*가 약할 수 있을 때(0건/thin/skew) LLM 이 원인을 추론해
+이미 한 번 실행된 뒤, 그 *결과*가 약할 수 있을 때(0건/thin) LLM 이 원인을 추론해
 ANSWER / REPLAN / STOP 을 정한다. LLM 은 with_structured_output 으로
 CriticOutput(스키마)만 산출하므로 자유 SQL/식별자를 만들 수 없다(인젝션 가드).
 

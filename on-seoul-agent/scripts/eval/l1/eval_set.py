@@ -7,7 +7,7 @@ baseline↔after 채점(결정적 체크 + LLM-as-judge)에 재사용한다.
 케이스 패밀리(요구된 유형 전부 최소 1건):
   - simple_no_critic : 단순 대표 — critic **미발동** 회귀 가드(80% 경로 보호 확인).
   - thin             : 빈약 결과 유발.
-  - skew             : 한 구/카테고리 쏠림 유발.
+  - skew             : 한 구/카테고리 쏠림 유발 — critic **미발동**(answer 톤 조정으로만 처리).
   - zero_hit         : 0건 유발.
   - intent_mispick   : intent 오선택 유발(집계 질의 등).
   - drift            : 결과 표류 유발(자연 활동 ↔ 실내 강좌 혼입).
@@ -68,14 +68,17 @@ CURATED_CASES: list[EvalCase] = [
         min_results=0,
         note="희소 조합 — 1~2건 thin 유발, critic 이 재탐색/톤 판단.",
     ),
-    # --- skew: 쏠림 ---
+    # --- skew: 쏠림(critic 미발동 — answer 톤 조정으로만 처리) ---
     EvalCase(
         family="skew",
         query="서울 무료 전시 추천",
         expected_intent="VECTOR_SEARCH",
-        expected_critic_fires=True,
+        expected_critic_fires=False,
         min_results=3,
-        note="결과가 한 구에 쏠릴 개연 — skew 유발, critic 재탐색 판단.",
+        note=(
+            "결과가 한 구에 쏠릴 개연 — skew 유발. skew 는 지역 미지정 시에만 산출되어 "
+            "재검색으로 교정 불가하므로 critic 미호출, answer 가 result_quality 로 톤 안내."
+        ),
     ),
     # --- zero_hit: 0건 ---
     EvalCase(
