@@ -32,6 +32,9 @@ uv run python scripts/embed_metadata.py --retry-failed
 
 # dry-run
 uv run python scripts/embed_metadata.py --dry-run --all
+
+# 소스 해시가 같아도 전량 재생성 (프롬프트/추출 로직 변경 후)
+uv run python scripts/embed_metadata.py --all --force
 """
 
 import argparse
@@ -49,8 +52,13 @@ from core.config import settings
 from llm.client import get_chat_model, get_embeddings
 from llm.extractor import extract_metadata
 from scripts.cleaning.detail_content import clean_detail_content
-from scripts.tracks._shared import ServiceRecord, delete_rows_by_service_id
-from scripts.tracks.identity import embed_and_insert_identity
+from scripts.tracks._shared import (
+    ServiceRecord,
+    compute_source_hash,
+    delete_rows_by_service_id,
+    fetch_source_hash,
+)
+from scripts.tracks.identity import embed_and_insert_identity, update_identity_metadata
 from scripts.tracks.questions import embed_and_insert_questions
 from scripts.tracks.summary import embed_and_insert_summary
 
@@ -71,13 +79,37 @@ async def process_service(
     llm_client,
     tracks: set[str],
     extraction_failed_path: Path | None = None,
-) -> None:
-    """단일 시설의 Triple-Track 임베딩 적재.
+    force: bool = False,
+) -> str:
+    """단일 시설의 Triple-Track 임베딩 적재. "skipped" 또는 "processed"를 반환한다.
 
     tracks: {"A"}, {"B"}, {"C"}, {"A","B","C"} 등 조합 가능.
     extraction_failed_path: LLM 추출 실패 시 service_id를 append할 파일.
+    force: 소스 해시가 같아도 전량 재생성(프롬프트/추출 로직 변경 시 사용).
+
+    소스 해시 스킵: 임베딩 결과를 좌우하는 입력(소스 필드 + 정제된 상세내용)이
+    직전 적재와 동일하면 LLM 추출/임베딩을 건너뛰고 identity metadata 만 갱신한다.
+    상태·날짜만 바뀌는 대부분의 변경에서 LLM 2회 + 임베딩 (2+N)회를 절약한다.
+    부분 트랙 백필은 스킵하면 해당 트랙이 영영 비므로 전체 트랙에서만 적용한다.
     """
     cleaned = clean_detail_content(service.get("detail_content"))
+    source_hash = compute_source_hash(service, cleaned)
+    full_sync = tracks >= {"A", "B", "C"}
+
+    if full_sync and not force:
+        # 해시 조회를 반드시 begin 블록 *안에서* 한다. SQLAlchemy 2.0 은 session.execute()
+        # 시점에 트랜잭션을 autobegin 하므로, 블록 밖에서 읽고 나서 session.begin() 을
+        # 열면 "A transaction is already begun on this Session"(InvalidRequestError)로
+        # 터진다 — 이 경로는 운영 기본 경로(full_sync, force=False)라 전 건 실패로 이어지고,
+        # _upsert_one 의 except 가 로그로 삼켜 무증상 동기화 중단이 된다.
+        # 블록을 빠져나오면 커밋되어 트랜잭션이 해제되므로 아래 재생성 경로의 begin 은 안전하다.
+        async with session.begin():
+            stored_hash = await fetch_source_hash(session, service["service_id"])
+            if stored_hash == source_hash:
+                await update_identity_metadata(
+                    session, service, source_hash=source_hash
+                )
+                return "skipped"
 
     async with session.begin():
         await delete_rows_by_service_id(session, service["service_id"], tracks=tracks)
@@ -105,7 +137,7 @@ async def process_service(
             if extraction_failed_path:
                 with extraction_failed_path.open("a", encoding="utf-8") as f:
                     f.write(f"{service['service_id']}\n")
-            return
+            return "processed"
 
         if "B" in tracks:
             await embed_and_insert_summary(
@@ -113,7 +145,7 @@ async def process_service(
             )
 
         if "C" in tracks:
-            await embed_and_insert_questions(
+            questions_ok = await embed_and_insert_questions(
                 session,
                 service,
                 embedder=embedder,
@@ -121,6 +153,14 @@ async def process_service(
                 cleaned_detail=cleaned,
                 extracted_summary=extracted.summary,
             )
+            if not questions_ok:
+                # 해시를 찍지 않아 다음 동기화가 재시도한다.
+                return "processed"
+
+        if full_sync:
+            await update_identity_metadata(session, service, source_hash=source_hash)
+
+    return "processed"
 
 
 async def run(
@@ -129,6 +169,7 @@ async def run(
     tracks: set[str] | None = None,
     dry_run: bool = False,
     retry_failed: bool = False,
+    force: bool = False,
 ) -> None:
     effective_tracks = tracks or {"A", "B", "C"}
 
@@ -191,6 +232,7 @@ async def run(
                         llm_client=llm_client,
                         tracks=effective_tracks,
                         extraction_failed_path=failed_path,
+                        force=force,
                     )
                 except Exception:
                     logger.exception("처리 실패: service_id=%s", row.get("service_id"))
@@ -334,6 +376,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dry-run", action="store_true", help="실제 적재 없이 대상 건수만 확인"
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="소스 해시가 같아도 전량 재생성 (프롬프트/추출 로직 변경 시)",
+    )
     return parser.parse_args()
 
 
@@ -357,6 +404,7 @@ if __name__ == "__main__":
                 tracks=tracks,
                 dry_run=args.dry_run,
                 retry_failed=args.retry_failed,
+                force=args.force,
             )
         )
     except Exception:

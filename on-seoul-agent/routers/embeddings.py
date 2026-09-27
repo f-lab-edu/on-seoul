@@ -6,6 +6,7 @@ POST /embeddings/services/sync — 백그라운드로 upsert/delete 작업을 �
 
 import asyncio
 import logging
+from collections import Counter
 
 from fastapi import APIRouter, BackgroundTasks
 from opentelemetry import context as otel_context
@@ -101,6 +102,8 @@ async def _run_services_sync(
 
                 # upsert 처리
                 if upsert:
+                    # 소스 해시 기반 스킵/재생성 절감 측정용 카운터.
+                    counts = Counter()
 
                     async def _upsert_one(service_id: str) -> None:
                         async with sem:
@@ -115,20 +118,28 @@ async def _run_services_sync(
                                 return
                             async with OnAiSession() as ai_session:
                                 try:
-                                    await process_service(
+                                    result = await process_service(
                                         row,
                                         session=ai_session,
                                         embedder=embedder,
                                         llm_client=llm_client,
                                         tracks={"A", "B", "C"},
                                     )
+                                    counts[result] += 1
                                 except Exception:
                                     logger.exception(
                                         "임베딩 처리 실패: service_id=%s", service_id
                                     )
 
                     await asyncio.gather(*[_upsert_one(sid) for sid in upsert])
-                    logger.info("임베딩 upsert 완료: %d건", len(upsert))
+                    logger.info(
+                        "임베딩 upsert 완료: %d건 (재생성 %d, 소스 불변 스킵 %d)",
+                        len(upsert),
+                        counts["processed"],
+                        counts["skipped"],
+                    )
+                    span.set_attribute("embeddings.regenerated", counts["processed"])
+                    span.set_attribute("embeddings.skipped", counts["skipped"])
         finally:
             await on_data_engine.dispose()
             await on_ai_engine.dispose()
