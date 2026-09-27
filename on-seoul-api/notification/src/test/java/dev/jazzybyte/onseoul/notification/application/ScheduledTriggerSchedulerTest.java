@@ -333,13 +333,14 @@ class ScheduledTriggerSchedulerTest {
     }
 
     // ── cross-dedup 실행 순서 불변식(회귀 가드) ──────────────────────────────
-    // 수집이 주 1회(월요일 08:00 KST)로 바뀐 뒤에도 cross-dedup 선후 관계가 유지되는지 코드로 고정한다.
-    // 불변식: "수집이 도는 주기"에는 수집(CHANGE 배치가 dispatch 선점) → 시점 트리거 순으로 실행된다.
+    // 수집이 주 2회(월·목 08:00 KST)로 바뀐 뒤에도 cross-dedup 선후 관계가 유지되는지 코드로 고정한다.
+    // 불변식: "수집이 도는 날"에는 수집(CHANGE 배치가 dispatch 선점) → 시점 트리거 순으로 실행된다.
     //   - JVM 기본 타임존은 UTC로 강제됨(OnSeoulApiApplication.init()).
-    //   - 수집  : @Scheduled(cron="0 0 8 * * MON", zone="Asia/Seoul") → 월 08:00 KST = 일 23:00 UTC.
+    //   - 수집  : @Scheduled(cron="0 0 8 * * MON,THU", zone="Asia/Seoul")
+    //             → 월 08:00 KST = 일 23:00 UTC / 목 08:00 KST = 수 23:00 UTC.
     //   - 시점  : @Scheduled(cron="...0 30 9 * * *", zone 미지정) → JVM UTC 기준 매일 09:30 UTC.
-    // 수집 발화(일 23:00 UTC) 직후 처음 도는 시점 트리거는 월 09:30 UTC이므로, 수집이 약 10.5시간
-    // 마진으로 선행한다(주 1회 전환 전 일간 편성과 동일한 마진 — 발화 요일만 줄었다).
+    // 각 수집 발화(전일 23:00 UTC) 직후 처음 도는 시점 트리거는 당일 09:30 UTC이므로, 수집이 약
+    // 10.5시간 마진으로 선행한다(일간 편성 시절과 동일한 마진 — 발화 요일 수만 달라졌다).
     // 수집이 없는 나머지 요일에는 CHANGE 배치 자체가 생기지 않으므로 시점 트리거가 선점할
     // CHANGE dispatch 가 없다 → cross-dedup 경합 자체가 발생하지 않는다.
     // 이 마진이 무너지면 시점 트리거가 CHANGE보다 먼저 dispatch를 선점해 cross-dedup(CHANGE 우선)이 깨진다.
@@ -354,52 +355,59 @@ class ScheduledTriggerSchedulerTest {
         // 기본 cron 표현식(프로퍼티 미설정 시): 0 30 9 * * *
         assertThat(scheduled.cron()).isEqualTo("${notification.scheduled-trigger.cron:0 30 9 * * *}");
         // zone 미지정 → JVM 기본 타임존(UTC)을 따른다. zone 추가는 시점 트리거를 KST로 당겨
-        // 수집(월 08:00 KST = 일 23:00 UTC)보다 앞당겨 cross-dedup 순서를 깰 수 있으므로 의도적으로 비워둔다.
+        // 수집(월·목 08:00 KST = 전일 23:00 UTC)보다 앞당겨 cross-dedup 순서를 깰 수 있으므로 의도적으로 비워둔다.
         assertThat(scheduled.zone()).isEmpty();
     }
 
     @Test
-    @DisplayName("주 1회 수집(월 08:00 KST = 일 23:00 UTC)은 직후 시점 트리거(월 09:30 UTC)보다 선행한다 — cross-dedup 순서 불변식")
-    void weeklyCollectionMonday_precedesNextScheduledTrigger_crossDedupOrdering() {
-        // 주의: 이 테스트는 기본 cron(0 30 9 / 0 0 8 ... MON)에 대한 *코드 회귀* 가드다.
+    @DisplayName("주 2회 수집(월·목 08:00 KST = 전일 23:00 UTC)은 각각 직후 시점 트리거(당일 09:30 UTC)보다 선행한다 — cross-dedup 순서 불변식")
+    void biweeklyCollection_precedesNextScheduledTrigger_crossDedupOrdering() {
+        // 주의: 이 테스트는 기본 cron(0 30 9 / 0 0 8 ... MON,THU)에 대한 *코드 회귀* 가드다.
         // 시점 트리거 cron은 notification.scheduled-trigger.cron 프로퍼티로 런타임 오버라이드 가능하므로,
         // 운영에서 트리거 시각을 앞당기면 이 테스트는 그대로 통과해도 순서가 깨질 수 있다(런타임 cron 미검증).
         ZoneId utc = ZoneOffset.UTC;
         ZoneId kst = ZoneId.of("Asia/Seoul");
 
-        CronExpression collectCron = CronExpression.parse("0 0 8 * * MON");   // CollectionScheduler (zone=Asia/Seoul)
-        CronExpression triggerCron = CronExpression.parse("0 30 9 * * *");    // ScheduledTriggerScheduler (zone 미지정 = UTC)
+        CronExpression collectCron = CronExpression.parse("0 0 8 * * MON,THU"); // CollectionScheduler (zone=Asia/Seoul)
+        CronExpression triggerCron = CronExpression.parse("0 30 9 * * *");      // ScheduledTriggerScheduler (zone 미지정 = UTC)
 
-        // 임의의 비-월요일(2026-06-03 수) 기준으로 다음 수집 발화를 구한다.
-        ZonedDateTime collectFireKst =
+        // 임의의 비-수집일(2026-06-03 수) 기준으로 연속한 두 수집 발화를 구한다 → 목요일, 그 다음 월요일.
+        ZonedDateTime thursdayFireKst =
                 collectCron.next(ZonedDateTime.of(LocalDateTime.of(2026, 6, 3, 0, 0), kst));
-        ZonedDateTime collectFireUtc = collectFireKst.withZoneSameInstant(utc);
+        ZonedDateTime mondayFireKst = collectCron.next(thursdayFireKst);
+        assertThat(thursdayFireKst.getDayOfWeek()).isEqualTo(DayOfWeek.THURSDAY);
+        assertThat(mondayFireKst.getDayOfWeek()).isEqualTo(DayOfWeek.MONDAY);
 
-        // 수집은 KST 월요일 08:00 = UTC 일요일 23:00 에 발화한다.
-        assertThat(collectFireKst.getDayOfWeek()).isEqualTo(DayOfWeek.MONDAY);
-        assertThat(collectFireKst.toLocalTime().toString()).isEqualTo("08:00");
-        assertThat(collectFireUtc.getDayOfWeek()).isEqualTo(DayOfWeek.SUNDAY);
-        assertThat(collectFireUtc.toLocalTime().toString()).isEqualTo("23:00");
+        // 주 2회 발화 *양쪽 모두* 에서 선후 관계가 성립해야 한다(한쪽만 검증하면 요일 추가 회귀를 놓친다).
+        for (ZonedDateTime fireKst : List.of(thursdayFireKst, mondayFireKst)) {
+            ZonedDateTime fireUtc = fireKst.withZoneSameInstant(utc);
 
-        // 수집 직후 처음 도는 시점 트리거 = 월요일 09:30 UTC.
-        ZonedDateTime nextTriggerFire = triggerCron.next(collectFireUtc);
-        assertThat(nextTriggerFire.getDayOfWeek()).isEqualTo(DayOfWeek.MONDAY);
-        assertThat(nextTriggerFire.toLocalTime().toString()).isEqualTo("09:30");
+            assertThat(fireKst.toLocalTime().toString()).isEqualTo("08:00");
+            // KST 08:00 = 전일 23:00 UTC
+            assertThat(fireUtc.toLocalTime().toString()).isEqualTo("23:00");
+            assertThat(fireUtc.getDayOfWeek()).isEqualTo(fireKst.getDayOfWeek().minus(1));
 
-        // 핵심 불변식: 수집이 도는 주기에는 CHANGE 배치가 시점 트리거보다 먼저 dispatch 를 선점한다.
-        assertThat(collectFireUtc)
-                .as("수집(일 23:00 UTC)이 직후 시점 트리거(월 09:30 UTC)보다 선행해야 cross-dedup(CHANGE 우선) 성립")
-                .isBefore(nextTriggerFire);
-        // 수집 → 임베딩 동기화 → CHANGE 알림 파이프라인이 끝날 마진: 약 10.5시간.
-        assertThat(Duration.between(collectFireUtc, nextTriggerFire).toHours())
-                .isGreaterThanOrEqualTo(10L);
+            // 수집 직후 처음 도는 시점 트리거 = 같은 KST 요일의 09:30 UTC.
+            ZonedDateTime nextTriggerFire = triggerCron.next(fireUtc);
+            assertThat(nextTriggerFire.toLocalTime().toString()).isEqualTo("09:30");
+            assertThat(nextTriggerFire.getDayOfWeek()).isEqualTo(fireKst.getDayOfWeek());
 
-        // 수집이 없는 요일(화요일 09:30 UTC 트리거)에는 그 이전에 새 수집 발화가 없다 →
+            // 핵심 불변식: 수집이 도는 날에는 CHANGE 배치가 시점 트리거보다 먼저 dispatch 를 선점한다.
+            assertThat(fireUtc)
+                    .as("수집(전일 23:00 UTC)이 직후 시점 트리거(당일 09:30 UTC)보다 선행해야 cross-dedup(CHANGE 우선) 성립")
+                    .isBefore(nextTriggerFire);
+            // 수집 → 임베딩 동기화 → CHANGE 알림 파이프라인이 끝날 마진: 약 10.5시간.
+            assertThat(Duration.between(fireUtc, nextTriggerFire).toHours())
+                    .isGreaterThanOrEqualTo(10L);
+        }
+
+        // 수집이 없는 요일(금요일 09:30 UTC 트리거)에는 그 이전에 새 수집 발화가 없다 →
         // 선점할 CHANGE 배치가 없으므로 cross-dedup 경합 대상 자체가 생기지 않는다.
-        ZonedDateTime tuesdayTriggerFire = triggerCron.next(nextTriggerFire);
-        assertThat(tuesdayTriggerFire.getDayOfWeek()).isEqualTo(DayOfWeek.TUESDAY);
-        assertThat(collectCron.next(nextTriggerFire.withZoneSameInstant(kst)).withZoneSameInstant(utc))
-                .as("월요일 트리거 이후 다음 수집은 그 다음 주 — 화요일 트리거 시점엔 새 CHANGE 배치가 없다")
-                .isAfter(tuesdayTriggerFire);
+        ZonedDateTime thursdayTriggerFire = triggerCron.next(thursdayFireKst.withZoneSameInstant(utc));
+        ZonedDateTime fridayTriggerFire = triggerCron.next(thursdayTriggerFire);
+        assertThat(fridayTriggerFire.getDayOfWeek()).isEqualTo(DayOfWeek.FRIDAY);
+        assertThat(collectCron.next(thursdayTriggerFire.withZoneSameInstant(kst)).withZoneSameInstant(utc))
+                .as("목요일 트리거 이후 다음 수집은 그 다음 월요일 — 금요일 트리거 시점엔 새 CHANGE 배치가 없다")
+                .isAfter(fridayTriggerFire);
     }
 }

@@ -147,7 +147,7 @@ ADR-0004 기반 배치 잡 방식. 상태 머신 아님.
 
 ### 메인 발송 배치 (`NotificationScheduler` — `CollectionCompletedEvent` 수신 시 1회)
 
-수집 스케줄러(`CollectionScheduler`, 주 1회 월요일 08:00 KST)가 `collectAll()` 완료 후 이벤트를 발행하면
+수집 스케줄러(`CollectionScheduler`, 주 2회 월·목 08:00 KST)가 `collectAll()` 완료 후 이벤트를 발행하면
 `@Async @EventListener`로 비동기 기동한다. 수집 중 일부 소스 실패 시에도 이벤트는 발행된다.
 
 ```

@@ -37,8 +37,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@code EmbeddingSyncCompletedEvent} 이벤트 기반이라 "그 직후 단계"로 동기 합류시키기 어렵다.
  * 따라서 별도 {@code @Scheduled} cron 으로 분리하고, CHANGE 수집/임베딩/알림 파이프라인이
  * 충분히 끝난 뒤(기본 09:30) 실행되도록 시각을 늦춰 <b>CHANGE 가 먼저 dispatch 를 선점</b>하게 한다.
- * 이 실행 순서가 cross-trigger dedup(CHANGE 우선)의 1차 보장이다. 수집은 주 1회(월 08:00 KST)라
- * CHANGE 배치도 주 1회만 생기며, 수집이 없는 요일에는 선점 대상 CHANGE dispatch 자체가 없다.
+ * 이 실행 순서가 cross-trigger dedup(CHANGE 우선)의 1차 보장이다. 수집은 주 2회(월·목 08:00 KST)라
+ * CHANGE 배치도 주 2회만 생기며, 수집이 없는 요일에는 선점 대상 CHANGE dispatch 자체가 없다.
  *
  * <p><b>dedup (모두 batch 생성 전 선조회 — 빈 batch 미생성)</b>:
  * <ul>
@@ -121,7 +121,7 @@ public class ScheduledTriggerScheduler {
      * 매일 09:30 UTC(= 18:30 KST)에 시점 트리거 알림을 발송한다.
      * JVM 기본 존이 OnSeoulApiApplication.init()에서 UTC로 강제되므로 zone 미지정 cron은 UTC 기준이다.
      * today/dispatch_date도 UTC 달력 기준이라 발화 존과 정합된다.
-     * CHANGE 배치(CollectionScheduler 주 1회 월 08:00 KST = 일 23:00 UTC)보다 늦게 실행되도록 시각을 늦춘다
+     * CHANGE 배치(CollectionScheduler 주 2회 월·목 08:00 KST = 전일 23:00 UTC)보다 늦게 실행되도록 시각을 늦춘다
      * (실행 순서 = cross dedup 1차 보장). 시점 트리거 자체는 요일과 무관하게 매일 실행된다.
      */
     @Scheduled(cron = "${notification.scheduled-trigger.cron:0 30 9 * * *}")
