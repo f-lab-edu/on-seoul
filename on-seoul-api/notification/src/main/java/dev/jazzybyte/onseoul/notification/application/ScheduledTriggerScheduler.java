@@ -253,10 +253,31 @@ public class ScheduledTriggerScheduler {
      * </ol>
      * 둘 다 통과하면 batch INSERT 후 {@code saveScheduledIfAbsent}(ON CONFLICT 멱등 = race-safety 백업)로 발행한다.
      *
+     * <p>3종 트리거(OPEN_DAY / BEFORE_RECEIPT_D1 / DEADLINE_DDAY)가 모두 이 메서드를 지나므로
+     * 구독 생존 재확인도 여기 한 곳에만 둔다.
+     *
      * @return 발송 성공 시 true, dedup 으로 skip 또는 발송 실패 시 false.
      */
     private boolean dispatchOne(NotificationSubscription sub, TriggerType triggerType,
                                 ScheduledServiceMatch match, LocalDate today) {
+        // 0) 생존 재확인: loadChunk 로 적재한 뒤 사용자가 해지(소프트 딜리트)했을 수 있다.
+        // 메인 배치(NotificationTxHelper#txA)만 막고 시점 트리거를 열어두면 해지한 사용자가
+        // 시점 알림을 계속 받는다.
+        //
+        // [호출 빈도] 이 메서드는 (트리거 3종 × 매치 N건)마다 호출되므로 PK SELECT 는 매치당 1회,
+        // 구독당 N_open + N_d1 + N_deadline 회다 — 같은 행을 여러 번 다시 읽는다. 넓은 필터 구독이
+        // 오늘 200건에 매칭되면 그 구독 하나에 200회.
+        //
+        // [그래도 매치 단위인 이유] 같은 루프 반복에 이미 AI 템플릿 호출 + Knock 푸시(100ms~10s)가
+        // 있어 PK SELECT 비용은 무시할 수준이고, 매치당 확인은 fan-out 중간에 멈출 수 있다는
+        // 더 나은 opt-out 특성을 준다. processSubscription 으로 올리면 매치가 많은 구독은
+        // 한 번의 확인 후 수 분간 발송이 계속된다.
+        // 잔여 창(이 확인 이후의 AI 호출+푸시)은 남는다.
+        if (loadSubscriptionPort.loadById(sub.getId()).isEmpty()) {
+            log.info("[ScheduledTriggerScheduler] 구독 subscriptionId={} — 배치 진행 중 해지됨, 발송 건너뜀",
+                    sub.getId());
+            return false;
+        }
         // 1) CHANGE↔시점 cross-dedup: 오늘 같은 구독의 CHANGE payload 가 이 service 를 이미 커버하면 skip.
         if (loadDispatchPort.existsChangeDispatchForServiceToday(sub.getId(), match.serviceId(), today)) {
             return false;

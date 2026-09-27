@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS notification_subscriptions
     filter           VARCHAR(2000) NOT NULL DEFAULT '{}',
     last_notified_at TIMESTAMP,
     created_at       TIMESTAMP     NOT NULL DEFAULT NOW(),
+    deleted_at       TIMESTAMP,
 
     CONSTRAINT uq_ns_user_service UNIQUE (user_id, service_id)
 );

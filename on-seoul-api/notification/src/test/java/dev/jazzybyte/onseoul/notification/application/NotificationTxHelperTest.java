@@ -11,6 +11,7 @@ import dev.jazzybyte.onseoul.notification.domain.SubscriptionFilter;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
 import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadServiceChangePort;
+import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.SubscriptionFilterParserPort;
@@ -33,6 +34,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -42,6 +44,7 @@ import static org.mockito.Mockito.when;
 class NotificationTxHelperTest {
 
     @Mock private LoadServiceChangePort loadServiceChangePort;
+    @Mock private LoadSubscriptionPort loadSubscriptionPort;
     @Mock private LoadDispatchPort loadDispatchPort;
     @Mock private SaveDispatchPort saveDispatchPort;
     @Mock private SaveSubscriptionPort saveSubscriptionPort;
@@ -56,9 +59,17 @@ class NotificationTxHelperTest {
     @BeforeEach
     void setUp() {
         txHelper = new NotificationTxHelper(
-                loadServiceChangePort, loadDispatchPort, saveDispatchPort,
+                loadServiceChangePort, loadSubscriptionPort, loadDispatchPort, saveDispatchPort,
                 saveSubscriptionPort, subscriptionFilterParserPort,
                 Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+        // txA 의 생존 재확인 기본값 — 구독이 살아 있는 상태. 해지 케이스는 개별 테스트에서 덮어쓴다.
+        // 인자 id 를 반영해 돌려준다 — 고정 인스턴스를 반환하면 나중에 이 fresh read 를 실제로
+        // 소비하게 만들었을 때 잘못된 구독이 흘러들어도 테스트가 초록으로 남는다.
+        lenient().when(loadSubscriptionPort.loadById(any())).thenAnswer(inv -> {
+            Long id = inv.getArgument(0, Long.class);
+            return Optional.of(NotificationSubscription.ofPersistence(id, 100L, "{}",
+                    Set.of(NotificationChannel.EMAIL), null, Instant.now()));
+        });
     }
 
     // ── helpers ──────────────────────────────────────────────────────────
@@ -92,6 +103,20 @@ class NotificationTxHelperTest {
     }
 
     // ── TX A ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("TX A — 배치 진행 중 해지된 구독은 변경 조회 없이 empty 반환 (소프트 딜리트 생존 재확인)")
+    void txA_subscriptionDeletedMidBatch_skipsAllAndReturnsEmpty() {
+        NotificationSubscription sub = subscriptionWithLastNotifiedAt(null);
+        when(loadSubscriptionPort.loadById(1L)).thenReturn(Optional.empty());
+
+        NotificationTxHelper.TxAResult result = txHelper.txA(TEST_BATCH, sub);
+
+        assertThat(result.changes()).isEmpty();
+        assertThat(result.dispatch()).isEmpty();
+        verifyNoInteractions(loadDispatchPort, loadServiceChangePort, saveDispatchPort,
+                subscriptionFilterParserPort);
+    }
 
     @Test
     @DisplayName("TX A — DEAD dispatch가 존재하면 변경 조회 없이 empty 반환 (영구 실패 가드)")

@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS notification_subscriptions
     filter           VARCHAR(2000) NOT NULL DEFAULT '{}',
     channels         VARCHAR(500)  NOT NULL DEFAULT '["EMAIL"]', -- H2는 jsonb_array_length 미지원으로 CHECK(jsonb_array_length > 0) 생략
     last_notified_at TIMESTAMP,
-    created_at       TIMESTAMP     NOT NULL DEFAULT NOW()
+    created_at       TIMESTAMP     NOT NULL DEFAULT NOW(),
+    deleted_at       TIMESTAMP                                   -- migration 10: 소프트 딜리트. NULL = 활성 구독
     -- serviceId pin 제거: 구독 중복 방지 제약(uq_ns_user_service) 없음 — 조건 기반 다중 구독 허용
 );
 

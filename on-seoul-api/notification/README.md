@@ -40,7 +40,7 @@ notification/
 │   │   └── (CreateSubscription/UpdateSubscription/DeleteSubscription/ListSubscriptions/ListDispatches)
 │   └── out/
 │       ├── LoadSubscriptionPort.java    # 구독 조회 (스케줄러용 청크 페이지네이션 포함)
-│       ├── SaveSubscriptionPort.java    # 구독 저장 + saveIfAbsent
+│       ├── SaveSubscriptionPort.java    # 구독 저장 (save/insert/updatePartial/deleteById)
 │       ├── LoadDispatchPort.java        # dispatch 조회 (재시도 목록, DEAD 가드)
 │       ├── SaveDispatchPort.java        # dispatch 저장 + saveIfAbsent
 │       ├── LoadBatchPort.java           # 배치 이력 조회 (stale RUNNING 회수)
@@ -246,10 +246,6 @@ FastAPI AI 서비스(`POST /notification/template`)를 호출해 자연어 알�
 
 **LogOnlyFallbackNotificationAdapter** — `FallbackNotificationPort` 기본 스텁. 로그·메트릭만 기록, 실 발송 없음.
 실 구현체(`OneSignalFallbackNotificationAdapter`, TODO) 등록 시 `@ConditionalOnMissingBean`으로 자동 교체.
-
-### NotificationSubscriptionPersistenceAdapter (`adapter/out/persistence`)
-
-`saveIfAbsent()` — `JdbcTemplate` + `DataIntegrityViolationException` catch 방식으로 `ON CONFLICT DO NOTHING` 의미론 구현 (H2/PostgreSQL 공통 호환).
 
 ---
 

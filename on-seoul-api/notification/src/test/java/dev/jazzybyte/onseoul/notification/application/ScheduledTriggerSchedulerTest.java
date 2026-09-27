@@ -94,6 +94,11 @@ class ScheduledTriggerSchedulerTest {
         lenient().when(loadScheduledTriggerPort.loadReceiptStartTomorrow(any(), any())).thenReturn(List.of());
         lenient().when(loadScheduledTriggerPort.loadDeadlineToday(any(), any())).thenReturn(List.of());
         lenient().when(loadSubscriptionPort.loadChunk(anyLong(), anyInt())).thenReturn(List.of());
+        // dispatchOne 의 생존 재확인 기본값 — 구독이 살아 있는 상태. 해지 케이스는 개별 테스트에서 덮어쓴다.
+        // 인자 id 를 반영해 돌려준다 — 고정 인스턴스를 반환하면 나중에 이 fresh read 를 실제로
+        // 소비하게 만들었을 때 잘못된 구독이 흘러들어도 테스트가 초록으로 남는다.
+        lenient().when(loadSubscriptionPort.loadById(anyLong()))
+                .thenAnswer(inv -> Optional.of(sub(inv.getArgument(0, Long.class))));
         lenient().when(saveBatchPort.insertRunning(any())).thenAnswer(inv ->
                 new NotificationBatch(7L, java.time.Instant.now(), null, BatchStatus.RUNNING, null, null));
         lenient().when(saveBatchPort.update(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -183,6 +188,25 @@ class ScheduledTriggerSchedulerTest {
 
         verifyNoInteractions(pushNotificationPort, templateGenerationPort);
         verify(txHelper, never()).txBScheduledSuccess(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("배치 진행 중 해지된 구독 → 시점 발행 skip (dedup 선조회·batch·AI·푸시 전부 생략)")
+    void subscriptionDeletedMidBatch_skipsWithoutDispatch() {
+        NotificationSubscription s = sub(1L);
+        when(loadSubscriptionPort.loadChunk(eq(0L), anyInt())).thenReturn(List.of(s));
+        when(loadScheduledTriggerPort.loadDeadlineToday(any(), eq(TODAY)))
+                .thenReturn(List.of(match("OA-1")));
+        when(loadSubscriptionPort.loadById(1L)).thenReturn(Optional.empty());
+
+        ScheduledTriggerScheduler.RunResult result = scheduler.processAll(TODAY);
+
+        // 해지된 구독에는 dispatch INSERT·AI 템플릿·푸시가 전부 발생하지 않는다.
+        verifyNoInteractions(loadDispatchPort, saveBatchPort, templateGenerationPort,
+                pushNotificationPort, loadUserContactPort);
+        verify(txHelper, never()).saveScheduledIfAbsent(any());
+        assertThat(result.sent()).isZero();
+        assertThat(result.skipped()).isEqualTo(1);
     }
 
     @Test

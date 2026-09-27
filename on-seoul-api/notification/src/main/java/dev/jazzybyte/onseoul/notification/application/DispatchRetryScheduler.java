@@ -131,7 +131,9 @@ public class DispatchRetryScheduler {
         }
 
         if (subOpt.isEmpty()) {
-            log.warn("[DispatchRetryScheduler] 구독 없음(삭제된 구독) — 스킵: subscriptionId={}", subscriptionId);
+            // 소프트 딜리트 이후 정상 해지로 도달하는 경로다 — 미발송 FAILED dispatch 가 남아 있으면
+            // max-age 동안 매시간 찍히므로 WARN 이 아니라 INFO 로 남긴다.
+            log.info("[DispatchRetryScheduler] 구독 없음(삭제된 구독) — 스킵: subscriptionId={}", subscriptionId);
             return;
         }
 

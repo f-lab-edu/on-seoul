@@ -8,6 +8,7 @@ import dev.jazzybyte.onseoul.notification.domain.SubscriptionFilter;
 import dev.jazzybyte.onseoul.notification.domain.TemplateSource;
 import dev.jazzybyte.onseoul.notification.port.out.LoadDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.LoadServiceChangePort;
+import dev.jazzybyte.onseoul.notification.port.out.LoadSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveDispatchPort;
 import dev.jazzybyte.onseoul.notification.port.out.SaveSubscriptionPort;
 import dev.jazzybyte.onseoul.notification.port.out.SubscriptionFilterParserPort;
@@ -36,6 +37,7 @@ import java.util.Optional;
 public class NotificationTxHelper {
 
     private final LoadServiceChangePort loadServiceChangePort;
+    private final LoadSubscriptionPort loadSubscriptionPort;
     private final LoadDispatchPort loadDispatchPort;
     private final SaveDispatchPort saveDispatchPort;
     private final SaveSubscriptionPort saveSubscriptionPort;
@@ -62,6 +64,14 @@ public class NotificationTxHelper {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public TxAResult txA(NotificationBatch batch, NotificationSubscription sub) {
+        // 생존 재확인(PK 조회 1회): loadChunk 로 적재한 뒤 사용자가 해지(소프트 딜리트)했을 수 있다.
+        // 이 TX 는 REQUIRES_NEW 라 해지 커밋을 읽는다. 잔여 창(AI 호출+푸시)은 남지만
+        // 배치 전체 길이만큼 열려 있던 창을 좁힌다 — opt-out 준수.
+        if (loadSubscriptionPort.loadById(sub.getId()).isEmpty()) {
+            log.info("[txA] 구독 subscriptionId={} — 배치 진행 중 해지됨, 발송 건너뜀", sub.getId());
+            return new TxAResult(List.of(), Optional.empty());
+        }
+
         // DEAD guard: 영구 실패로 판정된 구독은 이후 모든 배치에서도 건너뛴다.
         // 재시도 스케줄러가 attempt_count >= MAX_ATTEMPTS 후 DEAD로 전환한 뒤에도
         // 메인 배치가 매 tick 새 dispatch를 생성하는 것을 방지한다.

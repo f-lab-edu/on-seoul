@@ -10,8 +10,6 @@ public interface SaveSubscriptionPort {
 
     NotificationSubscription save(NotificationSubscription subscription);
 
-    void saveIfAbsent(NotificationSubscription subscription);
-
     /**
      * 새 구독을 INSERT 한다. DB 제약 위반 시
      * {@link org.springframework.dao.DataIntegrityViolationException} 를 그대로 던진다.

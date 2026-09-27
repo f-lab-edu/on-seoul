@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS notification_subscriptions
     channels         VARCHAR(500)  NOT NULL DEFAULT '["EMAIL"]',
     last_notified_at TIMESTAMP,
     created_at       TIMESTAMP     NOT NULL DEFAULT NOW(),
+    deleted_at       TIMESTAMP,
 
     CONSTRAINT uq_ns_user_service UNIQUE (user_id, service_id)
 );
